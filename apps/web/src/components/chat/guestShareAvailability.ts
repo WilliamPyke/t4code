@@ -5,7 +5,7 @@ import { environmentPresentations } from "~/state/presentation";
 import { serverEnvironment } from "~/state/server";
 
 /**
- * Whether this environment offers "Share with guest": the user may create links there, and its
+ * Whether this environment offers "Share with guests": the user may create links there, and its
  * Guest links beta is on (Settings > Labs). The server refuses links while the beta is off.
  * Guests arrive through T3 Connect, so a policy that turns Connect off hides sharing too.
  */

@@ -1592,6 +1592,21 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:guest-share:create",
       tag: WS_METHODS.guestShareCreate,
     }),
+    // What a shared thread's link would bring to this environment, read before joining.
+    previewSharedThread: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:shared-thread:preview",
+      tag: WS_METHODS.sharedThreadPreview,
+    }),
+    joinSharedThread: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:shared-thread:join",
+      tag: WS_METHODS.sharedThreadJoin,
+    }),
+    // Which guests have a shared thread open. Mounted only while the owner's guest list is open.
+    guestPresence: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:guest-share:presence",
+      tag: WS_METHODS.guestShareSubscribePresence,
+      idleTtlMs: 0,
+    }),
     // Off the config lane: answering a card must not queue behind settings
     // edits. One answer per card at a time.
     answerSecretRequest: createEnvironmentRpcCommand(runtime, {

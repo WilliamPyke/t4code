@@ -15,6 +15,7 @@ import {
   ContextHandoffId,
   ContextTransferId,
   EventId,
+  GuestId,
   GuestMessageId,
   GuestShareId,
   IsoDateTime,
@@ -43,7 +44,7 @@ import {
 } from "./baseSchemas.ts";
 import { AuthMcpClientAccess } from "./auth.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
-import { ThreadGuestShare } from "./guestShare.ts";
+import { SharedThreadMessage, ThreadGuestShare } from "./guestShare.ts";
 import { StoredThreadTags, ThreadTag } from "./threadTags.ts";
 import {
   OrchestrationSearchThreadsInput,
@@ -2952,6 +2953,17 @@ export const OrchestrationV2Command = Schema.Union([
     linkOrigin: Schema.optional(OrchestrationV2LinkOrigin),
     /** Only the server sets this, with `linkOrigin`, for a linked environment's delegated task. */
     delegatedFrom: Schema.optional(OrchestrationV2DelegatedFrom),
+    /**
+     * Only the server sets this: a conversation from elsewhere that the thread starts with. The
+     * first turn hands it to the agent as history, the way an imported session's is.
+     */
+    importedHistory: Schema.optional(
+      Schema.Struct({
+        messages: Schema.Array(SharedThreadMessage),
+        /** Shown above the messages, to say where they came from. */
+        notice: Schema.String,
+      }),
+    ),
     importedNativeThread: Schema.optional(
       Schema.Struct({
         ref: Schema.Struct({
@@ -2978,6 +2990,21 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     guestMessageId: GuestMessageId,
+  }),
+  /** Lets a guest's messages reach the agent without the owner sending each one, or stops it. */
+  Schema.Struct({
+    type: Schema.Literal("thread.guest.trust"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    guestId: GuestId,
+    trusted: Schema.Boolean,
+  }),
+  /** Removes one guest and closes the link to new guests, so they cannot join again. */
+  Schema.Struct({
+    type: Schema.Literal("thread.guest.remove"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    guestId: GuestId,
   }),
   Schema.Struct({
     type: Schema.Literal("thread.unarchive"),
@@ -3423,6 +3450,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     shareId: GuestShareId,
+    guestId: GuestId,
     guestName: TrimmedNonEmptyString,
   }),
   Schema.Struct({
@@ -3430,9 +3458,13 @@ const OrchestrationV2InternalCommand = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     shareId: GuestShareId,
+    /** Absent for the one guest of a link made before several could join. */
+    guestId: Schema.optional(GuestId),
     guestMessageId: GuestMessageId,
     text: Schema.String,
     attachments: Schema.optional(Schema.Array(ChatAttachment)),
+    /** The server sends this message itself, right after recording it. */
+    direct: Schema.optional(Schema.Boolean),
   }),
   /** Moves a thread to a project rooted at the folder it already works in, so its cwd never changes. */
   Schema.Struct({

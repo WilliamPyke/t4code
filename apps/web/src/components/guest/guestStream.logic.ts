@@ -6,6 +6,7 @@ import {
   GUEST_SHARE_PARAM,
   GuestStreamEvent,
   isProviderSendTurnSupportedImageMimeType,
+  type GuestId,
   type GuestMessageId,
   type GuestShareView,
   type OrchestrationV2ProjectedTurnItem,
@@ -30,6 +31,8 @@ export interface GuestStreamState {
   /** Where "Load earlier turns" continues, or null once the whole thread is loaded. */
   readonly historyCursor: string | null;
   readonly ended: boolean;
+  /** The guests with the page open now, this one included. */
+  readonly online: ReadonlyArray<GuestId>;
   /**
    * Messages this page saw waiting that have no transcript row yet. Survives reconnects, and a
    * message leaves once its row arrives, so a later bounded snapshot cannot bring it back.
@@ -44,6 +47,7 @@ export const initialGuestStreamState: GuestStreamState = {
   partial: null,
   historyCursor: null,
   ended: false,
+  online: [],
   awaitingRowIds: new Set(),
 };
 
@@ -162,6 +166,8 @@ export function applyGuestStreamEvent(
             : withoutPlaced(state.awaitingRowIds, [turnItem]),
       };
     }
+    case "presence":
+      return { ...state, online: event.online };
     case "ended":
       return { ...state, ended: true };
   }

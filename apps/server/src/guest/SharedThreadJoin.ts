@@ -1,0 +1,151 @@
+import {
+  GUEST_EXPORT_ROUTE,
+  SHARED_THREAD_MAX_CHARS,
+  SHARED_THREAD_MAX_MESSAGES,
+  SharedThreadExport,
+  SharedThreadJoinError,
+  type SharedThreadJoinInput,
+  type SharedThreadJoinResult,
+  type SharedThreadPreview,
+  type SharedThreadSource,
+} from "@t3tools/contracts";
+import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
+import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
+
+import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
+
+const REQUEST_TIMEOUT = Duration.seconds(20);
+// Well over the largest export an honest host sends, so a declared size past it is refused unread.
+const MAX_EXPORT_BYTES = 4 * 1024 * 1024;
+
+const decodeExport = Schema.decodeUnknownEffect(Schema.toCodecJson(SharedThreadExport));
+
+/**
+ * Where a link's host serves its export, or null. The host comes from a link someone sent, so
+ * only a public-looking name is fetched: no port, path, address, or local name, which would
+ * point this server at its own network.
+ */
+export function sharedThreadExportUrl(host: string): string | null {
+  const name = host.toLowerCase();
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(name) || /^[0-9.]+$/.test(name)) return null;
+  if (name.endsWith(".local") || name.endsWith(".localhost") || name.endsWith(".internal")) {
+    return null;
+  }
+  return `https://${name}${GUEST_EXPORT_ROUTE}`;
+}
+
+/**
+ * Brings a thread someone shared to this machine as a new thread of the user's own. A one-time
+ * copy: this server only reads the owner's export, and every turn in the new thread runs here,
+ * under this machine's provider login. Nothing is sent back to the owner's thread.
+ */
+export class SharedThreadJoin extends Context.Service<
+  SharedThreadJoin,
+  {
+    readonly preview: (
+      source: SharedThreadSource,
+    ) => Effect.Effect<SharedThreadPreview, SharedThreadJoinError>;
+    readonly join: (
+      input: SharedThreadJoinInput,
+    ) => Effect.Effect<SharedThreadJoinResult, SharedThreadJoinError>;
+  }
+>()("t3/guest/SharedThreadJoin") {}
+
+const make = Effect.gen(function* () {
+  const launches = yield* ThreadLaunch.ThreadLaunchService;
+  // The token goes only to the host the link names: a redirect could forward it anywhere.
+  const http = HttpClient.transform(yield* HttpClient.HttpClient, (response) =>
+    Effect.provideService(response, FetchHttpClient.RequestInit, { redirect: "manual" }),
+  );
+  const fail = (reason: SharedThreadJoinError["reason"]) => new SharedThreadJoinError({ reason });
+
+  const fetchExport = Effect.fn("SharedThreadJoin.fetchExport")(function* (
+    source: SharedThreadSource,
+  ) {
+    const url = sharedThreadExportUrl(source.host);
+    if (url === null) return yield* fail("invalid_host");
+    const response = yield* http
+      .execute(HttpClientRequest.get(url).pipe(HttpClientRequest.bearerToken(source.token)))
+      .pipe(
+        Effect.timeout(REQUEST_TIMEOUT),
+        Effect.mapError(() => fail("unreachable")),
+      );
+    // The owner's server answers 4xx for a token it no longer honors.
+    if (response.status >= 400 && response.status < 500) return yield* fail("expired");
+    if (response.status !== 200) return yield* fail("unreachable");
+    if (Number(response.headers["content-length"] ?? "0") > MAX_EXPORT_BYTES) {
+      return yield* fail("invalid_response");
+    }
+    const shared = yield* response.json.pipe(
+      Effect.flatMap(decodeExport),
+      Effect.timeout(REQUEST_TIMEOUT),
+      Effect.mapError(() => fail("invalid_response")),
+    );
+    // The other machine is not trusted to keep its own limits.
+    const chars = shared.messages.reduce((total, message) => total + message.text.length, 0);
+    if (shared.messages.length > SHARED_THREAD_MAX_MESSAGES || chars > SHARED_THREAD_MAX_CHARS) {
+      return yield* fail("invalid_response");
+    }
+    return shared;
+  }, Effect.scoped);
+
+  const preview = Effect.fn("SharedThreadJoin.preview")(function* (source: SharedThreadSource) {
+    const shared = yield* fetchExport(source);
+    return {
+      title: shared.title,
+      messageCount: shared.messages.length,
+      truncated: shared.truncated,
+      checkout: shared.checkout,
+    };
+  });
+
+  const join = Effect.fn("SharedThreadJoin.join")(function* (input: SharedThreadJoinInput) {
+    const shared = yield* fetchExport(input.source);
+    const title = shared.title.trim() === "" ? "Shared thread" : shared.title.trim();
+    const checkout = input.checkout ? shared.checkout : null;
+    const launched = yield* launches
+      .launch({
+        commandId: input.commandId,
+        projectId: input.projectId,
+        title,
+        modelSelection: input.modelSelection,
+        runtimeMode: input.runtimeMode,
+        interactionMode: input.interactionMode,
+        // A new branch of the user's own, started from the shared one as its remote has it.
+        workspaceStrategy:
+          checkout === null
+            ? { type: "root" }
+            : { type: "worktree", baseRef: checkout.branch, startFromOrigin: true },
+        ...(shared.messages.length === 0
+          ? {}
+          : {
+              importedHistory: {
+                // Characters nobody can see can hide instructions for the agent.
+                messages: shared.messages.map((message) => ({
+                  ...message,
+                  text: sanitizeLinkedPrompt(message.text).text,
+                })),
+                notice: `Copied from "${title}", a thread shared from another machine.${
+                  shared.truncated ? " Its earlier messages were left out." : ""
+                } Turns here run on this machine and are not sent back.`,
+              },
+            }),
+        createdBy: "user",
+        creationSource: "web",
+      })
+      .pipe(
+        Effect.tapError((cause) => Effect.logWarning("Could not join a shared thread", { cause })),
+        Effect.mapError(() => fail("launch_failed")),
+      );
+    return { threadId: launched.threadId };
+  });
+
+  return SharedThreadJoin.of({ preview, join });
+});
+
+export const layer = Layer.effect(SharedThreadJoin, make);

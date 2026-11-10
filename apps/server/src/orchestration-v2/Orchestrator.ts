@@ -144,6 +144,7 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import { withCommandMetrics } from "../observability/Metrics.ts";
 import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import { importedMessage } from "./importedHistory.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import {
   DispatchModeLimit,
@@ -563,6 +564,8 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.guest-share.close":
     case "thread.guest-message.submit":
     case "thread.guest-message.dismiss":
+    case "thread.guest.trust":
+    case "thread.guest.remove":
     case "thread.settle":
     case "thread.auto-settle":
     case "thread.unsettle":
@@ -675,6 +678,7 @@ function delegatedTasksStopEffect(command: {
 }
 
 const WORKSPACE_PREPARATION_INPUT = "Preparing workspace";
+const IMPORTED_HISTORY_PREFIX = "imported-history:v1";
 const RUNTIME_REQUEST_DELIVERY_FAILED_MESSAGE =
   "T3 Code could not confirm that your answer reached the agent. If the run stays stuck, stop it and try again.";
 
@@ -3064,6 +3068,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(command.linkOrigin === undefined || command.delegatedFrom === undefined
         ? {}
         : { delegatedFrom: command.delegatedFrom }),
+      // Run-less history reaches the agent on the first turn, as an imported session's does.
+      ...(command.importedHistory === undefined ? {} : { historyOrigin: "v1_import" as const }),
       lineage: {
         parentThreadId: null,
         relationshipToParent: null,
@@ -3088,6 +3094,52 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       occurredAt: now,
       payload: thread,
     });
+    if (command.importedHistory !== undefined) {
+      const noticeId = TurnItemId.make(`${IMPORTED_HISTORY_PREFIX}:notice:${command.threadId}`);
+      yield* emitEvent({
+        type: "turn-item.updated",
+        threadId: command.threadId,
+        occurredAt: now,
+        payload: {
+          id: noticeId,
+          threadId: command.threadId,
+          runId: null,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 0,
+          status: "completed",
+          title: null,
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+          type: "system_notice",
+          message: command.importedHistory.notice,
+        },
+      });
+      for (const [index, imported] of command.importedHistory.messages.entries()) {
+        const { at, message, turnItem } = importedMessage({
+          threadId: command.threadId,
+          index,
+          idPrefix: IMPORTED_HISTORY_PREFIX,
+          message: imported,
+        });
+        yield* emitEvent({
+          type: "message.updated",
+          threadId: command.threadId,
+          occurredAt: at,
+          payload: message,
+        });
+        yield* emitEvent({
+          type: "turn-item.updated",
+          threadId: command.threadId,
+          occurredAt: at,
+          payload: turnItem,
+        });
+      }
+    }
     if (command.importedNativeThread !== undefined) {
       yield* emitEvent({
         type: "provider-thread.updated",
@@ -13569,6 +13621,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.guest-share.close":
       case "thread.guest-message.submit":
       case "thread.guest-message.dismiss":
+      case "thread.guest.trust":
+      case "thread.guest.remove":
         yield* dispatchGuestShare(command, events, effects);
         break;
       case "provider-session.detach":

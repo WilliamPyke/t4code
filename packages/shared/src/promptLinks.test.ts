@@ -2,7 +2,9 @@ import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  buildJoinLink,
   buildNewThreadLink,
+  parseJoinLink,
   parseNewThreadLink,
   parseThreadLinkPrompt,
   promptLinkAppPath,
@@ -118,6 +120,20 @@ describe("link round trips", () => {
     const deepLink = promptLinkDeepLink(path!);
     expect(deepLink).toBe("t3code://threads/env-1/mcp%3A1");
     expect(promptLinkAppPath(deepLink)).toBe(path);
+  });
+
+  it("carries a shared thread's host and token from the hosted app into the desktop app", () => {
+    const link = buildJoinLink({ host: "sam.t3.test", token: "payload.signature" });
+    const path = promptLinkAppPath(link);
+    expect(path).toBe("/join?host=sam.t3.test&token=payload.signature");
+    const deepLink = promptLinkDeepLink(path!);
+    expect(deepLink).toBe("t3code://join?host=sam.t3.test&token=payload.signature");
+    expect(promptLinkAppPath(deepLink)).toBe(path);
+    expect(parseJoinLink(new URL(link).search)).toEqual({
+      ok: true,
+      value: { host: "sam.t3.test", token: "payload.signature" },
+    });
+    expect(parseJoinLink("?host=sam.t3.test").ok).toBe(false);
   });
 
   it("maps app scheme and hosted links to in-app paths, and nothing else", () => {

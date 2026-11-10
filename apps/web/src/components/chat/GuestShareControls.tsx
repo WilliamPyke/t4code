@@ -6,8 +6,14 @@ import {
 import {
   AuthOrchestrationOperateScope,
   type ChatAttachment,
+  GUEST_SHARE_MAX_GUESTS,
+  guestMessageAuthorName,
+  type GuestId,
   type GuestMessageId,
+  guestShareStatusLabel,
+  providerAllowsDirectGuestSend,
   type ScopedThreadRef,
+  type ThreadGuest,
   type ThreadGuestShare,
 } from "@t3tools/contracts";
 import { CheckIcon, CopyIcon, UserIcon } from "lucide-react";
@@ -17,7 +23,9 @@ import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useQuietThreadProjection } from "~/state/entities";
+import { useEnvironmentProviders } from "~/state/environments";
 import { serverEnvironment } from "~/state/server";
+import { useEnvironmentQuery } from "~/state/query";
 import { useEnvironmentScope } from "~/state/session";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -34,6 +42,16 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import {
+  Menu,
+  MenuCheckboxItem,
+  MenuGroup,
+  MenuGroupLabel,
+  MenuItem,
+  MenuPopup,
+  MenuSeparator,
+  MenuTrigger,
+} from "../ui/menu";
 import { useAssetUrls } from "~/assets/assetUrls";
 import { type ChatFileAttachment, isImageAttachment } from "../../types";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -110,10 +128,11 @@ function GuestShareDialog({
     >
       <DialogPopup className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Share with guest</DialogTitle>
+          <DialogTitle>Share with guests</DialogTitle>
           <DialogDescription>
-            The guest sees the thread as you do, including command output and the agent&apos;s
-            reasoning. Each message they send waits for you.
+            Guests see the thread as you do, including command output and the agent&apos;s
+            reasoning, and can copy the conversation to their own T3 Code. Each message they send
+            waits for you.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -134,7 +153,7 @@ function GuestShareDialog({
             <p className="text-muted-foreground text-sm">
               {activeShare !== null
                 ? "A new link ends the current one."
-                : "The link works once and expires in 24 hours."}
+                : `Up to ${GUEST_SHARE_MAX_GUESTS} people can join with the link. It expires in 24 hours.`}
             </p>
           )}
           {state.status === "failed" ? (
@@ -184,7 +203,7 @@ export function GuestShareIndicator({ threadRef }: { readonly threadRef: ScopedT
   return (
     <div className="flex shrink-0 items-center gap-1 text-muted-foreground text-xs">
       <UserIcon aria-hidden className="size-3.5" />
-      <GuestShareStatus share={share} />
+      <GuestShareStatus share={share} threadRef={threadRef} />
       <Button
         size="xs"
         variant="ghost-muted"
@@ -204,12 +223,113 @@ export function GuestShareIndicator({ threadRef }: { readonly threadRef: ScopedT
   );
 }
 
-function GuestShareStatus({ share }: { readonly share: ThreadGuestShare }) {
+function GuestShareStatus({
+  share,
+  threadRef,
+}: {
+  readonly share: ThreadGuestShare;
+  readonly threadRef: ScopedThreadRef;
+}) {
   const nowMinute = useNowMinute();
   // The share stays on the thread after it expires, until the owner clears it.
   if (share.expiresAt.slice(0, 16) <= nowMinute) return <span>Guest link expired</span>;
+  const label = guestShareStatusLabel(share);
+  // Only a server that lists guests can remove one or say who is viewing.
+  const guests = share.guests ?? [];
+  if (guests.length === 0) return <span>{label}</span>;
   return (
-    <span>{share.guestName !== null ? `${share.guestName} is a guest` : "Guest link active"}</span>
+    <Menu>
+      <MenuTrigger render={<Button size="xs" variant="ghost-muted" />}>{label}</MenuTrigger>
+      <MenuPopup align="end" width="content">
+        <GuestList guests={guests} joinsClosed={share.joinsClosed === true} threadRef={threadRef} />
+      </MenuPopup>
+    </Menu>
+  );
+}
+
+/**
+ * Who joined and who has the thread open now. For each guest: whether their messages go to the
+ * agent without a Send from the owner, and the way to remove them.
+ */
+function GuestList({
+  guests,
+  joinsClosed,
+  threadRef,
+}: {
+  readonly guests: ReadonlyArray<ThreadGuest>;
+  readonly joinsClosed: boolean;
+  readonly threadRef: ScopedThreadRef;
+}) {
+  // Subscribed only while the list is open, so an idle shared thread streams nothing extra.
+  const { data: presence } = useEnvironmentQuery(
+    serverEnvironment.guestPresence({
+      environmentId: threadRef.environmentId,
+      input: { threadId: threadRef.threadId },
+    }),
+  );
+  const canOperate = useEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope);
+  const removeGuest = useOrchestrationCommand(threadEnvironment.removeGuest, {
+    label: "remove guest",
+  });
+  const setGuestTrust = useOrchestrationCommand(threadEnvironment.setGuestTrust, {
+    label: "change guest sending",
+  });
+  // The server decides this again on every guest message; here it only explains the switch.
+  const instanceId =
+    useQuietThreadProjection(threadRef)?.projection.thread.modelSelection.instanceId;
+  const directAllowed = providerAllowsDirectGuestSend(
+    useEnvironmentProviders()
+      .get(threadRef.environmentId)
+      ?.find((provider) => provider.instanceId === instanceId),
+  );
+  const target = (guestId: GuestId) => ({ threadId: threadRef.threadId, guestId });
+  return (
+    <>
+      {guests.map((guest) => (
+        <MenuGroup key={guest.id}>
+          <MenuGroupLabel>
+            {presence?.online.includes(guest.id) ? `${guest.name} · viewing now` : guest.name}
+          </MenuGroupLabel>
+          <MenuCheckboxItem
+            checked={guest.trusted === true}
+            // Turning it off always works; turning it on needs a provider that allows it.
+            disabled={!canOperate || (!directAllowed && guest.trusted !== true)}
+            closeOnClick={false}
+            aria-label={`Send ${guest.name}'s messages without asking`}
+            onCheckedChange={(trusted) =>
+              void setGuestTrust({
+                environmentId: threadRef.environmentId,
+                input: { ...target(guest.id), trusted },
+              })
+            }
+          >
+            Send without asking
+          </MenuCheckboxItem>
+          <MenuItem
+            variant="destructive"
+            disabled={!canOperate}
+            aria-label={`Remove ${guest.name}`}
+            onClick={() =>
+              void removeGuest({
+                environmentId: threadRef.environmentId,
+                input: target(guest.id),
+              })
+            }
+          >
+            Remove
+          </MenuItem>
+          <MenuSeparator />
+        </MenuGroup>
+      ))}
+      <p className="max-w-64 px-2 py-1.5 text-muted-foreground text-xs">
+        {directAllowed
+          ? "Send without asking runs a guest's messages with this thread's permissions before you read them."
+          : "Send without asking needs Claude or Codex signed in with an API key. A plan covers only your own prompts."}{" "}
+        {joinsClosed
+          ? "No one new can join with this link."
+          : "Removing a guest also stops new people joining."}
+      </p>
+    </>
   );
 }
 
@@ -246,7 +366,6 @@ export function GuestPendingMessages({
     }),
   );
   if (share === null || pending.length === 0) return null;
-  const guestName = share.guestName ?? "Guest";
   const openImage = (attachment: ChatAttachment) => {
     const preview = buildExpandedImagePreview(
       images.map((image) => ({ ...image, previewUrl: imageUrlById.get(image.id) ?? "" })),
@@ -276,6 +395,7 @@ export function GuestPendingMessages({
     >
       {pending.map((message) => {
         const busy = busyIds.has(message.id);
+        const guestName = guestMessageAuthorName(share, message);
         return (
           <li key={message.id} className="flex flex-col items-end gap-1">
             <GuestMessageName name={guestName} />

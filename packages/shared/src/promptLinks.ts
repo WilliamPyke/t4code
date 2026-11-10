@@ -181,6 +181,28 @@ export function buildNewThreadLink(input: {
   return url.toString();
 }
 
+/** A shared thread to bring to this machine: its owner's host and a guest's handoff token. */
+export interface JoinLink {
+  readonly host: string;
+  readonly token: string;
+}
+
+export function parseJoinLink(search: string): PromptLinkResult<JoinLink> {
+  const params = new URLSearchParams(search);
+  const host = optionalParam(params, "host");
+  const token = optionalParam(params, "token");
+  return host === null || token === null
+    ? { ok: false, error: "This link does not say which shared thread to open." }
+    : { ok: true, value: { host, token } };
+}
+
+export function buildJoinLink(input: JoinLink & { readonly origin?: string }): string {
+  const url = new URL("/join", input.origin ?? DEFAULT_HOSTED_APP_URL);
+  url.searchParams.set("host", input.host);
+  url.searchParams.set("token", input.token);
+  return url.toString();
+}
+
 const APP_SCHEME = /^t3code(?:-[a-z]+)?:$/;
 const THREAD_PATH = /^\/([^/]+)\/([^/]+)\/?$/;
 
@@ -191,14 +213,14 @@ export function promptLinkAppPath(
   if (!URL.canParse(value)) return null;
   const url = new URL(value);
   if (APP_SCHEME.test(url.protocol)) {
-    if (url.host === "new" && (url.pathname === "" || url.pathname === "/")) {
-      return `/new${url.search}`;
+    if ((url.host === "new" || url.host === "join") && /^\/?$/.test(url.pathname)) {
+      return `/${url.host}${url.search}`;
     }
     const thread = url.host === "threads" ? THREAD_PATH.exec(url.pathname) : null;
     return thread ? `/${thread[1]}/${thread[2]}${url.search}` : null;
   }
   if (!URL.canParse(hostedAppUrl) || url.origin !== new URL(hostedAppUrl).origin) return null;
-  if (url.pathname === "/new") return `/new${url.search}`;
+  if (url.pathname === "/new" || url.pathname === "/join") return `${url.pathname}${url.search}`;
   // The web app's own thread route is a link only with a prompt, so reloading a tab never asks.
   const thread = url.pathname.startsWith("/threads/")
     ? THREAD_PATH.exec(url.pathname.slice("/threads".length))
@@ -210,6 +232,9 @@ export function promptLinkAppPath(
 
 export function promptLinkDeepLink(appPath: string, scheme = "t3code"): string {
   const url = new URL(appPath, "https://app.invalid");
-  const host = url.pathname === "/new" ? "new" : `threads${url.pathname}`;
+  const host =
+    url.pathname === "/new" || url.pathname === "/join"
+      ? url.pathname.slice(1)
+      : `threads${url.pathname}`;
   return `${scheme}://${host}${url.search}`;
 }

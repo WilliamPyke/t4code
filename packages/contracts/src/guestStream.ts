@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 
-import { GuestShareId, IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { ThreadGuestMessage } from "./guestShare.ts";
+import { GuestId, GuestShareId, IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ThreadGuest, ThreadGuestMessage } from "./guestShare.ts";
 import { OrchestrationV2ThreadStreamItem } from "./orchestrationV2.ts";
 import { ProviderDriverKind } from "./providerInstance.ts";
 
@@ -22,8 +22,16 @@ export type GuestThreadModel = typeof GuestThreadModel.Type;
 export const GuestShareView = Schema.Struct({
   shareId: GuestShareId,
   title: Schema.String,
+  /** The guest this view is for. */
   guestName: TrimmedNonEmptyString,
+  /** Absent for the one guest of a link made before several could join. */
+  guestId: Schema.optional(GuestId),
+  /** Everyone on the link, this guest included. */
+  guests: Schema.Array(ThreadGuest),
+  /** This guest's messages reach the agent as they are sent, with no wait for the owner. */
+  direct: Schema.Boolean,
   expiresAt: IsoDateTime,
+  /** Every guest's messages, so the guests see what each other asked. */
   messages: Schema.Array(ThreadGuestMessage),
   model: GuestThreadModel,
 });
@@ -37,6 +45,8 @@ export type GuestShareView = typeof GuestShareView.Type;
 export const GuestStreamEvent = Schema.Union([
   Schema.Struct({ type: Schema.Literal("view"), view: GuestShareView }),
   Schema.Struct({ type: Schema.Literal("thread"), item: OrchestrationV2ThreadStreamItem }),
+  /** The guests with the page open, sent when the stream opens and whenever that changes. */
+  Schema.Struct({ type: Schema.Literal("presence"), online: Schema.Array(GuestId) }),
   Schema.Struct({ type: Schema.Literal("ended") }),
 ]);
 export type GuestStreamEvent = typeof GuestStreamEvent.Type;

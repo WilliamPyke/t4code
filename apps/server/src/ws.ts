@@ -128,6 +128,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as GuestShareService from "./guest/GuestShareService.ts";
+import * as SharedThreadJoin from "./guest/SharedThreadJoin.ts";
 import {
   bufferShellLiveStream,
   coalesceShellApplicationEvents,
@@ -1449,6 +1450,7 @@ export const layerWsRpc = (
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const secretRequests = yield* SecretRequests.SecretRequests;
       const guestShares = yield* GuestShareService.GuestShareService;
+      const sharedThreads = yield* SharedThreadJoin.SharedThreadJoin;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -2369,6 +2371,13 @@ export const layerWsRpc = (
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.rotateWebhookToken(input)),
           ),
+        [WS_METHODS.guestShareSubscribePresence]: (input) => guestShares.presence(input.threadId),
+        [WS_METHODS.sharedThreadPreview]: (input) => sharedThreads.preview(input),
+        [WS_METHODS.sharedThreadJoin]: (input) =>
+          Effect.annotateCurrentSpan({
+            "orchestration_v2.command_id": input.commandId,
+            "orchestration_v2.project_id": input.projectId,
+          }).pipe(Effect.andThen(sharedThreads.join(input))),
         [WS_METHODS.guestShareCreate]: (input) =>
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(guestShares.create(input)),

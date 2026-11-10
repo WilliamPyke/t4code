@@ -7,6 +7,7 @@ import {
 import {
   AuthOrchestrationOperateScope,
   type ChatAttachment,
+  guestShareStatusLabel,
   type ScopedThreadRef,
   type ThreadGuestMessage,
   type ThreadGuestShare,
@@ -85,7 +86,7 @@ export function ThreadGuestShareBar(props: {
   const stopSharing = () =>
     Dialog.confirm({
       title: "Stop sharing?",
-      message: "The guest loses access and the link stops working.",
+      message: "Every guest loses access and the link stops working.",
       confirmText: "Stop sharing",
       destructive: true,
       onConfirm: () => {
@@ -105,11 +106,7 @@ export function ThreadGuestShareBar(props: {
     <View className="flex-row items-center gap-2 px-4 pb-2">
       <SymbolView name="person.2" size={12} tintColorClassName="accent-foreground-muted" />
       <Text className="min-w-0 flex-1 text-xs text-foreground-muted" numberOfLines={1}>
-        {expiredAt === share.expiresAt
-          ? "Guest link expired"
-          : share.guestName === null
-            ? "Guest link active"
-            : `${share.guestName} is a guest`}
+        {expiredAt === share.expiresAt ? "Guest link expired" : guestShareStatusLabel(share)}
       </Text>
       <Button label="Stop sharing" tone="text" disabled={disabled} onPress={stopSharing} />
     </View>

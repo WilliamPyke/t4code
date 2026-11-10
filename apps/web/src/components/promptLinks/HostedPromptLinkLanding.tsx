@@ -1,5 +1,6 @@
 import {
   type LinkedPrompt,
+  parseJoinLink,
   parseNewThreadLink,
   parseThreadLinkPrompt,
   promptLinkAppPath,
@@ -38,6 +39,20 @@ function summarize(
   appPath: string,
 ): { ok: true; value: LinkSummary } | { ok: false; error: string } {
   const url = new URL(appPath, window.location.origin);
+  if (url.pathname === "/join") {
+    const join = parseJoinLink(url.search);
+    if (!join.ok) return join;
+    return {
+      ok: true,
+      value: {
+        title: "Bring this shared thread to your machine",
+        description:
+          "You get your own copy of the conversation. Your turns run on your machine, on your own provider login.",
+        prompt: null,
+        details: [`Shared from ${join.value.host}`],
+      },
+    };
+  }
   if (url.pathname !== "/new") {
     const prompt = parseThreadLinkPrompt(url.search);
     if (!prompt.ok) return prompt;

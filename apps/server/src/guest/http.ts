@@ -1,6 +1,8 @@
 import {
   GUEST_ATTACHMENT_ROUTE,
   GUEST_COMMAND_OUTPUT_ROUTE,
+  GUEST_EXPORT_ROUTE,
+  GUEST_HANDOFF_ROUTE,
   GUEST_HISTORY_ROUTE,
   GUEST_ITEM_ROUTE,
   GUEST_MEDIA_ROUTE,
@@ -10,6 +12,7 @@ import {
   GUEST_MESSAGE_MAX_ATTACHMENT_BYTES,
   GUEST_MESSAGE_MAX_ATTACHMENTS,
   GUEST_SHARE_TTL_MS,
+  GuestHandoff,
   GuestRedeemRequest,
   GuestStreamEvent,
   GuestSubmitRequest,
@@ -18,6 +21,7 @@ import {
   OrchestrationV2CommandOutputFrame,
   OrchestrationV2GetTurnItemResult,
   OrchestrationV2ThreadHistoryPage,
+  SharedThreadExport,
 } from "@t3tools/contracts";
 import * as ByteSize from "effect/ByteSize";
 import * as Duration from "effect/Duration";
@@ -241,6 +245,47 @@ const streamRoute = HttpRouter.add(
   }),
 );
 
+const encodeHandoff = Schema.encodeEffect(Schema.toCodecJson(GuestHandoff));
+const encodeExport = Schema.encodeEffect(Schema.toCodecJson(SharedThreadExport));
+
+// The guest's page asks for a handoff token, then sends the guest to their own T3 Code with it.
+const handoffRoute = HttpRouter.add(
+  "POST",
+  GUEST_HANDOFF_ROUTE,
+  Effect.gen(function* () {
+    const guestShares = yield* GuestShareService;
+    return yield* guestShares.handoff(yield* sessionToken).pipe(
+      Effect.flatMap((result) =>
+        encodeHandoff(result).pipe(
+          Effect.mapError(() => new GuestShareAccessError({ reason: "unavailable" })),
+        ),
+      ),
+      Effect.map((body) => HttpServerResponse.jsonUnsafe(body, { headers: NO_STORE })),
+      Effect.catchTags({ GuestShareAccessError: errorResponse }),
+    );
+  }),
+);
+
+// Read by the guest's own T3 Code server, not a browser: the token is a bearer, not a cookie.
+const exportRoute = HttpRouter.add(
+  "GET",
+  GUEST_EXPORT_ROUTE,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const token = /^Bearer (.+)$/.exec(request.headers["authorization"] ?? "")?.[1] ?? "";
+    const guestShares = yield* GuestShareService;
+    return yield* guestShares.exportThread(token).pipe(
+      Effect.flatMap((result) =>
+        encodeExport(result).pipe(
+          Effect.mapError(() => new GuestShareAccessError({ reason: "unavailable" })),
+        ),
+      ),
+      Effect.map((body) => HttpServerResponse.jsonUnsafe(body, { headers: NO_STORE })),
+      Effect.catchTags({ GuestShareAccessError: errorResponse }),
+    );
+  }),
+);
+
 // Lets a returning guest skip the name form when this browser already joined the share.
 const sessionRoute = HttpRouter.add(
   "GET",
@@ -386,6 +431,8 @@ export const layer = Layer.mergeAll(
   sessionRoute,
   submitRoute,
   streamRoute,
+  handoffRoute,
+  exportRoute,
   renderRoute,
   itemRoute,
   historyRoute,

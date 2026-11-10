@@ -26,6 +26,7 @@ import {
   type ThreadId,
   type ThreadEnvMode,
   type UploadChatAttachment,
+  type GuestId,
   type GuestMessageId,
 } from "@t3tools/contracts";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
@@ -445,6 +446,38 @@ export const closeGuestShare = Effect.fn("EnvironmentCommands.closeGuestShare")(
   input: CloseGuestShareInput,
 ) {
   return yield* simpleThreadCommand("thread.guest-share.close", input);
+});
+
+export interface SetGuestTrustInput extends ThreadCommandInput {
+  readonly guestId: GuestId;
+  readonly trusted: boolean;
+}
+/** Lets a guest's messages reach the agent without a Send for each one, or stops that. */
+export const setGuestTrust = Effect.fn("EnvironmentCommands.setGuestTrust")(function* (
+  input: SetGuestTrustInput,
+) {
+  return yield* dispatch({
+    type: "thread.guest.trust",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    guestId: input.guestId,
+    trusted: input.trusted,
+  });
+});
+
+export interface RemoveGuestInput extends ThreadCommandInput {
+  readonly guestId: GuestId;
+}
+/** Removes one guest. The link then lets no one new in, so they cannot join again. */
+export const removeGuest = Effect.fn("EnvironmentCommands.removeGuest")(function* (
+  input: RemoveGuestInput,
+) {
+  return yield* dispatch({
+    type: "thread.guest.remove",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    guestId: input.guestId,
+  });
 });
 
 export interface ResolveGuestMessageInput extends ThreadCommandInput {

@@ -168,10 +168,19 @@ import {
 } from "./provider.ts";
 import { ProviderInstanceId, ProviderInstanceMutation } from "./providerInstance.ts";
 import {
+  GuestPresence,
+  GuestPresenceInput,
   GuestShareCreateError,
   GuestShareCreateInput,
   GuestShareCreateResult,
 } from "./guestShare.ts";
+import {
+  SharedThreadJoinError,
+  SharedThreadJoinInput,
+  SharedThreadJoinResult,
+  SharedThreadPreview,
+  SharedThreadSource,
+} from "./sharedThread.ts";
 import { PullRequestReviewGuideResult } from "./pullRequestReviewGuide.ts";
 import {
   PullRequestActionInput,
@@ -556,6 +565,9 @@ export const WS_METHODS = {
   scheduledTasksRotateWebhookToken: "scheduledTasks.rotateWebhookToken",
   secretsAnswerRequest: "secrets.answerRequest",
   guestShareCreate: "guestShare.create",
+  guestShareSubscribePresence: "guestShare.subscribePresence",
+  sharedThreadPreview: "sharedThread.preview",
+  sharedThreadJoin: "sharedThread.join",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
 
@@ -2016,6 +2028,25 @@ const WsScheduledTasksRotateWebhookTokenRpc = Rpc.make(
   },
 );
 
+const WsGuestShareSubscribePresenceRpc = Rpc.make(WS_METHODS.guestShareSubscribePresence, {
+  payload: GuestPresenceInput,
+  success: GuestPresence,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const WsSharedThreadPreviewRpc = Rpc.make(WS_METHODS.sharedThreadPreview, {
+  payload: SharedThreadSource,
+  success: SharedThreadPreview,
+  error: Schema.Union([SharedThreadJoinError, EnvironmentAuthorizationError]),
+});
+
+const WsSharedThreadJoinRpc = Rpc.make(WS_METHODS.sharedThreadJoin, {
+  payload: SharedThreadJoinInput,
+  success: SharedThreadJoinResult,
+  error: Schema.Union([SharedThreadJoinError, EnvironmentAuthorizationError]),
+});
+
 const WsGuestShareCreateRpc = Rpc.make(WS_METHODS.guestShareCreate, {
   payload: GuestShareCreateInput,
   success: GuestShareCreateResult,
@@ -2066,6 +2097,9 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 
 export const WsRpcGroup = RpcGroup.make(
   WsGuestShareCreateRpc,
+  WsGuestShareSubscribePresenceRpc,
+  WsSharedThreadPreviewRpc,
+  WsSharedThreadJoinRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

@@ -179,7 +179,7 @@ export function buildThreadActionMenuItems(
       : []),
     { id: "mark-unread", label: "Mark unread", icon: "mail-open" },
     ...(state.canShareWithGuest
-      ? [{ id: "share-guest" as const, label: "Share with guest", icon: "user-plus" }]
+      ? [{ id: "share-guest" as const, label: "Share with guests", icon: "user-plus" }]
       : []),
     ...(state.projectFilter
       ? [

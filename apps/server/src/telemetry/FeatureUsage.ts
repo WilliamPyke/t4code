@@ -46,6 +46,8 @@ const COMMAND_FEATURES: {
   "queued-run.edit": () => ({ feature: "queue.edit" }),
   "thread.guest-share.close": () => ({ feature: "guest_share.close" }),
   "thread.guest-message.dismiss": () => ({ feature: "guest_message.dismiss" }),
+  "thread.guest.remove": () => ({ feature: "guest.remove" }),
+  "thread.guest.trust": (command) => use("guest.trust", command.trusted ? "on" : "off"),
 };
 
 /**
@@ -73,6 +75,8 @@ const METHOD_FEATURES: Readonly<Record<string, (payload: Payload) => FeatureUsag
   [WS_METHODS.sourceControlSignInStart]: () => ({ feature: "source_control.sign_in" }),
   [WS_METHODS.serverUpsertKeybinding]: () => ({ feature: "keybinding.customize" }),
   [WS_METHODS.guestShareCreate]: () => ({ feature: "guest_share.create" }),
+  [WS_METHODS.sharedThreadJoin]: (payload) =>
+    use("shared_thread.join", payload["checkout"] === true ? "with_code" : "conversation_only"),
 };
 
 /** The feature a dispatched command uses, or undefined when it is not a tracked feature. */

@@ -22,7 +22,9 @@ import {
   type UpdateThreadMetadataInput,
   archiveThread,
   closeGuestShare,
+  removeGuest,
   resolveGuestMessage,
+  setGuestTrust,
   cancelQueuedRun,
   createThread,
   deleteThread,
@@ -135,6 +137,18 @@ export function createThreadEnvironmentAtoms<R, E>(
     closeGuestShare: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:close-guest-share",
       execute: closeGuestShare,
+      scheduler,
+      concurrency,
+    }),
+    removeGuest: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:remove-guest",
+      execute: removeGuest,
+      scheduler,
+      concurrency,
+    }),
+    setGuestTrust: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:set-guest-trust",
+      execute: setGuestTrust,
       scheduler,
       concurrency,
     }),

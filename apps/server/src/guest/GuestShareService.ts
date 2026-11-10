@@ -2,21 +2,34 @@ import {
   type ChatAttachment,
   ChatAttachmentId,
   CommandId,
+  GUEST_HANDOFF_TTL_MS,
   GUEST_SHARE_TTL_MS,
+  type GuestHandoff,
   GuestMessageId,
   GuestShareCreateError,
   type GuestShareCreateInput,
   type GuestShareCreateResult,
+  GuestId,
+  type GuestPresence,
   GuestShareId,
   type GuestRedeemRequest,
   type GuestStreamEvent,
   type GuestSubmitRequest,
+  MessageId,
+  providerAllowsDirectGuestSend,
+  repositoryGroupingKeyOf,
+  SHARED_THREAD_MAX_CHARS,
+  SHARED_THREAD_MAX_MESSAGES,
+  type SharedThreadCheckout,
+  type SharedThreadExport,
+  type SharedThreadMessage,
   type OrchestrationV2AppThread,
   type OrchestrationV2CommandOutputFrame,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2GetTurnItemResult,
   type OrchestrationV2ThreadHistoryPage,
   type OrchestrationV2TurnItem,
+  type ServerProvider,
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
@@ -33,6 +46,7 @@ import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import { base64UrlDecodeUtf8, base64UrlEncode, timingSafeEqualBase64Url } from "../auth/utils.ts";
 import * as PayloadSigner from "../auth/PayloadSigner.ts";
@@ -45,8 +59,9 @@ import {
 } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import { CloudManagedEndpointRuntime } from "../cloud/ManagedEndpointRuntime.ts";
+import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as CommandOutputHub from "../orchestration-v2/CommandOutputHub.ts";
-import { GUEST_FAILURE } from "../orchestration-v2/GuestShareDecider.ts";
+import { GUEST_FAILURE, hasGuest } from "../orchestration-v2/GuestShareDecider.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { coalesceThreadLiveStream } from "../orchestration-v2/ThreadLiveEventCoalescer.ts";
 import { buildBoundedThreadStreamSnapshot } from "../orchestration-v2/ThreadStream.ts";
@@ -55,6 +70,8 @@ import {
   projectTurnItemForWire,
   threadStreamEventItem,
 } from "../orchestration-v2/WireProjection.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
@@ -81,6 +98,7 @@ const ACCESS_RECHECK_INTERVAL = Duration.seconds(30);
 
 const GUEST_ACCESS_MESSAGES = {
   ...GUEST_FAILURE,
+  name_taken: GUEST_FAILURE.nameTaken,
   invalid: "This guest link is not valid.",
   stale_page: "This page is for an older guest link. Reload it to continue.",
   unavailable: "This item is not available.",
@@ -100,6 +118,9 @@ export class GuestShareAccessError extends Schema.TaggedError<GuestShareAccessEr
       "invalid",
       "inactive",
       "used",
+      "full",
+      "closed",
+      "name_taken",
       "busy",
       "stale_page",
       "unavailable",
@@ -117,21 +138,27 @@ export class GuestShareAccessError extends Schema.TaggedError<GuestShareAccessEr
   }
 }
 
+const GUEST_FAILURE_REASONS = new Map<unknown, GuestShareAccessError["reason"]>([
+  [GUEST_FAILURE.inactive, "inactive"],
+  [GUEST_FAILURE.used, "used"],
+  [GUEST_FAILURE.full, "full"],
+  [GUEST_FAILURE.closed, "closed"],
+  [GUEST_FAILURE.nameTaken, "name_taken"],
+  [GUEST_FAILURE.busy, "busy"],
+  [GUEST_FAILURE.filesBusy, "files_busy"],
+]);
 const guestFailureReason = (cause: unknown): GuestShareAccessError["reason"] =>
-  cause === GUEST_FAILURE.inactive
-    ? "inactive"
-    : cause === GUEST_FAILURE.used
-      ? "used"
-      : cause === GUEST_FAILURE.busy
-        ? "busy"
-        : cause === GUEST_FAILURE.filesBusy
-          ? "files_busy"
-          : "rejected";
+  GUEST_FAILURE_REASONS.get(cause) ?? "rejected";
 
 const SessionClaims = Schema.Struct({
-  kind: Schema.Literal("session"),
+  // A handoff token only opens the thread's export, and only for a few minutes.
+  kind: Schema.Literals(["session", "handoff"]),
   threadId: ThreadId,
   shareId: GuestShareId,
+  /** Absent in the session of a link made before several guests could join. */
+  guestId: Schema.optional(GuestId),
+  /** Epoch milliseconds. Only a handoff token expires before its share does. */
+  expiresAt: Schema.optional(Schema.Number),
 });
 type SessionClaims = typeof SessionClaims.Type;
 const decodeSessionClaims = Schema.decodeUnknownOption(Schema.fromJsonString(SessionClaims));
@@ -144,7 +171,7 @@ export class GuestShareService extends Context.Service<
     readonly create: (
       input: GuestShareCreateInput,
     ) => Effect.Effect<GuestShareCreateResult, GuestShareCreateError>;
-    /** Spends an invite and returns the session token for the guest's cookie. */
+    /** Joins the invite's share as a new guest and returns the session token for their cookie. */
     readonly redeem: (
       request: GuestRedeemRequest,
     ) => Effect.Effect<
@@ -162,6 +189,14 @@ export class GuestShareService extends Context.Service<
     readonly stream: (
       session: string,
     ) => Effect.Effect<Stream.Stream<GuestStreamEvent>, GuestShareAccessError>;
+    /** The guests with a thread's shared page open, now and as that changes. */
+    readonly presence: (threadId: ThreadId) => Stream.Stream<GuestPresence>;
+    /** A token the guest's own T3 Code reads the thread's export with, for a few minutes. */
+    readonly handoff: (session: string) => Effect.Effect<GuestHandoff, GuestShareAccessError>;
+    /** The conversation and where its code is, for a handoff token. Changes nothing here. */
+    readonly exportThread: (
+      handoffToken: string,
+    ) => Effect.Effect<SharedThreadExport, GuestShareAccessError>;
     /** The file of an HTML render in the shared thread, and its title. */
     readonly render: (
       session: string,
@@ -221,6 +256,9 @@ const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const commandOutputs = yield* CommandOutputHub.CommandOutputHub;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+  const projects = yield* ProjectService.ProjectService;
+  const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+  const git = yield* GitWorkflow.GitWorkflowService;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const managedEndpoint = yield* CloudManagedEndpointRuntime;
   const { attachmentsDir } = yield* ServerConfig.ServerConfig;
@@ -309,10 +347,11 @@ const make = Effect.gen(function* () {
   /** Checks a token against the live share: same id, not expired, and Connect still serving it. */
   const authorize = Effect.fn("GuestShareService.authorize")(function* (
     token: string,
-    kind: "invite" | "session",
+    kind: "invite" | "session" | "handoff",
   ) {
     const claims = yield* kind === "invite" ? verifyInvite(token) : verifySession(token);
-    if (Option.isNone(claims)) {
+    // A handoff token is not a session, and a session is not a handoff token.
+    if (Option.isNone(claims) || (kind !== "invite" && claims.value.kind !== kind)) {
       return yield* new GuestShareAccessError({ reason: "invalid" });
     }
     const { thread } = yield* orchestrator
@@ -327,12 +366,13 @@ const make = Effect.gen(function* () {
       thread.archivedAt !== null ||
       thread.deletedAt !== null ||
       DateTime.toEpochMillis(now) >= Date.parse(share.expiresAt) ||
-      (kind === "session" && share.guestName === null) ||
+      (kind !== "invite" && !hasGuest(share, claims.value.guestId)) ||
+      (kind === "handoff" && DateTime.toEpochMillis(now) >= (claims.value.expiresAt ?? 0)) ||
       (yield* connectHostname) !== share.host
     ) {
       return yield* inactive;
     }
-    return { thread, share };
+    return { thread, share, guestId: claims.value.guestId };
   });
 
   const create = Effect.fn("GuestShareService.create")(function* (input: GuestShareCreateInput) {
@@ -368,22 +408,38 @@ const make = Effect.gen(function* () {
 
   const redeem = Effect.fn("GuestShareService.redeem")(function* (request: GuestRedeemRequest) {
     const { thread, share } = yield* authorize(request.credential, "invite");
+    const guestId = GuestId.make(yield* random.uuidV4().pipe(Effect.orDie));
     yield* dispatchGuestCommand({
       type: "thread.guest-share.redeem",
       commandId: yield* commandId("redeem"),
       threadId: thread.id,
       shareId: share.id,
+      guestId,
       guestName: request.name,
     });
     // Guests have no client connection, so their events carry no surface.
     yield* analytics.record("feature.used", { feature: "guest_share.join" });
-    const token = yield* signSession({ kind: "session", threadId: thread.id, shareId: share.id });
+    const token = yield* signSession({
+      kind: "session",
+      threadId: thread.id,
+      shareId: share.id,
+      guestId,
+    });
     return { token, shareId: share.id };
   });
 
   const check = Effect.fn("GuestShareService.check")(function* (session: string) {
     yield* authorize(session, "session");
   });
+
+  /** Whether the provider the thread runs on takes a guest's message without the owner's Send. */
+  const providerAllowsDirect = (
+    thread: OrchestrationV2AppThread,
+    providers: ReadonlyArray<ServerProvider>,
+  ) =>
+    providerAllowsDirectGuestSend(
+      providers.find((provider) => provider.instanceId === thread.modelSelection.instanceId),
+    );
 
   const uploadFailed = new GuestShareAccessError({ reason: "rejected" });
   const removeStored = (attachments: ReadonlyArray<ChatAttachment>) =>
@@ -450,7 +506,7 @@ const make = Effect.gen(function* () {
     request: GuestSubmitRequest,
     uploads: ReadonlyArray<GuestUpload>,
   ) {
-    const { thread, share } = yield* authorize(session, "session");
+    const { thread, share, guestId } = yield* authorize(session, "session");
     if (request.shareId !== share.id) {
       return yield* new GuestShareAccessError({ reason: "stale_page" });
     }
@@ -458,17 +514,48 @@ const make = Effect.gen(function* () {
       return yield* new GuestShareAccessError({ reason: "empty" });
     }
     const attachments = yield* storeUploads(thread.id, uploads);
+    // Checked on every message: the owner can stop trusting a guest, or sign in another way.
+    const direct =
+      share.guests?.find((guest) => guest.id === guestId)?.trusted === true &&
+      providerAllowsDirect(thread, yield* providerRegistry.getProviders);
+    const guestMessageId = GuestMessageId.make(yield* random.uuidV4());
     yield* dispatchGuestCommand({
       type: "thread.guest-message.submit",
       commandId: yield* commandId("submit"),
       threadId: thread.id,
       shareId: share.id,
-      guestMessageId: GuestMessageId.make(yield* random.uuidV4()),
+      ...(guestId === undefined ? {} : { guestId }),
+      guestMessageId,
       text: request.text,
       ...(attachments.length === 0 ? {} : { attachments }),
+      ...(direct ? { direct } : {}),
     }).pipe(Effect.onError(() => removeStored(attachments)));
+    if (direct) {
+      const sendId = yield* commandId("send");
+      // The same send the owner's button makes. If it fails, the message waits for the owner.
+      yield* orchestrator
+        .dispatch({
+          type: "message.dispatch",
+          commandId: sendId,
+          threadId: thread.id,
+          messageId: MessageId.make(sendId),
+          guestMessageId,
+          text: "",
+          attachments,
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "user",
+          creationSource: "server",
+        })
+        .pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Could not send a trusted guest's message; it waits for the owner.", {
+              error,
+            }),
+          ),
+        );
+    }
     yield* analytics.record("feature.used", {
-      feature: "guest_message.submit",
+      feature: direct ? "guest_message.submit_direct" : "guest_message.submit",
       variant: attachments.length === 0 ? "text_only" : "with_files",
     });
   });
@@ -514,21 +601,52 @@ const make = Effect.gen(function* () {
     }
   };
 
+  // Open guest pages by thread, counted per guest because one guest can have several tabs. Held
+  // in memory only: it is not history, and a restart closes every stream it counts.
+  const viewing = yield* SubscriptionRef.make<ReadonlyMap<ThreadId, ReadonlyMap<GuestId, number>>>(
+    new Map(),
+  );
+  const countViewer = (threadId: ThreadId, guestId: GuestId, delta: 1 | -1) =>
+    SubscriptionRef.update(viewing, (current) => {
+      const guests = new Map(current.get(threadId));
+      const count = (guests.get(guestId) ?? 0) + delta;
+      if (count > 0) guests.set(guestId, count);
+      else guests.delete(guestId);
+      const next = new Map(current);
+      if (guests.size > 0) next.set(threadId, guests);
+      else next.delete(threadId);
+      return next;
+    });
+  const presence = (threadId: ThreadId) =>
+    SubscriptionRef.changes(viewing).pipe(
+      Stream.map((current) => [...(current.get(threadId)?.keys() ?? [])].toSorted().join("\n")),
+      // Other threads' guests change the map too.
+      Stream.changes,
+      Stream.map((ids): GuestPresence => ({
+        online: ids === "" ? [] : ids.split("\n").map((id) => GuestId.make(id)),
+      })),
+    );
+
   /**
    * The thread as the owner's thread subscription sends it: a bounded snapshot, then the same
    * wire events, batched the same way. Only the share's own state is added.
    */
   const stream = Effect.fn("GuestShareService.stream")(function* (session: string) {
-    const { thread, share } = yield* authorize(session, "session");
+    const { thread, share, guestId } = yield* authorize(session, "session");
     const snapshot = yield* orchestrator
       .getThreadSnapshotWindow(thread.id, {
         rowLimit: SNAPSHOT_ROW_LIMIT,
         userTurnLimit: SNAPSHOT_USER_TURN_LIMIT,
       })
       .pipe(Effect.mapError(() => inactive));
+    // Still this link, and still with this guest on it: the owner can remove one guest.
+    const stillIn = (current: OrchestrationV2AppThread) => {
+      const currentShare = current.guestShare;
+      return !!currentShare && currentShare.id === share.id && hasGuest(currentShare, guestId);
+    };
     // The share can end between authorize and this read; the live tail starts after it.
     if (
-      snapshot.projection.thread.guestShare?.id !== share.id ||
+      !stillIn(snapshot.projection.thread) ||
       snapshot.projection.thread.archivedAt !== null ||
       snapshot.projection.thread.deletedAt !== null
     ) {
@@ -537,7 +655,12 @@ const make = Effect.gen(function* () {
     // Read once; a provider configured mid-share shows after the guest reconnects.
     const providers = yield* providerRegistry.getProviders;
     const viewOf = (current: OrchestrationV2AppThread) =>
-      guestShareView(current, guestThreadModel(current.modelSelection, providers));
+      guestShareView(
+        current,
+        guestThreadModel(current.modelSelection, providers),
+        guestId,
+        providerAllowsDirect(current, providers),
+      );
     const initialView = viewOf(snapshot.projection.thread);
     if (initialView === null) return yield* inactive;
 
@@ -545,7 +668,7 @@ const make = Effect.gen(function* () {
     const endsShare = (event: OrchestrationV2DomainEvent) => {
       if (event.type === "thread.archived" || event.type === "thread.deleted") return true;
       const updated = threadOf(event);
-      return updated !== null && updated.guestShare?.id !== share.id;
+      return updated !== null && !stillIn(updated);
     };
     const live = orchestrator
       .streamStoredEventsFrom({ threadId: thread.id, afterSequence: snapshot.snapshotSequence })
@@ -571,6 +694,12 @@ const make = Effect.gen(function* () {
         // A failed read closes the response without `ended`: the browser reconnects, and
         // `authorize` decides whether the link still works.
         Stream.catchCause(() => Stream.empty),
+        Stream.merge(
+          presence(thread.id).pipe(
+            Stream.map(({ online }): GuestStreamEvent => ({ type: "presence", online })),
+          ),
+          { haltStrategy: "left" },
+        ),
       );
     const untilExpiry = Effect.sleep(
       Math.max(0, Date.parse(share.expiresAt) - DateTime.toEpochMillis(yield* DateTime.now)),
@@ -614,13 +743,101 @@ const make = Effect.gen(function* () {
             openingSnapshot.projection.visibleTurnItems.map((row) => row.item),
           );
           return record;
-        }),
+        }).pipe(
+          Effect.tap(() =>
+            guestId === undefined ? Effect.void : countViewer(thread.id, guestId, 1),
+          ),
+        ),
         (record) =>
           Effect.sync(() => {
             record.openStreams -= 1;
-          }),
+          }).pipe(
+            Effect.andThen(
+              guestId === undefined ? Effect.void : countViewer(thread.id, guestId, -1),
+            ),
+          ),
       ).pipe(Effect.as(events)),
     );
+  });
+
+  const handoff = Effect.fn("GuestShareService.handoff")(function* (session: string) {
+    const { thread, share, guestId } = yield* authorize(session, "session");
+    const token = yield* signSession({
+      kind: "handoff",
+      threadId: thread.id,
+      shareId: share.id,
+      ...(guestId === undefined ? {} : { guestId }),
+      expiresAt: DateTime.toEpochMillis(yield* DateTime.now) + GUEST_HANDOFF_TTL_MS,
+    });
+    yield* analytics.record("feature.used", { feature: "guest_share.handoff" });
+    return { token };
+  });
+
+  /**
+   * The branch the thread works on and whether its remote has all of it. Null when the thread
+   * has no repository with a remote, or git cannot say: the guest then gets the conversation only.
+   */
+  const checkoutOf = Effect.fn("GuestShareService.checkoutOf")(
+    function* (thread: OrchestrationV2AppThread) {
+      const project = yield* projects.getById(thread.projectId);
+      if (Option.isNone(project)) return null;
+      const cwd = thread.worktreePath ?? project.value.workspaceRoot;
+      const identity = yield* repositoryIdentities.resolve(cwd);
+      const status = yield* git.status({ cwd });
+      const branch = status.refName ?? thread.branch;
+      if (identity === null || branch === null) return null;
+      return {
+        repositoryKey: repositoryGroupingKeyOf(identity),
+        branch,
+        synced: status.hasUpstream && status.aheadCount === 0 && !status.hasWorkingTreeChanges,
+      } satisfies SharedThreadCheckout;
+    },
+    Effect.orElseSucceed(() => null),
+  );
+
+  const exportThread = Effect.fn("GuestShareService.exportThread")(function* (token: string) {
+    const { thread } = yield* authorize(token, "handoff");
+    // What the guest's page opens with: the same window, so nothing they could not already read.
+    const window = yield* orchestrator
+      .getThreadSnapshotWindow(thread.id, {
+        rowLimit: SNAPSHOT_ROW_LIMIT,
+        userTurnLimit: SNAPSHOT_USER_TURN_LIMIT,
+      })
+      .pipe(Effect.mapError(() => inactive));
+    const snapshot = buildBoundedThreadStreamSnapshot({
+      snapshotSequence: window.snapshotSequence,
+      projection: window.projection,
+    });
+    const spoken = snapshot.projection.visibleTurnItems.flatMap(
+      ({ item }): ReadonlyArray<SharedThreadMessage> =>
+        (item.type === "user_message" || (item.type === "assistant_message" && !item.streaming)) &&
+        item.text.trim() !== ""
+          ? [
+              {
+                role: item.type === "user_message" ? "user" : "assistant",
+                text: item.text,
+                createdAt: DateTime.formatIso(item.updatedAt),
+              },
+            ]
+          : [],
+    );
+    // The newest messages that fit, and always the last one.
+    const kept: Array<SharedThreadMessage> = [];
+    let chars = 0;
+    for (const message of spoken.toReversed()) {
+      const over =
+        kept.length >= SHARED_THREAD_MAX_MESSAGES ||
+        chars + message.text.length > SHARED_THREAD_MAX_CHARS;
+      if (over && kept.length > 0) break;
+      kept.push(message);
+      chars += message.text.length;
+    }
+    return {
+      title: thread.title,
+      messages: kept.toReversed(),
+      truncated: snapshot.hasMoreHistory === true || kept.length < spoken.length,
+      checkout: yield* checkoutOf(thread),
+    };
   });
 
   const unavailable = new GuestShareAccessError({ reason: "unavailable" });
@@ -756,6 +973,9 @@ const make = Effect.gen(function* () {
     check,
     submit,
     stream,
+    presence,
+    handoff,
+    exportThread,
     render,
     item,
     history,

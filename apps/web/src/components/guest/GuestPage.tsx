@@ -1,10 +1,13 @@
 import {
   EnvironmentId,
+  GUEST_HANDOFF_ROUTE,
   GUEST_MESSAGE_MAX_LENGTH,
   GUEST_HISTORY_ROUTE,
   GUEST_NAME_MAX_LENGTH,
   GUEST_ROUTE_PREFIX,
   GUEST_SHARE_PARAM,
+  GuestHandoff,
+  guestMessageAuthorName,
   GuestMessageId,
   type GuestRedeemRequest,
   type GuestShareView,
@@ -18,6 +21,7 @@ import type { LegendListRef } from "@legendapp/list/react";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
+import { buildJoinLink } from "@t3tools/shared/promptLinks";
 import {
   deriveRunlessWorkStartedAt,
   deriveThreadActivityRun,
@@ -159,6 +163,29 @@ async function fetchGuestHistoryPage(
   }
 }
 
+const decodeHandoff = Schema.decodeUnknownOption(GuestHandoff);
+
+/** Resolves to a handoff token, or to a message the guest can read. */
+async function requestGuestHandoff(shareId: string): Promise<GuestHandoff | string> {
+  const failed = "Could not start the handoff. Try again.";
+  try {
+    const response = await fetch(
+      `${GUEST_HANDOFF_ROUTE}?${GUEST_SHARE_PARAM}=${encodeURIComponent(shareId)}`,
+      { method: "POST" },
+    );
+    const json: unknown = await response.json().catch(() => null);
+    if (!response.ok) {
+      return Option.match(decodeErrorBody(json), {
+        onNone: () => failed,
+        onSome: ({ message }) => message,
+      });
+    }
+    return Option.getOrElse(decodeHandoff(json), () => failed);
+  } catch {
+    return "Could not reach the server.";
+  }
+}
+
 /** Resolves to null on success, or to a message the guest can read. */
 async function postGuest(
   path: "redeem" | `messages?${string}`,
@@ -199,7 +226,7 @@ type GuestAccess = "checking" | "session" | "name" | "none";
 
 export function GuestPage() {
   const [{ credential, shareId }] = useState(takeGuestEntry);
-  // A browser that already joined this share goes straight back in, even from the spent link.
+  // A browser that already joined this share goes straight back in instead of joining again.
   // Sessions are per share, so one for another link never stands in for this one.
   const [access, setAccess] = useState<GuestAccess>(shareId === null ? "none" : "checking");
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- fetches whether this browser already has a guest session and ignores the answer after cleanup
@@ -240,7 +267,7 @@ export function GuestPage() {
         <NameForm
           credential={credential}
           onJoined={() => {
-            // The invite is spent; a remount must open the session, not the name form again.
+            // This browser joined; a remount must open the session, not the name form again.
             capturedEntry = { credential: null, shareId };
             setAccess("session");
           }}
@@ -250,7 +277,7 @@ export function GuestPage() {
       ) : (
         <Notice
           title="This link has ended or is not valid"
-          detail="Ask the owner for a new link. Each link works in one browser."
+          detail="Ask the owner for a new link."
         />
       )}
     </div>
@@ -325,6 +352,7 @@ function GuestSession({ shareId }: { readonly shareId: string }) {
       <GuestThread
         view={stream.view}
         projection={stream.projection}
+        online={stream.online}
         awaitingRowIds={stream.awaitingRowIds}
         historyControls={historyControls}
       />
@@ -332,10 +360,7 @@ function GuestSession({ shareId }: { readonly shareId: string }) {
   }
   if (!rejected) return <Notice title="Connecting..." />;
   return (
-    <Notice
-      title="This link has ended or is not valid"
-      detail="Ask the owner for a new link. Each link works in one browser."
-    />
+    <Notice title="This link has ended or is not valid" detail="Ask the owner for a new link." />
   );
 }
 
@@ -409,13 +434,15 @@ const ignore = () => {};
  * revert, diffs, files, other threads, shell) is left out, so its control does not render.
  */
 function GuestThread({
-  view: { shareId, title, expiresAt, messages, model },
+  view: { shareId, title, expiresAt, messages, model, guests, guestId, direct },
   projection,
+  online,
   awaitingRowIds,
   historyControls,
 }: {
   readonly view: GuestShareView;
   readonly projection: OrchestrationV2ThreadProjection;
+  readonly online: GuestStreamState["online"];
   readonly awaitingRowIds: GuestStreamState["awaitingRowIds"];
   readonly historyControls: MessagesTimelineHistoryControls | undefined;
 }) {
@@ -471,10 +498,19 @@ function GuestThread({
     ),
   );
   const unplaced = unplacedGuestMessages(messages, items, awaitingRowIds);
+  const otherGuests = guests
+    .filter((guest) => guest.id !== guestId)
+    .map((guest) => (online.includes(guest.id) ? guest.name : `${guest.name} (away)`));
   return (
     <>
       <header className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-2.5">
         <h1 className="min-w-0 flex-1 truncate text-sm font-medium">{title}</h1>
+        {otherGuests.length === 0 ? null : (
+          <span className="max-w-[40%] min-w-0 truncate text-xs text-muted-foreground">
+            With {otherGuests.join(", ")}
+          </span>
+        )}
+        <ContinueOnMyMachine shareId={shareId} />
         <ExpiryLabel expiresAt={expiresAt} />
       </header>
       <div className="relative min-h-0 flex-1">
@@ -518,7 +554,15 @@ function GuestThread({
                 <ol className="chat-content-lane flex flex-col gap-4 pb-4">
                   {unplaced.map((message) => (
                     <li key={message.id}>
-                      <UnplacedGuestMessage shareId={shareId} message={message} />
+                      <UnplacedGuestMessage
+                        shareId={shareId}
+                        message={message}
+                        author={
+                          message.guestId === guestId
+                            ? "You"
+                            : guestMessageAuthorName({ guests, guestName: null }, message)
+                        }
+                      />
                     </li>
                   ))}
                 </ol>
@@ -535,8 +579,54 @@ function GuestThread({
         ) : null}
       </div>
       <div className={cn(LANE, "shrink-0 pb-4")}>
-        <GuestComposer shareId={shareId} model={model} onSent={() => follow.scrollToEnd(true)} />
+        <GuestComposer
+          shareId={shareId}
+          model={model}
+          direct={direct}
+          onSent={() => follow.scrollToEnd(true)}
+        />
       </div>
+    </>
+  );
+}
+
+/**
+ * Takes the guest to their own T3 Code with a short-lived token, where they get their own copy
+ * of this thread. From then on their turns run on their machine, not the owner's.
+ */
+function ContinueOnMyMachine({ shareId }: { readonly shareId: GuestShareView["shareId"] }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const start = async () => {
+    // Opened in the click itself: a tab opened after the request counts as a popup.
+    const tab = window.open("", "_blank");
+    setBusy(true);
+    const handoff = await requestGuestHandoff(shareId);
+    setBusy(false);
+    if (typeof handoff === "string") {
+      tab?.close();
+      setError(handoff);
+      return;
+    }
+    setError(null);
+    const url = buildJoinLink({ host: window.location.host, token: handoff.token });
+    if (tab === null) {
+      window.location.href = url;
+      return;
+    }
+    tab.opener = null;
+    tab.location.href = url;
+  };
+  return (
+    <>
+      {error === null ? null : (
+        <span role="alert" className="min-w-0 truncate text-xs text-destructive">
+          {error}
+        </span>
+      )}
+      <Button size="xs" variant="outline" disabled={busy} onClick={() => void start()}>
+        Continue on my machine
+      </Button>
     </>
   );
 }
@@ -564,16 +654,19 @@ const openExpandedImage = (preview: ExpandedImagePreview) => {
 function UnplacedGuestMessage({
   shareId,
   message,
+  author,
 }: {
   readonly shareId: GuestShareView["shareId"];
   readonly message: ThreadGuestMessage;
+  /** "You", or the name of the other guest who wrote it. */
+  readonly author: string;
 }) {
   // A dismissed message's files are deleted, so only their names remain.
   const served = message.status !== "dismissed";
   const url = (attachment: { readonly id: string }) => guestAttachmentUrl(shareId, attachment.id);
   return (
     <div className="flex flex-col items-end gap-1">
-      <GuestMessageName name="You" />
+      <GuestMessageName name={author} />
       <div
         className={cn(
           BUBBLE,
@@ -643,10 +736,13 @@ function StagedImage({ file }: { readonly file: File }) {
 function GuestComposer({
   shareId,
   model,
+  direct,
   onSent,
 }: {
   readonly shareId: GuestShareView["shareId"];
   readonly model: GuestThreadModel;
+  /** The owner lets this guest's messages through without sending each one. */
+  readonly direct: boolean;
   /** The guest's own message comes into view even if they had scrolled up, as the owner's does. */
   readonly onSent: () => void;
 }) {
@@ -791,7 +887,7 @@ function GuestComposer({
           </p>
         ) : (
           <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-            The owner approves each message
+            {direct ? "Your messages go straight to the agent" : "The owner approves each message"}
           </p>
         )}
         <button

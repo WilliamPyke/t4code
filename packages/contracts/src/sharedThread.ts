@@ -1,0 +1,72 @@
+import * as Schema from "effect/Schema";
+
+import {
+  CommandId,
+  NonNegativeInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
+import { SharedThreadCheckout } from "./guestShare.ts";
+import { ModelSelection } from "./modelSelection.ts";
+import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
+
+// Joining a shared thread on your own machine. The owner's side of it is in guestShare.ts.
+
+/** Where a shared thread comes from: its owner's T3 Connect host and a guest's handoff token. */
+export const SharedThreadSource = Schema.Struct({
+  host: TrimmedNonEmptyString,
+  token: TrimmedNonEmptyString,
+});
+export type SharedThreadSource = typeof SharedThreadSource.Type;
+
+/** What joining would bring over, for the user to confirm before anything is created. */
+export const SharedThreadPreview = Schema.Struct({
+  title: Schema.String,
+  messageCount: NonNegativeInt,
+  truncated: Schema.Boolean,
+  checkout: Schema.NullOr(SharedThreadCheckout),
+});
+export type SharedThreadPreview = typeof SharedThreadPreview.Type;
+
+export const SharedThreadJoinInput = Schema.Struct({
+  commandId: CommandId,
+  source: SharedThreadSource,
+  projectId: ProjectId,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  /** Start from the shared branch in a new worktree. That runs the project's setup script. */
+  checkout: Schema.Boolean,
+});
+export type SharedThreadJoinInput = typeof SharedThreadJoinInput.Type;
+
+export const SharedThreadJoinResult = Schema.Struct({ threadId: ThreadId });
+export type SharedThreadJoinResult = typeof SharedThreadJoinResult.Type;
+
+const SHARED_THREAD_JOIN_MESSAGES = {
+  invalid_host: "This link does not name a machine T3 Code can reach.",
+  unreachable: "Could not reach the machine that shared this thread. It may be offline.",
+  expired:
+    "This link has expired, or the thread is no longer shared with you. Open the shared thread and choose Continue on my machine again.",
+  invalid_response:
+    "The other machine sent something T3 Code could not read. It may run a different version.",
+  launch_failed: "Could not create the thread on this machine.",
+} as const;
+
+export class SharedThreadJoinError extends Schema.TaggedError<SharedThreadJoinError>()(
+  "SharedThreadJoinError",
+  {
+    reason: Schema.Literals([
+      "invalid_host",
+      "unreachable",
+      "expired",
+      "invalid_response",
+      "launch_failed",
+    ]),
+  },
+) {
+  override get message(): string {
+    return SHARED_THREAD_JOIN_MESSAGES[this.reason];
+  }
+}

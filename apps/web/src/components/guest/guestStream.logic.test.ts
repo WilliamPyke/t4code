@@ -30,6 +30,8 @@ const view: GuestShareView = {
   shareId: GuestShareId.make("share-1"),
   title: "Fix login",
   guestName: "Sam",
+  guests: [],
+  direct: false,
   expiresAt: "2026-10-24T00:00:00.000Z",
   messages: [],
   model: { driver: null, name: "gpt-5.4" },

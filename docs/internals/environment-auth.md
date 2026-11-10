@@ -29,15 +29,33 @@ vocabulary gives these grants a familiar meaning.
 
 ### Guest links are not sessions
 
-A [guest link](../user/guest-links.md) gives one browser read access to one
-thread and a way to propose messages. Its tokens are HMACs of the thread and
-share id under a server key ([GuestShareService](../../apps/server/src/guest/GuestShareService.ts)),
+A [guest link](../user/guest-links.md) gives a few browsers read access to one
+thread and a way to propose messages. Its tokens are HMACs of the thread, share,
+and guest id under a server key ([GuestShareService](../../apps/server/src/guest/GuestShareService.ts)),
 so nothing secret is stored. The share in the thread projection is the only
 state: replacing, closing, or archiving it revokes every token, and the
-orchestrator's serial commands make redeeming and sending happen once. Guest
+orchestrator's serial commands cap who joins and make each send happen once. Guest
 tokens never enter `SessionStore`, so no RPC, WebSocket, or MCP path can accept
 one. Guest routes also require T3 Connect to still serve the link's hostname;
 the request's Host header is not checked, because a LAN client can forge it.
+
+A guest can also take the thread to their own T3 Code. The guest page asks for a
+handoff token, a signed claim like the session's that lasts ten minutes and opens
+only the thread's export, and passes it with this host's name to the guest's own
+app. The guest's server then reads the export
+([SharedThreadJoin](../../apps/server/src/guest/SharedThreadJoin.ts)) and creates
+a thread of its own with that history. The export route is the one guest route a
+server calls, so it takes a bearer token, not the cookie. The host in such a link
+is untrusted: the joining server fetches only a public-looking https name, never
+follows a redirect with the token, and asks the user first. The export names the
+repository by its key, never its remote URL, which can hold a credential.
+
+A guest's message normally reaches the agent only when the owner sends it. The
+owner can trust one guest, and then the server sends that guest's messages
+itself, but only while the thread's provider is signed in with an API key
+(`providerAllowsDirectGuestSend`). That check is about provider terms, not
+security: a plan sign-in covers only the account holder's own prompts. Add a
+driver to it only after reading that provider's terms.
 
 ### MCP clients are a separate audience
 

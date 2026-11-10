@@ -5,6 +5,7 @@ import {
   ChatAttachmentId,
   CommandId,
   EventId,
+  type GuestId,
   GuestShareId,
   type GuestStreamEvent,
   MessageId,
@@ -14,7 +15,9 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   RunId,
+  type ServerProvider,
   ThreadId,
+  type VcsStatusResult,
   TurnItemId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -42,6 +45,7 @@ import { CloudManagedEndpointRuntime } from "../cloud/ManagedEndpointRuntime.ts"
 import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as CommandOutputHub from "../orchestration-v2/CommandOutputHub.ts";
 import * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
 import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
@@ -51,6 +55,8 @@ import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ResourceCleanupService from "../orchestration-v2/ResourceCleanupService.ts";
 import * as ProviderReplayHarness from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
@@ -86,9 +92,46 @@ const layerConnect = Layer.mock(CloudManagedEndpointRuntime)({
     protocol: "http2",
   })),
 });
+// The providers the fake registry reports. Tests set how the thread's provider is signed in.
+const providers = Ref.makeUnsafe<ReadonlyArray<ServerProvider>>([]);
 const layerProviders = Layer.mock(ProviderRegistry.ProviderRegistry)({
-  getProviders: Effect.succeed([]),
+  getProviders: Ref.get(providers),
 });
+// What git says about the shared thread's checkout. Null means it has no repository to share.
+const checkout = Ref.makeUnsafe<{ readonly branch: string; readonly synced: boolean } | null>(null);
+const layerCheckout = Layer.mergeAll(
+  Layer.mock(ProjectService.ProjectService)({
+    getById: () => Effect.succeedSome({ workspaceRoot: "/repo" } as never),
+  }),
+  Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
+    resolve: () =>
+      Effect.map(Ref.get(checkout), (facts) =>
+        facts === null
+          ? null
+          : {
+              canonicalKey: "github.com/acme/app",
+              locator: {
+                source: "git-remote" as const,
+                remoteName: "origin",
+                remoteUrl: "https://token@github.com/acme/app.git",
+              },
+            },
+      ),
+  }),
+  Layer.mock(GitWorkflow.GitWorkflowService)({
+    status: () =>
+      Effect.map(
+        Ref.get(checkout),
+        (facts) =>
+          ({
+            refName: facts?.branch ?? null,
+            hasUpstream: facts?.synced === true,
+            aheadCount: 0,
+            hasWorkingTreeChanges: false,
+          }) as VcsStatusResult,
+      ),
+  }),
+);
 const layerConfig = ServerConfig.layerTest(process.cwd(), { prefix: "t3-guest-share-" });
 // The real cleanup also closes terminals and previews; these tests only need the files gone.
 const layerCleanup = Layer.effect(
@@ -142,6 +185,7 @@ const layerTest = GuestShareService.layer.pipe(
     ),
   ),
   Layer.provide(layerProviders),
+  Layer.provide(layerCheckout),
   Layer.provideMerge(ServerSettings.layerTest({ guestSharingEnabled: true })),
   Layer.provide(layerConnect),
   Layer.provideMerge(layerAnalytics),
@@ -154,6 +198,8 @@ const threadId = ThreadId.make("thread:guest-share-service");
 
 const shareThreadFor = Effect.fn(function* (threadId: ThreadId) {
   yield* Ref.set(hostname, "env.t3.test");
+  yield* Ref.set(providers, []);
+  yield* Ref.set(checkout, null);
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   yield* orchestrator.dispatch({
     type: "thread.create",
@@ -177,13 +223,29 @@ const shareThreadFor = Effect.fn(function* (threadId: ThreadId) {
 });
 const shareThread = shareThreadFor(threadId);
 
-it.effect("spends an invite once and ends the guest stream when the owner stops sharing", () =>
+it.effect("lets each browser join an invite as its own guest until the owner stops sharing", () =>
   Effect.gen(function* () {
     const { orchestrator, guestShares, credential } = yield* shareThread;
     const { token: session } = yield* guestShares.redeem({ credential, name: "Sam" });
-    const again = yield* Effect.exit(guestShares.redeem({ credential, name: "Eve" }));
-    assert.isTrue(Exit.isFailure(again));
-    // The browser that joined can come back without the spent invite.
+    const eve = yield* guestShares.redeem({ credential, name: "Eve" });
+    assert.notEqual(eve.token, session);
+    const taken = yield* Effect.flip(guestShares.redeem({ credential, name: "sam" }));
+    assert.equal(taken.reason, "name_taken");
+    // Each guest's page names them, lists everyone, and shows what the others asked.
+    yield* guestShares.submit(session, { shareId: eve.shareId, text: "Sam's question" }, []);
+    const [eveView] = Array.from(
+      yield* Stream.runCollect(Stream.take(yield* guestShares.stream(eve.token), 1)),
+    );
+    if (eveView?.type !== "view") return assert.fail("Expected the share view first.");
+    assert.equal(eveView.view.guestName, "Eve");
+    assert.deepEqual(
+      eveView.view.guests.map((guest) => guest.name),
+      ["Sam", "Eve"],
+    );
+    const [asked] = eveView.view.messages;
+    assert.equal(asked?.text, "Sam's question");
+    assert.notEqual(asked?.guestId, eveView.view.guestId);
+    // The browser that joined can come back without joining again.
     assert.isTrue(Exit.isSuccess(yield* Effect.exit(guestShares.check(session))));
     // An invite token is not a session token.
     assert.isTrue(Exit.isFailure(yield* Effect.exit(guestShares.stream(credential))));
@@ -196,11 +258,157 @@ it.effect("spends an invite once and ends the guest stream when the owner stops 
     });
     const received = Array.from(yield* Stream.runCollect(events));
     assert.deepEqual(
-      received.map((event) => (event.type === "thread" ? event.item.kind : event.type)),
+      received
+        .filter((event) => event.type !== "presence")
+        .map((event) => (event.type === "thread" ? event.item.kind : event.type)),
       ["view", "snapshot", "ended"],
     );
     assert.isTrue(Exit.isFailure(yield* Effect.exit(guestShares.stream(session))));
     assert.isTrue(Exit.isFailure(yield* Effect.exit(guestShares.check(session))));
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(guestShares.check(eve.token))));
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("says who has the page open, and ends the page of a guest the owner removes", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const eve = yield* guestShares.redeem({ credential, name: "Eve" });
+    const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+    const [samId, eveId] = thread.guestShare!.guests!.map((guest) => guest.id) as [
+      GuestId,
+      GuestId,
+    ];
+
+    const online = yield* Queue.unbounded<ReadonlyArray<string>>();
+    yield* Stream.runForEach(guestShares.presence(threadId), (presence) =>
+      Queue.offer(online, presence.online.toSorted()),
+    ).pipe(Effect.forkScoped);
+    assert.deepEqual(yield* Queue.take(online), []);
+
+    yield* Stream.runDrain(yield* guestShares.stream(sam.token)).pipe(Effect.forkScoped);
+    assert.deepEqual(yield* Queue.take(online), [samId]);
+    const evePage = yield* Stream.runCollect(yield* guestShares.stream(eve.token)).pipe(
+      Effect.forkScoped,
+    );
+    assert.deepEqual(yield* Queue.take(online), [samId, eveId].toSorted());
+
+    yield* orchestrator.dispatch({
+      type: "thread.guest.remove",
+      commandId: CommandId.make("remove-eve"),
+      threadId,
+      guestId: eveId,
+    });
+    assert.equal(Array.from(yield* Fiber.join(evePage)).at(-1)?.type, "ended");
+    assert.deepEqual(yield* Queue.take(online), [samId]);
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(guestShares.check(eve.token))));
+    assert.isTrue(Exit.isSuccess(yield* Effect.exit(guestShares.check(sam.token))));
+    const closed = yield* Effect.flip(guestShares.redeem({ credential, name: "Eve again" }));
+    assert.equal(closed.reason, "closed");
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("sends a trusted guest's message itself only while the provider is on an API key", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const joined = yield* orchestrator.getThreadRecords(threadId, []);
+    const samId = joined.thread.guestShare!.guests![0]!.id;
+    const signedInWith = (type: string) =>
+      Ref.set(providers, [
+        { instanceId, driver: "codex", auth: { status: "authenticated", type }, models: [] },
+      ] as unknown as ReadonlyArray<ServerProvider>);
+    const trust = (trusted: boolean) =>
+      orchestrator.dispatch({
+        type: "thread.guest.trust",
+        commandId: CommandId.make(`trust:${trusted}`),
+        threadId,
+        guestId: samId,
+        trusted,
+      });
+    const ask = (text: string) => guestShares.submit(sam.token, { shareId: sam.shareId, text }, []);
+    const state = orchestrator.getThreadRecords(threadId, ["messages"]).pipe(
+      Effect.map(({ thread, messages }) => ({
+        waiting: thread.guestShare!.messages.map((message) => message.status),
+        sent: messages.map((message) => message.text),
+      })),
+    );
+
+    // An API key alone is not enough: the owner has to trust the guest.
+    yield* signedInWith("apiKey");
+    yield* ask("First");
+    // Nor is trust alone: a plan sign-in covers only the owner's own prompts.
+    yield* trust(true);
+    yield* signedInWith("chatgpt");
+    yield* ask("Second");
+    assert.deepEqual(yield* state, { waiting: ["pending", "pending"], sent: [] });
+
+    yield* signedInWith("apiKey");
+    yield* ask("Third");
+    assert.deepEqual(yield* state, {
+      waiting: ["pending", "pending", "sent"],
+      sent: ["Message from guest Sam, sent without the owner reading it:\n\nThird"],
+    });
+    const [opened] = Array.from(
+      yield* Stream.runCollect(Stream.take(yield* guestShares.stream(sam.token), 1)),
+    );
+    assert.isTrue(opened?.type === "view" && opened.view.direct);
+
+    yield* trust(false);
+    yield* ask("Fourth");
+    assert.equal((yield* state).waiting.at(-1), "pending");
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("hands a guest a short-lived token that only reads the thread's export", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("owner-message"),
+      threadId,
+      messageId: MessageId.make("message:owner"),
+      text: "Fix the login bug",
+      attachments: [],
+      dispatchMode: { type: "defer_start" },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    yield* Ref.set(checkout, { branch: "fix/login", synced: false });
+
+    const { token } = yield* guestShares.handoff(sam.token);
+    const exported = yield* guestShares.exportThread(token);
+    assert.equal(exported.title, "Review me");
+    assert.deepEqual(
+      exported.messages.map((message) => [message.role, message.text]),
+      [["user", "Fix the login bug"]],
+    );
+    // The repository is named, but its remote URL can hold a credential and stays here.
+    assert.deepEqual(exported.checkout, {
+      repositoryKey: "github.com/acme/app",
+      branch: "fix/login",
+      synced: false,
+    });
+    assert.notInclude(JSON.stringify(exported), "token@");
+
+    // Neither token stands in for the other.
+    assert.equal((yield* Effect.flip(guestShares.check(token))).reason, "invalid");
+    assert.equal((yield* Effect.flip(guestShares.exportThread(sam.token))).reason, "invalid");
+    assert.equal((yield* Effect.flip(guestShares.handoff(token))).reason, "invalid");
+
+    yield* TestClock.adjust("11 minutes");
+    assert.equal((yield* Effect.flip(guestShares.exportThread(token))).reason, "inactive");
+    // A fresh one works until the owner removes the guest.
+    const fresh = yield* guestShares.handoff(sam.token);
+    const joined = yield* orchestrator.getThreadRecords(threadId, []);
+    yield* orchestrator.dispatch({
+      type: "thread.guest.remove",
+      commandId: CommandId.make("remove-sam"),
+      threadId,
+      guestId: joined.thread.guestShare!.guests![0]!.id,
+    });
+    assert.equal((yield* Effect.flip(guestShares.exportThread(fresh.token))).reason, "inactive");
   }).pipe(Effect.provide(layerTest)),
 );
 

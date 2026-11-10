@@ -1,7 +1,9 @@
 import {
   EventId,
   GUEST_COMMAND_OUTPUT_ROUTE,
+  GUEST_HANDOFF_ROUTE,
   GUEST_RENDER_ROUTE,
+  GuestId,
   GuestMessageId,
   GuestShareId,
   GuestStreamEvent,
@@ -110,17 +112,39 @@ const view: GuestShareView = {
   shareId: GuestShareId.make(SHARE_ID),
   title: "Fix login",
   guestName: "Sam",
+  guests: [],
+  direct: false,
   expiresAt: "2026-10-24T10:00:00.000Z",
   messages: [],
   model: { driver: ProviderDriverKind.make("codex"), name: "GPT-5.4", shortName: "5.4" },
+};
+
+/** The same share once Alex joined too and asked something the owner has not answered. */
+const sharedView: GuestShareView = {
+  ...view,
+  guestId: GuestId.make("guest-sam"),
+  guests: [
+    { id: GuestId.make("guest-sam"), name: "Sam", joinedAt: "2026-10-23T09:00:00.000Z" },
+    { id: GuestId.make("guest-alex"), name: "Alex", joinedAt: "2026-10-23T09:05:00.000Z" },
+  ],
+  messages: [
+    {
+      id: GuestMessageId.make("guest-message-alex"),
+      guestId: GuestId.make("guest-alex"),
+      text: "What about expiry?",
+      status: "pending",
+      submittedAt: "2026-10-23T10:01:00.000Z",
+    },
+  ],
 };
 
 /** The stream's opening, as the server sends it: the share, then the owner's snapshot. */
 const opening = (
   runs: ReadonlyArray<OrchestrationV2Run>,
   turnItems: ReadonlyArray<OrchestrationV2TurnItem>,
+  shown: GuestShareView = view,
 ): ReadonlyArray<GuestStreamEvent> => [
-  { type: "view", view },
+  { type: "view", view: shown },
   {
     type: "thread",
     item: {
@@ -223,7 +247,12 @@ describe("GuestPage", () => {
       .mockImplementation(async () => new Response(null, { status: 204 }));
     using _stream = vi
       .spyOn(window, "EventSource")
-      .mockImplementation(fakeEventSource(opening([run("run-1", 1, "completed")], items)) as never);
+      .mockImplementation(
+        fakeEventSource([
+          ...opening([run("run-1", 1, "completed")], items, sharedView),
+          { type: "presence", online: [GuestId.make("guest-alex")] },
+        ]) as never,
+      );
     using socket = vi.spyOn(window, "WebSocket");
     const container = document.createElement("div");
     container.style.cssText = "height: 900px; width: 900px; display: flex; flex-direction: column;";
@@ -247,6 +276,40 @@ describe("GuestPage", () => {
     expect(socket).not.toHaveBeenCalled();
     // The composer names the thread's model, as the owner's does, with nothing to pick.
     await expect.element(screen.getByLabelText("Model: GPT-5.4")).toBeVisible();
+    // The other guest is named, and what they asked waits under their name, not as "You".
+    await expect.element(screen.getByText("With Alex", { exact: true })).toBeVisible();
+    await expect.element(screen.getByText("What about expiry?")).toBeVisible();
+    await expect.element(screen.getByText("Alex (guest)")).toBeVisible();
+    expect(screen.getByText("You (guest)").elements()).toHaveLength(0);
+  });
+
+  it("takes the guest to their own T3 Code with a handoff token, not their session", async () => {
+    using _page = visit(`/guest?share=${SHARE_ID}`);
+    using fetchSpy = vi
+      .spyOn(window, "fetch")
+      .mockImplementation(async (url) =>
+        String(url).startsWith(GUEST_HANDOFF_ROUTE)
+          ? Response.json({ token: "payload.signature" })
+          : new Response(null, { status: 204 }),
+      );
+    using _stream = vi
+      .spyOn(window, "EventSource")
+      .mockImplementation(fakeEventSource(opening([run("run-1", 1, "completed")], items)) as never);
+    const tab = { opener: window as unknown, location: { href: "" }, close: vi.fn() };
+    using _open = vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
+    await using screen = await render(<GuestPage />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Continue on my machine" }));
+    await vi.waitFor(() =>
+      expect(tab.location.href).toBe(
+        `https://app.t3.codes/join?host=${encodeURIComponent(window.location.host)}&token=payload.signature`,
+      ),
+    );
+    expect(fetchSpy).toHaveBeenCalledWith(`${GUEST_HANDOFF_ROUTE}?share=${SHARE_ID}`, {
+      method: "POST",
+    });
+    // The new tab cannot reach back into the page that holds the guest session.
+    expect(tab.opener).toBeNull();
   });
 
   it("sends attached files with the message, as form data", async () => {

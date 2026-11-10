@@ -1,4 +1,5 @@
 import type {
+  GuestId,
   GuestShareView,
   GuestThreadModel,
   OrchestrationV2AppThread,
@@ -20,17 +21,35 @@ export function guestThreadModel(
   };
 }
 
-/** The share as its guest sees it, or null before the guest has joined. */
+/**
+ * The share as one of its guests sees it, or null if that guest has not joined. No id means the
+ * one guest of a link made before several could join.
+ */
 export function guestShareView(
   thread: OrchestrationV2AppThread,
   model: GuestThreadModel,
+  guestId: GuestId | undefined,
+  /** The thread's provider lets a trusted guest's message through; see `sendsDirectly`. */
+  providerAllowsDirect: boolean,
 ): GuestShareView | null {
   const share = thread.guestShare;
-  if (!share || share.guestName === null) return null;
+  if (!share) return null;
+  const guests = share.guests ?? [];
+  const guest = guests.find((candidate) => candidate.id === guestId);
+  const guestName =
+    guestId === undefined
+      ? share.guests === undefined
+        ? share.guestName
+        : null
+      : (guest?.name ?? null);
+  if (guestName === null) return null;
   return {
     shareId: share.id,
     title: thread.title,
-    guestName: share.guestName,
+    guestName,
+    ...(guestId === undefined ? {} : { guestId }),
+    guests,
+    direct: providerAllowsDirect && guest?.trusted === true,
     expiresAt: share.expiresAt,
     messages: share.messages,
     model,
