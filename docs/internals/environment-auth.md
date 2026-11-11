@@ -44,11 +44,35 @@ handoff token, a signed claim like the session's that lasts ten minutes and open
 only the thread's export, and passes it with this host's name to the guest's own
 app. The guest's server then reads the export
 ([SharedThreadJoin](../../apps/server/src/guest/SharedThreadJoin.ts)) and creates
-a thread of its own with that history. The export route is the one guest route a
-server calls, so it takes a bearer token, not the cookie. The host in such a link
-is untrusted: the joining server fetches only a public-looking https name, never
-follows a redirect with the token, and asks the user first. The export names the
-repository by its key, never its remote URL, which can hold a credential.
+a thread of its own with that history. The export and room routes are the guest
+routes a server calls, so they take a bearer token, not the cookie. The host in
+such a link is untrusted: the joining server calls only a public-looking https
+name, never follows a redirect with a token, and asks the user first. The export
+names the repository by its key, never its remote URL, which can hold a
+credential.
+
+The export also carries a room token, a third kind of signed claim. It lasts as
+long as the share and does two things: post a turn the guest ran on their own
+machine, as text, for the room to read, and read what the room said after a
+cursor. The guest's server keeps it in its secret
+store, not on the thread, and posts each finished run
+([SharedRoomLink](../../apps/server/src/guest/SharedRoomLink.ts)). The owner's
+side stores a few such turns on the share, bounded in count, size, and rate, and
+only shows them. A posted turn must never start a run or become a message in the
+owner's thread: a plan sign-in covers the account holder's own prompts, and that
+text was written on someone else's machine. A room that has ended answers 410,
+which disconnects the guest's thread; a tunnel that is down or a beta that is off
+answers 403, which may pass.
+
+The same rule holds in the other direction. What the room said reaches the
+guest's machine only when its user asks (`sharedThread.catchUp`), and only as
+text the client attaches to that user's next message as a `room-updates` context
+record. Nothing on that path may dispatch a message or start a run: the joiner's
+plan covers the joiner's prompts, not the room's. Both servers bound and
+sanitize the text, since each is untrusted to the other, and the prompt
+projection labels it as other people's words. Advancing the cursor on fetch, not
+on send, is deliberate: a chip the user removes is a choice not to pass those
+updates on.
 
 A guest's message normally reaches the agent only when the owner sends it. The
 owner can trust one guest, and then the server sends that guest's messages
@@ -56,6 +80,12 @@ itself, but only while the thread's provider is signed in with an API key
 (`providerAllowsDirectGuestSend`). That check is about provider terms, not
 security: a plan sign-in covers only the account holder's own prompts. Add a
 driver to it only after reading that provider's terms.
+
+A guest's typed name is not an identity. A guest can prove a GitHub account with
+the device flow ([GuestSignIn](../../apps/server/src/guest/GuestSignIn.ts)): the
+server reads the login and id, then drops the token. The owner's saved
+contributors are matched by login the first time and by id after that, because a
+login can be renamed away and taken by someone else.
 
 ### MCP clients are a separate audience
 

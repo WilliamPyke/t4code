@@ -15,9 +15,10 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
+import { HttpClient, HttpClientRequest } from "effect/http";
 
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
+import * as SharedRoomLink from "./SharedRoomLink.ts";
 
 const REQUEST_TIMEOUT = Duration.seconds(20);
 // Well over the largest export an honest host sends, so a declared size past it is refused unread.
@@ -25,24 +26,14 @@ const MAX_EXPORT_BYTES = 4 * 1024 * 1024;
 
 const decodeExport = Schema.decodeUnknownEffect(Schema.toCodecJson(SharedThreadExport));
 
-/**
- * Where a link's host serves its export, or null. The host comes from a link someone sent, so
- * only a public-looking name is fetched: no port, path, address, or local name, which would
- * point this server at its own network.
- */
-export function sharedThreadExportUrl(host: string): string | null {
-  const name = host.toLowerCase();
-  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(name) || /^[0-9.]+$/.test(name)) return null;
-  if (name.endsWith(".local") || name.endsWith(".localhost") || name.endsWith(".internal")) {
-    return null;
-  }
-  return `https://${name}${GUEST_EXPORT_ROUTE}`;
-}
+/** Where a link's host serves its export, or null for a host this server must not call. */
+export const sharedThreadExportUrl = (host: string): string | null =>
+  SharedRoomLink.sharedThreadRouteUrl(host, GUEST_EXPORT_ROUTE);
 
 /**
- * Brings a thread someone shared to this machine as a new thread of the user's own. A one-time
- * copy: this server only reads the owner's export, and every turn in the new thread runs here,
- * under this machine's provider login. Nothing is sent back to the owner's thread.
+ * Brings a thread someone shared to this machine as a new thread of the user's own. Every turn
+ * in the new thread runs here, under this machine's provider login. When the owner's server
+ * offers a room, the thread stays connected to it and shows its turns there.
  */
 export class SharedThreadJoin extends Context.Service<
   SharedThreadJoin,
@@ -58,10 +49,8 @@ export class SharedThreadJoin extends Context.Service<
 
 const make = Effect.gen(function* () {
   const launches = yield* ThreadLaunch.ThreadLaunchService;
-  // The token goes only to the host the link names: a redirect could forward it anywhere.
-  const http = HttpClient.transform(yield* HttpClient.HttpClient, (response) =>
-    Effect.provideService(response, FetchHttpClient.RequestInit, { redirect: "manual" }),
-  );
+  const rooms = yield* SharedRoomLink.SharedRoomLink;
+  const http = SharedRoomLink.withoutRedirects(yield* HttpClient.HttpClient);
   const fail = (reason: SharedThreadJoinError["reason"]) => new SharedThreadJoinError({ reason });
 
   const fetchExport = Effect.fn("SharedThreadJoin.fetchExport")(function* (
@@ -101,6 +90,7 @@ const make = Effect.gen(function* () {
       messageCount: shared.messages.length,
       truncated: shared.truncated,
       checkout: shared.checkout,
+      ...(shared.room === undefined ? {} : { live: true }),
     };
   });
 
@@ -132,7 +122,11 @@ const make = Effect.gen(function* () {
                 })),
                 notice: `Copied from "${title}", a thread shared from another machine.${
                   shared.truncated ? " Its earlier messages were left out." : ""
-                } Turns here run on this machine and are not sent back.`,
+                } Turns here run on this machine.${
+                  shared.room === undefined
+                    ? " They are not sent back."
+                    : " While this thread's header says your turns show in the room, each prompt and your agent's final reply are shown to the room it came from."
+                }`,
               },
             }),
         createdBy: "user",
@@ -142,6 +136,14 @@ const make = Effect.gen(function* () {
         Effect.tapError((cause) => Effect.logWarning("Could not join a shared thread", { cause })),
         Effect.mapError(() => fail("launch_failed")),
       );
+    if (shared.room !== undefined) {
+      yield* rooms.connect(
+        launched.threadId,
+        input.source.host,
+        shared.room,
+        shared.messages.at(-1)?.createdAt,
+      );
+    }
     return { threadId: launched.threadId };
   });
 

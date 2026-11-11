@@ -19,8 +19,15 @@ function hasConnectCliAuthConfig(): boolean {
   );
 }
 
+// A fork with its own sign-in has no hosted app, so its CLI points T3CODE_HOSTED_APP_URL at the local one.
+function isLoopbackApp(): boolean {
+  return ["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname);
+}
+
 export function connectCliAuthRoutesEnabled(): boolean {
-  return isHostedStaticApp() && hasCloudPublicConfig() && hasConnectCliAuthConfig();
+  return (
+    (isHostedStaticApp() || isLoopbackApp()) && hasCloudPublicConfig() && hasConnectCliAuthConfig()
+  );
 }
 
 export function buildConnectCliClerkAuthorizeUrl(request: ConnectAuthorizeRequest): string | null {

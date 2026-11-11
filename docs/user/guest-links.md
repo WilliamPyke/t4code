@@ -31,6 +31,13 @@ Choose **Stop sharing** to end the link for everyone at once. Archiving the thre
 link, or unlinking the machine from T3 Connect also ends it. You can send or dismiss guest messages
 from the mobile app.
 
+## See the room as a board
+
+On web, choose **Board** in a shared thread's header. The thread and each guest appear as cards
+you can drag, with what each guest has waiting for you, and you can add notes. Scroll to move,
+and hold Ctrl or Cmd while scrolling to zoom. The arrangement and the notes are yours alone for
+now: they are kept in this browser and guests do not see them.
+
 ## Remove a guest
 
 On web, click the guest names in the thread header and choose **Remove** under the guest. They lose
@@ -54,6 +61,22 @@ full access that lets them have the agent run anything on your machine, so trust
 would hand your terminal to, and prefer a mode that asks before acting. Their usage is billed to
 your key.
 
+### Approve contributors once
+
+A typed name proves nothing, so the switch above is per guest and per link. To approve someone
+for every link, list their GitHub username under **Settings → Labs → Guest links → Approved
+contributors**. When they join a link and choose **Sign in with GitHub** on the shared page, they
+type a code on GitHub, and from then on their messages are sent without asking on that thread. You
+can also approve a signed-in guest from the guest names in the thread header.
+
+The first sign-in ties the username to that GitHub account, so someone who takes the username later
+is not approved. Removing a username applies to links that person joins afterwards; turn off
+**Send without asking** on a thread to stop them there now. The same API key rule applies.
+
+The shared page offers the sign-in only when the server that runs the thread was started with a
+GitHub app's client ID in `T3CODE_GITHUB_APP_CLIENT_ID`. T3 Code reads the guest's username and
+account number, then discards the token.
+
 ## Continue on your own machine
 
 A guest who has T3 Code can take the thread to their own machine. On the shared thread's page,
@@ -67,14 +90,52 @@ machine, then shows what comes over and offers:
 - **Conversation only**, which starts a thread without a project.
 
 You get your own thread with the conversation as its history, and the agent is handed that history
-on your first message. It is a one-time copy: it does not update when the owner's thread moves on,
-and nothing you do in it goes back. Your turns run on your machine, with your own provider login,
-model, and permission mode, so this works on a Claude or ChatGPT plan. Share code back the usual
-way, with a branch or a pull request.
+on your first message. Your turns run on your machine, with your own provider login, model, and
+permission mode, so this works on a Claude or ChatGPT plan. Share code back the usual way, with a
+branch or a pull request.
+
+### Your turns show in the room
+
+The thread stays connected to the room it came from. Each time a turn finishes in it, T3 Code
+sends the prompt and your agent's final reply to the owner's machine, which shows them to the owner
+and every guest as your agent's, for example **Sam's agent**. T3 Code tells you this before you
+join, and the thread header says **Your turns show in the room** while it is on. Choose **Leave
+room** there to stop; your thread keeps working as a plain copy, and what the room already shows
+stays until the owner stops sharing.
+
+Only that text goes back: no files, command output, reasoning, or diffs. A long prompt or reply is
+shortened, and the room keeps the 10 most recent turns from all guests. A turn you interrupt, or
+one that fails, is not sent. The connection ends on its own when the link expires, the owner stops
+sharing, or the owner removes you.
+
+For the owner: a guest's turn is only shown. It never starts a turn on your thread and your agent
+never receives it, so nothing a guest runs is billed to you or counted as your prompt. To act on
+it, write your own message. Removing a guest also removes the turns they posted.
+
+### Catch up on the room
+
+Your thread does not update by itself when the owner's thread or other guests move on. Choose
+**Catch up** in the thread header, or above the composer in the mobile app, to bring over what the
+room said since you joined or last caught up: the owner's messages, their agent's final replies,
+guest messages the owner sent, and other guests' own turns. Your own turns are left out. A reply
+from the owner's agent comes over once its turn has ended, so a turn still running when you catch
+up arrives with the next one.
+
+Nothing runs when you catch up. The updates appear as a **Room updates** chip in your next message;
+open it to read them, remove it if you do not want them, and send the message yourself. Your agent
+reads them as what other people and their agents said, not as your instructions, so say in your
+message what you want done with them. Removing the chip does not bring those updates back on the
+next catch-up; the shared page still shows them.
+
+One catch-up brings at most the 50 most recent updates, as text only, and shortens long ones; the
+chip says when something was cut. If the room has ended or the owner removed you, the header stops
+saying you are in it.
 
 The copy holds the messages you could see when you chose it, up to the most recent 400. Images and
 other files in them stay behind. The link T3 Code opens is good for 10 minutes; choose **Continue
-on my machine** again if it runs out. This works on desktop and web, not yet in the mobile app.
+on my machine** again if it runs out. Joining works on desktop and web, not yet in the mobile app.
+A thread you already joined shows **Catch up** and **Leave room** above the composer there; the
+mobile app does not show guests' own turns.
 
 ## What a guest sees
 
@@ -84,7 +145,8 @@ machine, its reasoning, plans, questions, and its work, with command output when
 command. Their composer shows the thread's model, but they cannot change it. They do not see diffs, and they cannot act on the thread: no forking,
 reverting, opening files on your machine, or answering the agent for you.
 
-Guests also see each other's names, who is away, and the messages each of them has waiting.
+Guests also see each other's names, who is away, the messages each of them has waiting, and the
+turns guests [ran on their own machines](#your-turns-show-in-the-room).
 
 Anything the agent read or printed can show, such as a value from a file, and a guest can
 [take a copy of the conversation](#continue-on-your-own-machine) that stays with them after you stop

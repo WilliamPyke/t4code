@@ -1,10 +1,13 @@
 import { useAuth } from "@clerk/react";
 import { Link } from "@tanstack/react-router";
-import { managedCapabilityDenial } from "@t3tools/contracts";
+import { GUEST_NAME_MAX_LENGTH, managedCapabilityDenial } from "@t3tools/contracts";
+import { XIcon } from "lucide-react";
+import { type FormEvent, useState } from "react";
 
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
@@ -131,7 +134,76 @@ function GuestLinksRow() {
           aria-label="Guest links"
         />
       }
-    />
+    >
+      {settings.guestSharingEnabled ? (
+        <div className="mt-2 mb-2 border-l-2 border-border/60 ps-3">
+          <GuestContributors />
+        </div>
+      ) : null}
+    </SettingsRow>
+  );
+}
+
+/** GitHub usernames whose messages go to the agent without a Send, once they sign in. */
+function GuestContributors() {
+  const contributors = useScopedSettings((settings) => settings.guestContributors);
+  const updateSettings = useUpdateScopedSettings();
+  const [draft, setDraft] = useState("");
+  const login = draft.trim().replace(/^@/, "");
+  const known = contributors.some(
+    (contributor) => contributor.login.toLowerCase() === login.toLowerCase(),
+  );
+  const add = (event: FormEvent) => {
+    event.preventDefault();
+    if (login === "" || known) return;
+    updateSettings({ guestContributors: [...contributors, { login }] });
+    setDraft("");
+  };
+  return (
+    <div className="flex flex-col gap-2 py-2">
+      <p className="text-xs text-muted-foreground">
+        Approved contributors: a guest who signs in with one of these GitHub accounts has their
+        messages sent without asking, on threads whose provider uses an API key. Removing someone
+        applies to links they join later.
+      </p>
+      {contributors.length === 0 ? null : (
+        <ul className="flex flex-wrap gap-1.5">
+          {contributors.map((contributor) => (
+            <li
+              key={contributor.login.toLowerCase()}
+              className="flex items-center gap-1 rounded-md border border-border ps-2 text-xs"
+            >
+              @{contributor.login}
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                aria-label={`Remove ${contributor.login}`}
+                onClick={() =>
+                  updateSettings({
+                    guestContributors: contributors.filter((other) => other !== contributor),
+                  })
+                }
+              >
+                <XIcon />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form className="flex max-w-sm items-center gap-2" onSubmit={add}>
+        <Input
+          size="sm"
+          value={draft}
+          maxLength={GUEST_NAME_MAX_LENGTH}
+          placeholder="GitHub username"
+          aria-label="GitHub username to approve"
+          onChange={(event) => setDraft(event.target.value)}
+        />
+        <Button type="submit" size="sm" variant="outline" disabled={login === "" || known}>
+          Add
+        </Button>
+      </form>
+    </div>
   );
 }
 

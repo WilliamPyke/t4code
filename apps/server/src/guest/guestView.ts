@@ -31,6 +31,8 @@ export function guestShareView(
   guestId: GuestId | undefined,
   /** The thread's provider lets a trusted guest's message through; see `sendsDirectly`. */
   providerAllowsDirect: boolean,
+  /** This server can sign a guest in with GitHub. */
+  signIn = false,
 ): GuestShareView | null {
   const share = thread.guestShare;
   if (!share) return null;
@@ -50,8 +52,10 @@ export function guestShareView(
     ...(guestId === undefined ? {} : { guestId }),
     guests,
     direct: providerAllowsDirect && guest?.trusted === true,
+    ...(signIn && guestId !== undefined ? { signIn: true } : {}),
     expiresAt: share.expiresAt,
     messages: share.messages,
+    ...(share.turns === undefined ? {} : { turns: share.turns }),
     model,
   };
 }

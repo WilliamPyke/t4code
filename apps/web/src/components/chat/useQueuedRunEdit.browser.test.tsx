@@ -168,6 +168,7 @@ const savedContent = (prompt: string) => ({
   previewAnnotations: [],
   threadContexts: [],
   environmentContexts: [],
+  roomUpdatesContexts: [],
 });
 
 const promptOf = (ref: ScopedThreadRef) =>

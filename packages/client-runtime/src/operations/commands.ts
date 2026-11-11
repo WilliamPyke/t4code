@@ -483,6 +483,8 @@ export const removeGuest = Effect.fn("EnvironmentCommands.removeGuest")(function
 export interface ResolveGuestMessageInput extends ThreadCommandInput {
   readonly guestMessageId: GuestMessageId;
   readonly decision: "send" | "dismiss";
+  /** The model the owner has picked for their next message, so a guest's turn runs on it too. */
+  readonly modelSelection?: ModelSelection;
   readonly creationSource?: "web" | "mobile";
 }
 /** Send runs the guest's text as a normal turn; the server supplies the text, not the client. */
@@ -506,6 +508,7 @@ export const resolveGuestMessage = Effect.fn("EnvironmentCommands.resolveGuestMe
     guestMessageId: input.guestMessageId,
     text: "",
     attachments: [],
+    ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
     dispatchMode: { type: "queue_after_active" },
     createdBy: "user",
     creationSource: input.creationSource ?? "web",

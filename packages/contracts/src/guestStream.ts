@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { GuestId, GuestShareId, IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { ThreadGuest, ThreadGuestMessage } from "./guestShare.ts";
+import { ThreadGuest, ThreadGuestMessage, ThreadGuestTurn } from "./guestShare.ts";
 import { OrchestrationV2ThreadStreamItem } from "./orchestrationV2.ts";
 import { ProviderDriverKind } from "./providerInstance.ts";
 
@@ -30,9 +30,13 @@ export const GuestShareView = Schema.Struct({
   guests: Schema.Array(ThreadGuest),
   /** This guest's messages reach the agent as they are sent, with no wait for the owner. */
   direct: Schema.Boolean,
+  /** The owner's server can sign a guest in with GitHub. Absent from an older server. */
+  signIn: Schema.optional(Schema.Boolean),
   expiresAt: IsoDateTime,
   /** Every guest's messages, so the guests see what each other asked. */
   messages: Schema.Array(ThreadGuestMessage),
+  /** Turns guests ran on their own machines. Absent from an older server. */
+  turns: Schema.optional(Schema.Array(ThreadGuestTurn)),
   model: GuestThreadModel,
 });
 export type GuestShareView = typeof GuestShareView.Type;

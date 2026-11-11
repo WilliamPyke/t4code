@@ -3,6 +3,7 @@ import {
   CommandId,
   GUEST_PENDING_MESSAGE_LIMIT,
   GUEST_SHARE_MAX_GUESTS,
+  GUEST_TURN_LIMIT,
   GuestId,
   GuestMessageId,
   GuestShareId,
@@ -236,6 +237,53 @@ it.effect("removes one guest with their waiting messages and lets no one new in"
     // Sam still has the link, so it lets no one new in, under any name.
     assert.isTrue(yield* refused(join(GuestId.make("guest:sam-again"), "Not Sam")));
     yield* ask(alex, GuestMessageId.make("guest-message:alex-2"));
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("shows a guest's own turns on the share and starts nothing with them", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* setup;
+    yield* orchestrator.dispatch({
+      type: "thread.guest-share.redeem",
+      commandId: CommandId.make("redeem:sam"),
+      threadId,
+      shareId,
+      guestId: sam,
+      guestName: "Sam",
+    });
+    const post = (guestId: GuestId, id: string, commandId = `turn:${guestId}:${id}`) =>
+      orchestrator.dispatch({
+        type: "thread.guest-turn.post",
+        commandId: CommandId.make(commandId),
+        threadId,
+        shareId,
+        guestId,
+        turn: { id, prompt: "Why?", reply: `Because ${id}.` },
+      });
+    for (let index = 0; index < GUEST_TURN_LIMIT + 2; index += 1) yield* post(sam, `run:${index}`);
+    // The same turn posted again changes nothing and is not an error.
+    yield* post(sam, `run:${GUEST_TURN_LIMIT + 1}`, "turn:again");
+    const records = yield* orchestrator.getThreadRecords(threadId, ["runs", "messages"]);
+    const turns = records.thread.guestShare?.turns ?? [];
+    assert.lengthOf(turns, GUEST_TURN_LIMIT);
+    assert.deepEqual(
+      [turns[0]?.id, turns.at(-1)?.id, turns.at(-1)?.guestId],
+      ["run:2", `run:${GUEST_TURN_LIMIT + 1}`, sam],
+    );
+    // Shown only: no message for the owner's agent, and no run.
+    assert.lengthOf(records.runs, 0);
+    assert.lengthOf(records.messages, 0);
+    // Only someone on the link can post, and their turns leave with them.
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(post(alex, "run:alex"))));
+    yield* orchestrator.dispatch({
+      type: "thread.guest.remove",
+      commandId: CommandId.make("remove-sam"),
+      threadId,
+      guestId: sam,
+    });
+    const after = yield* orchestrator.getThreadRecords(threadId, []);
+    assert.deepEqual(after.thread.guestShare?.turns, []);
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(post(sam, "run:late"))));
   }).pipe(Effect.provide(layerTest)),
 );
 

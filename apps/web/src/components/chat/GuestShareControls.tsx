@@ -7,22 +7,31 @@ import {
   AuthOrchestrationOperateScope,
   type ChatAttachment,
   GUEST_SHARE_MAX_GUESTS,
+  guestContributorFor,
   guestMessageAuthorName,
   type GuestId,
   type GuestMessageId,
   guestShareStatusLabel,
+  type ModelSelection,
   providerAllowsDirectGuestSend,
   type ScopedThreadRef,
   type ThreadGuest,
   type ThreadGuestShare,
 } from "@t3tools/contracts";
-import { CheckIcon, CopyIcon, UserIcon } from "lucide-react";
+import {
+  roomCatchUpFailureMessage,
+  roomCatchUpOutcome,
+} from "@t3tools/client-runtime/room-catch-up";
+import { useNavigate } from "@tanstack/react-router";
+import { CheckIcon, CopyIcon, RadioIcon, UserIcon } from "lucide-react";
 import { useState } from "react";
 
+import { useComposerDraftStore } from "~/composerDraftStore";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useQuietThreadProjection } from "~/state/entities";
+import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "~/hooks/useSettings";
 import { useEnvironmentProviders } from "~/state/environments";
 import { serverEnvironment } from "~/state/server";
 import { useEnvironmentQuery } from "~/state/query";
@@ -57,6 +66,7 @@ import { type ChatFileAttachment, isImageAttachment } from "../../types";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { GuestMessageAttachments } from "./GuestMessageAttachments";
 import { GuestMessageName, guestBubbleClassName } from "./guestMessageStyle";
+import { GuestTurnList } from "./GuestTurnList";
 import { guestShareDialogThreadAtom } from "./guestShareDialogState";
 
 function useThreadGuestShare(threadRef: ScopedThreadRef | null): ThreadGuestShare | null {
@@ -199,11 +209,27 @@ export function GuestShareIndicator({ threadRef }: { readonly threadRef: ScopedT
     label: "stop guest share",
   });
   const [closing, setClosing] = useState(false);
+  const navigate = useNavigate();
   if (share === null) return null;
   return (
     <div className="flex shrink-0 items-center gap-1 text-muted-foreground text-xs">
       <UserIcon aria-hidden className="size-3.5" />
       <GuestShareStatus share={share} threadRef={threadRef} />
+      <Button
+        size="xs"
+        variant="ghost-muted"
+        onClick={() =>
+          void navigate({
+            to: "/board/$roomEnvironmentId/$roomThreadId",
+            params: {
+              roomEnvironmentId: threadRef.environmentId,
+              roomThreadId: threadRef.threadId,
+            },
+          })
+        }
+      >
+        Board
+      </Button>
       <Button
         size="xs"
         variant="ghost-muted"
@@ -282,13 +308,36 @@ function GuestList({
       .get(threadRef.environmentId)
       ?.find((provider) => provider.instanceId === instanceId),
   );
+  const contributors = useEnvironmentSettings(
+    threadRef.environmentId,
+    (settings) => settings.guestContributors,
+  );
+  const updateSettings = useUpdateEnvironmentSettings(threadRef.environmentId);
   const target = (guestId: GuestId) => ({ threadId: threadRef.threadId, guestId });
+  const setApproved = (guest: ThreadGuest, approved: boolean) => {
+    const { account } = guest;
+    if (account === undefined) return;
+    const saved = guestContributorFor(contributors, account);
+    updateSettings({
+      guestContributors: approved
+        ? [...contributors.filter((contributor) => contributor !== saved), account]
+        : contributors.filter((contributor) => contributor !== saved),
+    });
+    // Approving someone who is already here should not wait for their next link.
+    if (approved && guest.trusted !== true) {
+      void setGuestTrust({
+        environmentId: threadRef.environmentId,
+        input: { ...target(guest.id), trusted: true },
+      });
+    }
+  };
   return (
     <>
       {guests.map((guest) => (
         <MenuGroup key={guest.id}>
           <MenuGroupLabel>
-            {presence?.online.includes(guest.id) ? `${guest.name} · viewing now` : guest.name}
+            {guest.account === undefined ? guest.name : `${guest.name} (@${guest.account.login})`}
+            {presence?.online.includes(guest.id) ? " · viewing now" : ""}
           </MenuGroupLabel>
           <MenuCheckboxItem
             checked={guest.trusted === true}
@@ -305,6 +354,17 @@ function GuestList({
           >
             Send without asking
           </MenuCheckboxItem>
+          {guest.account === undefined ? null : (
+            <MenuCheckboxItem
+              checked={guestContributorFor(contributors, guest.account) !== undefined}
+              disabled={!canOperate}
+              closeOnClick={false}
+              aria-label={`Approve ${guest.account.login} on every link`}
+              onCheckedChange={(approved) => setApproved(guest, approved)}
+            >
+              Approved contributor
+            </MenuCheckboxItem>
+          )}
           <MenuItem
             variant="destructive"
             disabled={!canOperate}
@@ -327,9 +387,87 @@ function GuestList({
           : "Send without asking needs Claude or Codex signed in with an API key. A plan covers only your own prompts."}{" "}
         {joinsClosed
           ? "No one new can join with this link."
-          : "Removing a guest also stops new people joining."}
+          : "Removing a guest also stops new people joining."}{" "}
+        A guest who signs in with GitHub can be approved for every link.
       </p>
     </>
+  );
+}
+
+/** The turns guests ran on their own machines, at the end of the owner's timeline. */
+export function GuestTurns({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
+  const share = useThreadGuestShare(threadRef);
+  return share === null ? null : <GuestTurnList roster={share} turns={share.turns ?? []} />;
+}
+
+/**
+ * On a thread joined from someone's room: says its turns are shown there, with the way to read
+ * what the room said since and the way to stop.
+ */
+export function RoomLinkIndicator({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
+  const roomLink = useQuietThreadProjection(threadRef)?.projection.thread.roomLink ?? null;
+  const canLeave = useAtomValue(
+    serverEnvironment.leaveSharedRoom.permissionAtom(threadRef.environmentId),
+  );
+  const leaveSharedRoom = useAtomCommand(serverEnvironment.leaveSharedRoom, "leave room");
+  const canCatchUp = useAtomValue(
+    serverEnvironment.catchUpSharedRoom.permissionAtom(threadRef.environmentId),
+  );
+  const catchUpSharedRoom = useAtomCommand(serverEnvironment.catchUpSharedRoom, "catch up");
+  const nowMinute = useNowMinute();
+  const [leaving, setLeaving] = useState(false);
+  const [catchUp, setCatchUp] = useState<"idle" | "working" | string>("idle");
+  // The server clears an ended link when it next posts a turn or catches up.
+  if (roomLink === null || roomLink.expiresAt.slice(0, 16) <= nowMinute) return null;
+  return (
+    <div className="flex shrink-0 items-center gap-1 text-muted-foreground text-xs">
+      <RadioIcon aria-hidden className="size-3.5" />
+      <span>Your turns show in the room</span>
+      {catchUp === "idle" || catchUp === "working" ? null : <span role="status">· {catchUp}</span>}
+      <Button
+        size="xs"
+        variant="ghost-muted"
+        disabled={!canCatchUp || catchUp === "working"}
+        onClick={async () => {
+          setCatchUp("working");
+          const result = await catchUpSharedRoom({
+            environmentId: threadRef.environmentId,
+            input: { threadId: threadRef.threadId },
+          });
+          if (result._tag === "Failure") {
+            setCatchUp(
+              isAtomCommandInterrupted(result)
+                ? "idle"
+                : roomCatchUpFailureMessage(squashAtomCommandFailure(result)),
+            );
+            return;
+          }
+          const { record, status } = roomCatchUpOutcome(result.value);
+          // Only attached: the user reads the chip and sends the message themselves.
+          if (record !== null) {
+            useComposerDraftStore.getState().addRoomUpdatesContexts(threadRef, [record]);
+          }
+          setCatchUp(status);
+        }}
+      >
+        Catch up
+      </Button>
+      <Button
+        size="xs"
+        variant="ghost-muted"
+        disabled={!canLeave || leaving}
+        onClick={async () => {
+          setLeaving(true);
+          await leaveSharedRoom({
+            environmentId: threadRef.environmentId,
+            input: { threadId: threadRef.threadId },
+          });
+          setLeaving(false);
+        }}
+      >
+        Leave room
+      </Button>
+    </div>
   );
 }
 
@@ -339,10 +477,13 @@ function GuestList({
  */
 export function GuestPendingMessages({
   threadRef,
+  modelSelection,
   onImageExpand,
   onFileOpen,
 }: {
   readonly threadRef: ScopedThreadRef;
+  /** The composer's model, when the owner picked one that differs from the thread's. */
+  readonly modelSelection: ModelSelection | undefined;
   readonly onImageExpand: (preview: ExpandedImagePreview) => void;
   readonly onFileOpen: (attachment: ChatFileAttachment) => void;
 }) {
@@ -378,7 +519,12 @@ export function GuestPendingMessages({
     setBusyIds((ids) => new Set(ids).add(guestMessageId));
     await resolveGuestMessage({
       environmentId: threadRef.environmentId,
-      input: { threadId: threadRef.threadId, guestMessageId, decision },
+      input: {
+        threadId: threadRef.threadId,
+        guestMessageId,
+        decision,
+        ...(modelSelection === undefined ? {} : { modelSelection }),
+      },
     });
     setBusyIds((ids) => {
       const next = new Set(ids);

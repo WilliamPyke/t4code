@@ -118,6 +118,14 @@ const knownRecords: Record<(typeof COMPOSER_CONTEXT_KINDS)[number], Record<strin
     label: "vps",
     environmentId: "environment-vps",
   },
+  "room-updates": {
+    ...base,
+    kind: "room-updates",
+    label: "Room updates · 1 message",
+    messageCount: 1,
+    truncated: false,
+    text: "Room owner:\n  Ship it today.",
+  },
 };
 
 describe("ComposerContextRecord", () => {

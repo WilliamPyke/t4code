@@ -321,6 +321,9 @@ export function summarizeT3ToolCalls(
         quantity(countEntities(entityIds("worktreePath")), "worktree"),
       );
       break;
+    case "room-catch-up":
+      label = phrase("Caught up on", "catch up on", `the shared room ${times}`);
+      break;
     case "worktree-list":
       label = phrase("Listed", "list", `workspace branches ${times}`);
       break;

@@ -1601,6 +1601,16 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:shared-thread:join",
       tag: WS_METHODS.sharedThreadJoin,
     }),
+    // Stops a thread joined from a room showing its turns there.
+    leaveSharedRoom: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:shared-thread:leave",
+      tag: WS_METHODS.sharedThreadLeave,
+    }),
+    // Reads what the room said since the joined thread last caught up. Starts no turn.
+    catchUpSharedRoom: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:shared-thread:catch-up",
+      tag: WS_METHODS.sharedThreadCatchUp,
+    }),
     // Which guests have a shared thread open. Mounted only while the owner's guest list is open.
     guestPresence: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:guest-share:presence",

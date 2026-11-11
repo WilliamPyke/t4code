@@ -1,5 +1,7 @@
 import * as WorktreeBranchSync from "./WorktreeBranchSync.ts";
 import * as GuestShareService from "../guest/GuestShareService.ts";
+import * as GuestSignIn from "../guest/GuestSignIn.ts";
+import * as SharedRoomLink from "../guest/SharedRoomLink.ts";
 import * as SharedThreadJoin from "../guest/SharedThreadJoin.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
@@ -369,6 +371,10 @@ export const layer = Layer.mergeAll(
   layerLegacyV1ThreadImporterProvided,
 );
 
+const layerSharedRoomLinkProvided = SharedRoomLink.layer.pipe(
+  Layer.provide(layerOrchestratorProvided),
+);
+
 export const layerProduction = Layer.mergeAll(
   WorktreeBranchSync.layer.pipe(
     Layer.provide(Layer.merge(layerThreadManagementProvided, ProjectionStore.layer)),
@@ -380,10 +386,18 @@ export const layerProduction = Layer.mergeAll(
   layerScheduledTaskProvided,
   layerScratchThreadPromotionProvided,
   layerSecretRequestsProvided,
-  SharedThreadJoin.layer.pipe(Layer.provide(layerThreadLaunchProvided)),
+  layerSharedRoomLinkProvided,
+  SharedThreadJoin.layer.pipe(
+    Layer.provide(Layer.merge(layerThreadLaunchProvided, layerSharedRoomLinkProvided)),
+  ),
   GuestShareService.layer.pipe(
     Layer.provide(
-      Layer.mergeAll(layerOrchestratorProvided, layerCommandOutputHubProvided, layerProjectService),
+      Layer.mergeAll(
+        layerOrchestratorProvided,
+        layerCommandOutputHubProvided,
+        layerProjectService,
+        GuestSignIn.layer,
+      ),
     ),
   ),
   UsageLimitRecoveryWorker.layer.pipe(

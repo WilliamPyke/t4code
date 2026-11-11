@@ -178,6 +178,9 @@ import {
   SharedThreadJoinError,
   SharedThreadJoinInput,
   SharedThreadJoinResult,
+  SharedThreadCatchUpInput,
+  SharedThreadCatchUpResult,
+  SharedThreadLeaveInput,
   SharedThreadPreview,
   SharedThreadSource,
 } from "./sharedThread.ts";
@@ -568,6 +571,8 @@ export const WS_METHODS = {
   guestShareSubscribePresence: "guestShare.subscribePresence",
   sharedThreadPreview: "sharedThread.preview",
   sharedThreadJoin: "sharedThread.join",
+  sharedThreadLeave: "sharedThread.leave",
+  sharedThreadCatchUp: "sharedThread.catchUp",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
 
@@ -2047,6 +2052,17 @@ const WsSharedThreadJoinRpc = Rpc.make(WS_METHODS.sharedThreadJoin, {
   error: Schema.Union([SharedThreadJoinError, EnvironmentAuthorizationError]),
 });
 
+const WsSharedThreadLeaveRpc = Rpc.make(WS_METHODS.sharedThreadLeave, {
+  payload: SharedThreadLeaveInput,
+  error: Schema.Union([SharedThreadJoinError, EnvironmentAuthorizationError]),
+});
+
+const WsSharedThreadCatchUpRpc = Rpc.make(WS_METHODS.sharedThreadCatchUp, {
+  payload: SharedThreadCatchUpInput,
+  success: SharedThreadCatchUpResult,
+  error: Schema.Union([SharedThreadJoinError, EnvironmentAuthorizationError]),
+});
+
 const WsGuestShareCreateRpc = Rpc.make(WS_METHODS.guestShareCreate, {
   payload: GuestShareCreateInput,
   success: GuestShareCreateResult,
@@ -2100,6 +2116,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsGuestShareSubscribePresenceRpc,
   WsSharedThreadPreviewRpc,
   WsSharedThreadJoinRpc,
+  WsSharedThreadLeaveRpc,
+  WsSharedThreadCatchUpRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

@@ -1,5 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  roomCatchUpFailureMessage,
+  roomCatchUpOutcome,
+} from "@t3tools/client-runtime/room-catch-up";
+import {
   type AtomCommandResult,
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -12,6 +16,7 @@ import {
   type ThreadGuestMessage,
   type ThreadGuestShare,
 } from "@t3tools/contracts";
+import { formatComposerContextReference } from "@t3tools/shared/composerContextReferences";
 import { Atom } from "effect/reactivity";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { View } from "react-native";
@@ -20,9 +25,14 @@ import { Button } from "../../components/ui/Button";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import * as Dialog from "../../components/ui/Dialog";
+import { serverEnvironment } from "../../state/server";
 import { useEnvironmentScope } from "../../state/session";
 import { environmentThreadDetails, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
+import {
+  getComposerDraftSnapshot,
+  insertComposerDraftContext,
+} from "../../state/use-composer-drafts";
 import { GUEST_PENDING_BUBBLE_CLASS_NAME, GuestMessageName } from "./guestMessageStyle";
 
 const NO_GUEST_SHARE_ATOM = Atom.make<ThreadGuestShare | null>(null);
@@ -44,6 +54,21 @@ export function useThreadGuestShare(threadRef: ScopedThreadRef | null): ThreadGu
     [threadRef],
   );
   return useAtomValue(shareAtom);
+}
+
+/** True once `expiresAt` has passed. Keyed by the expiry, so a replaced one gets its own timer. */
+function useExpired(expiresAt: string | undefined): boolean {
+  const [expiredAt, setExpiredAt] = useState<string | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- arms a timer that fires when the link expires
+  useEffect(() => {
+    if (expiresAt === undefined) return;
+    const timer = setTimeout(
+      () => setExpiredAt(expiresAt),
+      Math.max(0, Date.parse(expiresAt) - Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [expiresAt]);
+  return expiresAt !== undefined && expiredAt === expiresAt;
 }
 
 function alertOnFailure(failureTitle: string, result: AtomCommandResult<unknown, unknown>) {
@@ -68,18 +93,7 @@ export function ThreadGuestShareBar(props: {
   const [busy, setBusy] = useState(false);
   // The server keeps an expired link so waiting messages stay resolvable; the label flips when
   // it expires.
-  // Keyed by the expiry, so a replaced link (even one already expired) gets its own timer.
-  const [expiredAt, setExpiredAt] = useState<string | null>(null);
-  const expiresAt = share?.expiresAt;
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- arms a timer that flips the share label when the guest link expires
-  useEffect(() => {
-    if (expiresAt === undefined) return;
-    const timer = setTimeout(
-      () => setExpiredAt(expiresAt),
-      Math.max(0, Date.parse(expiresAt) - Date.now()),
-    );
-    return () => clearTimeout(timer);
-  }, [expiresAt]);
+  const expired = useExpired(share?.expiresAt);
   if (threadRef === null || !share) return null;
 
   const disabled = busy || !props.canOperateThread;
@@ -106,9 +120,118 @@ export function ThreadGuestShareBar(props: {
     <View className="flex-row items-center gap-2 px-4 pb-2">
       <SymbolView name="person.2" size={12} tintColorClassName="accent-foreground-muted" />
       <Text className="min-w-0 flex-1 text-xs text-foreground-muted" numberOfLines={1}>
-        {expiredAt === share.expiresAt ? "Guest link expired" : guestShareStatusLabel(share)}
+        {expired ? "Guest link expired" : guestShareStatusLabel(share)}
       </Text>
       <Button label="Stop sharing" tone="text" disabled={disabled} onPress={stopSharing} />
+    </View>
+  );
+}
+
+const NO_ROOM_LINK_EXPIRY_ATOM = Atom.make<string | null>(null);
+
+/**
+ * On a thread joined from someone's room, above the composer: says its turns are shown there,
+ * with the way to attach what the room said since to the draft, and the way to stop. Mount it
+ * keyed by thread, so the catch-up status never shows on another thread.
+ */
+export function ThreadRoomLinkBar(props: {
+  readonly threadRef: ScopedThreadRef | null;
+  readonly draftKey: string | null;
+}) {
+  const { threadRef, draftKey } = props;
+  const expiryAtom = useMemo(
+    () =>
+      threadRef === null
+        ? NO_ROOM_LINK_EXPIRY_ATOM
+        : Atom.make(
+            (get) =>
+              get(environmentThreadDetails.threadAtom(threadRef))?.projection.thread.roomLink
+                ?.expiresAt ?? null,
+          ),
+    [threadRef],
+  );
+  const expiresAt = useAtomValue(expiryAtom) ?? undefined;
+  // The server clears an ended link when it next posts a turn or catches up.
+  const expired = useExpired(expiresAt);
+  const environmentId = threadRef?.environmentId ?? null;
+  const canCatchUp = useAtomValue(
+    serverEnvironment.catchUpSharedRoom.permissionAtom(environmentId),
+  );
+  const canLeave = useAtomValue(serverEnvironment.leaveSharedRoom.permissionAtom(environmentId));
+  const catchUpSharedRoom = useAtomCommand(serverEnvironment.catchUpSharedRoom, {
+    reportFailure: false,
+  });
+  const leaveSharedRoom = useAtomCommand(serverEnvironment.leaveSharedRoom, "leave room");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  if (threadRef === null || expiresAt === undefined || expired) return null;
+  const target = {
+    environmentId: threadRef.environmentId,
+    input: { threadId: threadRef.threadId },
+  };
+
+  const catchUp = async () => {
+    if (busy || draftKey === null) return;
+    setBusy(true);
+    const result = await catchUpSharedRoom(target);
+    setBusy(false);
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result)) {
+        setStatus(roomCatchUpFailureMessage(squashAtomCommandFailure(result)));
+      }
+      return;
+    }
+    const { record, status: outcome } = roomCatchUpOutcome(result.value);
+    if (record === null) {
+      setStatus(outcome);
+      return;
+    }
+    // Only attached: the user reads the chip and sends the message themselves.
+    const attached =
+      getComposerDraftSnapshot(draftKey).context?.records.some(
+        (entry) => entry.contextId === record.contextId,
+      ) === true ||
+      insertComposerDraftContext(draftKey, {
+        text: formatComposerContextReference(record),
+        context: { version: 1, records: [record] },
+      });
+    setStatus(attached ? outcome : "Remove some context from the draft, then catch up again");
+  };
+
+  const leave = () =>
+    Dialog.confirm({
+      title: "Leave room?",
+      message: "Your turns stop showing in the room. This thread stays on your machine.",
+      confirmText: "Leave room",
+      destructive: true,
+      onConfirm: () => {
+        if (busy) return;
+        setBusy(true);
+        void leaveSharedRoom(target).then(() => setBusy(false));
+      },
+    });
+
+  return (
+    <View className="flex-row items-center gap-2 px-4 pb-2">
+      <SymbolView
+        name="bubble.left.and.bubble.right"
+        size={12}
+        tintColorClassName="accent-foreground-muted"
+      />
+      <Text
+        className="min-w-0 flex-1 text-xs text-foreground-muted"
+        numberOfLines={2}
+        accessibilityLiveRegion="polite"
+      >
+        {status ?? "Your turns show in the room"}
+      </Text>
+      <Button
+        label="Catch up"
+        tone="text"
+        disabled={busy || !canCatchUp || draftKey === null}
+        onPress={() => void catchUp()}
+      />
+      <Button label="Leave room" tone="text" disabled={busy || !canLeave} onPress={leave} />
     </View>
   );
 }

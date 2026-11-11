@@ -45,7 +45,8 @@ const messageOf = (error: unknown, fallback: string) =>
 
 /**
  * Brings a thread someone shared to one of the user's own machines, as a thread of their own.
- * A one-time copy: every turn in it runs here, on the user's own provider login.
+ * Every turn in it runs here, on the user's own provider login. When the owner's machine offers
+ * a room, the thread shows its turns there, which the preview says before anything is created.
  */
 export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
   const navigate = useNavigate();
@@ -156,7 +157,7 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
       return (
         <JoinPage
           title="Bring this shared thread to your machine?"
-          description={`T3 Code will ask ${link.host} for the conversation. You get your own copy: your turns run here, on your own provider login, and nothing is sent back.`}
+          description={`T3 Code will ask ${link.host} for the conversation. You get your own thread: your turns run here, on your own provider login.`}
         >
           <Button size="sm" onClick={() => void loadPreview()}>
             Continue
@@ -196,7 +197,11 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
       return (
         <JoinPage
           title={`Join "${preview.title}"?`}
-          description={`${count}${preview.truncated ? " from the end of the thread" : ""} come with it. ${code}`}
+          description={`${count}${preview.truncated ? " from the end of the thread" : ""} come with it. ${code} ${
+            preview.live === true
+              ? "Each prompt you send in it and your agent's final reply are shown to everyone in the room; you can leave the room from the thread."
+              : "Nothing you do in it is sent back."
+          }`}
         >
           {checkout !== null && project !== undefined ? (
             <Button size="sm" onClick={() => joinWithCode(project)}>

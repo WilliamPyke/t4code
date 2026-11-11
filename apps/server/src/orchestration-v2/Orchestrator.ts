@@ -565,7 +565,10 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.guest-message.submit":
     case "thread.guest-message.dismiss":
     case "thread.guest.trust":
+    case "thread.guest.identify":
     case "thread.guest.remove":
+    case "thread.guest-turn.post":
+    case "thread.room-link.set":
     case "thread.settle":
     case "thread.auto-settle":
     case "thread.unsettle":
@@ -13622,7 +13625,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.guest-message.submit":
       case "thread.guest-message.dismiss":
       case "thread.guest.trust":
+      case "thread.guest.identify":
       case "thread.guest.remove":
+      case "thread.guest-turn.post":
+      case "thread.room-link.set":
         yield* dispatchGuestShare(command, events, effects);
         break;
       case "provider-session.detach":
@@ -13976,6 +13982,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.type === "subagent.stop" ||
           // Closing a share again, or after it ended, is not an error.
           command.type === "thread.guest-share.close" ||
+          // So is a guest's turn posted twice, or leaving a room already left.
+          command.type === "thread.guest-turn.post" ||
+          command.type === "thread.room-link.set" ||
           (command.type === "thread.delete" && command.onlyIfUnused === true),
         (_planned) =>
           new OrchestratorDispatchError({

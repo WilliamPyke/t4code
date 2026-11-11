@@ -25,6 +25,7 @@ export const COMPOSER_CONTEXT_KINDS = [
   "skill",
   "thread",
   "environment",
+  "room-updates",
 ] as const;
 export type KnownComposerContextKind = (typeof COMPOSER_CONTEXT_KINDS)[number];
 
@@ -40,6 +41,7 @@ const COMPOSER_CONTEXT_ELEMENT_STYLES_MAX_CHARS = 8_000;
 export const COMPOSER_CONTEXT_REVIEW_TEXT_MAX_CHARS = 16_000;
 export const COMPOSER_CONTEXT_REVIEW_DIFF_MAX_CHARS = 32_000;
 const COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS = 8_000;
+export const COMPOSER_CONTEXT_ROOM_UPDATES_TEXT_MAX_CHARS = 64_000;
 
 export const ComposerContextId = TrimmedNonEmptyString.check(
   Schema.isMaxLength(CONTEXT_ID_MAX_CHARS),
@@ -224,6 +226,20 @@ export const EnvironmentContextRecord = Schema.Struct({
 });
 export type EnvironmentContextRecord = typeof EnvironmentContextRecord.Type;
 
+/**
+ * What other people and their agents said in a shared room, which the user caught up on and
+ * attached to a message of their own. The agent reads `text` as other people's words.
+ */
+export const RoomUpdatesContextRecord = Schema.Struct({
+  ...recordBase,
+  kind: Schema.Literal("room-updates"),
+  messageCount: NonNegativeInt,
+  /** Older messages, or the end of a long one, were left out. */
+  truncated: Schema.Boolean,
+  text: BoundedString(COMPOSER_CONTEXT_ROOM_UPDATES_TEXT_MAX_CHARS),
+});
+export type RoomUpdatesContextRecord = typeof RoomUpdatesContextRecord.Type;
+
 const isJson = Schema.is(Schema.Json);
 
 /** Excludes known discriminators so malformed known records fail their own schema. */
@@ -255,6 +271,7 @@ export const KnownComposerContextRecord = Schema.Union([
   SkillContextRecord,
   ThreadContextRecord,
   EnvironmentContextRecord,
+  RoomUpdatesContextRecord,
 ]);
 export type KnownComposerContextRecord = typeof KnownComposerContextRecord.Type;
 

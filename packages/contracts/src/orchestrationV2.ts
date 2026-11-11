@@ -44,7 +44,13 @@ import {
 } from "./baseSchemas.ts";
 import { AuthMcpClientAccess } from "./auth.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
-import { SharedThreadMessage, ThreadGuestShare } from "./guestShare.ts";
+import {
+  GuestAccount,
+  GuestTurnRequest,
+  SharedThreadMessage,
+  ThreadGuestShare,
+  ThreadRoomLink,
+} from "./guestShare.ts";
 import { StoredThreadTags, ThreadTag } from "./threadTags.ts";
 import {
   OrchestrationSearchThreadsInput,
@@ -487,6 +493,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   lastSnoozeWakeAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
   guestShare: Schema.optional(Schema.NullOr(ThreadGuestShare)),
+  /** Set while this thread, joined from someone's room, shows its turns there. */
+  roomLink: Schema.optional(Schema.NullOr(ThreadRoomLink)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -3454,6 +3462,16 @@ const OrchestrationV2InternalCommand = Schema.Union([
     guestName: TrimmedNonEmptyString,
   }),
   Schema.Struct({
+    type: Schema.Literal("thread.guest.identify"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    guestId: GuestId,
+    account: GuestAccount,
+    /** The account is one of the owner's saved contributors. */
+    trusted: Schema.Boolean,
+  }),
+  Schema.Struct({
     type: Schema.Literal("thread.guest-message.submit"),
     commandId: CommandId,
     threadId: ThreadId,
@@ -3465,6 +3483,22 @@ const OrchestrationV2InternalCommand = Schema.Union([
     attachments: Schema.optional(Schema.Array(ChatAttachment)),
     /** The server sends this message itself, right after recording it. */
     direct: Schema.optional(Schema.Boolean),
+  }),
+  /** Shows a turn a guest ran on their own machine. It changes the share and nothing else. */
+  Schema.Struct({
+    type: Schema.Literal("thread.guest-turn.post"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    guestId: GuestId,
+    turn: GuestTurnRequest,
+  }),
+  /** Connects a thread joined from a room to it, or with null ends that. */
+  Schema.Struct({
+    type: Schema.Literal("thread.room-link.set"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    roomLink: Schema.NullOr(ThreadRoomLink),
   }),
   /** Moves a thread to a project rooted at the folder it already works in, so its cwd never changes. */
   Schema.Struct({

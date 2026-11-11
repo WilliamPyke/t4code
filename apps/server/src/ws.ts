@@ -128,6 +128,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as GuestShareService from "./guest/GuestShareService.ts";
+import * as SharedRoomLink from "./guest/SharedRoomLink.ts";
 import * as SharedThreadJoin from "./guest/SharedThreadJoin.ts";
 import {
   bufferShellLiveStream,
@@ -1451,6 +1452,7 @@ export const layerWsRpc = (
       const secretRequests = yield* SecretRequests.SecretRequests;
       const guestShares = yield* GuestShareService.GuestShareService;
       const sharedThreads = yield* SharedThreadJoin.SharedThreadJoin;
+      const sharedRooms = yield* SharedRoomLink.SharedRoomLink;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -2378,6 +2380,14 @@ export const layerWsRpc = (
             "orchestration_v2.command_id": input.commandId,
             "orchestration_v2.project_id": input.projectId,
           }).pipe(Effect.andThen(sharedThreads.join(input))),
+        [WS_METHODS.sharedThreadLeave]: (input) =>
+          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+            Effect.andThen(sharedRooms.leave(input.threadId)),
+          ),
+        [WS_METHODS.sharedThreadCatchUp]: (input) =>
+          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+            Effect.andThen(sharedRooms.catchUp(input.threadId)),
+          ),
         [WS_METHODS.guestShareCreate]: (input) =>
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(guestShares.create(input)),

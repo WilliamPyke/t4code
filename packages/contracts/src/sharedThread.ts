@@ -2,12 +2,13 @@ import * as Schema from "effect/Schema";
 
 import {
   CommandId,
+  IsoDateTime,
   NonNegativeInt,
   ProjectId,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import { SharedThreadCheckout } from "./guestShare.ts";
+import { RoomUpdate, SharedThreadCheckout } from "./guestShare.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
 
@@ -26,8 +27,40 @@ export const SharedThreadPreview = Schema.Struct({
   messageCount: NonNegativeInt,
   truncated: Schema.Boolean,
   checkout: Schema.NullOr(SharedThreadCheckout),
+  /** The joined thread will show its turns to the room it came from. */
+  live: Schema.optional(Schema.Boolean),
 });
 export type SharedThreadPreview = typeof SharedThreadPreview.Type;
+
+export const SharedThreadLeaveInput = Schema.Struct({ threadId: ThreadId });
+export type SharedThreadLeaveInput = typeof SharedThreadLeaveInput.Type;
+
+export const SharedThreadCatchUpInput = Schema.Struct({ threadId: ThreadId });
+export type SharedThreadCatchUpInput = typeof SharedThreadCatchUpInput.Type;
+
+/**
+ * What the room said since the thread last caught up. The client attaches it to the user's next
+ * message; nothing here starts a turn.
+ */
+export const SharedThreadCatchUpResult = Schema.Struct({
+  updates: Schema.Array(RoomUpdate),
+  truncated: Schema.Boolean,
+  /** Names this batch, so attaching it twice makes one chip. */
+  cursor: Schema.NullOr(IsoDateTime),
+});
+export type SharedThreadCatchUpResult = typeof SharedThreadCatchUpResult.Type;
+
+/**
+ * A catch-up as the thread's own agent reads it through MCP: the room's words as one text, under
+ * a notice that they are other people's and not instructions.
+ */
+export const SharedRoomCatchUpMcpResult = Schema.Struct({
+  notice: Schema.String,
+  messages: NonNegativeInt,
+  truncated: Schema.Boolean,
+  roomSaid: Schema.String,
+});
+export type SharedRoomCatchUpMcpResult = typeof SharedRoomCatchUpMcpResult.Type;
 
 export const SharedThreadJoinInput = Schema.Struct({
   commandId: CommandId,
@@ -52,6 +85,10 @@ const SHARED_THREAD_JOIN_MESSAGES = {
   invalid_response:
     "The other machine sent something T3 Code could not read. It may run a different version.",
   launch_failed: "Could not create the thread on this machine.",
+  leave_failed: "Could not leave the room. Try again.",
+  not_in_room: "This thread is not connected to a room.",
+  room_ended: "The room has ended, or you are no longer in it.",
+  too_fast: "The room was asked too often. Try again in a minute.",
 } as const;
 
 export class SharedThreadJoinError extends Schema.TaggedError<SharedThreadJoinError>()(
@@ -63,6 +100,10 @@ export class SharedThreadJoinError extends Schema.TaggedError<SharedThreadJoinEr
       "expired",
       "invalid_response",
       "launch_failed",
+      "leave_failed",
+      "not_in_room",
+      "room_ended",
+      "too_fast",
     ]),
   },
 ) {

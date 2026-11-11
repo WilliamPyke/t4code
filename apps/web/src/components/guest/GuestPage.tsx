@@ -6,7 +6,12 @@ import {
   GUEST_NAME_MAX_LENGTH,
   GUEST_ROUTE_PREFIX,
   GUEST_SHARE_PARAM,
+  GUEST_SIGN_IN_POLL_ROUTE,
+  GUEST_SIGN_IN_ROUTE,
+  type GuestAccount,
   GuestHandoff,
+  GuestSignInPrompt,
+  GuestSignInStatus,
   guestMessageAuthorName,
   GuestMessageId,
   type GuestRedeemRequest,
@@ -51,6 +56,7 @@ import { GuestMessageAttachments } from "../chat/GuestMessageAttachments";
 import { HostImageUrlContext } from "../chat/hostImageUrl";
 import { PierreEntryIcon } from "../chat/PierreEntryIcon";
 import { GuestMessageName, guestBubbleClassName } from "../chat/guestMessageStyle";
+import { GuestTurnList } from "../chat/GuestTurnList";
 import { MessagesTimeline, type MessagesTimelineHistoryControls } from "../chat/MessagesTimeline";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { getDisplayModelName, getTriggerDisplayModelName } from "../chat/providerIconUtils";
@@ -164,15 +170,20 @@ async function fetchGuestHistoryPage(
 }
 
 const decodeHandoff = Schema.decodeUnknownOption(GuestHandoff);
+const decodeSignInPrompt = Schema.decodeUnknownOption(GuestSignInPrompt);
+const decodeSignInStatus = Schema.decodeUnknownOption(GuestSignInStatus);
 
-/** Resolves to a handoff token, or to a message the guest can read. */
-async function requestGuestHandoff(shareId: string): Promise<GuestHandoff | string> {
-  const failed = "Could not start the handoff. Try again.";
+/** Posts to a guest route with no body. Resolves to its answer, or to a message for the guest. */
+async function postGuestAction<A>(
+  route: string,
+  shareId: string,
+  decode: (json: unknown) => Option.Option<A>,
+  failed: string,
+): Promise<A | string> {
   try {
-    const response = await fetch(
-      `${GUEST_HANDOFF_ROUTE}?${GUEST_SHARE_PARAM}=${encodeURIComponent(shareId)}`,
-      { method: "POST" },
-    );
+    const response = await fetch(`${route}?${GUEST_SHARE_PARAM}=${encodeURIComponent(shareId)}`, {
+      method: "POST",
+    });
     const json: unknown = await response.json().catch(() => null);
     if (!response.ok) {
       return Option.match(decodeErrorBody(json), {
@@ -180,11 +191,19 @@ async function requestGuestHandoff(shareId: string): Promise<GuestHandoff | stri
         onSome: ({ message }) => message,
       });
     }
-    return Option.getOrElse(decodeHandoff(json), () => failed);
+    return Option.getOrElse(decode(json), () => failed);
   } catch {
     return "Could not reach the server.";
   }
 }
+
+const requestGuestHandoff = (shareId: string) =>
+  postGuestAction(
+    GUEST_HANDOFF_ROUTE,
+    shareId,
+    decodeHandoff,
+    "Could not start the handoff. Try again.",
+  );
 
 /** Resolves to null on success, or to a message the guest can read. */
 async function postGuest(
@@ -434,7 +453,7 @@ const ignore = () => {};
  * revert, diffs, files, other threads, shell) is left out, so its control does not render.
  */
 function GuestThread({
-  view: { shareId, title, expiresAt, messages, model, guests, guestId, direct },
+  view: { shareId, title, expiresAt, messages, turns, model, guests, guestId, direct, signIn },
   projection,
   online,
   awaitingRowIds,
@@ -510,6 +529,11 @@ function GuestThread({
             With {otherGuests.join(", ")}
           </span>
         )}
+        <GuestGitHubSignIn
+          shareId={shareId}
+          account={guests.find((guest) => guest.id === guestId)?.account}
+          available={signIn === true}
+        />
         <ContinueOnMyMachine shareId={shareId} />
         <ExpiryLabel expiresAt={expiresAt} />
       </header>
@@ -550,22 +574,31 @@ function GuestThread({
             onViewportAttach={follow.attachTimelineViewport}
             onFooterGrow={follow.onTimelineFooterGrowStable}
             footer={
-              unplaced.length === 0 ? null : (
-                <ol className="chat-content-lane flex flex-col gap-4 pb-4">
-                  {unplaced.map((message) => (
-                    <li key={message.id}>
-                      <UnplacedGuestMessage
-                        shareId={shareId}
-                        message={message}
-                        author={
-                          message.guestId === guestId
-                            ? "You"
-                            : guestMessageAuthorName({ guests, guestName: null }, message)
-                        }
-                      />
-                    </li>
-                  ))}
-                </ol>
+              unplaced.length === 0 && (turns ?? []).length === 0 ? null : (
+                <>
+                  <GuestTurnList
+                    roster={{ guests, guestName: null }}
+                    turns={turns ?? []}
+                    ownGuestId={guestId}
+                  />
+                  {unplaced.length === 0 ? null : (
+                    <ol className="chat-content-lane flex flex-col gap-4 pb-4">
+                      {unplaced.map((message) => (
+                        <li key={message.id}>
+                          <UnplacedGuestMessage
+                            shareId={shareId}
+                            message={message}
+                            author={
+                              message.guestId === guestId
+                                ? "You"
+                                : guestMessageAuthorName({ guests, guestName: null }, message)
+                            }
+                          />
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </>
               )
             }
           />
@@ -586,6 +619,111 @@ function GuestThread({
           onSent={() => follow.scrollToEnd(true)}
         />
       </div>
+    </>
+  );
+}
+
+const SIGN_IN_FAILED = "Could not sign in with GitHub. Try again.";
+const SIGN_IN_ENDINGS = {
+  expired: "The GitHub code expired. Try again.",
+  denied: "The sign-in was cancelled on GitHub.",
+  failed: SIGN_IN_FAILED,
+} as const;
+
+/**
+ * Proves who the guest is to the owner. The guest types a code on GitHub; the owner's server
+ * learns their username and nothing else, and the owner can then approve them by account.
+ */
+function GuestGitHubSignIn({
+  shareId,
+  account,
+  available,
+}: {
+  readonly shareId: GuestShareView["shareId"];
+  readonly account: GuestAccount | undefined;
+  readonly available: boolean;
+}) {
+  const [prompt, setPrompt] = useState<GuestSignInPrompt | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- asks the owner's server whether the guest finished signing in on GitHub
+  useEffect(() => {
+    if (prompt === null) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const ask = async () => {
+      const answer = await postGuestAction(
+        GUEST_SIGN_IN_POLL_ROUTE,
+        shareId,
+        decodeSignInStatus,
+        SIGN_IN_FAILED,
+      );
+      if (stopped) return;
+      if (typeof answer === "string") {
+        setPrompt(null);
+        setError(answer);
+        return;
+      }
+      if (answer.status === "pending") {
+        timer = setTimeout(() => void ask(), prompt.interval * 1_000);
+        return;
+      }
+      // Signed in: the account arrives with the share's next update.
+      setPrompt(null);
+      if (answer.status !== "signed_in") setError(SIGN_IN_ENDINGS[answer.status]);
+    };
+    timer = setTimeout(() => void ask(), prompt.interval * 1_000);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [prompt, shareId]);
+
+  if (account !== undefined) {
+    return <span className="shrink-0 text-xs text-muted-foreground">@{account.login}</span>;
+  }
+  if (!available) return null;
+  if (prompt !== null) {
+    return (
+      <span className="shrink-0 text-xs text-muted-foreground">
+        Enter <strong className="font-mono text-foreground">{prompt.userCode}</strong> on{" "}
+        <a
+          href={prompt.verificationUri}
+          target="_blank"
+          rel="noreferrer"
+          className="underline underline-offset-2"
+        >
+          GitHub
+        </a>
+      </span>
+    );
+  }
+  const start = async () => {
+    setBusy(true);
+    const started = await postGuestAction(
+      GUEST_SIGN_IN_ROUTE,
+      shareId,
+      decodeSignInPrompt,
+      SIGN_IN_FAILED,
+    );
+    setBusy(false);
+    if (typeof started === "string") {
+      setError(started);
+      return;
+    }
+    setError(null);
+    setPrompt(started);
+  };
+  return (
+    <>
+      {error === null ? null : (
+        <span role="alert" className="min-w-0 truncate text-xs text-destructive">
+          {error}
+        </span>
+      )}
+      <Button size="xs" variant="outline" disabled={busy} onClick={() => void start()}>
+        Sign in with GitHub
+      </Button>
     </>
   );
 }

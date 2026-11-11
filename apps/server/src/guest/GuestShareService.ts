@@ -10,14 +10,19 @@ import {
   type GuestShareCreateInput,
   type GuestShareCreateResult,
   GuestId,
+  guestContributorFor,
+  type GuestSignInPrompt,
+  type GuestSignInStatus,
   type GuestPresence,
   GuestShareId,
   type GuestRedeemRequest,
   type GuestStreamEvent,
   type GuestSubmitRequest,
+  type GuestTurnRequest,
   MessageId,
   providerAllowsDirectGuestSend,
   repositoryGroupingKeyOf,
+  type RoomUpdates,
   SHARED_THREAD_MAX_CHARS,
   SHARED_THREAD_MAX_MESSAGES,
   type SharedThreadCheckout,
@@ -34,6 +39,7 @@ import {
   TurnItemId,
 } from "@t3tools/contracts";
 import { chatMarkdownImageSources } from "@t3tools/shared/markdownPipeline";
+import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
 import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -75,7 +81,9 @@ import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolv
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
+import * as GuestSignIn from "./GuestSignIn.ts";
 import { guestShareView, guestThreadModel } from "./guestView.ts";
+import { roomUpdatesOf } from "./roomUpdates.ts";
 import {
   classifyGuestUploads,
   GUEST_UPLOAD_HEADER_BYTES,
@@ -95,6 +103,11 @@ const SHARED_THREAD_REPLIES_LIMIT = 64;
 // How soon an open read notices that its link stopped working, such as Connect no longer serving
 // the host. Closing or replacing the link ends the main stream at once.
 const ACCESS_RECHECK_INTERVAL = Duration.seconds(30);
+// Turns one guest's machine can post in a minute. An agent rarely finishes faster than this.
+const GUEST_TURN_RATE_LIMIT = 6;
+const GUEST_TURN_RATE_WINDOW_MS = 60_000;
+// Catch-ups one guest's machine can ask for in a minute. Each is a person pressing a button.
+const ROOM_UPDATES_RATE_LIMIT = 20;
 
 const GUEST_ACCESS_MESSAGES = {
   ...GUEST_FAILURE,
@@ -108,6 +121,9 @@ const GUEST_ACCESS_MESSAGES = {
   too_large: "Attached files can total up to 10 MB per message.",
   unsupported_file: "This file cannot be attached. Images must be PNG, JPEG, GIF, or WebP.",
   files_busy: GUEST_FAILURE.filesBusy,
+  sign_in_failed: "Could not start the GitHub sign-in. Try again.",
+  ended: "This room has ended, or you are no longer in it.",
+  too_fast: "Too many requests at once. Try again in a minute.",
 } as const;
 
 /** What a guest is told. The message comes from `reason`, never from a cause. */
@@ -130,6 +146,9 @@ export class GuestShareAccessError extends Schema.TaggedError<GuestShareAccessEr
       "too_large",
       "unsupported_file",
       "files_busy",
+      "sign_in_failed",
+      "ended",
+      "too_fast",
     ]),
   },
 ) {
@@ -151,8 +170,9 @@ const guestFailureReason = (cause: unknown): GuestShareAccessError["reason"] =>
   GUEST_FAILURE_REASONS.get(cause) ?? "rejected";
 
 const SessionClaims = Schema.Struct({
-  // A handoff token only opens the thread's export, and only for a few minutes.
-  kind: Schema.Literals(["session", "handoff"]),
+  // A handoff token only opens the thread's export, and only for a few minutes. A room token only
+  // posts the guest's own turns and reads what the room said, for as long as the share lasts.
+  kind: Schema.Literals(["session", "handoff", "room"]),
   threadId: ThreadId,
   shareId: GuestShareId,
   /** Absent in the session of a link made before several guests could join. */
@@ -189,6 +209,12 @@ export class GuestShareService extends Context.Service<
     readonly stream: (
       session: string,
     ) => Effect.Effect<Stream.Stream<GuestStreamEvent>, GuestShareAccessError>;
+    /** Starts the guest's GitHub sign-in and returns the code they type on GitHub. */
+    readonly signIn: (session: string) => Effect.Effect<GuestSignInPrompt, GuestShareAccessError>;
+    /** Whether the guest finished. Once they have, the share records their account. */
+    readonly signInPoll: (
+      session: string,
+    ) => Effect.Effect<GuestSignInStatus, GuestShareAccessError>;
     /** The guests with a thread's shared page open, now and as that changes. */
     readonly presence: (threadId: ThreadId) => Stream.Stream<GuestPresence>;
     /** A token the guest's own T3 Code reads the thread's export with, for a few minutes. */
@@ -197,6 +223,16 @@ export class GuestShareService extends Context.Service<
     readonly exportThread: (
       handoffToken: string,
     ) => Effect.Effect<SharedThreadExport, GuestShareAccessError>;
+    /** Records a turn the guest ran on their own machine, for the room to see. */
+    readonly postTurn: (
+      roomToken: string,
+      request: GuestTurnRequest,
+    ) => Effect.Effect<void, GuestShareAccessError>;
+    /** What the room said after `after`, for the guest's own machine. Changes nothing here. */
+    readonly roomUpdates: (
+      roomToken: string,
+      after: string | null,
+    ) => Effect.Effect<RoomUpdates, GuestShareAccessError>;
     /** The file of an HTML render in the shared thread, and its title. */
     readonly render: (
       session: string,
@@ -260,6 +296,7 @@ const make = Effect.gen(function* () {
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const git = yield* GitWorkflow.GitWorkflowService;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const guestSignIn = yield* GuestSignIn.GuestSignIn;
   const managedEndpoint = yield* CloudManagedEndpointRuntime;
   const { attachmentsDir } = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -347,7 +384,7 @@ const make = Effect.gen(function* () {
   /** Checks a token against the live share: same id, not expired, and Connect still serving it. */
   const authorize = Effect.fn("GuestShareService.authorize")(function* (
     token: string,
-    kind: "invite" | "session" | "handoff",
+    kind: "invite" | "session" | "handoff" | "room",
   ) {
     const claims = yield* kind === "invite" ? verifyInvite(token) : verifySession(token);
     // A handoff token is not a session, and a session is not a handoff token.
@@ -360,13 +397,18 @@ const make = Effect.gen(function* () {
     const share = thread.guestShare;
     const now = yield* DateTime.now;
     if (
-      !(yield* sharingEnabled) ||
       !share ||
       share.id !== claims.value.shareId ||
       thread.archivedAt !== null ||
       thread.deletedAt !== null ||
       DateTime.toEpochMillis(now) >= Date.parse(share.expiresAt) ||
-      (kind !== "invite" && !hasGuest(share, claims.value.guestId)) ||
+      (kind !== "invite" && !hasGuest(share, claims.value.guestId))
+    ) {
+      // A guest's machine stops posting for good on this; what is checked below can come back.
+      return yield* kind === "room" ? new GuestShareAccessError({ reason: "ended" }) : inactive;
+    }
+    if (
+      !(yield* sharingEnabled) ||
       (kind === "handoff" && DateTime.toEpochMillis(now) >= (claims.value.expiresAt ?? 0)) ||
       (yield* connectHostname) !== share.host
     ) {
@@ -430,6 +472,52 @@ const make = Effect.gen(function* () {
 
   const check = Effect.fn("GuestShareService.check")(function* (session: string) {
     yield* authorize(session, "session");
+  });
+
+  const signIn = Effect.fn("GuestShareService.signIn")(function* (session: string) {
+    const { share, guestId } = yield* authorize(session, "session");
+    if (guestId === undefined) return yield* new GuestShareAccessError({ reason: "unavailable" });
+    return yield* guestSignIn
+      .start(`${share.id}:${guestId}`)
+      .pipe(Effect.mapError(() => new GuestShareAccessError({ reason: "sign_in_failed" })));
+  });
+
+  const signInPoll = Effect.fn("GuestShareService.signInPoll")(function* (session: string) {
+    const { thread, share, guestId } = yield* authorize(session, "session");
+    if (guestId === undefined) return yield* new GuestShareAccessError({ reason: "unavailable" });
+    const polled = yield* guestSignIn.poll(`${share.id}:${guestId}`).pipe(Effect.result);
+    if (polled._tag === "Failure") {
+      const { reason } = polled.failure;
+      return { status: reason === "unavailable" ? "failed" : reason } satisfies GuestSignInStatus;
+    }
+    if (Option.isNone(polled.success)) return { status: "pending" } satisfies GuestSignInStatus;
+    const account = polled.success.value;
+    const contributors = yield* serverSettings.getSettings.pipe(
+      Effect.map((settings) => settings.guestContributors),
+      Effect.orElseSucceed(() => []),
+    );
+    const contributor = guestContributorFor(contributors, account);
+    if (contributor !== undefined && contributor.id === undefined) {
+      // Pinned to the account that signed in, so the login alone stops being enough.
+      yield* serverSettings
+        .updateSettings({
+          guestContributors: contributors.map((candidate) =>
+            candidate === contributor ? { login: account.login, id: account.id } : candidate,
+          ),
+        })
+        .pipe(Effect.ignore);
+    }
+    yield* dispatchGuestCommand({
+      type: "thread.guest.identify",
+      commandId: yield* commandId("identify"),
+      threadId: thread.id,
+      shareId: share.id,
+      guestId,
+      account,
+      trusted: contributor !== undefined,
+    });
+    yield* analytics.record("feature.used", { feature: "guest_share.sign_in" });
+    return { status: "signed_in" } satisfies GuestSignInStatus;
   });
 
   /** Whether the provider the thread runs on takes a guest's message without the owner's Send. */
@@ -660,6 +748,7 @@ const make = Effect.gen(function* () {
         guestThreadModel(current.modelSelection, providers),
         guestId,
         providerAllowsDirect(current, providers),
+        guestSignIn.enabled,
       );
     const initialView = viewOf(snapshot.projection.thread);
     if (initialView === null) return yield* inactive;
@@ -796,7 +885,7 @@ const make = Effect.gen(function* () {
   );
 
   const exportThread = Effect.fn("GuestShareService.exportThread")(function* (token: string) {
-    const { thread } = yield* authorize(token, "handoff");
+    const { thread, share, guestId } = yield* authorize(token, "handoff");
     // What the guest's page opens with: the same window, so nothing they could not already read.
     const window = yield* orchestrator
       .getThreadSnapshotWindow(thread.id, {
@@ -837,7 +926,91 @@ const make = Effect.gen(function* () {
       messages: kept.toReversed(),
       truncated: snapshot.hasMoreHistory === true || kept.length < spoken.length,
       checkout: yield* checkoutOf(thread),
+      ...(guestId === undefined
+        ? {}
+        : {
+            room: {
+              token: yield* signSession({
+                kind: "room",
+                threadId: thread.id,
+                shareId: share.id,
+                guestId,
+              }),
+              expiresAt: share.expiresAt,
+            },
+          }),
     };
+  });
+
+  // When each guest's machine last asked, so one cannot flood the room. In memory: a restart
+  // forgets at most a minute.
+  const rateLimit = (limit: number) => {
+    const requests = new Map<string, Array<number>>();
+    return (key: string, now: number) => {
+      const recent = (requests.get(key) ?? []).filter((at) => now - at < GUEST_TURN_RATE_WINDOW_MS);
+      if (recent.length >= limit) return false;
+      for (const [other, times] of requests) {
+        if (times.every((at) => now - at >= GUEST_TURN_RATE_WINDOW_MS)) requests.delete(other);
+      }
+      requests.set(key, [...recent, now]);
+      return true;
+    };
+  };
+  const allowTurnPost = rateLimit(GUEST_TURN_RATE_LIMIT);
+  const allowUpdatesRead = rateLimit(ROOM_UPDATES_RATE_LIMIT);
+
+  const postTurn = Effect.fn("GuestShareService.postTurn")(function* (
+    token: string,
+    request: GuestTurnRequest,
+  ) {
+    const { thread, share, guestId } = yield* authorize(token, "room");
+    if (guestId === undefined) return yield* new GuestShareAccessError({ reason: "ended" });
+    // Characters nobody can see have no place in text the whole room reads.
+    const prompt = sanitizeLinkedPrompt(request.prompt).text.trim();
+    const reply = sanitizeLinkedPrompt(request.reply).text.trim();
+    if (reply === "") return yield* new GuestShareAccessError({ reason: "empty" });
+    if (!allowTurnPost(`${share.id}:${guestId}`, DateTime.toEpochMillis(yield* DateTime.now))) {
+      return yield* new GuestShareAccessError({ reason: "too_fast" });
+    }
+    yield* dispatchGuestCommand({
+      type: "thread.guest-turn.post",
+      commandId: yield* commandId("turn"),
+      threadId: thread.id,
+      shareId: share.id,
+      guestId,
+      turn: { ...request, prompt, reply },
+    });
+    yield* analytics.record("feature.used", { feature: "guest_share.turn" });
+  });
+
+  const roomUpdates = Effect.fn("GuestShareService.roomUpdates")(function* (
+    token: string,
+    after: string | null,
+  ) {
+    const { thread, share, guestId } = yield* authorize(token, "room");
+    if (guestId === undefined) return yield* new GuestShareAccessError({ reason: "ended" });
+    if (!allowUpdatesRead(`${share.id}:${guestId}`, DateTime.toEpochMillis(yield* DateTime.now))) {
+      return yield* new GuestShareAccessError({ reason: "too_fast" });
+    }
+    // The window the guest's page opens with, so nothing they could not already read.
+    const window = yield* orchestrator
+      .getThreadSnapshotWindow(thread.id, {
+        rowLimit: SNAPSHOT_ROW_LIMIT,
+        userTurnLimit: SNAPSHOT_USER_TURN_LIMIT,
+      })
+      .pipe(Effect.mapError(() => inactive));
+    const snapshot = buildBoundedThreadStreamSnapshot({
+      snapshotSequence: window.snapshotSequence,
+      projection: window.projection,
+    });
+    return roomUpdatesOf({
+      items: snapshot.projection.visibleTurnItems.map((row) => row.item),
+      runs: snapshot.projection.runs,
+      hasMoreHistory: snapshot.hasMoreHistory === true,
+      share,
+      guestId,
+      after,
+    });
   });
 
   const unavailable = new GuestShareAccessError({ reason: "unavailable" });
@@ -972,10 +1145,14 @@ const make = Effect.gen(function* () {
     redeem,
     check,
     submit,
+    signIn,
+    signInPoll,
     stream,
     presence,
     handoff,
     exportThread,
+    postTurn,
+    roomUpdates,
     render,
     item,
     history,

@@ -14,6 +14,7 @@ import * as Ref from "effect/Ref";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
+import * as SharedRoomLink from "./SharedRoomLink.ts";
 import * as SharedThreadJoin from "./SharedThreadJoin.ts";
 
 const shared: SharedThreadExport = {
@@ -47,6 +48,7 @@ const world = Effect.fn(function* (reply: { readonly status: number; readonly bo
     ReadonlyArray<{ url: string; authorization: string | undefined }>
   >([]);
   const launches = yield* Ref.make<ReadonlyArray<ThreadLaunch.ThreadLaunchInput>>([]);
+  const rooms = yield* Ref.make<ReadonlyArray<ReadonlyArray<unknown>>>([]);
   const layer = SharedThreadJoin.layer.pipe(
     Layer.provide(
       Layer.succeed(
@@ -77,8 +79,13 @@ const world = Effect.fn(function* (reply: { readonly status: number; readonly bo
           ),
       }),
     ),
+    Layer.provide(
+      Layer.mock(SharedRoomLink.SharedRoomLink)({
+        connect: (...room) => Ref.update(rooms, (seen) => [...seen, room]),
+      }),
+    ),
   );
-  return { requests, launches, layer };
+  return { requests, launches, rooms, layer };
 });
 
 it("fetches a shared thread only from a public-looking https host", () => {
@@ -105,7 +112,7 @@ it("fetches a shared thread only from a public-looking https host", () => {
 
 it.effect("launches a thread of the user's own from the other machine's export", () =>
   Effect.gen(function* () {
-    const { requests, launches, layer } = yield* world({ status: 200, body: shared });
+    const { requests, launches, rooms, layer } = yield* world({ status: 200, body: shared });
     const joined = yield* Effect.gen(function* () {
       const sharedThreads = yield* SharedThreadJoin.SharedThreadJoin;
       assert.deepEqual(yield* sharedThreads.preview(input.source), {
@@ -143,6 +150,36 @@ it.effect("launches a thread of the user's own from the other machine's export",
       ["Why does login fail?", "The token expires early."],
     );
     assert.include(withCode?.importedHistory?.notice, "earlier messages were left out");
+    // An owner's server that offers no room gives a plain copy.
+    assert.include(withCode?.importedHistory?.notice, "not sent back");
+    assert.lengthOf(yield* Ref.get(rooms), 0);
+  }),
+);
+
+it.effect("connects the joined thread to the room the export offers", () =>
+  Effect.gen(function* () {
+    const room = { token: "room-token", expiresAt: "2026-11-10T10:00:00.000Z" };
+    const { launches, rooms, layer } = yield* world({ status: 200, body: { ...shared, room } });
+    yield* Effect.gen(function* () {
+      const sharedThreads = yield* SharedThreadJoin.SharedThreadJoin;
+      // Reading what would come over connects nothing, and the token stays on the server.
+      assert.deepEqual(yield* sharedThreads.preview(input.source), {
+        title: "Fix login",
+        messageCount: 2,
+        truncated: true,
+        checkout: shared.checkout,
+        live: true,
+      });
+      assert.lengthOf(yield* Ref.get(rooms), 0);
+      yield* sharedThreads.join(input);
+    }).pipe(Effect.provide(layer));
+    // Catching up starts after the newest message the thread was created with.
+    assert.deepEqual(yield* Ref.get(rooms), [
+      ["thread:joined", "sam.t3.test", room, shared.messages.at(-1)?.createdAt],
+    ]);
+    const [launch] = yield* Ref.get(launches);
+    // Storing the room's token can still fail, so the notice points at the header, which knows.
+    assert.include(launch?.importedHistory?.notice, "While this thread's header says");
   }),
 );
 

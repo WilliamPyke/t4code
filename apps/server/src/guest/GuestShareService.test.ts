@@ -5,6 +5,7 @@ import {
   ChatAttachmentId,
   CommandId,
   EventId,
+  type GuestAccount,
   type GuestId,
   GuestShareId,
   type GuestStreamEvent,
@@ -29,6 +30,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -41,6 +43,7 @@ import {
   sweepStalePendingAttachments,
 } from "../attachmentStore.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as GuestSignIn from "./GuestSignIn.ts";
 import { CloudManagedEndpointRuntime } from "../cloud/ManagedEndpointRuntime.ts";
 import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -93,6 +96,19 @@ const layerConnect = Layer.mock(CloudManagedEndpointRuntime)({
   })),
 });
 // The providers the fake registry reports. Tests set how the thread's provider is signed in.
+// The GitHub account the next finished sign-in proves. Null means the guest has not finished.
+const githubAccount = Ref.makeUnsafe<GuestAccount | null>(null);
+const layerSignIn = Layer.mock(GuestSignIn.GuestSignIn)({
+  enabled: true,
+  start: () =>
+    Effect.succeed({
+      userCode: "ABCD-1234",
+      verificationUri: "https://github.com/login/device",
+      expiresAt: 0,
+      interval: 5,
+    }),
+  poll: () => Effect.map(Ref.get(githubAccount), Option.fromNullishOr),
+});
 const providers = Ref.makeUnsafe<ReadonlyArray<ServerProvider>>([]);
 const layerProviders = Layer.mock(ProviderRegistry.ProviderRegistry)({
   getProviders: Ref.get(providers),
@@ -186,6 +202,7 @@ const layerTest = GuestShareService.layer.pipe(
   ),
   Layer.provide(layerProviders),
   Layer.provide(layerCheckout),
+  Layer.provide(layerSignIn),
   Layer.provideMerge(ServerSettings.layerTest({ guestSharingEnabled: true })),
   Layer.provide(layerConnect),
   Layer.provideMerge(layerAnalytics),
@@ -360,6 +377,45 @@ it.effect("sends a trusted guest's message itself only while the provider is on 
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("trusts a guest who signs in as a saved contributor, and no one else", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    yield* settings.updateSettings({ guestContributors: [{ login: "Sam-Dev" }] });
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const eve = yield* guestShares.redeem({ credential, name: "Eve" });
+    const guests = orchestrator
+      .getThreadRecords(threadId, [])
+      .pipe(Effect.map(({ thread }) => thread.guestShare!.guests!));
+
+    yield* Ref.set(githubAccount, null);
+    yield* guestShares.signIn(sam.token);
+    assert.deepEqual(yield* guestShares.signInPoll(sam.token), { status: "pending" });
+    assert.isUndefined((yield* guests)[0]?.account);
+
+    yield* Ref.set(githubAccount, { login: "sam-dev", id: 7 });
+    assert.deepEqual(yield* guestShares.signInPoll(sam.token), { status: "signed_in" });
+    // Someone else's account is recorded, but their messages still wait for the owner.
+    yield* Ref.set(githubAccount, { login: "eve", id: 8 });
+    yield* guestShares.signInPoll(eve.token);
+    assert.deepEqual(
+      (yield* guests).map(({ account, trusted }) => ({ account, trusted })),
+      [
+        { account: { login: "sam-dev", id: 7 }, trusted: true },
+        { account: { login: "eve", id: 8 }, trusted: undefined },
+      ],
+    );
+    // The saved login now names that one account, whoever holds the login later.
+    assert.deepEqual((yield* settings.getSettings).guestContributors, [
+      { login: "sam-dev", id: 7 },
+    ]);
+    const mallory = yield* guestShares.redeem({ credential, name: "Mallory" });
+    yield* Ref.set(githubAccount, { login: "sam-dev", id: 99 });
+    yield* guestShares.signInPoll(mallory.token);
+    assert.isUndefined((yield* guests)[2]?.trusted);
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("hands a guest a short-lived token that only reads the thread's export", () =>
   Effect.gen(function* () {
     const { orchestrator, guestShares, credential } = yield* shareThread;
@@ -409,6 +465,109 @@ it.effect("hands a guest a short-lived token that only reads the thread's export
       guestId: joined.thread.guestShare!.guests![0]!.id,
     });
     assert.equal((yield* Effect.flip(guestShares.exportThread(fresh.token))).reason, "inactive");
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("lets a guest's own machine post its turns to the room, and nothing else", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const { token: handoff } = yield* guestShares.handoff(sam.token);
+    const room = (yield* guestShares.exportThread(handoff)).room;
+    assert.isDefined(room);
+    const token = room!.token;
+    const turn = (id: string) => ({ id, prompt: " Why? ", reply: "The token\u200B expires." });
+    const share = Effect.map(
+      orchestrator.getThreadRecords(threadId, ["runs", "messages"]),
+      (records) => ({ ...records, turns: records.thread.guestShare?.turns ?? [] }),
+    );
+
+    yield* guestShares.postTurn(token, turn("run:1"));
+    yield* guestShares.postTurn(token, turn("run:1"));
+    const shown = yield* share;
+    // Once, with the characters nobody can see removed.
+    assert.deepEqual(
+      shown.turns.map(({ id, prompt, reply }) => ({ id, prompt, reply })),
+      [{ id: "run:1", prompt: "Why?", reply: "The token expires." }],
+    );
+    // The owner's thread got no message and ran nothing.
+    assert.lengthOf(shown.runs, 0);
+    assert.lengthOf(shown.messages, 0);
+
+    // A room token is not a session or a handoff token, and neither of those posts a turn.
+    assert.equal((yield* Effect.flip(guestShares.check(token))).reason, "invalid");
+    assert.equal((yield* Effect.flip(guestShares.exportThread(token))).reason, "invalid");
+    assert.equal((yield* Effect.flip(guestShares.handoff(token))).reason, "invalid");
+    for (const other of [sam.token, handoff]) {
+      assert.equal(
+        (yield* Effect.flip(guestShares.postTurn(other, turn("run:2")))).reason,
+        "invalid",
+      );
+    }
+    assert.equal(
+      (yield* Effect.flip(guestShares.postTurn(token, { ...turn("run:2"), reply: " " }))).reason,
+      "empty",
+    );
+
+    // It also reads what the room said: never its own turns, and another guest's machine reads
+    // them. A session or a handoff token reads nothing.
+    assert.deepEqual((yield* guestShares.roomUpdates(token, null)).updates, []);
+    for (const other of [sam.token, handoff]) {
+      assert.equal((yield* Effect.flip(guestShares.roomUpdates(other, null))).reason, "invalid");
+    }
+    const alex = yield* guestShares.redeem({ credential, name: "Alex" });
+    const alexRoom = (yield* guestShares.exportThread(
+      (yield* guestShares.handoff(alex.token)).token,
+    )).room!;
+    const seen = yield* guestShares.roomUpdates(alexRoom.token, null);
+    assert.deepEqual(
+      seen.updates.map(({ author, name, text }) => ({ author, name, text })),
+      [
+        { author: "guest", name: "Sam", text: "Why?" },
+        { author: "guest_agent", name: "Sam", text: "The token expires." },
+      ],
+    );
+    assert.isFalse(seen.truncated);
+    assert.deepEqual((yield* guestShares.roomUpdates(alexRoom.token, seen.cursor)).updates, []);
+    // Reading changed nothing in the owner's thread.
+    assert.lengthOf((yield* share).runs, 0);
+
+    // Six posts a minute, counting the two above.
+    for (const id of ["run:2", "run:3", "run:4", "run:5"]) {
+      yield* guestShares.postTurn(token, turn(id));
+    }
+    assert.equal(
+      (yield* Effect.flip(guestShares.postTurn(token, turn("run:6")))).reason,
+      "too_fast",
+    );
+    yield* TestClock.adjust("61 seconds");
+    yield* guestShares.postTurn(token, turn("run:6"));
+    assert.lengthOf((yield* share).turns, 6);
+
+    // It outlives the handoff token. A tunnel that is down may come back, so that is not the
+    // end; the owner removing the guest is.
+    yield* TestClock.adjust("11 minutes");
+    yield* guestShares.postTurn(token, turn("run:7"));
+    yield* Ref.set(hostname, "other.t3.test");
+    assert.equal(
+      (yield* Effect.flip(guestShares.postTurn(token, turn("run:8")))).reason,
+      "inactive",
+    );
+    yield* Ref.set(hostname, "env.t3.test");
+    yield* orchestrator.dispatch({
+      type: "thread.guest.remove",
+      commandId: CommandId.make("remove-sam-room"),
+      threadId,
+      guestId: shown.turns[0]!.guestId,
+    });
+    assert.equal((yield* Effect.flip(guestShares.postTurn(token, turn("run:8")))).reason, "ended");
+    assert.equal((yield* Effect.flip(guestShares.roomUpdates(token, null))).reason, "ended");
+    // Twenty reads a minute for the guest who is still in.
+    for (let read = 0; read < 20; read++) yield* guestShares.roomUpdates(alexRoom.token, null);
+    assert.equal(
+      (yield* Effect.flip(guestShares.roomUpdates(alexRoom.token, null))).reason,
+      "too_fast",
+    );
   }).pipe(Effect.provide(layerTest)),
 );
 

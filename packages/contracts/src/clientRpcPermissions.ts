@@ -74,6 +74,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   // Both make this server call the machine a link names; joining also creates a thread.
   [WS_METHODS.sharedThreadPreview]: AuthOrchestrationOperateScope,
   [WS_METHODS.sharedThreadJoin]: AuthOrchestrationOperateScope,
+  [WS_METHODS.sharedThreadLeave]: AuthOrchestrationOperateScope,
+  [WS_METHODS.sharedThreadCatchUp]: AuthOrchestrationOperateScope,
   // A guest link hands thread access to someone outside, like a pairing link.
   [WS_METHODS.guestShareCreate]: AuthAccessWriteScope,
   [WS_METHODS.peerLinksLink]: AuthAccessWriteScope,

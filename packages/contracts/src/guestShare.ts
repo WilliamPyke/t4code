@@ -31,6 +31,17 @@ export const GUEST_MESSAGE_MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 /** Total size of the files in a share's waiting messages, so a guest cannot fill the disk. */
 export const GUEST_PENDING_ATTACHMENT_BYTES_LIMIT = 20 * 1024 * 1024;
 
+/** A turn a guest ran on their own machine, as the room shows it. Text only, cut to these. */
+export const GUEST_TURN_PROMPT_MAX_LENGTH = 2_000;
+export const GUEST_TURN_REPLY_MAX_LENGTH = 8_000;
+/** Guests' own turns a share keeps, newest last, so the thread record stays small. */
+export const GUEST_TURN_LIMIT = 10;
+
+/** One catch-up from a room: how many messages, how long each, and how much in all. */
+export const ROOM_UPDATES_MAX_MESSAGES = 50;
+export const ROOM_UPDATE_MAX_LENGTH = 8_000;
+export const ROOM_UPDATES_MAX_CHARS = 48_000;
+
 export const ThreadGuestMessageStatus = Schema.Literals(["pending", "sent", "dismissed"]);
 export type ThreadGuestMessageStatus = typeof ThreadGuestMessageStatus.Type;
 
@@ -48,10 +59,53 @@ export const ThreadGuestMessage = Schema.Struct({
 });
 export type ThreadGuestMessage = typeof ThreadGuestMessage.Type;
 
+/**
+ * One turn a guest ran in their own T3 Code after joining from the room: their prompt and their
+ * agent's final reply. The room only shows it. It never starts a turn here and never reaches the
+ * owner's agent.
+ */
+export const ThreadGuestTurn = Schema.Struct({
+  /** The guest's machine names the turn, so a repeated post is recorded once. */
+  id: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  guestId: GuestId,
+  prompt: Schema.String.check(Schema.isMaxLength(GUEST_TURN_PROMPT_MAX_LENGTH)),
+  reply: Schema.String.check(Schema.isMaxLength(GUEST_TURN_REPLY_MAX_LENGTH)),
+  /** The prompt or the reply was longer than the room keeps. */
+  truncated: Schema.optional(Schema.Boolean),
+  postedAt: IsoDateTime,
+});
+export type ThreadGuestTurn = typeof ThreadGuestTurn.Type;
+
+/** The GitHub account a guest signed in with. The id stays the same when the login changes. */
+export const GuestAccount = Schema.Struct({ login: TrimmedNonEmptyString, id: Schema.Number });
+export type GuestAccount = typeof GuestAccount.Type;
+
+/**
+ * Someone whose messages the owner lets through on every link they join signed in. The id is
+ * filled in the first time they sign in, so a login someone else takes later does not match.
+ */
+export const GuestContributor = Schema.Struct({
+  login: TrimmedNonEmptyString,
+  id: Schema.optional(Schema.Number),
+});
+export type GuestContributor = typeof GuestContributor.Type;
+
+export const guestContributorFor = (
+  contributors: ReadonlyArray<GuestContributor>,
+  account: GuestAccount,
+): GuestContributor | undefined =>
+  contributors.find(
+    (contributor) =>
+      contributor.login.toLowerCase() === account.login.toLowerCase() &&
+      (contributor.id === undefined || contributor.id === account.id),
+  );
+
 export const ThreadGuest = Schema.Struct({
   id: GuestId,
   name: TrimmedNonEmptyString,
   joinedAt: IsoDateTime,
+  /** Set once the guest signs in, so the owner knows who they are beyond a typed name. */
+  account: Schema.optional(GuestAccount),
   /** The owner lets this guest's messages reach the agent without sending each one. */
   trusted: Schema.optional(Schema.Boolean),
 });
@@ -91,6 +145,8 @@ export const ThreadGuestShare = Schema.Struct({
    */
   joinsClosed: Schema.optional(Schema.Boolean),
   messages: Schema.Array(ThreadGuestMessage),
+  /** Turns guests ran on their own machines, newest last. Absent until one is posted. */
+  turns: Schema.optional(Schema.Array(ThreadGuestTurn)),
 });
 export type ThreadGuestShare = typeof ThreadGuestShare.Type;
 
@@ -106,6 +162,12 @@ export const guestMessageAuthorName = (
   message: Pick<ThreadGuestMessage, "guestId">,
 ): string =>
   share.guests?.find((guest) => guest.id === message.guestId)?.name ?? share.guestName ?? "Guest";
+
+/** Whose agent ran a guest's own turn, as the room labels it: "Sam's agent". */
+export const guestAgentName = (
+  share: GuestRoster,
+  turn: Pick<ThreadGuestTurn, "guestId">,
+): string => `${guestMessageAuthorName(share, turn)}'s agent`;
 
 /** "Sam is a guest", "Sam and Alex are guests", or a count once the names would not fit. */
 export const guestShareStatusLabel = (share: GuestRoster): string => {
@@ -215,8 +277,20 @@ export const SharedThreadCheckout = Schema.Struct({
 export type SharedThreadCheckout = typeof SharedThreadCheckout.Type;
 
 /**
+ * Lets the guest's own T3 Code post the turns it runs back to the room and read what the room
+ * said since, until the share ends or the guest is removed. The token opens nothing else.
+ */
+export const SharedThreadRoom = Schema.Struct({
+  token: TrimmedNonEmptyString,
+  /** When the share ends, so the guest's machine stops posting then. */
+  expiresAt: IsoDateTime,
+});
+export type SharedThreadRoom = typeof SharedThreadRoom.Type;
+
+/**
  * A shared thread as a guest takes it to their own machine: the conversation and where its code
- * is. A one-time copy. Nothing the guest then does reaches the owner's thread or their agent.
+ * is. The guest's turns run on their machine; `room` lets it show them to the room, where they
+ * never reach the owner's agent.
  */
 export const SharedThreadExport = Schema.Struct({
   title: Schema.String,
@@ -224,17 +298,86 @@ export const SharedThreadExport = Schema.Struct({
   /** Older messages were left out to keep the export small. */
   truncated: Schema.Boolean,
   checkout: Schema.NullOr(SharedThreadCheckout),
+  /** Absent from an older server, and for the one guest of a link made before several could join. */
+  room: Schema.optional(SharedThreadRoom),
 });
 export type SharedThreadExport = typeof SharedThreadExport.Type;
+
+/**
+ * On a thread joined from a room: where its turns are shown, until the room ends. The token that
+ * allows it stays in the server's secret store.
+ */
+export const ThreadRoomLink = Schema.Struct({
+  host: TrimmedNonEmptyString,
+  expiresAt: IsoDateTime,
+  /** The newest thing from the room this thread has: joining and each catch-up move it on. */
+  cursor: Schema.optional(IsoDateTime),
+});
+export type ThreadRoomLink = typeof ThreadRoomLink.Type;
+
+/** A turn the guest's own T3 Code posts to the room. */
+export const GuestTurnRequest = Schema.Struct({
+  id: ThreadGuestTurn.fields.id,
+  prompt: ThreadGuestTurn.fields.prompt,
+  reply: ThreadGuestTurn.fields.reply,
+  truncated: ThreadGuestTurn.fields.truncated,
+});
+export type GuestTurnRequest = typeof GuestTurnRequest.Type;
+
+/**
+ * One thing said in a room, as a thread joined from it reads it back. A guest's name is on the
+ * guest's own messages and on their agent's replies.
+ */
+export const RoomUpdate = Schema.Struct({
+  author: Schema.Literals(["owner", "owner_agent", "guest", "guest_agent"]),
+  name: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(GUEST_NAME_MAX_LENGTH))),
+  text: Schema.String.check(Schema.isMaxLength(ROOM_UPDATE_MAX_LENGTH)),
+  at: IsoDateTime,
+});
+export type RoomUpdate = typeof RoomUpdate.Type;
+
+/** What happened in a room after a cursor, oldest first, never the caller's own turns. */
+export const RoomUpdates = Schema.Struct({
+  updates: Schema.Array(RoomUpdate).check(Schema.isMaxLength(ROOM_UPDATES_MAX_MESSAGES)),
+  /** Older updates, or the end of a long one, were left out. */
+  truncated: Schema.Boolean,
+  /** What to ask after next time. Null when the room has said nothing yet. */
+  cursor: Schema.NullOr(IsoDateTime),
+});
+export type RoomUpdates = typeof RoomUpdates.Type;
 
 export const GuestHandoff = Schema.Struct({ token: TrimmedNonEmptyString });
 export type GuestHandoff = typeof GuestHandoff.Type;
 
+/** What a guest does to sign in: open the address and type the code. */
+export const GuestSignInPrompt = Schema.Struct({
+  userCode: TrimmedNonEmptyString,
+  verificationUri: TrimmedNonEmptyString,
+  /** Epoch milliseconds. */
+  expiresAt: Schema.Number,
+  /** Seconds the page waits between asking whether the guest finished. */
+  interval: Schema.Number,
+});
+export type GuestSignInPrompt = typeof GuestSignInPrompt.Type;
+
+export const GuestSignInStatus = Schema.Struct({
+  status: Schema.Literals(["pending", "signed_in", "expired", "denied", "failed"]),
+});
+export type GuestSignInStatus = typeof GuestSignInStatus.Type;
+
 export const GUEST_ROUTE_PREFIX = "/api/guest";
+/** Starts a guest's GitHub sign-in (POST) and returns the code to type: `?share=<id>`. */
+export const GUEST_SIGN_IN_ROUTE = `${GUEST_ROUTE_PREFIX}/sign-in`;
+/** Asks whether the guest finished signing in (POST): `?share=<id>`. */
+export const GUEST_SIGN_IN_POLL_ROUTE = `${GUEST_ROUTE_PREFIX}/sign-in/poll`;
 /** Mints a short-lived token the guest's own T3 Code uses to read the export: `?share=<id>`. */
 export const GUEST_HANDOFF_ROUTE = `${GUEST_ROUTE_PREFIX}/handoff`;
 /** The thread's export, for a bearer handoff token. Called by another T3 Code server. */
 export const GUEST_EXPORT_ROUTE = `${GUEST_ROUTE_PREFIX}/export`;
+/** A guest's own T3 Code posts a turn it ran here, with a bearer room token. */
+export const GUEST_ROOM_TURN_ROUTE = `${GUEST_ROUTE_PREFIX}/room/turns`;
+/** What happened in the room since `?after=<ISO time>`, for a bearer room token. */
+export const GUEST_ROOM_UPDATES_ROUTE = `${GUEST_ROUTE_PREFIX}/room/updates`;
 /** The guest page and guest routes name the share they mean with this query parameter. */
 export const GUEST_SHARE_PARAM = "share";
 

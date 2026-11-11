@@ -3,6 +3,7 @@ import {
   GUEST_PENDING_MESSAGE_LIMIT,
   GUEST_RESOLVED_MESSAGE_LIMIT,
   GUEST_SHARE_MAX_GUESTS,
+  GUEST_TURN_LIMIT,
   guestMessageAuthorName,
   type GuestId,
   type GuestMessageAttribution,
@@ -26,7 +27,10 @@ export type GuestShareCommand = Extract<
       | "thread.guest-message.submit"
       | "thread.guest-message.dismiss"
       | "thread.guest.trust"
-      | "thread.guest.remove";
+      | "thread.guest.identify"
+      | "thread.guest.remove"
+      | "thread.guest-turn.post"
+      | "thread.room-link.set";
   }
 >;
 
@@ -230,6 +234,28 @@ export function decideGuestShareCommand(input: {
         }),
       });
     }
+    case "thread.guest.identify": {
+      if (
+        share === null ||
+        share.id !== command.shareId ||
+        share.guests?.some((guest) => guest.id === command.guestId) !== true
+      ) {
+        return Result.fail(GUEST_FAILURE.inactive);
+      }
+      return withShare({
+        ...share,
+        guests: share.guests.map((guest) =>
+          guest.id === command.guestId
+            ? {
+                ...guest,
+                account: command.account,
+                // Signing in never takes away what the owner already switched on by hand.
+                ...(command.trusted ? { trusted: true } : {}),
+              }
+            : guest,
+        ),
+      });
+    }
     case "thread.guest.remove": {
       if (share === null || share.guests?.some((guest) => guest.id === command.guestId) !== true) {
         return Result.fail("This guest is not on the link.");
@@ -242,8 +268,43 @@ export function decideGuestShareCommand(input: {
         messages: share.messages.filter(
           (message) => message.guestId !== command.guestId || message.status === "sent",
         ),
+        ...(share.turns === undefined
+          ? {}
+          : { turns: share.turns.filter((turn) => turn.guestId !== command.guestId) }),
       });
     }
+    // Only the share changes: a guest's own turn starts nothing here and reaches no agent.
+    case "thread.guest-turn.post": {
+      if (
+        share === null ||
+        share.id !== command.shareId ||
+        share.guests?.some((guest) => guest.id === command.guestId) !== true ||
+        isExpired(share, now)
+      ) {
+        return Result.fail(GUEST_FAILURE.inactive);
+      }
+      const turns = share.turns ?? [];
+      if (turns.some((turn) => turn.guestId === command.guestId && turn.id === command.turn.id)) {
+        return Result.succeed(thread);
+      }
+      const { truncated, ...turn } = command.turn;
+      return withShare({
+        ...share,
+        turns: [
+          ...turns,
+          {
+            ...turn,
+            guestId: command.guestId,
+            postedAt: DateTime.formatIso(now),
+            ...(truncated === true ? { truncated } : {}),
+          },
+        ].slice(-GUEST_TURN_LIMIT),
+      });
+    }
+    case "thread.room-link.set":
+      return (thread.roomLink ?? null) === null && command.roomLink === null
+        ? Result.succeed(thread)
+        : Result.succeed({ ...thread, roomLink: command.roomLink, updatedAt: now });
     case "thread.guest-message.dismiss": {
       if (share === null) return Result.fail("This thread has no guest link.");
       return Result.map(resolveMessage(share, command.guestMessageId, "dismissed"), (next) => ({

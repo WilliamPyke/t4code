@@ -7,8 +7,12 @@ import {
   GUEST_ITEM_ROUTE,
   GUEST_MEDIA_ROUTE,
   GUEST_RENDER_ROUTE,
+  GUEST_ROOM_TURN_ROUTE,
+  GUEST_ROOM_UPDATES_ROUTE,
   GUEST_ROUTE_PREFIX,
   GUEST_SHARE_PARAM,
+  GUEST_SIGN_IN_POLL_ROUTE,
+  GUEST_SIGN_IN_ROUTE,
   GUEST_MESSAGE_MAX_ATTACHMENT_BYTES,
   GUEST_MESSAGE_MAX_ATTACHMENTS,
   GUEST_SHARE_TTL_MS,
@@ -16,17 +20,21 @@ import {
   GuestRedeemRequest,
   GuestStreamEvent,
   GuestSubmitRequest,
+  GuestTurnRequest,
   guestSessionCookieName,
   isProviderSendTurnSupportedImageMimeType,
   OrchestrationV2CommandOutputFrame,
   OrchestrationV2GetTurnItemResult,
   OrchestrationV2ThreadHistoryPage,
+  RoomUpdates,
   SharedThreadExport,
 } from "@t3tools/contracts";
 import * as ByteSize from "effect/ByteSize";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { HttpRouter, HttpServerRequest, HttpServerResponse, Multipart } from "effect/http";
@@ -67,12 +75,16 @@ const errorResponse = (error: GuestShareAccessError) =>
       status:
         error.reason === "invalid" || error.reason === "inactive" || error.reason === "unavailable"
           ? 403
-          : error.reason === "empty" ||
-              error.reason === "too_many_files" ||
-              error.reason === "too_large" ||
-              error.reason === "unsupported_file"
-            ? 400
-            : 409,
+          : error.reason === "ended"
+            ? 410
+            : error.reason === "too_fast"
+              ? 429
+              : error.reason === "empty" ||
+                  error.reason === "too_many_files" ||
+                  error.reason === "too_large" ||
+                  error.reason === "unsupported_file"
+                ? 400
+                : 409,
       headers: NO_STORE,
     },
   );
@@ -130,16 +142,17 @@ const eventStreamResponse = <A>(
 
 // Guest JSON bodies are a name or one message; anyone who can reach the tunnel can post them.
 const JSON_MAX_BODY_BYTES = 64 * 1024;
-const readJson = Effect.gen(function* () {
+const readJsonWithin = Effect.fn("guest.readJsonWithin")(function* (maxBytes: number) {
   const request = yield* HttpServerRequest.HttpServerRequest;
   // A declared length over the cap is refused before reading; chunked bodies hit the reader cap.
-  if (Number(request.headers["content-length"] ?? "0") > JSON_MAX_BODY_BYTES) {
+  if (Number(request.headers["content-length"] ?? "0") > maxBytes) {
     return yield* new GuestShareAccessError({ reason: "too_large" });
   }
   return yield* request.json.pipe(
-    Effect.provideService(HttpIncomingMessage.MaxBodySize, ByteSize.bytes(JSON_MAX_BODY_BYTES)),
+    Effect.provideService(HttpIncomingMessage.MaxBodySize, ByteSize.bytes(maxBytes)),
   );
 });
+const readJson = readJsonWithin(JSON_MAX_BODY_BYTES);
 
 const redeemRoute = HttpRouter.add(
   "POST",
@@ -245,6 +258,11 @@ const streamRoute = HttpRouter.add(
   }),
 );
 
+const bearerToken = Effect.map(
+  HttpServerRequest.HttpServerRequest,
+  (request) => /^Bearer (.+)$/.exec(request.headers["authorization"] ?? "")?.[1] ?? "",
+);
+
 const encodeHandoff = Schema.encodeEffect(Schema.toCodecJson(GuestHandoff));
 const encodeExport = Schema.encodeEffect(Schema.toCodecJson(SharedThreadExport));
 
@@ -271,16 +289,89 @@ const exportRoute = HttpRouter.add(
   "GET",
   GUEST_EXPORT_ROUTE,
   Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const token = /^Bearer (.+)$/.exec(request.headers["authorization"] ?? "")?.[1] ?? "";
     const guestShares = yield* GuestShareService;
-    return yield* guestShares.exportThread(token).pipe(
+    return yield* guestShares.exportThread(yield* bearerToken).pipe(
       Effect.flatMap((result) =>
         encodeExport(result).pipe(
           Effect.mapError(() => new GuestShareAccessError({ reason: "unavailable" })),
         ),
       ),
       Effect.map((body) => HttpServerResponse.jsonUnsafe(body, { headers: NO_STORE })),
+      Effect.catchTags({ GuestShareAccessError: errorResponse }),
+    );
+  }),
+);
+
+// A turn's text at its limits, in the widest characters, JSON-escaped.
+const TURN_MAX_BODY_BYTES = 128 * 1024;
+const decodeTurn = Schema.decodeUnknownEffect(GuestTurnRequest);
+
+// Posted by the guest's own T3 Code server, like the export: a bearer, not a cookie.
+const roomTurnRoute = HttpRouter.add(
+  "POST",
+  GUEST_ROOM_TURN_ROUTE,
+  Effect.gen(function* () {
+    const token = yield* bearerToken;
+    const body = yield* readJsonWithin(TURN_MAX_BODY_BYTES).pipe(
+      Effect.flatMap(decodeTurn),
+      Effect.option,
+    );
+    if (body._tag === "None") return yield* badRequest;
+    const guestShares = yield* GuestShareService;
+    return yield* guestShares
+      .postTurn(token, body.value)
+      .pipe(
+        Effect.as(HttpServerResponse.empty({ status: 204, headers: NO_STORE })),
+        Effect.catchTags({ GuestShareAccessError: errorResponse }),
+      );
+  }),
+);
+
+const encodeUpdates = Schema.encodeEffect(Schema.toCodecJson(RoomUpdates));
+
+// Read by the guest's own T3 Code server when its user catches up.
+const roomUpdatesRoute = HttpRouter.add(
+  "GET",
+  GUEST_ROOM_UPDATES_ROUTE,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const after = new URLSearchParams(request.url.split("?", 2)[1] ?? "").get("after");
+    const cursor = after === null ? Option.none() : DateTime.make(after);
+    if (after !== null && Option.isNone(cursor)) return yield* badRequest;
+    const guestShares = yield* GuestShareService;
+    return yield* guestShares
+      .roomUpdates(yield* bearerToken, Option.getOrNull(Option.map(cursor, DateTime.formatIso)))
+      .pipe(
+        Effect.flatMap((result) =>
+          encodeUpdates(result).pipe(
+            Effect.mapError(() => new GuestShareAccessError({ reason: "unavailable" })),
+          ),
+        ),
+        Effect.map((body) => HttpServerResponse.jsonUnsafe(body, { headers: NO_STORE })),
+        Effect.catchTags({ GuestShareAccessError: errorResponse }),
+      );
+  }),
+);
+
+const signInRoute = HttpRouter.add(
+  "POST",
+  GUEST_SIGN_IN_ROUTE,
+  Effect.gen(function* () {
+    const guestShares = yield* GuestShareService;
+    return yield* guestShares.signIn(yield* sessionToken).pipe(
+      Effect.map((prompt) => HttpServerResponse.jsonUnsafe(prompt, { headers: NO_STORE })),
+      Effect.catchTags({ GuestShareAccessError: errorResponse }),
+    );
+  }),
+);
+
+const signInPollRoute = HttpRouter.add(
+  "POST",
+  GUEST_SIGN_IN_POLL_ROUTE,
+  Effect.gen(function* () {
+    const guestShares = yield* GuestShareService;
+    return yield* guestShares.signInPoll(yield* sessionToken).pipe(
+      Effect.map((status) => HttpServerResponse.jsonUnsafe(status, { headers: NO_STORE })),
       Effect.catchTags({ GuestShareAccessError: errorResponse }),
     );
   }),
@@ -433,6 +524,10 @@ export const layer = Layer.mergeAll(
   streamRoute,
   handoffRoute,
   exportRoute,
+  roomTurnRoute,
+  roomUpdatesRoute,
+  signInRoute,
+  signInPollRoute,
   renderRoute,
   itemRoute,
   historyRoute,
