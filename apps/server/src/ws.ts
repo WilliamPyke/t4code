@@ -94,6 +94,7 @@ import {
   PersistChatAttachmentsError,
   RpcClientId,
   EnvironmentAuthorizationError,
+  RoomBoardChangeError,
   type ProjectId,
   type ProviderDriverKind,
   type ProviderInstanceId,
@@ -2374,6 +2375,17 @@ export const layerWsRpc = (
             Effect.andThen(scheduledTasks.rotateWebhookToken(input)),
           ),
         [WS_METHODS.guestShareSubscribePresence]: (input) => guestShares.presence(input.threadId),
+        [WS_METHODS.guestShareChangeBoard]: (input) =>
+          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+            Effect.andThen(guestShares.changeBoard({ threadId: input.threadId }, input.change)),
+            Effect.mapError(
+              ({ reason }) =>
+                new RoomBoardChangeError({
+                  reason:
+                    reason === "inactive" ? reason : reason === "board_full" ? "full" : "rejected",
+                }),
+            ),
+          ),
         [WS_METHODS.sharedThreadPreview]: (input) => sharedThreads.preview(input),
         [WS_METHODS.sharedThreadJoin]: (input) =>
           Effect.annotateCurrentSpan({

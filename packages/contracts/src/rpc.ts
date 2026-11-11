@@ -173,6 +173,8 @@ import {
   GuestShareCreateError,
   GuestShareCreateInput,
   GuestShareCreateResult,
+  RoomBoardChangeError,
+  RoomBoardChangeInput,
 } from "./guestShare.ts";
 import {
   SharedThreadJoinError,
@@ -569,6 +571,7 @@ export const WS_METHODS = {
   secretsAnswerRequest: "secrets.answerRequest",
   guestShareCreate: "guestShare.create",
   guestShareSubscribePresence: "guestShare.subscribePresence",
+  guestShareChangeBoard: "guestShare.changeBoard",
   sharedThreadPreview: "sharedThread.preview",
   sharedThreadJoin: "sharedThread.join",
   sharedThreadLeave: "sharedThread.leave",
@@ -2069,6 +2072,11 @@ const WsGuestShareCreateRpc = Rpc.make(WS_METHODS.guestShareCreate, {
   error: Schema.Union([GuestShareCreateError, EnvironmentAuthorizationError]),
 });
 
+const WsGuestShareChangeBoardRpc = Rpc.make(WS_METHODS.guestShareChangeBoard, {
+  payload: RoomBoardChangeInput,
+  error: Schema.Union([RoomBoardChangeError, EnvironmentAuthorizationError]),
+});
+
 const WsSecretsAnswerRequestRpc = Rpc.make(WS_METHODS.secretsAnswerRequest, {
   payload: SecretRequestAnswerInput,
   error: Schema.Union([SecretRequestError, EnvironmentAuthorizationError]),
@@ -2114,6 +2122,7 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 export const WsRpcGroup = RpcGroup.make(
   WsGuestShareCreateRpc,
   WsGuestShareSubscribePresenceRpc,
+  WsGuestShareChangeBoardRpc,
   WsSharedThreadPreviewRpc,
   WsSharedThreadJoinRpc,
   WsSharedThreadLeaveRpc,

@@ -35,8 +35,17 @@ from the mobile app.
 
 On web, choose **Board** in a shared thread's header. The thread and each guest appear as cards
 you can drag, with what each guest has waiting for you, and you can add notes. Scroll to move,
-and hold Ctrl or Cmd while scrolling to zoom. The arrangement and the notes are yours alone for
-now: they are kept in this browser and guests do not see them.
+and hold Ctrl or Cmd while scrolling to zoom.
+
+The board belongs to the room. Guests open the same one with **Board** on their page, and
+everyone sees a card land where it was dropped and a note once its author clicks away from it.
+Anyone in the room can move, edit or delete any note; each note names who added it. A board
+holds up to 50 notes of 280 characters. Agents never see the board, so use a message, not a note,
+for anything an agent should act on.
+
+The board lasts as long as the link: stopping sharing or creating a new link starts an empty
+one, and removing a guest removes their notes. Someone who continued the thread on their own
+machine does not get the board in their T3 Code; they still see it on the guest page.
 
 ## Remove a guest
 

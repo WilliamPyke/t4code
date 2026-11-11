@@ -47,6 +47,7 @@ import { ChatAttachment } from "./chatAttachment.ts";
 import {
   GuestAccount,
   GuestTurnRequest,
+  RoomBoardChange,
   SharedThreadMessage,
   ThreadGuestShare,
   ThreadRoomLink,
@@ -3492,6 +3493,16 @@ const OrchestrationV2InternalCommand = Schema.Union([
     shareId: GuestShareId,
     guestId: GuestId,
     turn: GuestTurnRequest,
+  }),
+  /** Changes one card or note on the room's board. It changes the share and nothing else. */
+  Schema.Struct({
+    type: Schema.Literal("thread.guest-board.change"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    /** The guest who made the change, or null for the owner. */
+    author: Schema.NullOr(GuestId),
+    change: RoomBoardChange,
   }),
   /** Connects a thread joined from a room to it, or with null ends that. */
   Schema.Struct({

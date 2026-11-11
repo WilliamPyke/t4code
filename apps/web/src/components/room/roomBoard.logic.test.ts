@@ -1,17 +1,20 @@
+import type { RoomBoard } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   BOARD_MAX_ZOOM,
   BOARD_MIN_ZOOM,
-  EMPTY_BOARD_LAYOUT,
+  EMPTY_ROOM_BOARD,
   INITIAL_BOARD_VIEW,
-  addBoardNote,
+  NO_BOARD_EDITS,
+  boardChangeOf,
   boardMessages,
-  moveBoardCard,
-  parseBoardLayout,
+  dropBoardEdit,
   placeBoardCards,
+  putBoardEdit,
+  resolveBoard,
   screenToBoard,
-  serializeBoardLayout,
+  settleBoardValue,
   zoomBoardAt,
 } from "./roomBoard.logic";
 
@@ -44,20 +47,52 @@ describe("placeBoardCards", () => {
   });
 });
 
-describe("parseBoardLayout", () => {
-  it("reads back what was saved and ignores anything else stored under the key", () => {
-    const layout = addBoardNote(moveBoardCard(EMPTY_BOARD_LAYOUT, "thread", { x: 12, y: 34 }), {
-      id: "note:1",
-      text: "Ship Friday",
-      x: 1,
-      y: 2,
+describe("resolveBoard", () => {
+  const thread = { kind: "card", id: "thread" } as const;
+  const room = (x: number): RoomBoard => ({ positions: { thread: { x, y: 0 } }, notes: [] });
+
+  it("shows a drag over the room's copy, then the room's copy once it moves on", () => {
+    const dragging = putBoardEdit(room(0), NO_BOARD_EDITS, thread, { x: 40.4, y: 0 }, true);
+    // Someone else moving the card does not pull it from under the pointer.
+    expect(resolveBoard(room(900), dragging).positions.thread).toEqual({ x: 40.4, y: 0 });
+
+    const dropped = settleBoardValue({ x: 40.4, y: 0 });
+    const sent = putBoardEdit(room(0), dragging, thread, dropped, false);
+    expect(boardChangeOf(thread, dropped)).toEqual({
+      type: "card.move",
+      cardId: "thread",
+      x: 40,
+      y: 0,
     });
-    expect(parseBoardLayout(serializeBoardLayout(layout))).toEqual(layout);
-    expect(parseBoardLayout(null)).toEqual(EMPTY_BOARD_LAYOUT);
-    expect(parseBoardLayout("{")).toEqual(EMPTY_BOARD_LAYOUT);
-    expect(parseBoardLayout(JSON.stringify({ positions: { thread: { x: "left" } } }))).toEqual(
-      EMPTY_BOARD_LAYOUT,
-    );
+    // Until the server answers, the card stays where it was dropped.
+    expect(resolveBoard(room(0), sent).positions.thread).toEqual({ x: 40, y: 0 });
+    // A later move by someone else wins, and the edit is forgotten on the next one.
+    expect(resolveBoard(room(900), sent).positions.thread).toEqual({ x: 900, y: 0 });
+    const note = { kind: "note", id: "n" } as const;
+    expect(Object.keys(putBoardEdit(room(900), sent, note, null, false))).toEqual(["note:n"]);
+  });
+
+  it("takes back a refused edit, unless a newer one replaced it", () => {
+    const first = { x: 5, y: 5 };
+    const sent = putBoardEdit(room(0), NO_BOARD_EDITS, thread, first, false);
+    expect(dropBoardEdit(sent, thread, { x: 5, y: 5 })).toBe(sent);
+    expect(resolveBoard(room(0), dropBoardEdit(sent, thread, first)).positions.thread).toEqual({
+      x: 0,
+      y: 0,
+    });
+  });
+
+  it("adds, rewrites and removes notes over the room's copy", () => {
+    const target = { kind: "note", id: "n" } as const;
+    const written = { id: "n", text: "Ship Friday", x: 1, y: 2 };
+    const added = putBoardEdit(EMPTY_ROOM_BOARD, NO_BOARD_EDITS, target, written, false);
+    expect(resolveBoard(EMPTY_ROOM_BOARD, added).notes).toEqual([written]);
+    const stored: RoomBoard = { positions: {}, notes: [written] };
+    const typing = putBoardEdit(stored, added, target, { ...written, text: "Ship Monday" }, true);
+    expect(resolveBoard(stored, typing).notes[0]?.text).toBe("Ship Monday");
+    const removed = putBoardEdit(stored, typing, target, null, false);
+    expect(resolveBoard(stored, removed).notes).toEqual([]);
+    expect(boardChangeOf(target, null)).toEqual({ type: "note.remove", noteId: "n" });
   });
 });
 

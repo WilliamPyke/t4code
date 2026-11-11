@@ -22,6 +22,7 @@ import {
   MessageId,
   providerAllowsDirectGuestSend,
   repositoryGroupingKeyOf,
+  type RoomBoardChange,
   type RoomUpdates,
   SHARED_THREAD_MAX_CHARS,
   SHARED_THREAD_MAX_MESSAGES,
@@ -41,6 +42,8 @@ import {
 import { chatMarkdownImageSources } from "@t3tools/shared/markdownPipeline";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
 import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
+import * as NodeOS from "node:os";
+
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
@@ -81,6 +84,7 @@ import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolv
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
+import { type GuestRedactor, type GuestSafe, makeGuestRedactor } from "./guestRedaction.ts";
 import * as GuestSignIn from "./GuestSignIn.ts";
 import { guestShareView, guestThreadModel } from "./guestView.ts";
 import { roomUpdatesOf } from "./roomUpdates.ts";
@@ -90,7 +94,7 @@ import {
   guestHostImageType,
   type GuestUpload,
   matchesImageSignature,
-  repliesShowImage,
+  shownImageHostPath,
 } from "./guestAttachments.ts";
 
 const SIGNING_SECRET_NAME = "guest-share-signing-key";
@@ -106,6 +110,8 @@ const ACCESS_RECHECK_INTERVAL = Duration.seconds(30);
 // Turns one guest's machine can post in a minute. An agent rarely finishes faster than this.
 const GUEST_TURN_RATE_LIMIT = 6;
 const GUEST_TURN_RATE_WINDOW_MS = 60_000;
+// Board changes one guest can make in a minute. Each is a card dropped or a note left.
+const BOARD_CHANGE_RATE_LIMIT = 120;
 // Catch-ups one guest's machine can ask for in a minute. Each is a person pressing a button.
 const ROOM_UPDATES_RATE_LIMIT = 20;
 
@@ -121,6 +127,7 @@ const GUEST_ACCESS_MESSAGES = {
   too_large: "Attached files can total up to 10 MB per message.",
   unsupported_file: "This file cannot be attached. Images must be PNG, JPEG, GIF, or WebP.",
   files_busy: GUEST_FAILURE.filesBusy,
+  board_full: GUEST_FAILURE.boardFull,
   sign_in_failed: "Could not start the GitHub sign-in. Try again.",
   ended: "This room has ended, or you are no longer in it.",
   too_fast: "Too many requests at once. Try again in a minute.",
@@ -146,6 +153,7 @@ export class GuestShareAccessError extends Schema.TaggedError<GuestShareAccessEr
       "too_large",
       "unsupported_file",
       "files_busy",
+      "board_full",
       "sign_in_failed",
       "ended",
       "too_fast",
@@ -165,6 +173,7 @@ const GUEST_FAILURE_REASONS = new Map<unknown, GuestShareAccessError["reason"]>(
   [GUEST_FAILURE.nameTaken, "name_taken"],
   [GUEST_FAILURE.busy, "busy"],
   [GUEST_FAILURE.filesBusy, "files_busy"],
+  [GUEST_FAILURE.boardFull, "board_full"],
 ]);
 const guestFailureReason = (cause: unknown): GuestShareAccessError["reason"] =>
   GUEST_FAILURE_REASONS.get(cause) ?? "rejected";
@@ -208,7 +217,7 @@ export class GuestShareService extends Context.Service<
     ) => Effect.Effect<void, GuestShareAccessError>;
     readonly stream: (
       session: string,
-    ) => Effect.Effect<Stream.Stream<GuestStreamEvent>, GuestShareAccessError>;
+    ) => Effect.Effect<Stream.Stream<GuestSafe<GuestStreamEvent>>, GuestShareAccessError>;
     /** Starts the guest's GitHub sign-in and returns the code they type on GitHub. */
     readonly signIn: (session: string) => Effect.Effect<GuestSignInPrompt, GuestShareAccessError>;
     /** Whether the guest finished. Once they have, the share records their account. */
@@ -222,7 +231,7 @@ export class GuestShareService extends Context.Service<
     /** The conversation and where its code is, for a handoff token. Changes nothing here. */
     readonly exportThread: (
       handoffToken: string,
-    ) => Effect.Effect<SharedThreadExport, GuestShareAccessError>;
+    ) => Effect.Effect<GuestSafe<SharedThreadExport>, GuestShareAccessError>;
     /** Records a turn the guest ran on their own machine, for the room to see. */
     readonly postTurn: (
       roomToken: string,
@@ -232,7 +241,15 @@ export class GuestShareService extends Context.Service<
     readonly roomUpdates: (
       roomToken: string,
       after: string | null,
-    ) => Effect.Effect<RoomUpdates, GuestShareAccessError>;
+    ) => Effect.Effect<GuestSafe<RoomUpdates>, GuestShareAccessError>;
+    /**
+     * Changes one card or note on a shared thread's board: for its owner, who names the thread,
+     * or for a guest, who shows their session. Everyone in the room sees the result.
+     */
+    readonly changeBoard: (
+      by: { readonly threadId: ThreadId } | { readonly session: string },
+      change: RoomBoardChange,
+    ) => Effect.Effect<void, GuestShareAccessError>;
     /** The file of an HTML render in the shared thread, and its title. */
     readonly render: (
       session: string,
@@ -242,17 +259,20 @@ export class GuestShareService extends Context.Service<
     readonly item: (
       session: string,
       itemId: string,
-    ) => Effect.Effect<OrchestrationV2GetTurnItemResult, GuestShareAccessError>;
+    ) => Effect.Effect<GuestSafe<OrchestrationV2GetTurnItemResult>, GuestShareAccessError>;
     /** Older turns of the shared thread, as the owner's client pages them. */
     readonly history: (
       session: string,
       cursor: string,
-    ) => Effect.Effect<OrchestrationV2ThreadHistoryPage, GuestShareAccessError>;
+    ) => Effect.Effect<GuestSafe<OrchestrationV2ThreadHistoryPage>, GuestShareAccessError>;
     /** A command's output frames, as the owner's expanded row gets them, until the link ends. */
     readonly commandOutput: (
       session: string,
       itemId: string,
-    ) => Effect.Effect<Stream.Stream<OrchestrationV2CommandOutputFrame>, GuestShareAccessError>;
+    ) => Effect.Effect<
+      Stream.Stream<GuestSafe<OrchestrationV2CommandOutputFrame>>,
+      GuestShareAccessError
+    >;
     /** A file in the shared thread or one of the share's messages, never a dismissed one's. */
     readonly attachment: (
       session: string,
@@ -261,7 +281,10 @@ export class GuestShareService extends Context.Service<
       { readonly path: string; readonly attachment: ChatAttachment },
       GuestShareAccessError
     >;
-    /** An image on the host that an agent reply the guest sees shows, and its type. */
+    /**
+     * An image on the host that an agent reply the guest sees shows, and its type. `path` is the
+     * one the guest's copy of the reply names.
+     */
     readonly media: (
       session: string,
       path: string,
@@ -415,6 +438,25 @@ const make = Effect.gen(function* () {
       return yield* inactive;
     }
     return { thread, share, guestId: claims.value.guestId };
+  });
+
+  // Guests see paths relative to where the thread works, and `~` for the owner's home. Read per
+  // request, so a project moved mid-share is hidden from the next request on.
+  const homeDirectory = NodeOS.homedir();
+  const redactorFor = Effect.fn("GuestShareService.redactorFor")(function* (
+    thread: OrchestrationV2AppThread,
+  ) {
+    const project = yield* projects
+      .getById(thread.projectId)
+      .pipe(Effect.orElseSucceed(() => Option.none()));
+    const workspaceRoot = Option.getOrNull(project)?.workspaceRoot ?? null;
+    return {
+      workspaceRoot,
+      redactor: makeGuestRedactor({
+        workspaceRoots: [thread.worktreePath, workspaceRoot],
+        homeDirectory,
+      }),
+    };
   });
 
   const create = Effect.fn("GuestShareService.create")(function* (input: GuestShareCreateInput) {
@@ -752,8 +794,24 @@ const make = Effect.gen(function* () {
       );
     const initialView = viewOf(snapshot.projection.thread);
     if (initialView === null) return yield* inactive;
+    const { workspaceRoot, redactor: openingRedactor } = yield* redactorFor(
+      snapshot.projection.thread,
+    );
+    // The thread can move to another worktree while the guest watches.
+    let redactor = openingRedactor;
+    let worktreePath = snapshot.projection.thread.worktreePath;
+    const redactorAfter = (updated: OrchestrationV2AppThread | null): GuestRedactor => {
+      if (updated !== null && updated.worktreePath !== worktreePath) {
+        worktreePath = updated.worktreePath;
+        redactor = makeGuestRedactor({
+          workspaceRoots: [worktreePath, workspaceRoot],
+          homeDirectory,
+        });
+      }
+      return redactor;
+    };
 
-    const ended: GuestStreamEvent = { type: "ended" };
+    const ended = openingRedactor.redact<GuestStreamEvent>({ type: "ended" });
     const endsShare = (event: OrchestrationV2DomainEvent) => {
       if (event.type === "thread.archived" || event.type === "thread.deleted") return true;
       const updated = threadOf(event);
@@ -766,18 +824,24 @@ const make = Effect.gen(function* () {
         // Ending the source here flushes what the coalescer holds, so `ended` is not held back.
         Stream.takeUntil((item) => endsShare(item.event)),
         coalesceThreadLiveStream,
-        Stream.map((item): ReadonlyArray<GuestStreamEvent> => {
+        Stream.map((item): ReadonlyArray<GuestSafe<GuestStreamEvent>> => {
           if (item.kind !== "event") return [];
           if (endsShare(item.event)) return [ended];
           if (item.event.type === "turn-item.updated") rememberSent(share.id, [item.event.payload]);
           const updated = threadOf(item.event);
+          const current = redactorAfter(
+            typeof item.event.payload === "object" && "lineage" in item.event.payload
+              ? item.event.payload
+              : null,
+          );
+          const safeItem = current.streamItem(item);
           const view = updated === null ? null : viewOf(updated);
-          return view === null
-            ? [{ type: "thread", item }]
-            : [
-                { type: "thread", item },
-                { type: "view", view },
-              ];
+          return [
+            ...(safeItem === null
+              ? []
+              : [current.redact<GuestStreamEvent>({ type: "thread", item: safeItem })]),
+            ...(view === null ? [] : [current.redact<GuestStreamEvent>({ type: "view", view })]),
+          ];
         }),
         Stream.flattenIterable,
         // A failed read closes the response without `ended`: the browser reconnects, and
@@ -785,7 +849,9 @@ const make = Effect.gen(function* () {
         Stream.catchCause(() => Stream.empty),
         Stream.merge(
           presence(thread.id).pipe(
-            Stream.map(({ online }): GuestStreamEvent => ({ type: "presence", online })),
+            Stream.map(({ online }) =>
+              openingRedactor.redact<GuestStreamEvent>({ type: "presence", online }),
+            ),
           ),
           { haltStrategy: "left" },
         ),
@@ -797,9 +863,12 @@ const make = Effect.gen(function* () {
       snapshotSequence: snapshot.snapshotSequence,
       projection: snapshot.projection,
     });
-    const opening: ReadonlyArray<GuestStreamEvent> = [
-      { type: "view", view: initialView },
-      { type: "thread", item: openingSnapshot },
+    const safeSnapshot = openingRedactor.streamItem(openingSnapshot);
+    const opening = [
+      openingRedactor.redact<GuestStreamEvent>({ type: "view", view: initialView }),
+      ...(safeSnapshot === null
+        ? []
+        : [openingRedactor.redact<GuestStreamEvent>({ type: "thread", item: safeSnapshot })]),
     ];
     const events = Stream.fromIterable(opening).pipe(
       Stream.concat(
@@ -921,7 +990,8 @@ const make = Effect.gen(function* () {
       kept.push(message);
       chars += message.text.length;
     }
-    return {
+    const { redactor } = yield* redactorFor(thread);
+    return redactor.redact<SharedThreadExport>({
       title: thread.title,
       messages: kept.toReversed(),
       truncated: snapshot.hasMoreHistory === true || kept.length < spoken.length,
@@ -939,7 +1009,7 @@ const make = Effect.gen(function* () {
               expiresAt: share.expiresAt,
             },
           }),
-    };
+    });
   });
 
   // When each guest's machine last asked, so one cannot flood the room. In memory: a restart
@@ -958,6 +1028,7 @@ const make = Effect.gen(function* () {
   };
   const allowTurnPost = rateLimit(GUEST_TURN_RATE_LIMIT);
   const allowUpdatesRead = rateLimit(ROOM_UPDATES_RATE_LIMIT);
+  const allowBoardChange = rateLimit(BOARD_CHANGE_RATE_LIMIT);
 
   const postTurn = Effect.fn("GuestShareService.postTurn")(function* (
     token: string,
@@ -1003,17 +1074,59 @@ const make = Effect.gen(function* () {
       snapshotSequence: window.snapshotSequence,
       projection: window.projection,
     });
-    return roomUpdatesOf({
-      items: snapshot.projection.visibleTurnItems.map((row) => row.item),
-      runs: snapshot.projection.runs,
-      hasMoreHistory: snapshot.hasMoreHistory === true,
-      share,
-      guestId,
-      after,
-    });
+    const { redactor } = yield* redactorFor(thread);
+    return redactor.redact(
+      roomUpdatesOf({
+        items: snapshot.projection.visibleTurnItems.map((row) => row.item),
+        runs: snapshot.projection.runs,
+        hasMoreHistory: snapshot.hasMoreHistory === true,
+        share,
+        guestId,
+        after,
+      }),
+    );
   });
 
   const unavailable = new GuestShareAccessError({ reason: "unavailable" });
+
+  /** Who is changing which share's board: a guest by their session, or the thread's owner. */
+  const boardAuthor = Effect.fn("GuestShareService.boardAuthor")(function* (
+    by: { readonly threadId: ThreadId } | { readonly session: string },
+  ) {
+    if ("threadId" in by) {
+      const { thread } = yield* orchestrator
+        .getThreadRecords(by.threadId, [])
+        .pipe(Effect.mapError(() => inactive));
+      if (!thread.guestShare) return yield* inactive;
+      return { threadId: thread.id, shareId: thread.guestShare.id, author: null };
+    }
+    const { thread, share, guestId } = yield* authorize(by.session, "session");
+    // The one guest of a link made before several could join has no id to sign a note with.
+    if (guestId === undefined) return yield* unavailable;
+    if (!allowBoardChange(`${share.id}:${guestId}`, DateTime.toEpochMillis(yield* DateTime.now))) {
+      return yield* new GuestShareAccessError({ reason: "too_fast" });
+    }
+    return { threadId: thread.id, shareId: share.id, author: guestId };
+  });
+
+  const changeBoard = Effect.fn("GuestShareService.changeBoard")(function* (
+    by: { readonly threadId: ThreadId } | { readonly session: string },
+    change: RoomBoardChange,
+  ) {
+    const { threadId, shareId, author } = yield* boardAuthor(by);
+    yield* dispatchGuestCommand({
+      type: "thread.guest-board.change",
+      commandId: yield* commandId("board"),
+      threadId,
+      shareId,
+      author,
+      change:
+        change.type === "note.put"
+          ? // Characters nobody can see have no place in text the whole room reads.
+            { ...change, text: sanitizeLinkedPrompt(change.text).text }
+          : change,
+    });
+  });
 
   /** An item of the shared thread, read after the session check. */
   const threadItem = Effect.fn("GuestShareService.threadItem")(function* (
@@ -1041,11 +1154,12 @@ const make = Effect.gen(function* () {
   });
 
   const item = Effect.fn("GuestShareService.item")(function* (session: string, itemId: string) {
-    const { item } = yield* threadItem(session, itemId);
-    return {
+    const { thread, item } = yield* threadItem(session, itemId);
+    const { redactor } = yield* redactorFor(thread);
+    return redactor.redact<OrchestrationV2GetTurnItemResult>({
       item:
         item.type === "file_change" ? projectTurnItemForWire(item) : projectTurnItemForDetail(item),
-    };
+    });
   });
 
   const history = Effect.fn("GuestShareService.history")(function* (
@@ -1060,7 +1174,8 @@ const make = Effect.gen(function* () {
       share.id,
       page.items.map((row) => row.item),
     );
-    return page;
+    const { redactor } = yield* redactorFor(thread);
+    return redactor.redact(page);
   });
 
   const commandOutput = Effect.fn("GuestShareService.commandOutput")(function* (
@@ -1069,7 +1184,9 @@ const make = Effect.gen(function* () {
   ) {
     const { thread, item } = yield* threadItem(session, itemId);
     if (item.type !== "command_execution") return yield* unavailable;
+    const { redactor } = yield* redactorFor(thread);
     return commandOutputs.subscribe({ threadId: thread.id, itemId: item.id }).pipe(
+      Stream.map((frame) => redactor.redact(frame)),
       // A lost hub stream ends the output; the row reloads it when reopened.
       Stream.catchCause(() => Stream.empty),
       Stream.interruptWhen(untilRevoked(session)),
@@ -1113,21 +1230,20 @@ const make = Effect.gen(function* () {
     return exists ? { path, attachment: found } : yield* unavailable;
   });
 
-  const media = Effect.fn("GuestShareService.media")(function* (session: string, path: string) {
-    const { share } = yield* authorize(session, "session");
-    const mimeType = guestHostImageType(path);
-    if (mimeType === null) return yield* unavailable;
+  const media = Effect.fn("GuestShareService.media")(function* (session: string, shown: string) {
+    const { thread, share } = yield* authorize(session, "session");
     const sent = sentImageReplies.get(share.id)?.replies.values() ?? [];
-    // Each sent reply is parsed once, on the first request that needs it.
-    if (
-      !repliesShowImage(
-        path,
-        [...sent],
-        (reply) => (reply.sources ??= chatMarkdownImageSources(reply.text)),
-      )
-    ) {
-      return yield* unavailable;
-    }
+    const { redactor } = yield* redactorFor(thread);
+    // Each sent reply is parsed once, on the first request that needs it. The guest names the
+    // path as their copy of the reply shows it; the file is read from where it is.
+    const path = shownImageHostPath(
+      shown,
+      [...sent],
+      (reply) => (reply.sources ??= chatMarkdownImageSources(reply.text)),
+      redactor.path,
+    );
+    const mimeType = path === null ? null : guestHostImageType(path);
+    if (path === null || mimeType === null) return yield* unavailable;
     // The bytes must be the image the name says, as for a guest's own upload.
     const header = yield* fileSystem.open(path, { flag: "r" }).pipe(
       Effect.flatMap((file) => file.readAlloc(GUEST_UPLOAD_HEADER_BYTES)),
@@ -1153,6 +1269,7 @@ const make = Effect.gen(function* () {
     exportThread,
     postTurn,
     roomUpdates,
+    changeBoard,
     render,
     item,
     history,

@@ -105,6 +105,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.secretsAnswerRequest]: "secrets",
   [WS_METHODS.guestShareCreate]: "guest-share",
   [WS_METHODS.guestShareSubscribePresence]: "guest-share",
+  [WS_METHODS.guestShareChangeBoard]: "guest-share",
   [WS_METHODS.sharedThreadPreview]: "guest-share",
   [WS_METHODS.sharedThreadJoin]: "guest-share",
   [WS_METHODS.sharedThreadLeave]: "guest-share",

@@ -568,6 +568,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.guest.identify":
     case "thread.guest.remove":
     case "thread.guest-turn.post":
+    case "thread.guest-board.change":
     case "thread.room-link.set":
     case "thread.settle":
     case "thread.auto-settle":
@@ -13628,6 +13629,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.guest.identify":
       case "thread.guest.remove":
       case "thread.guest-turn.post":
+      case "thread.guest-board.change":
       case "thread.room-link.set":
         yield* dispatchGuestShare(command, events, effects);
         break;
@@ -13984,6 +13986,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.type === "thread.guest-share.close" ||
           // So is a guest's turn posted twice, or leaving a room already left.
           command.type === "thread.guest-turn.post" ||
+          // And a board change that leaves the board as it was.
+          command.type === "thread.guest-board.change" ||
           command.type === "thread.room-link.set" ||
           (command.type === "thread.delete" && command.onlyIfUnused === true),
         (_planned) =>

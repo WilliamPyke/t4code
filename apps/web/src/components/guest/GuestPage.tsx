@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  GUEST_BOARD_ROUTE,
   GUEST_HANDOFF_ROUTE,
   GUEST_MESSAGE_MAX_LENGTH,
   GUEST_HISTORY_ROUTE,
@@ -19,6 +20,7 @@ import {
   type GuestThreadModel,
   OrchestrationV2ThreadHistoryPage,
   type OrchestrationV2ThreadProjection,
+  type RoomBoardChange,
   type ThreadGuestMessage,
   type ThreadGuestMessageStatus,
 } from "@t3tools/contracts";
@@ -63,6 +65,8 @@ import { getDisplayModelName, getTriggerDisplayModelName } from "../chat/provide
 import { ScrollToEndButton } from "../chat/TimelineOverlays";
 import type { TimelineRow } from "../chat/timelineRowContext";
 import { useTimelineFollow } from "../chat/useTimelineFollow";
+import { RoomBoard } from "../room/RoomBoard";
+import { BOARD_THREAD_MESSAGES, boardMessages } from "../room/roomBoard.logic";
 import { GuestHtmlRender } from "./GuestHtmlRender";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -232,6 +236,23 @@ async function postGuest(
   }
 }
 
+/** Sends one change to the room's board. Resolves to whether the owner's server took it. */
+async function postBoardChange(shareId: string, change: RoomBoardChange): Promise<boolean> {
+  try {
+    const response = await fetch(
+      `${GUEST_BOARD_ROUTE}?${GUEST_SHARE_PARAM}=${encodeURIComponent(shareId)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(change),
+      },
+    );
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 const STATUS_LABEL: Record<ThreadGuestMessageStatus, string> = {
   pending: "Waiting for approval",
   sent: "Sent",
@@ -313,6 +334,7 @@ function GuestSession({ shareId }: { readonly shareId: string }) {
   // EventSource closes for good only on a non-200 response, which the guest routes send for a
   // missing, invalid, or ended session. Network drops reconnect on their own.
   const [rejected, setRejected] = useState(false);
+  const [boardOpen, setBoardOpen] = useState(false);
 
   const [historyLoad, setHistoryLoad] = useState<{
     readonly cursor: string;
@@ -367,14 +389,37 @@ function GuestSession({ shareId }: { readonly shareId: string }) {
   }
   if (stream.view !== null) {
     if (stream.projection === null) return <Notice title="Connecting..." />;
+    const { view } = stream;
+    const guestId = view.guestId;
     return (
-      <GuestThread
-        view={stream.view}
-        projection={stream.projection}
-        online={stream.online}
-        awaitingRowIds={stream.awaitingRowIds}
-        historyControls={historyControls}
-      />
+      <>
+        {/* Hidden, not unmounted, so the board does not cost the guest their draft or place. */}
+        <div className={boardOpen ? "hidden" : "contents"}>
+          <GuestThread
+            view={view}
+            projection={stream.projection}
+            online={stream.online}
+            awaitingRowIds={stream.awaitingRowIds}
+            historyControls={historyControls}
+            onOpenBoard={guestId === undefined ? undefined : () => setBoardOpen(true)}
+          />
+        </div>
+        {boardOpen && guestId !== undefined ? (
+          <RoomBoard
+            title={view.title}
+            room={view}
+            online={stream.online}
+            messages={boardMessages(
+              stream.projection.visibleTurnItems.map((row) => row.item),
+              BOARD_THREAD_MESSAGES,
+              "Owner",
+            )}
+            viewer={guestId}
+            onOpenThread={() => setBoardOpen(false)}
+            onChange={(change) => postBoardChange(shareId, change)}
+          />
+        ) : null}
+      </>
     );
   }
   if (!rejected) return <Notice title="Connecting..." />;
@@ -458,12 +503,15 @@ function GuestThread({
   online,
   awaitingRowIds,
   historyControls,
+  onOpenBoard,
 }: {
   readonly view: GuestShareView;
   readonly projection: OrchestrationV2ThreadProjection;
   readonly online: GuestStreamState["online"];
   readonly awaitingRowIds: GuestStreamState["awaitingRowIds"];
   readonly historyControls: MessagesTimelineHistoryControls | undefined;
+  /** Absent for the one guest of a link made before several could join, who cannot sign a note. */
+  readonly onOpenBoard: (() => void) | undefined;
 }) {
   // No ":" so the timeline finds no environment thread behind the key.
   const threadKey = `guest-${shareId}`;
@@ -528,6 +576,11 @@ function GuestThread({
           <span className="max-w-[40%] min-w-0 truncate text-xs text-muted-foreground">
             With {otherGuests.join(", ")}
           </span>
+        )}
+        {onOpenBoard === undefined ? null : (
+          <Button size="xs" variant="outline" onClick={onOpenBoard}>
+            Board
+          </Button>
         )}
         <GuestGitHubSignIn
           shareId={shareId}

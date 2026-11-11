@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { GuestId, GuestShareId, IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { ThreadGuest, ThreadGuestMessage, ThreadGuestTurn } from "./guestShare.ts";
+import { RoomBoard, ThreadGuest, ThreadGuestMessage, ThreadGuestTurn } from "./guestShare.ts";
 import { OrchestrationV2ThreadStreamItem } from "./orchestrationV2.ts";
 import { ProviderDriverKind } from "./providerInstance.ts";
 
@@ -37,6 +37,8 @@ export const GuestShareView = Schema.Struct({
   messages: Schema.Array(ThreadGuestMessage),
   /** Turns guests ran on their own machines. Absent from an older server. */
   turns: Schema.optional(Schema.Array(ThreadGuestTurn)),
+  /** The room's board. Absent while nothing is arranged on it, and from an older server. */
+  board: Schema.optional(RoomBoard),
   model: GuestThreadModel,
 });
 export type GuestShareView = typeof GuestShareView.Type;

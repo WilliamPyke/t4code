@@ -2,7 +2,7 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { createFileRoute } from "@tanstack/react-router";
 
-import { RoomBoard } from "../components/room/RoomBoard";
+import { ThreadRoomBoard } from "../components/room/ThreadRoomBoard";
 
 // The params are not named environmentId/threadId: the _chat layout shows the thread for those.
 function RoomBoardRoute() {
@@ -11,7 +11,7 @@ function RoomBoardRoute() {
     EnvironmentId.make(roomEnvironmentId),
     ThreadId.make(roomThreadId),
   );
-  return <RoomBoard key={`${roomEnvironmentId}:${roomThreadId}`} threadRef={threadRef} />;
+  return <ThreadRoomBoard key={`${roomEnvironmentId}:${roomThreadId}`} threadRef={threadRef} />;
 }
 
 export const Route = createFileRoute("/_chat/board/$roomEnvironmentId/$roomThreadId")({

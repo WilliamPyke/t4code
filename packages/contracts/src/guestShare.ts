@@ -76,6 +76,59 @@ export const ThreadGuestTurn = Schema.Struct({
 });
 export type ThreadGuestTurn = typeof ThreadGuestTurn.Type;
 
+export const ROOM_BOARD_NOTE_MAX_LENGTH = 280;
+export const ROOM_BOARD_MAX_NOTES = 50;
+/** How far from the board's origin a card or note can sit, in board pixels. */
+export const ROOM_BOARD_MAX_COORDINATE = 100_000;
+
+const RoomBoardCoordinate = Schema.Int.check(
+  Schema.isBetween({ minimum: -ROOM_BOARD_MAX_COORDINATE, maximum: ROOM_BOARD_MAX_COORDINATE }),
+);
+export const RoomBoardPoint = Schema.Struct({ x: RoomBoardCoordinate, y: RoomBoardCoordinate });
+export type RoomBoardPoint = typeof RoomBoardPoint.Type;
+
+export const RoomBoardNote = Schema.Struct({
+  /** The client that adds the note names it. */
+  id: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+  text: Schema.String.check(Schema.isMaxLength(ROOM_BOARD_NOTE_MAX_LENGTH)),
+  ...RoomBoardPoint.fields,
+  /** The guest who added it. Absent on the owner's notes. */
+  guestId: Schema.optional(GuestId),
+});
+export type RoomBoardNote = typeof RoomBoardNote.Type;
+
+/**
+ * What the people in a room arranged on its board: where each card sits, and their notes. The
+ * room only shows it. It never starts a turn and never reaches an agent.
+ */
+export const RoomBoard = Schema.Struct({
+  positions: Schema.Record(Schema.String, RoomBoardPoint),
+  notes: Schema.Array(RoomBoardNote),
+});
+export type RoomBoard = typeof RoomBoard.Type;
+
+export const ROOM_BOARD_THREAD_CARD = "thread";
+export const roomBoardGuestCard = (guestId: string) => `guest:${guestId}`;
+export const roomBoardAgentCard = (guestId: string) => `agent:${guestId}`;
+
+/** One change to a room's board. The last change to a card or a note wins. */
+export const RoomBoardChange = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("card.move"),
+    cardId: TrimmedNonEmptyString.check(Schema.isMaxLength(160)),
+    ...RoomBoardPoint.fields,
+  }),
+  /** Adds the note, or replaces the text and place of the one with this id. */
+  Schema.Struct({
+    type: Schema.Literal("note.put"),
+    noteId: RoomBoardNote.fields.id,
+    text: RoomBoardNote.fields.text,
+    ...RoomBoardPoint.fields,
+  }),
+  Schema.Struct({ type: Schema.Literal("note.remove"), noteId: RoomBoardNote.fields.id }),
+]);
+export type RoomBoardChange = typeof RoomBoardChange.Type;
+
 /** The GitHub account a guest signed in with. The id stays the same when the login changes. */
 export const GuestAccount = Schema.Struct({ login: TrimmedNonEmptyString, id: Schema.Number });
 export type GuestAccount = typeof GuestAccount.Type;
@@ -147,6 +200,8 @@ export const ThreadGuestShare = Schema.Struct({
   messages: Schema.Array(ThreadGuestMessage),
   /** Turns guests ran on their own machines, newest last. Absent until one is posted. */
   turns: Schema.optional(Schema.Array(ThreadGuestTurn)),
+  /** Absent until someone moves a card or adds a note. */
+  board: Schema.optional(RoomBoard),
 });
 export type ThreadGuestShare = typeof ThreadGuestShare.Type;
 
@@ -219,6 +274,25 @@ export class GuestShareCreateError extends Schema.TaggedError<GuestShareCreateEr
 ) {
   override get message(): string {
     return GUEST_SHARE_CREATE_MESSAGES[this.reason];
+  }
+}
+
+/** The owner's change to the board of a thread they share. */
+export const RoomBoardChangeInput = Schema.Struct({ threadId: ThreadId, change: RoomBoardChange });
+export type RoomBoardChangeInput = typeof RoomBoardChangeInput.Type;
+
+const ROOM_BOARD_CHANGE_MESSAGES = {
+  inactive: "This thread is not shared.",
+  full: "This board has as many notes as it holds. Remove one first.",
+  rejected: "The board did not take this change.",
+} as const;
+
+export class RoomBoardChangeError extends Schema.TaggedError<RoomBoardChangeError>()(
+  "RoomBoardChangeError",
+  { reason: Schema.Literals(["inactive", "full", "rejected"]) },
+) {
+  override get message(): string {
+    return ROOM_BOARD_CHANGE_MESSAGES[this.reason];
   }
 }
 
@@ -378,6 +452,8 @@ export const GUEST_EXPORT_ROUTE = `${GUEST_ROUTE_PREFIX}/export`;
 export const GUEST_ROOM_TURN_ROUTE = `${GUEST_ROUTE_PREFIX}/room/turns`;
 /** What happened in the room since `?after=<ISO time>`, for a bearer room token. */
 export const GUEST_ROOM_UPDATES_ROUTE = `${GUEST_ROUTE_PREFIX}/room/updates`;
+/** A guest's change to the room's board (POST), a `RoomBoardChange` as JSON: `?share=<id>`. */
+export const GUEST_BOARD_ROUTE = `${GUEST_ROUTE_PREFIX}/board`;
 /** The guest page and guest routes name the share they mean with this query parameter. */
 export const GUEST_SHARE_PARAM = "share";
 

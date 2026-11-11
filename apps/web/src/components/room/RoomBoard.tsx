@@ -1,66 +1,58 @@
-import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef, ThreadGuest, ThreadGuestShare } from "@t3tools/contracts";
-import { useNavigate } from "@tanstack/react-router";
+import {
+  type GuestId,
+  ROOM_BOARD_MAX_NOTES,
+  ROOM_BOARD_NOTE_MAX_LENGTH,
+  ROOM_BOARD_THREAD_CARD,
+  type RoomBoardChange,
+  type RoomBoardNote,
+  type ThreadGuest,
+  type ThreadGuestShare,
+  roomBoardAgentCard,
+  roomBoardGuestCard,
+} from "@t3tools/contracts";
 import { ArrowLeftIcon, MinusIcon, PlusIcon, StickyNoteIcon, XIcon } from "lucide-react";
 import { type PointerEvent, type ReactNode, useEffect, useRef, useState } from "react";
 
 import { cn, randomUUID } from "~/lib/utils";
-import {
-  useQuietThreadProjection,
-  useThreadShell,
-  useThreadVisibleTurnItems,
-} from "~/state/entities";
-import { useEnvironmentQuery } from "~/state/query";
-import { serverEnvironment } from "~/state/server";
 
 import { Button } from "../ui/button";
-import { SidebarInset } from "../ui/sidebar";
 import {
   BOARD_CARD_WIDTH,
-  BOARD_NOTE_MAX_LENGTH,
+  type BoardMessage,
   type BoardPoint,
+  type BoardTarget,
+  type BoardValue,
   type BoardView,
-  EMPTY_BOARD_LAYOUT,
+  EMPTY_ROOM_BOARD,
   INITIAL_BOARD_VIEW,
-  addBoardNote,
+  NO_BOARD_EDITS,
+  boardChangeOf,
   boardConnectorPath,
-  boardLayoutStorageKey,
-  boardMessages,
-  moveBoardCard,
+  boardEditKey,
+  dropBoardEdit,
   panBoardBy,
-  parseBoardLayout,
   placeBoardCards,
-  removeBoardNote,
+  putBoardEdit,
+  resolveBoard,
   screenToBoard,
-  serializeBoardLayout,
-  updateBoardNote,
+  settleBoardValue,
   zoomBoardAt,
 } from "./roomBoard.logic";
 
-const THREAD_CARD = "thread";
-const guestCardId = (guest: ThreadGuest) => `guest:${guest.id}`;
-const agentCardId = (guest: ThreadGuest) => `agent:${guest.id}`;
+const guestCardId = (guest: ThreadGuest) => roomBoardGuestCard(guest.id);
+const agentCardId = (guest: ThreadGuest) => roomBoardAgentCard(guest.id);
 const GRID = 22;
-const THREAD_MESSAGE_COUNT = 3;
 
-function readStored(key: string): string | null {
-  try {
-    return window.localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function writeStored(key: string, value: string) {
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    // The arrangement then lasts until the page closes.
-  }
-}
-
-/** Pointer handlers that report how far a held pointer moved, in screen pixels. */
-function dragHandlers(onMove: (dx: number, dy: number) => void) {
+/**
+ * Pointer handlers that report how far a held pointer moved, in screen pixels, and when it is
+ * let go.
+ */
+function dragHandlers(onMove: (dx: number, dy: number) => void, onEnd?: () => void) {
+  const release = (event: PointerEvent<HTMLElement>) => {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    onEnd?.();
+  };
   return {
     onPointerDown: (event: PointerEvent<HTMLElement>) => {
       if (event.button !== 0) return;
@@ -72,37 +64,46 @@ function dragHandlers(onMove: (dx: number, dy: number) => void) {
       if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
       onMove(event.movementX, event.movementY);
     },
-    onPointerUp: (event: PointerEvent<HTMLElement>) => {
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }
-    },
+    onPointerUp: release,
+    onPointerCancel: release,
   };
 }
 
+/** What the board shows of a room: who joined, what they wait on, and what is arranged. */
+type BoardRoom = Pick<ThreadGuestShare, "guests" | "messages" | "turns" | "board">;
+
 /**
- * A shared thread laid out as a board: the thread, each person in the room, and notes, as cards
- * the owner arranges. The arrangement and the notes stay on this device.
+ * A shared thread laid out as a board: the thread, each person in the room, and notes, as cards.
+ * The arrangement and the notes are the room's: the owner and every guest see the same ones.
  */
-export function RoomBoard({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
-  const navigate = useNavigate();
-  const shell = useThreadShell(threadRef);
-  const share = useQuietThreadProjection(threadRef)?.projection.thread.guestShare ?? null;
-  const items = useThreadVisibleTurnItems(threadRef);
-  const { data: presence } = useEnvironmentQuery(
-    serverEnvironment.guestPresence({
-      environmentId: threadRef.environmentId,
-      input: { threadId: threadRef.threadId },
-    }),
-  );
-  const storageKey = boardLayoutStorageKey(scopedThreadKey(threadRef));
-  const [layout, setLayout] = useState(() => parseBoardLayout(readStored(storageKey)));
+export function RoomBoard({
+  title,
+  room,
+  online,
+  messages,
+  viewer,
+  onOpenThread,
+  onChange,
+}: {
+  readonly title: string;
+  /** Null when the thread is not shared, so there is no room to arrange a board for. */
+  readonly room: BoardRoom | null;
+  readonly online: ReadonlyArray<GuestId>;
+  readonly messages: ReadonlyArray<BoardMessage>;
+  /** The guest looking at the board, or null for the owner. */
+  readonly viewer: GuestId | null;
+  readonly onOpenThread: () => void;
+  /** Sends one change to the room and says whether it was taken. Absent when they may not. */
+  readonly onChange: ((change: RoomBoardChange) => Promise<boolean>) | undefined;
+}) {
+  const board = room?.board ?? EMPTY_ROOM_BOARD;
+  const [edits, setEdits] = useState(NO_BOARD_EDITS);
+  // What each drag or draft has reached, read when it is let go. A render may not have caught up.
+  const held = useRef(new Map<string, NonNullable<BoardValue>>());
   const [view, setView] = useState(INITIAL_BOARD_VIEW);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- saves the arrangement to localStorage, which lives outside React
-  useEffect(() => {
-    if (layout !== EMPTY_BOARD_LAYOUT) writeStored(storageKey, serializeBoardLayout(layout));
-  }, [layout, storageKey]);
+  const canEdit = room !== null && onChange !== undefined;
+  const shown = resolveBoard(board, edits);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a wheel listener must be non-passive to stop the browser's own pinch zoom, which React's onWheel cannot be
   useEffect(() => {
@@ -122,23 +123,46 @@ export function RoomBoard({ threadRef }: { readonly threadRef: ScopedThreadRef }
     return () => surface.removeEventListener("wheel", onWheel);
   }, []);
 
-  const guests = share?.guests ?? [];
+  const guests = room?.guests ?? [];
   // A guest's agent gets a card once it has posted a turn from their machine.
   const agents = guests.flatMap((guest) => {
-    const turns = share?.turns?.filter((turn) => turn.guestId === guest.id) ?? [];
+    const turns = room?.turns?.filter((turn) => turn.guestId === guest.id) ?? [];
     return turns.length === 0 ? [] : [{ guest, turns }];
   });
   const positions = placeBoardCards(
-    [THREAD_CARD, ...guests.map(guestCardId), ...agents.map(({ guest }) => agentCardId(guest))],
-    layout.positions,
+    [
+      ROOM_BOARD_THREAD_CARD,
+      ...guests.map(guestCardId),
+      ...agents.map(({ guest }) => agentCardId(guest)),
+    ],
+    shown.positions,
   );
-  const moveCard = (id: string, from: BoardPoint) =>
-    dragHandlers((dx, dy) =>
-      setLayout((current) => {
-        const at = current.positions[id] ?? from;
-        return moveBoardCard(current, id, { x: at.x + dx / view.zoom, y: at.y + dy / view.zoom });
-      }),
-    );
+  const send = (target: BoardTarget, value: BoardValue) => {
+    if (onChange === undefined) return;
+    held.current.delete(boardEditKey(target));
+    setEdits((current) => putBoardEdit(board, current, target, value, false));
+    void onChange(boardChangeOf(target, value)).then((taken) => {
+      if (!taken) setEdits((current) => dropBoardEdit(current, target, value));
+    });
+  };
+  const hold = (target: BoardTarget, value: NonNullable<BoardValue>) => {
+    held.current.set(boardEditKey(target), value);
+    setEdits((current) => putBoardEdit(board, current, target, value, true));
+  };
+  // The room hears of a drag or a draft once, when it ends.
+  const letGo = (target: BoardTarget) => {
+    const value = held.current.get(boardEditKey(target));
+    if (value !== undefined) send(target, settleBoardValue(value));
+  };
+  const dragBy = (target: BoardTarget, from: NonNullable<BoardValue>, dx: number, dy: number) => {
+    if (!canEdit) return;
+    const at = held.current.get(boardEditKey(target)) ?? from;
+    hold(target, { ...at, x: at.x + dx / view.zoom, y: at.y + dy / view.zoom });
+  };
+  const writeNote = (note: RoomBoardNote, text: string) => {
+    const target = { kind: "note", id: note.id } as const;
+    hold(target, { ...(held.current.get(boardEditKey(target)) ?? note), text });
+  };
   const zoomBy = (factor: number) => {
     const bounds = surfaceRef.current?.getBoundingClientRect();
     const center = { x: (bounds?.width ?? 0) / 2, y: (bounds?.height ?? 0) / 2 };
@@ -147,31 +171,38 @@ export function RoomBoard({ threadRef }: { readonly threadRef: ScopedThreadRef }
   const addNote = () => {
     const bounds = surfaceRef.current?.getBoundingClientRect();
     const at = screenToBoard(view, { x: (bounds?.width ?? 600) / 2 - 90, y: 96 });
-    setLayout(addBoardNote(layout, { id: randomUUID(), text: "", x: at.x, y: at.y }));
+    const id = randomUUID();
+    send(
+      { kind: "note", id },
+      settleBoardValue({ id, text: "", ...at, ...(viewer === null ? {} : { guestId: viewer }) }),
+    );
   };
-  const openThread = () =>
-    void navigate({
-      to: "/$environmentId/$threadId",
-      params: { environmentId: threadRef.environmentId, threadId: threadRef.threadId },
-    });
+  const noteAuthor = (note: RoomBoardNote) =>
+    note.guestId === viewer || (note.guestId === undefined && viewer === null)
+      ? "You"
+      : note.guestId === undefined
+        ? "Owner"
+        : (guests.find((guest) => guest.id === note.guestId)?.name ?? "Guest");
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-none">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden overscroll-none">
       <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-        <Button size="sm" variant="ghost" onClick={openThread}>
+        <Button size="sm" variant="ghost" onClick={onOpenThread}>
           <ArrowLeftIcon />
           Thread
         </Button>
         <h1 className="min-w-0 flex-1 truncate text-sm font-medium">
-          {shell?.title ?? "Board"}
+          {title}
           <span className="ms-2 font-normal text-muted-foreground">
-            {share === null ? "Not shared" : roomSummary(share, presence?.online.length ?? 0)}
+            {room === null ? "Not shared" : roomSummary(room, online.length)}
           </span>
         </h1>
-        <span className="hidden text-xs text-muted-foreground md:inline">
-          Your arrangement and notes stay on this device
-        </span>
-        <Button size="sm" variant="outline" onClick={addNote}>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!canEdit || shown.notes.length >= ROOM_BOARD_MAX_NOTES}
+          onClick={addNote}
+        >
           <StickyNoteIcon />
           Note
         </Button>
@@ -223,14 +254,16 @@ export function RoomBoard({ threadRef }: { readonly threadRef: ScopedThreadRef }
             ))}
           </svg>
           <BoardCard
-            at={positions[THREAD_CARD]!}
-            title={shell?.title ?? "Thread"}
+            at={positions[ROOM_BOARD_THREAD_CARD]!}
+            title={title}
             kind="thread"
-            drag={moveCard(THREAD_CARD, positions[THREAD_CARD]!)}
+            id={ROOM_BOARD_THREAD_CARD}
+            onMove={dragBy}
+            onDrop={letGo}
           >
-            <ThreadMessages items={items} />
+            <ThreadMessages messages={messages} />
             <div>
-              <Button size="xs" variant="outline" onClick={openThread}>
+              <Button size="xs" variant="outline" onClick={onOpenThread}>
                 Open thread
               </Button>
             </div>
@@ -242,11 +275,13 @@ export function RoomBoard({ threadRef }: { readonly threadRef: ScopedThreadRef }
                 key={id}
                 at={positions[id]!}
                 title={guest.name}
-                kind={presence?.online.includes(guest.id) ? "viewing now" : "away"}
+                kind={online.includes(guest.id) ? "viewing now" : "away"}
                 dashed
-                drag={moveCard(id, positions[id]!)}
+                id={id}
+                onMove={dragBy}
+                onDrop={letGo}
               >
-                <GuestDetails guest={guest} share={share} />
+                <GuestDetails guest={guest} room={room} viewer={viewer} />
               </BoardCard>
             );
           })}
@@ -259,7 +294,9 @@ export function RoomBoard({ threadRef }: { readonly threadRef: ScopedThreadRef }
                 at={positions[id]!}
                 title={`${guest.name}'s agent`}
                 kind={`${turns.length} turn${turns.length === 1 ? "" : "s"}`}
-                drag={moveCard(id, positions[id]!)}
+                id={id}
+                onMove={dragBy}
+                onDrop={letGo}
               >
                 <p className="text-2xs text-muted-foreground">Ran on their machine</p>
                 {latest.prompt ? (
@@ -273,61 +310,31 @@ export function RoomBoard({ threadRef }: { readonly threadRef: ScopedThreadRef }
               </BoardCard>
             );
           })}
-          {layout.notes.map((note) => (
-            <div
+          {shown.notes.map((note) => (
+            <BoardNote
               key={note.id}
-              className="absolute flex w-48 flex-col rounded-sm border border-warning/40 bg-warning-surface text-foreground shadow-lg"
-              style={{ left: note.x, top: note.y }}
-            >
-              <div
-                className="flex h-6 cursor-grab items-center justify-end ps-2 active:cursor-grabbing"
-                {...dragHandlers((dx, dy) =>
-                  setLayout((current) => {
-                    const at = current.notes.find((other) => other.id === note.id) ?? note;
-                    return updateBoardNote(current, note.id, {
-                      x: at.x + dx / view.zoom,
-                      y: at.y + dy / view.zoom,
-                    });
-                  }),
-                )}
-              >
-                <button
-                  type="button"
-                  aria-label="Delete note"
-                  className="grid size-6 place-items-center rounded-sm opacity-60 hover:opacity-100"
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onClick={() => setLayout(removeBoardNote(layout, note.id))}
-                >
-                  <XIcon className="size-3.5" />
-                </button>
-              </div>
-              <textarea
-                aria-label="Note"
-                value={note.text}
-                maxLength={BOARD_NOTE_MAX_LENGTH}
-                rows={4}
-                placeholder="Write a note"
-                className="resize-none bg-transparent px-3 pb-3 text-sm leading-snug outline-none placeholder:text-placeholder"
-                onPointerDown={(event) => event.stopPropagation()}
-                onChange={(event) =>
-                  setLayout(updateBoardNote(layout, note.id, { text: event.target.value }))
-                }
-              />
-            </div>
+              note={note}
+              author={noteAuthor(note)}
+              canEdit={canEdit}
+              onMove={dragBy}
+              onDrop={letGo}
+              onText={writeNote}
+              onDelete={send}
+            />
           ))}
         </div>
-        {share === null ? (
+        {room === null ? (
           <p className="pointer-events-none absolute inset-x-0 bottom-6 text-center text-sm text-muted-foreground">
             Share this thread with guests and each person who joins gets a card here.
           </p>
         ) : null}
       </div>
-    </SidebarInset>
+    </div>
   );
 }
 
-function roomSummary(share: ThreadGuestShare, online: number): string {
-  const joined = share.guests?.length ?? 0;
+function roomSummary(room: BoardRoom, online: number): string {
+  const joined = room.guests?.length ?? 0;
   if (joined === 0) return "Shared, no one has joined yet";
   return `${joined} guest${joined === 1 ? "" : "s"}, ${online} viewing now`;
 }
@@ -338,21 +345,87 @@ const boardGridStyle = (view: BoardView) => ({
   backgroundPosition: `${view.x}px ${view.y}px`,
 });
 
+type DragBy = (target: BoardTarget, from: NonNullable<BoardValue>, dx: number, dy: number) => void;
+
+function BoardNote({
+  note,
+  author,
+  canEdit,
+  onMove,
+  onDrop,
+  onText,
+  onDelete,
+}: {
+  readonly note: RoomBoardNote;
+  readonly author: string;
+  readonly canEdit: boolean;
+  readonly onMove: DragBy;
+  readonly onDrop: (target: BoardTarget) => void;
+  readonly onText: (note: RoomBoardNote, text: string) => void;
+  readonly onDelete: (target: BoardTarget, value: null) => void;
+}) {
+  const target = { kind: "note", id: note.id } as const;
+  return (
+    <div
+      className="absolute flex w-48 flex-col rounded-sm border border-warning/40 bg-warning-surface text-foreground shadow-lg"
+      style={{ left: note.x, top: note.y }}
+    >
+      <div
+        className="flex h-6 cursor-grab items-center gap-1 ps-3 active:cursor-grabbing"
+        {...dragHandlers(
+          (dx, dy) => onMove(target, note, dx, dy),
+          () => onDrop(target),
+        )}
+      >
+        <span className="min-w-0 flex-1 truncate text-2xs opacity-60">{author}</span>
+        {canEdit ? (
+          <button
+            type="button"
+            aria-label="Delete note"
+            className="grid size-6 place-items-center rounded-sm opacity-60 hover:opacity-100"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={() => onDelete(target, null)}
+          >
+            <XIcon className="size-3.5" />
+          </button>
+        ) : null}
+      </div>
+      <textarea
+        aria-label="Note"
+        value={note.text}
+        readOnly={!canEdit}
+        maxLength={ROOM_BOARD_NOTE_MAX_LENGTH}
+        rows={4}
+        placeholder="Write a note"
+        className="resize-none bg-transparent px-3 pb-3 text-sm leading-snug outline-none placeholder:text-placeholder"
+        onPointerDown={(event) => event.stopPropagation()}
+        onChange={(event) => onText(note, event.target.value)}
+        onBlur={() => onDrop(target)}
+      />
+    </div>
+  );
+}
+
 function BoardCard({
   at,
   title,
   kind,
   dashed = false,
-  drag,
+  id,
+  onMove,
+  onDrop,
   children,
 }: {
   readonly at: BoardPoint;
   readonly title: string;
   readonly kind: string;
   readonly dashed?: boolean;
-  readonly drag: ReturnType<typeof dragHandlers>;
+  readonly id: string;
+  readonly onMove: DragBy;
+  readonly onDrop: (target: BoardTarget) => void;
   readonly children: ReactNode;
 }) {
+  const target = { kind: "card", id } as const;
   return (
     <section
       className={cn(
@@ -363,7 +436,10 @@ function BoardCard({
     >
       <header
         className="flex cursor-grab items-center gap-2 border-b border-border px-3 py-2 active:cursor-grabbing"
-        {...drag}
+        {...dragHandlers(
+          (dx, dy) => onMove(target, at, dx, dy),
+          () => onDrop(target),
+        )}
       >
         <h2 className="min-w-0 flex-1 truncate text-xs font-semibold">{title}</h2>
         <span className="shrink-0 rounded-full border border-border px-1.5 text-2xs text-muted-foreground">
@@ -375,15 +451,7 @@ function BoardCard({
   );
 }
 
-function ThreadMessages({
-  items,
-}: {
-  readonly items: ReturnType<typeof useThreadVisibleTurnItems>;
-}) {
-  const messages = boardMessages(
-    items.map((projected) => projected.item),
-    THREAD_MESSAGE_COUNT,
-  );
+function ThreadMessages({ messages }: { readonly messages: ReadonlyArray<BoardMessage> }) {
   if (messages.length === 0) {
     return <p className="text-xs text-muted-foreground">No messages yet.</p>;
   }
@@ -401,13 +469,15 @@ function ThreadMessages({
 
 function GuestDetails({
   guest,
-  share,
+  room,
+  viewer,
 }: {
   readonly guest: ThreadGuest;
-  readonly share: ThreadGuestShare | null;
+  readonly room: BoardRoom | null;
+  readonly viewer: GuestId | null;
 }) {
   const waiting =
-    share?.messages.filter(
+    room?.messages.filter(
       (message) => message.guestId === guest.id && message.status === "pending",
     ) ?? [];
   return (
@@ -417,7 +487,9 @@ function GuestDetails({
         {guest.trusted === true ? " · sends without asking" : ""}
       </p>
       {waiting.length === 0 ? (
-        <p className="text-xs text-muted-foreground">Nothing waiting for you.</p>
+        <p className="text-xs text-muted-foreground">
+          {viewer === null ? "Nothing waiting for you." : "Nothing waiting for the owner."}
+        </p>
       ) : (
         <ol className="flex flex-col gap-1.5">
           {waiting.map((message) => (

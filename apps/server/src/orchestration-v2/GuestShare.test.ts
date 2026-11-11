@@ -11,6 +11,8 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ROOM_BOARD_MAX_NOTES,
+  type RoomBoardChange,
   ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -284,6 +286,121 @@ it.effect("shows a guest's own turns on the share and starts nothing with them",
     const after = yield* orchestrator.getThreadRecords(threadId, []);
     assert.deepEqual(after.thread.guestShare?.turns, []);
     assert.isTrue(Exit.isFailure(yield* Effect.exit(post(sam, "run:late"))));
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("keeps one board for the room, changed a card or a note at a time", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* setup;
+    const join = (guestId: GuestId, guestName: string) =>
+      orchestrator.dispatch({
+        type: "thread.guest-share.redeem",
+        commandId: CommandId.make(`redeem:${guestId}`),
+        threadId,
+        shareId,
+        guestId,
+        guestName,
+      });
+    yield* join(sam, "Sam");
+    yield* join(alex, "Alex");
+    let changes = 0;
+    const change = (author: GuestId | null, change: RoomBoardChange) =>
+      orchestrator.dispatch({
+        type: "thread.guest-board.change",
+        commandId: CommandId.make(`board:${changes++}`),
+        threadId,
+        shareId,
+        author,
+        change,
+      });
+    const refused = (command: ReturnType<typeof change>) =>
+      Effect.map(Effect.exit(command), Exit.isFailure);
+    const read = Effect.map(
+      orchestrator.getThreadRecords(threadId, ["runs", "messages"]),
+      (records) => ({ ...records, board: records.thread.guestShare?.board }),
+    );
+    const before = (yield* read).thread.updatedAt;
+
+    // The last move of a card wins, whoever made it.
+    yield* change(null, { type: "card.move", cardId: "thread", x: 10, y: 20 });
+    yield* change(sam, { type: "card.move", cardId: "thread", x: 300, y: -40 });
+    yield* change(alex, { type: "card.move", cardId: `agent:${sam}`, x: 5, y: 5 });
+    yield* change(sam, { type: "note.put", noteId: "note:sam", text: "Ship it", x: 1, y: 2 });
+    yield* change(null, { type: "note.put", noteId: "note:owner", text: "Not yet", x: 3, y: 4 });
+    // Anyone in the room can edit a note; it stays its author's.
+    const edited: RoomBoardChange = {
+      type: "note.put",
+      noteId: "note:sam",
+      text: "Ship it Friday",
+      x: 9,
+      y: 9,
+    };
+    yield* change(alex, edited);
+    // Repeating a change, or removing a note that is gone, is not an error.
+    yield* change(alex, edited);
+    yield* change(null, { type: "note.remove", noteId: "note:never" });
+    const arranged = yield* read;
+    assert.deepEqual(arranged.board, {
+      positions: { thread: { x: 300, y: -40 }, [`agent:${sam}`]: { x: 5, y: 5 } },
+      notes: [
+        { id: "note:sam", text: "Ship it Friday", x: 9, y: 9, guestId: sam },
+        { id: "note:owner", text: "Not yet", x: 3, y: 4 },
+      ],
+    });
+    // Shown only: nothing for the agent, no run, and the thread keeps its place in the list.
+    assert.lengthOf(arranged.runs, 0);
+    assert.lengthOf(arranged.messages, 0);
+    assert.deepEqual(arranged.thread.updatedAt, before);
+
+    const outsider = GuestId.make("guest:outsider");
+    assert.isTrue(yield* refused(change(outsider, { type: "note.remove", noteId: "note:sam" })));
+    assert.isTrue(
+      yield* refused(change(sam, { type: "card.move", cardId: "guest:nobody", x: 0, y: 0 })),
+    );
+    const blank = (noteId: string): RoomBoardChange => ({
+      type: "note.put",
+      noteId,
+      text: "",
+      x: 0,
+      y: 0,
+    });
+    for (let index = 2; index < ROOM_BOARD_MAX_NOTES; index += 1) {
+      yield* change(alex, blank(`note:${index}`));
+    }
+    assert.isTrue(yield* refused(change(alex, blank("note:over"))));
+    // A full board still takes edits to the notes it has.
+    yield* change(alex, { type: "note.put", noteId: "note:owner", text: "Now", x: 3, y: 4 });
+
+    // A guest whose link ran out cannot write; the owner still can.
+    const { thread } = yield* read;
+    const later = DateTime.add(yield* DateTime.now, { hours: 25 });
+    const decideLater = (author: GuestId | null) =>
+      decideGuestShareCommand({
+        thread,
+        now: later,
+        command: {
+          type: "thread.guest-board.change",
+          commandId: CommandId.make("board:late"),
+          threadId,
+          shareId,
+          author,
+          change: { type: "note.remove", noteId: "note:owner" },
+        },
+      });
+    assert.isTrue(Result.isFailure(decideLater(sam)));
+    assert.isTrue(Result.isSuccess(decideLater(null)));
+
+    // A removed guest's notes and cards go with them, and they cannot write again.
+    yield* orchestrator.dispatch({
+      type: "thread.guest.remove",
+      commandId: CommandId.make("remove-sam"),
+      threadId,
+      guestId: sam,
+    });
+    const after = (yield* read).board;
+    assert.deepEqual(Object.keys(after?.positions ?? {}), ["thread"]);
+    assert.isFalse(after?.notes.some((note) => note.guestId === sam));
+    assert.isTrue(yield* refused(change(sam, { type: "note.remove", noteId: "note:owner" })));
   }).pipe(Effect.provide(layerTest)),
 );
 

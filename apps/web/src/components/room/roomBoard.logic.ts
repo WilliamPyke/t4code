@@ -1,3 +1,9 @@
+import {
+  ROOM_BOARD_MAX_COORDINATE,
+  type RoomBoard,
+  type RoomBoardChange,
+  type RoomBoardNote,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
 /** Where the board is scrolled to and how far it is zoomed. `x`/`y` are screen pixels. */
@@ -20,39 +26,10 @@ export const BOARD_CARD_WIDTH = 320;
 const CARD_ROW_HEIGHT = 240;
 const CARD_GAP = 40;
 const BOARD_ORIGIN: BoardPoint = { x: 80, y: 72 };
-const NOTE_LIMIT = 50;
-export const BOARD_NOTE_MAX_LENGTH = 280;
+/** How many of the thread's newest messages its card shows. */
+export const BOARD_THREAD_MESSAGES = 3;
 
-export const BoardNote = Schema.Struct({
-  id: Schema.String,
-  text: Schema.String,
-  x: Schema.Number,
-  y: Schema.Number,
-});
-export type BoardNote = typeof BoardNote.Type;
-
-/** What one person arranged on a thread's board. Kept on their device. */
-export const BoardLayout = Schema.Struct({
-  positions: Schema.Record(Schema.String, Schema.Struct({ x: Schema.Number, y: Schema.Number })),
-  notes: Schema.Array(BoardNote),
-});
-export type BoardLayout = typeof BoardLayout.Type;
-
-export const EMPTY_BOARD_LAYOUT: BoardLayout = { positions: {}, notes: [] };
-
-const decodeLayout = Schema.decodeUnknownOption(Schema.fromJsonString(BoardLayout));
-const encodeLayout = Schema.encodeSync(Schema.fromJsonString(BoardLayout));
-
-export const boardLayoutStorageKey = (threadKey: string) => `t3:room-board:${threadKey}`;
-
-/** A stored layout, or an empty one when nothing usable is stored. */
-export function parseBoardLayout(stored: string | null): BoardLayout {
-  if (stored === null) return EMPTY_BOARD_LAYOUT;
-  const layout = decodeLayout(stored);
-  return layout._tag === "Some" ? layout.value : EMPTY_BOARD_LAYOUT;
-}
-
-export const serializeBoardLayout = (layout: BoardLayout): string => encodeLayout(layout);
+export const EMPTY_ROOM_BOARD: RoomBoard = { positions: {}, notes: [] };
 
 export const screenToBoard = (view: BoardView, point: BoardPoint): BoardPoint => ({
   x: (point.x - view.x) / view.zoom,
@@ -78,7 +55,7 @@ export const panBoardBy = (view: BoardView, dx: number, dy: number): BoardView =
  */
 export function placeBoardCards(
   cardIds: ReadonlyArray<string>,
-  saved: BoardLayout["positions"],
+  saved: RoomBoard["positions"],
   columns = 3,
 ): Record<string, BoardPoint> {
   const stepX = BOARD_CARD_WIDTH + CARD_GAP;
@@ -122,32 +99,120 @@ export function boardConnectorPath(from: BoardPoint, to: BoardPoint): string {
   return `M${start.x} ${start.y} C${start.x + bend} ${start.y}, ${end.x - bend} ${end.y}, ${end.x} ${end.y}`;
 }
 
-export const moveBoardCard = (layout: BoardLayout, id: string, to: BoardPoint): BoardLayout => ({
-  ...layout,
-  positions: { ...layout.positions, [id]: to },
-});
-
-export function addBoardNote(layout: BoardLayout, note: BoardNote): BoardLayout {
-  return layout.notes.length >= NOTE_LIMIT ? layout : { ...layout, notes: [...layout.notes, note] };
+/** A card or a note on the board. */
+export interface BoardTarget {
+  readonly kind: "card" | "note";
+  readonly id: string;
 }
 
-export const updateBoardNote = (
-  layout: BoardLayout,
-  id: string,
-  change: Partial<Pick<BoardNote, "text" | "x" | "y">>,
-): BoardLayout => ({
-  ...layout,
-  notes: layout.notes.map((note) => (note.id === id ? { ...note, ...change } : note)),
-});
+/** Where a card is, a note as it reads, or null for a note taken off the board. */
+export type BoardValue = BoardPoint | RoomBoardNote | null;
 
-export const removeBoardNote = (layout: BoardLayout, id: string): BoardLayout => ({
-  ...layout,
-  notes: layout.notes.filter((note) => note.id !== id),
-});
+/**
+ * What this person did to one card or note, shown over the room's board so a drag does not
+ * wait for the server.
+ */
+export interface BoardEdit {
+  readonly target: BoardTarget;
+  readonly value: BoardValue;
+  /** Still being dragged or typed: it shows whatever the room's copy does. */
+  readonly held: boolean;
+  /** The room's copy when it was let go. The edit shows until the room's copy differs. */
+  readonly base: BoardValue | undefined;
+}
+export type BoardEdits = Readonly<Record<string, BoardEdit>>;
+export const NO_BOARD_EDITS: BoardEdits = {};
+
+export const boardEditKey = (target: BoardTarget) => `${target.kind}:${target.id}`;
+
+const roomCopy = (board: RoomBoard, target: BoardTarget): BoardValue | undefined =>
+  target.kind === "card"
+    ? board.positions[target.id]
+    : board.notes.find((note) => note.id === target.id);
+
+const noteText = (value: BoardValue | undefined) =>
+  value !== null && value !== undefined && "text" in value ? value.text : undefined;
+const sameValue = (a: BoardValue | undefined, b: BoardValue | undefined) =>
+  a?.x === b?.x && a?.y === b?.y && noteText(a) === noteText(b);
+
+const shows = (board: RoomBoard, edit: BoardEdit) =>
+  edit.held || sameValue(edit.base, roomCopy(board, edit.target));
+
+/**
+ * Records an edit, and forgets the ones the room's copy has moved past. Held while the drag or
+ * the typing goes on; let go, it stands in for the room's copy until the server answers.
+ */
+export function putBoardEdit(
+  board: RoomBoard,
+  edits: BoardEdits,
+  target: BoardTarget,
+  value: BoardValue,
+  held: boolean,
+): BoardEdits {
+  const kept = Object.entries(edits).filter(([, edit]) => shows(board, edit));
+  return {
+    ...Object.fromEntries(kept),
+    [boardEditKey(target)]: {
+      target,
+      value,
+      held,
+      base: held ? undefined : roomCopy(board, target),
+    },
+  };
+}
+
+/** Takes back an edit the server refused, unless a newer one replaced it. */
+export function dropBoardEdit(
+  edits: BoardEdits,
+  target: BoardTarget,
+  value: BoardValue,
+): BoardEdits {
+  const key = boardEditKey(target);
+  if (edits[key]?.value !== value) return edits;
+  const { [key]: _dropped, ...rest } = edits;
+  return rest;
+}
+
+/** The room's board with this person's own edits over it. */
+export function resolveBoard(board: RoomBoard, edits: BoardEdits): RoomBoard {
+  const positions = { ...board.positions };
+  let notes = board.notes;
+  for (const edit of Object.values(edits)) {
+    if (!shows(board, edit)) continue;
+    const { target, value } = edit;
+    if (target.kind === "card") {
+      if (value !== null) positions[target.id] = { x: value.x, y: value.y };
+    } else if (value === null) {
+      notes = notes.filter((note) => note.id !== target.id);
+    } else if ("text" in value) {
+      notes = notes.some((note) => note.id === target.id)
+        ? notes.map((note) => (note.id === target.id ? value : note))
+        : [...notes, value];
+    }
+  }
+  return { positions, notes };
+}
+
+const coordinate = (value: number) =>
+  Math.round(Math.min(ROOM_BOARD_MAX_COORDINATE, Math.max(-ROOM_BOARD_MAX_COORDINATE, value)));
+
+/** The value at the whole pixels the room keeps, so the server's copy equals what was let go. */
+export const settleBoardValue = <Value extends BoardValue>(value: Value): Value =>
+  value === null ? value : { ...value, x: coordinate(value.x), y: coordinate(value.y) };
+
+/** The change that makes the room's copy of a card or note this value. */
+export function boardChangeOf(target: BoardTarget, value: BoardValue): RoomBoardChange {
+  if (target.kind === "card") {
+    return { type: "card.move", cardId: target.id, x: value?.x ?? 0, y: value?.y ?? 0 };
+  }
+  return value === null
+    ? { type: "note.remove", noteId: target.id }
+    : { type: "note.put", noteId: target.id, text: noteText(value) ?? "", x: value.x, y: value.y };
+}
 
 export interface BoardMessage {
   readonly id: string;
-  /** Who wrote it: null for the agent, "You" for the owner, a guest's name otherwise. */
+  /** Who wrote it: null for the agent, the owner's label, a guest's name otherwise. */
   readonly author: string | null;
   readonly text: string;
 }
@@ -169,6 +234,8 @@ const textOf = (value: unknown) => (typeof value === "string" ? value.trim() : "
 export function boardMessages(
   items: ReadonlyArray<MessageItem>,
   limit: number,
+  /** What the owner is called: "You" on their own board. */
+  owner = "You",
 ): ReadonlyArray<BoardMessage> {
   const messages: Array<BoardMessage> = [];
   for (const item of items.toReversed()) {
@@ -177,7 +244,7 @@ export function boardMessages(
       const context = decodeGuestContext(item.context);
       const guest = context._tag === "Some" ? context.value.guest : undefined;
       const text = textOf(guest?.text ?? item.text);
-      if (text !== "") messages.push({ id: item.id, author: guest?.name ?? "You", text });
+      if (text !== "") messages.push({ id: item.id, author: guest?.name ?? owner, text });
     } else if (item.type === "assistant_message") {
       const text = textOf(item.text);
       if (text !== "") messages.push({ id: item.id, author: null, text });

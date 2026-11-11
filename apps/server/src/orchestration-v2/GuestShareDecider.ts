@@ -4,7 +4,13 @@ import {
   GUEST_RESOLVED_MESSAGE_LIMIT,
   GUEST_SHARE_MAX_GUESTS,
   GUEST_TURN_LIMIT,
+  ROOM_BOARD_MAX_NOTES,
+  ROOM_BOARD_THREAD_CARD,
   guestMessageAuthorName,
+  roomBoardAgentCard,
+  roomBoardGuestCard,
+  type RoomBoard,
+  type RoomBoardChange,
   type GuestId,
   type GuestMessageAttribution,
   type GuestMessageId,
@@ -30,6 +36,7 @@ export type GuestShareCommand = Extract<
       | "thread.guest.identify"
       | "thread.guest.remove"
       | "thread.guest-turn.post"
+      | "thread.guest-board.change"
       | "thread.room-link.set";
   }
 >;
@@ -43,6 +50,7 @@ export const GUEST_FAILURE = {
   nameTaken: "Someone on this link already uses that name. Pick another.",
   busy: "Wait for the owner to answer your earlier messages.",
   filesBusy: "Wait for the owner to answer your earlier messages before you attach more files.",
+  boardFull: "This board has as many notes as it holds. Remove one first.",
 } as const;
 
 const isExpired = (share: ThreadGuestShare, now: DateTime.Utc) =>
@@ -96,6 +104,72 @@ function trimResolved(messages: ReadonlyArray<ThreadGuestMessage>): Array<Thread
     kept.push(message);
   }
   return kept.toReversed();
+}
+
+const EMPTY_BOARD: RoomBoard = { positions: {}, notes: [] };
+
+/** The board after one change, the same board when the change does nothing, or why not. */
+function changeBoard(
+  share: ThreadGuestShare,
+  author: GuestId | null,
+  change: RoomBoardChange,
+): Result.Result<RoomBoard, string> {
+  const board = share.board ?? EMPTY_BOARD;
+  switch (change.type) {
+    case "card.move": {
+      // Only cards the room has, so the positions cannot grow without bound.
+      const onBoard =
+        change.cardId === ROOM_BOARD_THREAD_CARD ||
+        share.guests?.some(
+          (guest) =>
+            change.cardId === roomBoardGuestCard(guest.id) ||
+            change.cardId === roomBoardAgentCard(guest.id),
+        ) === true;
+      if (!onBoard) return Result.fail("This card is not on the board.");
+      const at = board.positions[change.cardId];
+      if (at?.x === change.x && at.y === change.y) return Result.succeed(board);
+      return Result.succeed({
+        ...board,
+        positions: { ...board.positions, [change.cardId]: { x: change.x, y: change.y } },
+      });
+    }
+    case "note.put": {
+      const existing = board.notes.find((note) => note.id === change.noteId);
+      const placed = { id: change.noteId, text: change.text, x: change.x, y: change.y };
+      if (existing === undefined) {
+        if (board.notes.length >= ROOM_BOARD_MAX_NOTES) return Result.fail(GUEST_FAILURE.boardFull);
+        return Result.succeed({
+          ...board,
+          notes: [...board.notes, author === null ? placed : { ...placed, guestId: author }],
+        });
+      }
+      if (existing.text === placed.text && existing.x === placed.x && existing.y === placed.y) {
+        return Result.succeed(board);
+      }
+      // A note stays its author's whoever edits it.
+      return Result.succeed({
+        ...board,
+        notes: board.notes.map((note) => (note === existing ? { ...existing, ...placed } : note)),
+      });
+    }
+    case "note.remove":
+      return board.notes.some((note) => note.id === change.noteId)
+        ? Result.succeed({
+            ...board,
+            notes: board.notes.filter((note) => note.id !== change.noteId),
+          })
+        : Result.succeed(board);
+  }
+}
+
+/** The board without a removed guest's notes and cards. */
+function boardWithoutGuest(board: RoomBoard, guestId: GuestId): RoomBoard {
+  const {
+    [roomBoardGuestCard(guestId)]: _guest,
+    [roomBoardAgentCard(guestId)]: _agent,
+    ...positions
+  } = board.positions;
+  return { positions, notes: board.notes.filter((note) => note.guestId !== guestId) };
 }
 
 const resolveMessage = (
@@ -271,7 +345,26 @@ export function decideGuestShareCommand(input: {
         ...(share.turns === undefined
           ? {}
           : { turns: share.turns.filter((turn) => turn.guestId !== command.guestId) }),
+        ...(share.board === undefined
+          ? {}
+          : { board: boardWithoutGuest(share.board, command.guestId) }),
       });
+    }
+    // Only the share changes, and the thread keeps its place in every list: arranging a board
+    // starts nothing here and reaches no agent.
+    case "thread.guest-board.change": {
+      if (
+        share === null ||
+        share.id !== command.shareId ||
+        (command.author !== null && (!hasGuest(share, command.author) || isExpired(share, now)))
+      ) {
+        return Result.fail(GUEST_FAILURE.inactive);
+      }
+      return Result.map(changeBoard(share, command.author, command.change), (board) =>
+        board === (share.board ?? EMPTY_BOARD)
+          ? thread
+          : { ...thread, guestShare: { ...share, board } },
+      );
     }
     // Only the share changes: a guest's own turn starts nothing here and reaches no agent.
     case "thread.guest-turn.post": {

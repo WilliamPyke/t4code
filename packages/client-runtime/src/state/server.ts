@@ -1592,6 +1592,11 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:guest-share:create",
       tag: WS_METHODS.guestShareCreate,
     }),
+    // One card move or note edit on a shared thread's board.
+    changeGuestBoard: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:guest-share:board",
+      tag: WS_METHODS.guestShareChangeBoard,
+    }),
     // What a shared thread's link would bring to this environment, read before joining.
     previewSharedThread: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:shared-thread:preview",

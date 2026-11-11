@@ -1,5 +1,6 @@
 import {
   GUEST_ATTACHMENT_ROUTE,
+  GUEST_BOARD_ROUTE,
   GUEST_COMMAND_OUTPUT_ROUTE,
   GUEST_EXPORT_ROUTE,
   GUEST_HANDOFF_ROUTE,
@@ -26,6 +27,7 @@ import {
   OrchestrationV2CommandOutputFrame,
   OrchestrationV2GetTurnItemResult,
   OrchestrationV2ThreadHistoryPage,
+  RoomBoardChange,
   RoomUpdates,
   SharedThreadExport,
 } from "@t3tools/contracts";
@@ -44,6 +46,7 @@ import { htmlRenderFileName } from "@t3tools/shared/htmlRender";
 
 import { assetFileResponse, downloadContentDisposition } from "../http.ts";
 import type { GuestUpload } from "./guestAttachments.ts";
+import type { GuestSafe } from "./guestRedaction.ts";
 import { GuestShareAccessError, GuestShareService } from "./GuestShareService.ts";
 
 // Cloudflare closes idle streams after about 100 seconds.
@@ -58,15 +61,18 @@ const FILE_HEADERS = {
 
 const decodeRedeem = Schema.decodeUnknownEffect(GuestRedeemRequest);
 const decodeSubmit = Schema.decodeUnknownEffect(GuestSubmitRequest);
+/** Encodes thread data for a guest. It takes only what the service's redactor returned. */
+const encodeForGuest = <S extends Schema.Top>(schema: S) => {
+  const encode = Schema.encodeEffect(schema);
+  return (value: GuestSafe<S["Type"]>) => encode(value);
+};
 // The owner's thread types hold DateTime values; the JSON codec writes them as strings.
-const encodeStreamEvent = Schema.encodeEffect(
+const encodeStreamEvent = encodeForGuest(
   Schema.fromJsonString(Schema.toCodecJson(GuestStreamEvent)),
 );
-const encodeOutputFrame = Schema.encodeEffect(
-  Schema.fromJsonString(OrchestrationV2CommandOutputFrame),
-);
-const encodeItem = Schema.encodeEffect(Schema.toCodecJson(OrchestrationV2GetTurnItemResult));
-const encodeHistoryPage = Schema.encodeEffect(Schema.toCodecJson(OrchestrationV2ThreadHistoryPage));
+const encodeOutputFrame = encodeForGuest(Schema.fromJsonString(OrchestrationV2CommandOutputFrame));
+const encodeItem = encodeForGuest(Schema.toCodecJson(OrchestrationV2GetTurnItemResult));
+const encodeHistoryPage = encodeForGuest(Schema.toCodecJson(OrchestrationV2ThreadHistoryPage));
 
 const errorResponse = (error: GuestShareAccessError) =>
   HttpServerResponse.json(
@@ -264,7 +270,7 @@ const bearerToken = Effect.map(
 );
 
 const encodeHandoff = Schema.encodeEffect(Schema.toCodecJson(GuestHandoff));
-const encodeExport = Schema.encodeEffect(Schema.toCodecJson(SharedThreadExport));
+const encodeExport = encodeForGuest(Schema.toCodecJson(SharedThreadExport));
 
 // The guest's page asks for a handoff token, then sends the guest to their own T3 Code with it.
 const handoffRoute = HttpRouter.add(
@@ -327,7 +333,7 @@ const roomTurnRoute = HttpRouter.add(
   }),
 );
 
-const encodeUpdates = Schema.encodeEffect(Schema.toCodecJson(RoomUpdates));
+const encodeUpdates = encodeForGuest(Schema.toCodecJson(RoomUpdates));
 
 // Read by the guest's own T3 Code server when its user catches up.
 const roomUpdatesRoute = HttpRouter.add(
@@ -348,6 +354,25 @@ const roomUpdatesRoute = HttpRouter.add(
           ),
         ),
         Effect.map((body) => HttpServerResponse.jsonUnsafe(body, { headers: NO_STORE })),
+        Effect.catchTags({ GuestShareAccessError: errorResponse }),
+      );
+  }),
+);
+
+const decodeBoardChange = Schema.decodeUnknownEffect(RoomBoardChange);
+
+const boardRoute = HttpRouter.add(
+  "POST",
+  GUEST_BOARD_ROUTE,
+  Effect.gen(function* () {
+    const session = yield* sessionToken;
+    const change = yield* readJson.pipe(Effect.flatMap(decodeBoardChange), Effect.option);
+    if (change._tag === "None") return yield* badRequest;
+    const guestShares = yield* GuestShareService;
+    return yield* guestShares
+      .changeBoard({ session }, change.value)
+      .pipe(
+        Effect.as(HttpServerResponse.empty({ status: 204, headers: NO_STORE })),
         Effect.catchTags({ GuestShareAccessError: errorResponse }),
       );
   }),
@@ -526,6 +551,7 @@ export const layer = Layer.mergeAll(
   exportRoute,
   roomTurnRoute,
   roomUpdatesRoute,
+  boardRoute,
   signInRoute,
   signInPollRoute,
   renderRoute,

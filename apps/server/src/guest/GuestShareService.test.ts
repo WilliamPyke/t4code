@@ -8,6 +8,7 @@ import {
   type GuestAccount,
   type GuestId,
   GuestShareId,
+  type GuestShareView,
   type GuestStreamEvent,
   MessageId,
   type OrchestrationV2ThreadHistoryPage,
@@ -213,7 +214,10 @@ const layerTest = GuestShareService.layer.pipe(
 
 const threadId = ThreadId.make("thread:guest-share-service");
 
-const shareThreadFor = Effect.fn(function* (threadId: ThreadId) {
+const shareThreadFor = Effect.fn(function* (
+  threadId: ThreadId,
+  worktreePath: string | null = null,
+) {
   yield* Ref.set(hostname, "env.t3.test");
   yield* Ref.set(providers, []);
   yield* Ref.set(checkout, null);
@@ -228,7 +232,7 @@ const shareThreadFor = Effect.fn(function* (threadId: ThreadId) {
     runtimeMode: "full-access",
     interactionMode: "default",
     branch: null,
-    worktreePath: null,
+    worktreePath,
     createdBy: "user",
     creationSource: "web",
   });
@@ -322,6 +326,65 @@ it.effect("says who has the page open, and ends the page of a guest the owner re
     assert.isTrue(Exit.isSuccess(yield* Effect.exit(guestShares.check(sam.token))));
     const closed = yield* Effect.flip(guestShares.redeem({ credential, name: "Eve again" }));
     assert.equal(closed.reason, "closed");
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("lets the owner and each guest change the board everyone on the link sees", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const eve = yield* guestShares.redeem({ credential, name: "Eve" });
+    const samId = (yield* orchestrator.getThreadRecords(threadId, [])).thread.guestShare!
+      .guests![0]!.id;
+    const boards = yield* Queue.unbounded<NonNullable<GuestShareView["board"]>>();
+    yield* Stream.runForEach(yield* guestShares.stream(eve.token), (event) =>
+      event.type === "view" && event.view.board !== undefined
+        ? Queue.offer(boards, event.view.board)
+        : Effect.void,
+    ).pipe(Effect.forkScoped);
+
+    yield* guestShares.changeBoard(
+      { session: sam.token },
+      { type: "note.put", noteId: "note:1", text: "Hid\u200Bden", x: 4, y: 8 },
+    );
+    // The other guest's open page gets the note, signed, without characters nobody can see.
+    assert.deepEqual((yield* Queue.take(boards)).notes, [
+      { id: "note:1", text: "Hidden", x: 4, y: 8, guestId: samId },
+    ]);
+    yield* guestShares.changeBoard(
+      { threadId },
+      { type: "card.move", cardId: "thread", x: 40, y: 80 },
+    );
+    assert.deepEqual((yield* Queue.take(boards)).positions, { thread: { x: 40, y: 80 } });
+
+    // Only a guest's session writes: not the invite, and not the token their own machine holds.
+    const remove = { type: "note.remove", noteId: "note:1" } as const;
+    const room = (yield* guestShares.exportThread((yield* guestShares.handoff(sam.token)).token))
+      .room!;
+    for (const token of [credential, room.token]) {
+      assert.equal(
+        (yield* Effect.flip(guestShares.changeBoard({ session: token }, remove))).reason,
+        "invalid",
+      );
+    }
+    yield* orchestrator.dispatch({
+      type: "thread.guest.remove",
+      commandId: CommandId.make("remove-sam-board"),
+      threadId,
+      guestId: samId,
+    });
+    assert.equal(
+      (yield* Effect.flip(guestShares.changeBoard({ session: sam.token }, remove))).reason,
+      "inactive",
+    );
+    yield* orchestrator.dispatch({
+      type: "thread.guest-share.close",
+      commandId: CommandId.make("close-board"),
+      threadId,
+    });
+    for (const by of [{ session: eve.token }, { threadId }]) {
+      assert.equal((yield* Effect.flip(guestShares.changeBoard(by, remove))).reason, "inactive");
+    }
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
 
@@ -620,6 +683,75 @@ it.effect("streams the owner's thread events after the share and a snapshot", ()
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("hides the owner's paths, project and provider from a guest's snapshot and events", () =>
+  Effect.gen(function* () {
+    const worktree = String.raw`C:\Users\pykew\hackathon\matchbox`;
+    const { orchestrator, guestShares, credential } = yield* shareThreadFor(threadId, worktree);
+    const { token: session } = yield* guestShares.redeem({ credential, name: "Sam" });
+    const say = (id: string, text: string) =>
+      orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(id),
+        threadId,
+        messageId: MessageId.make(`message:${id}`),
+        text,
+        attachments: [],
+        dispatchMode: { type: "defer_start" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+    const before = "Read C:/Users/pykew/hackathon/matchbox/src/x.ts and /repo/README.md";
+    yield* say("before", before);
+    const events = yield* guestShares.stream(session);
+    yield* say("after", String.raw`Now c:\users\pykew\hackathon\matchbox2\y.ts`);
+    yield* orchestrator.dispatch({
+      type: "thread.guest-share.close",
+      commandId: CommandId.make("close-after-paths"),
+      threadId,
+    });
+    const received = Array.from(yield* Stream.runCollect(events));
+    const snapshot = received.flatMap((event) =>
+      event.type === "thread" && event.item.kind === "snapshot" ? [event.item.projection] : [],
+    )[0];
+    if (snapshot === undefined) return assert.fail("Expected a snapshot.");
+    assert.deepInclude(snapshot.thread, {
+      title: "Review me",
+      worktreePath: null,
+      projectId: ProjectId.make("shared"),
+      providerInstanceId: ProviderInstanceId.make("shared"),
+      modelSelection: { instanceId: ProviderInstanceId.make("shared"), model: "gpt-5.1-codex" },
+    });
+    assert.doesNotHaveAnyKeys(snapshot.thread, ["pullRequests", "guestShare", "tags"]);
+    const texts = (items: ReadonlyArray<OrchestrationV2TurnItem>) =>
+      items.flatMap((item) => (item.type === "user_message" ? [item.text] : []));
+    assert.deepEqual(texts(snapshot.visibleTurnItems.map((row) => row.item)), [
+      "Read matchbox/src/x.ts and repo/README.md",
+    ]);
+    const later = received.flatMap((event) =>
+      event.type === "thread" && event.item.kind === "event" ? [event.item.event] : [],
+    );
+    // A queued message has no row yet; it arrives as the message itself.
+    assert.deepEqual(
+      later.flatMap((event) => (event.type === "message.updated" ? [event.payload.text] : [])),
+      [String.raw`Now ~\hackathon\matchbox2\y.ts`],
+    );
+    const sent = JSON.stringify(received).toLowerCase();
+    for (const hidden of ["pykew", "/repo", "project:guest-share-service"]) {
+      assert.notInclude(sent, hidden);
+    }
+    // The driver is also "codex", so the instance id is checked by its keys.
+    assert.match(sent, /instanceid":"shared"/);
+    assert.notMatch(sent, /instanceid":"(?!shared")/);
+    // The owner's own reads are untouched.
+    const own = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
+    assert.equal(own.thread.worktreePath, worktree);
+    assert.include(
+      own.messages.map((message) => message.text),
+      before,
+    );
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("starts a stream with the runs and items already in the thread", () =>
   Effect.gen(function* () {
     const { orchestrator, guestShares, credential } = yield* shareThread;
@@ -883,7 +1015,7 @@ it.effect("gives the guest a command's detail and output, but no file diffs", ()
       assert.deepInclude(change, { type: "file_change", fileName });
       assert.doesNotHaveAnyKeys(change, ["diffStr", "oldStr", "newStr"]);
     }
-    const frames = Array.from(
+    const frames: ReadonlyArray<unknown> = Array.from(
       yield* Stream.runCollect(yield* guestShares.commandOutput(session, command)),
     );
     assert.deepEqual(frames, [

@@ -56,6 +56,7 @@ export function guestShareView(
     expiresAt: share.expiresAt,
     messages: share.messages,
     ...(share.turns === undefined ? {} : { turns: share.turns }),
+    ...(share.board === undefined ? {} : { board: share.board }),
     model,
   };
 }
