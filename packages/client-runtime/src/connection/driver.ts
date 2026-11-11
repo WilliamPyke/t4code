@@ -169,7 +169,9 @@ export const make = Effect.gen(function* () {
 
   const checkRoute = (entry: ConnectionCatalogEntry, route: ConnectionRoute) => {
     const httpBaseUrl = routeHttpBaseUrl(route);
-    if (httpBaseUrl === null) return Effect.succeed<RouteCheck>("unchecked");
+    if (httpBaseUrl === null || route.target._tag === "GuestConnectionTarget") {
+      return Effect.succeed<RouteCheck>("unchecked");
+    }
     return checkDescriptor(httpBaseUrl, entry.target.environmentId).pipe(
       Effect.withSpan("ConnectionDriver.checkRoute", {
         attributes: { "connection.target.kind": route.target._tag },
@@ -178,11 +180,14 @@ export const make = Effect.gen(function* () {
   };
 
   const checkHost = (prepared: PreparedConnection) =>
-    checkDescriptor(prepared.httpBaseUrl, prepared.environmentId).pipe(
-      Effect.withSpan("ConnectionDriver.checkHost", {
-        attributes: { "connection.target.kind": prepared.target._tag },
-      }),
-    );
+    // A shared thread's host has a descriptor, but it names the owner's environment.
+    prepared.target._tag === "GuestConnectionTarget"
+      ? Effect.succeed<RouteCheck>("unchecked")
+      : checkDescriptor(prepared.httpBaseUrl, prepared.environmentId).pipe(
+          Effect.withSpan("ConnectionDriver.checkHost", {
+            attributes: { "connection.target.kind": prepared.target._tag },
+          }),
+        );
 
   const connect = Effect.fn("ConnectionDriver.connect")(function* (
     entry: ConnectionCatalogEntry,

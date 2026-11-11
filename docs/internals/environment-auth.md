@@ -39,6 +39,23 @@ tokens never enter `SessionStore`, so no RPC, WebSocket, or MCP path can accept
 one. Guest routes also require T3 Connect to still serve the link's hostname;
 the request's Host header is not checked, because a LAN client can forge it.
 
+A guest's page can be on another origin than the owner's host: the hosted app
+opens guest links when the owner's server is told about it
+(`T3CODE_HOSTED_APP_URL`). The session cookie is `SameSite=Strict` and cannot
+cross origins, so a redeem that asks gets the token in its body and the session
+routes take it as a bearer. That widens nothing: the bearer is the cookie's
+value, each route still names its share and drops a bearer signed for another,
+and the routes stay uncredentialed for CORS. In the client the share is an
+environment whose session is built on those routes
+([guestSession](../../packages/client-runtime/src/rpc/guestSession.ts)). It
+answers the config, the shell and the one thread, and every other RPC fails
+there without a request, so the environment API never sees a guest token. The
+hosted app keeps the token in page storage, which any script on that origin can
+read: it must stay a guest's token, good for one thread and a day. The `host` a
+link names is untrusted, and the page follows it only into the deployment's own
+tunnel zone ([guestLinks](../../packages/shared/src/guestLinks.ts)), because it
+sends that host a name and then holds a token for it.
+
 A guest can also take the thread to their own T3 Code. The guest page asks for a
 handoff token, a signed claim like the session's that lasts ten minutes and opens
 only the thread's export, and passes it with this host's name to the guest's own
@@ -89,7 +106,13 @@ machine that asked for the code, which is the owner's. The callback arrives
 without the guest session (that cookie is `SameSite=Strict`), so a one-time
 `state` held in memory names the session, and a separate `SameSite=Lax` cookie
 must match it: otherwise a guest could pass their GitHub link to someone else and
-be recorded as that person. The owner's saved
+be recorded as that person. A page on the hosted app cannot store that cookie
+from a fetch, so it posts a form to the owner's host instead, a navigation whose
+answer sets the cookie and redirects to GitHub. That route takes the post only
+from the hosted app's origin: a form any page could post would let an attacker
+walk a victim's browser through the attacker's own sign-in, which is the attack
+the cookie exists to stop. The callback then returns the browser to the hosted
+app, an address the server holds, never one the request names. The owner's saved
 contributors are matched by login the first time and by id after that, because a
 login can be renamed away and taken by someone else.
 

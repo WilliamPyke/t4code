@@ -50,7 +50,8 @@ import {
 import { useUiStateStore } from "../uiStateStore";
 import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
-import { GUEST_PAGE_PATH } from "../guestPage";
+import { hasGuestShares } from "../guest/guestShares";
+import { GUEST_PAGE_PATH, setGuestOnlySession } from "../guestPage";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
 import { useHostedPromptLinkLanding } from "../components/promptLinks/HostedPromptLinkLanding";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
@@ -63,8 +64,7 @@ import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
-    // Guest links open on the owner's tunnel host in a browser with no T3 session, and must
-    // not trigger pairing or an environment connection.
+    // A guest link asks for a name before anything connects, and must not trigger pairing.
     if (location.pathname === GUEST_PAGE_PATH) {
       return {
         authGateState: {
@@ -82,6 +82,7 @@ export const Route = createRootRoute({
     }
 
     if (isLocalEnvironmentDisabled() || isHostedStaticApp(new URL(window.location.href))) {
+      setGuestOnlySession(false);
       return {
         authGateState: {
           status: "hosted-static",
@@ -90,6 +91,17 @@ export const Route = createRootRoute({
     }
 
     const authGateState = await resolveInitialServerAuthGateState();
+    // No session on this host, but threads shared from it or elsewhere: the app opens with
+    // those and nothing of this host's own.
+    const guestOnly = authGateState.status !== "authenticated" && hasGuestShares();
+    setGuestOnlySession(guestOnly);
+    if (guestOnly) {
+      return {
+        authGateState: {
+          status: "guest",
+        } as const,
+      };
+    }
     if (authGateState.status === "authenticated") {
       // Idempotent, so every navigation can ask for it.
       void configureClientTracing();
@@ -166,7 +178,10 @@ function RootRouteBranch() {
   }
 
   const isWelcome = pathname === "/welcome";
-  if (authGateState.status !== "authenticated" && authGateState.status !== "hosted-static") {
+  // A guest gets the same shell a hosted app with no machine of its own gets.
+  const withoutLocalEnvironment =
+    authGateState.status === "hosted-static" || authGateState.status === "guest";
+  if (authGateState.status !== "authenticated" && !withoutLocalEnvironment) {
     return <Outlet />;
   }
 
@@ -213,7 +228,7 @@ function RootRouteBranch() {
       ) : (
         <FirstRunGate
           enabled={primaryEnvironmentAuthenticated}
-          hostedStatic={authGateState.status === "hosted-static"}
+          hostedStatic={withoutLocalEnvironment}
         >
           {appHosts}
           {primaryEnvironmentAuthenticated ? (

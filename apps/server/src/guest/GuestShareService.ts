@@ -12,6 +12,7 @@ import {
   type GuestAccount,
   GuestId,
   guestContributorFor,
+  GUEST_HOST_PARAM,
   GUEST_SHARE_PARAM,
   GUEST_SIGN_IN_CALLBACK_ROUTE,
   GUEST_SIGN_IN_PARAM,
@@ -43,6 +44,7 @@ import {
   TurnItemId,
 } from "@t3tools/contracts";
 import { chatMarkdownImageSources } from "@t3tools/shared/markdownPipeline";
+import { buildGuestLink } from "@t3tools/shared/guestLinks";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
 import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 import * as NodeOS from "node:os";
@@ -71,6 +73,7 @@ import {
 } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import { CloudManagedEndpointRuntime } from "../cloud/ManagedEndpointRuntime.ts";
+import { configuredHostedAppUrlConfig } from "../cloud/publicConfig.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as CommandOutputHub from "../orchestration-v2/CommandOutputHub.ts";
 import { GUEST_FAILURE, hasGuest } from "../orchestration-v2/GuestShareDecider.ts";
@@ -102,6 +105,7 @@ import {
 
 const SIGNING_SECRET_NAME = "guest-share-signing-key";
 const SHARE_ID_BYTES = 16;
+const HOSTED_SIGN_IN_MARK = "hosted";
 const INVITE_SIGNATURE_BYTES = 16;
 const SNAPSHOT_ROW_LIMIT = 600;
 const SNAPSHOT_USER_TURN_LIMIT = 20;
@@ -207,11 +211,16 @@ export class GuestShareService extends Context.Service<
     readonly redeem: (
       request: GuestRedeemRequest,
     ) => Effect.Effect<
-      { readonly token: string; readonly shareId: GuestShareId },
+      { readonly token: string; readonly shareId: GuestShareId; readonly threadId: ThreadId },
       GuestShareAccessError
     >;
     /** Succeeds while the session can still open its share. */
     readonly check: (session: string) => Effect.Effect<void, GuestShareAccessError>;
+    /**
+     * The share a session token was signed for, or null for anything else. It says nothing about
+     * whether the share still works: a route uses it to refuse a bearer sent for another share.
+     */
+    readonly sessionShareId: (token: string) => Effect.Effect<GuestShareId | null>;
     /** Stores the guest's files as the thread's attachments and records the message with them. */
     readonly submit: (
       session: string,
@@ -229,8 +238,18 @@ export class GuestShareService extends Context.Service<
       session: string,
     ) => Effect.Effect<{ readonly url: string; readonly cookie: string }, GuestShareAccessError>;
     /**
+     * Starts the sign-in for a guest page on the hosted app, which posts here as a navigation.
+     * Only that app's origin may: any other page could walk someone else's browser through a
+     * guest's sign-in. The guest comes back to the hosted app when it ends.
+     */
+    readonly signInFromHostedApp: (input: {
+      readonly session: string;
+      readonly origin: string | null;
+    }) => Effect.Effect<{ readonly url: string; readonly cookie: string }, GuestShareAccessError>;
+    /**
      * Finishes the sign-in GitHub sent a browser back for, recording the account on the share
-     * when everything matches. Returns where on this host the browser goes next.
+     * when everything matches. Returns where the browser goes next: the guest page on this host,
+     * or on the hosted app when the sign-in began there.
      */
     readonly signInFinish: (input: {
       readonly state: string | null;
@@ -339,6 +358,11 @@ const make = Effect.gen(function* () {
   const random = yield* SecureRandom.SecureRandom;
   const analytics = yield* AnalyticsService.AnalyticsService;
   const signer = yield* PayloadSigner.make(SIGNING_SECRET_NAME);
+  // A value that is set but is not a usable origin counts as none: links stay on this host.
+  const hostedAppUrl = yield* configuredHostedAppUrlConfig.pipe(
+    Effect.map(Option.getOrNull),
+    Effect.orElseSucceed(() => null),
+  );
   /** A truncated HMAC keeps invite links short. 128 bits is still far beyond guessing range. */
   const inviteSignature = (shareId: string) =>
     signer.sign(`guest-invite:${shareId}`).pipe(
@@ -500,7 +524,7 @@ const make = Effect.gen(function* () {
       return yield* new GuestShareCreateError({ reason: "changed" });
     }
     const credential = yield* signInvite(shareId);
-    return { url: `https://${host}/guest#${credential}`, share: thread.guestShare };
+    return { url: buildGuestLink({ host, credential, hostedAppUrl }), share: thread.guestShare };
   });
 
   const redeem = Effect.fn("GuestShareService.redeem")(function* (request: GuestRedeemRequest) {
@@ -522,20 +546,41 @@ const make = Effect.gen(function* () {
       shareId: share.id,
       guestId,
     });
-    return { token, shareId: share.id };
+    return { token, shareId: share.id, threadId: thread.id };
   });
 
   const check = Effect.fn("GuestShareService.check")(function* (session: string) {
     yield* authorize(session, "session");
   });
 
-  const signIn = Effect.fn("GuestShareService.signIn")(function* (session: string) {
+  const sessionShareId = (token: string) =>
+    verifySession(token).pipe(
+      Effect.map((claims) =>
+        Option.isSome(claims) && claims.value.kind === "session" ? claims.value.shareId : null,
+      ),
+    );
+
+  const startSignIn = Effect.fn("GuestShareService.signIn")(function* (
+    session: string,
+    hosted: boolean,
+  ) {
     const { share, guestId } = yield* authorize(session, "session");
     if (guestId === undefined) return yield* new GuestShareAccessError({ reason: "unavailable" });
     const { state, url } = yield* guestSignIn
       .start({ session, redirectUri: `https://${share.host}${GUEST_SIGN_IN_CALLBACK_ROUTE}` })
       .pipe(Effect.mapError(() => new GuestShareAccessError({ reason: "sign_in_failed" })));
-    return { url, cookie: `${share.id}.${state}` };
+    // The mark only picks the guest page the browser returns to; `state` is what gets checked.
+    return { url, cookie: `${share.id}.${state}${hosted ? `.${HOSTED_SIGN_IN_MARK}` : ""}` };
+  });
+  const signIn = (session: string) => startSignIn(session, false);
+  const signInFromHostedApp = Effect.fn("GuestShareService.signInFromHostedApp")(function* (input: {
+    readonly session: string;
+    readonly origin: string | null;
+  }) {
+    if (hostedAppUrl === null || input.origin !== hostedAppUrl) {
+      return yield* new GuestShareAccessError({ reason: "invalid" });
+    }
+    return yield* startSignIn(input.session, true);
   });
 
   const identify = Effect.fn("GuestShareService.identify")(function* (
@@ -577,13 +622,18 @@ const make = Effect.gen(function* () {
     readonly code: string | null;
     readonly cookie: string | null;
   }) {
-    // The cookie is `<share id>.<state>`, set in the browser that started this sign-in.
-    const [shareId = "", expected = ""] = (input.cookie ?? "").split(".");
+    // The cookie is `<share id>.<state>`, set in the browser that started this sign-in, with a
+    // mark after it when that browser was on the hosted app.
+    const [shareId = "", expected = "", mark = ""] = (input.cookie ?? "").split(".");
+    const host =
+      mark === HOSTED_SIGN_IN_MARK && hostedAppUrl !== null ? yield* connectHostname : null;
     const back = (failure?: GuestSignInFailure) => {
       const params = new URLSearchParams();
+      if (host !== null) params.set(GUEST_HOST_PARAM, host);
       if (shareId !== "") params.set(GUEST_SHARE_PARAM, shareId);
       if (failure !== undefined) params.set(GUEST_SIGN_IN_PARAM, failure);
-      return params.size === 0 ? "/guest" : `/guest?${params}`;
+      const page = params.size === 0 ? "/guest" : `/guest?${params}`;
+      return host === null ? page : `${hostedAppUrl}${page}`;
     };
     // Without this, a guest could send their GitHub link to someone else and be recorded as
     // that person's account once they approved it.
@@ -1304,8 +1354,10 @@ const make = Effect.gen(function* () {
     create,
     redeem,
     check,
+    sessionShareId,
     submit,
     signIn,
+    signInFromHostedApp,
     signInFinish,
     stream,
     presence,

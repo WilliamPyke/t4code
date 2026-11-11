@@ -22,6 +22,7 @@ import {
   type VcsStatusResult,
   TurnItemId,
 } from "@t3tools/contracts";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -217,6 +218,7 @@ const threadId = ThreadId.make("thread:guest-share-service");
 const shareThreadFor = Effect.fn(function* (
   threadId: ThreadId,
   worktreePath: string | null = null,
+  linkStart = "https://env.t3.test/guest#",
 ) {
   yield* Ref.set(hostname, "env.t3.test");
   yield* Ref.set(providers, []);
@@ -238,7 +240,7 @@ const shareThreadFor = Effect.fn(function* (
   });
   const guestShares = yield* GuestShareService.GuestShareService;
   const { url } = yield* guestShares.create({ threadId });
-  assert.isTrue(url.startsWith("https://env.t3.test/guest#"));
+  assert.isTrue(url.startsWith(linkStart));
   const credential = url.slice(url.indexOf("#") + 1);
   return { orchestrator, guestShares, credential };
 });
@@ -489,6 +491,13 @@ it.effect("trusts a guest who signs in as a saved contributor, and no one else",
     );
 
     assert.equal((yield* signIn(sam.token)).location, page);
+    // With no hosted app configured, no page on another origin can start a sign-in.
+    assert.equal(
+      (yield* Effect.flip(
+        guestShares.signInFromHostedApp({ session: sam.token, origin: "https://app.t3.codes" }),
+      )).reason,
+      "invalid",
+    );
     // Someone else's account is recorded, but their messages still wait for the owner.
     yield* Ref.set(githubAccount, { login: "eve", id: 8 });
     yield* signIn(eve.token);
@@ -510,6 +519,59 @@ it.effect("trusts a guest who signs in as a saved contributor, and no one else",
   }).pipe(Effect.provide(layerTest)),
 );
 
+const layerHostedApp = layerTest.pipe(
+  Layer.provide(
+    ConfigProvider.layer(
+      ConfigProvider.fromEnv({ env: { T3CODE_HOSTED_APP_URL: "https://app.t3.test" } }),
+    ),
+  ),
+);
+
+it.effect("opens links on a configured hosted app, and returns a guest who signs in there", () =>
+  Effect.gen(function* () {
+    const { guestShares, credential } = yield* shareThreadFor(
+      ThreadId.make("thread:guest-share-hosted"),
+      null,
+      "https://app.t3.test/guest?host=env.t3.test#",
+    );
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    // Any other page could walk someone else's browser through Sam's sign-in.
+    for (const origin of ["https://evil.test", "https://env.t3.test", "null", null]) {
+      assert.equal(
+        (yield* Effect.flip(guestShares.signInFromHostedApp({ session: sam.token, origin })))
+          .reason,
+        "invalid",
+      );
+    }
+    yield* Ref.set(githubAccount, { login: "sam-dev", id: 7 });
+    const started = yield* guestShares.signInFromHostedApp({
+      session: sam.token,
+      origin: "https://app.t3.test",
+    });
+    const state = started.cookie.split(".")[1]!;
+    const page = `https://app.t3.test/guest?host=env.t3.test&share=${sam.shareId}`;
+    // The browser still has to hold the cookie for this state; the mark finishes nothing.
+    assert.equal(
+      yield* guestShares.signInFinish({
+        state,
+        code: "code",
+        cookie: `${sam.shareId}.other.hosted`,
+      }),
+      `${page}&sign_in=failed`,
+    );
+    assert.equal(
+      yield* guestShares.signInFinish({ state, code: "code", cookie: started.cookie }),
+      page,
+    );
+    // A sign-in started on the owner's host still returns there.
+    const local = yield* guestShares.signIn(sam.token);
+    assert.equal(
+      yield* guestShares.signInFinish({ state, code: "code", cookie: local.cookie }),
+      `/guest?share=${sam.shareId}`,
+    );
+  }).pipe(Effect.provide(layerHostedApp)),
+);
+
 it.effect("hands a guest a short-lived token that only reads the thread's export", () =>
   Effect.gen(function* () {
     const { orchestrator, guestShares, credential } = yield* shareThread;
@@ -528,6 +590,11 @@ it.effect("hands a guest a short-lived token that only reads the thread's export
     yield* Ref.set(checkout, { branch: "fix/login", synced: false });
 
     const { token } = yield* guestShares.handoff(sam.token);
+    // A route takes a bearer only for the share it names, and only a session is one.
+    assert.equal(yield* guestShares.sessionShareId(sam.token), sam.shareId);
+    for (const other of [token, `${sam.token}x`, credential, ""]) {
+      assert.isNull(yield* guestShares.sessionShareId(other));
+    }
     const exported = yield* guestShares.exportThread(token);
     assert.equal(exported.title, "Review me");
     assert.deepEqual(

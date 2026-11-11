@@ -175,6 +175,13 @@ const executeEnvironmentRequest = Effect.fnUntraced(function* <
   let httpBaseUrl = input.prepared.httpBaseUrl;
   const requestUrlFor = (baseUrl: string) =>
     input.url(makeEnvironmentHttpApiUrlBuilder(baseUrl)[input.group]);
+  // A guest's token is for the share's guest routes. It is never sent to the environment API.
+  if (input.prepared.target._tag === "GuestConnectionTarget") {
+    return yield* new RemoteEnvironmentAuthFetchError({
+      message: "A shared thread has no environment API.",
+      cause: input.prepared.target._tag,
+    });
+  }
   return yield* Effect.gen(function* () {
     let rejectedAccessToken: string | undefined;
     for (;;) {

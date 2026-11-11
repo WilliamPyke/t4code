@@ -1,4 +1,4 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { RelayEnvironmentEndpointFailure } from "@t3tools/contracts/relay";
 import * as Schema from "effect/Schema";
 
@@ -39,11 +39,26 @@ export class SshConnectionTarget extends Schema.TaggedClass<SshConnectionTarget>
   },
 ) {}
 
+/**
+ * One thread someone shared from their host, read over that host's guest routes. It is not a
+ * session there: no socket, no RPC, and the only credential is the share's guest token.
+ */
+export class GuestConnectionTarget extends Schema.TaggedClass<GuestConnectionTarget>()(
+  "GuestConnectionTarget",
+  {
+    ...ConnectionTargetBase,
+    httpBaseUrl: Schema.String,
+    shareId: Schema.String,
+    threadId: ThreadId,
+  },
+) {}
+
 export const ConnectionTarget = Schema.Union([
   PrimaryConnectionTarget,
   BearerConnectionTarget,
   RelayConnectionTarget,
   SshConnectionTarget,
+  GuestConnectionTarget,
 ]);
 export type ConnectionTarget = typeof ConnectionTarget.Type;
 

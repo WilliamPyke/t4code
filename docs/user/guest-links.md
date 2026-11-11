@@ -18,7 +18,8 @@ expired work again when you turn it back on.
 2. Copy the link and send it to the people you want in the thread. Anyone who has the link can join
    until 8 people have, so send it only to them. It expires after 24 hours. Each person picks a
    name no one else on the link uses, and opening the link again in the same browser takes them
-   back to the thread.
+   back to the thread. The link opens in the hosted T3 Code app when your server is
+   [set up for one](#where-the-link-opens), and on your machine's T3 Connect address otherwise.
 3. When a guest sends a message, it appears at the end of the thread under their name and the
    sidebar shows **Request**. Choose **Send** to run it as a normal turn, or **Dismiss**. Files they
    attached show with the message, and **Send** includes them. The agent is told which guest wrote
@@ -37,7 +38,7 @@ On web, choose **Board** in a shared thread's header. The thread and each guest 
 you can drag, with what each guest has waiting for you, and you can add notes. Scroll to move,
 and hold Ctrl or Cmd while scrolling to zoom.
 
-The board belongs to the room. Guests open the same one with **Board** on their page, and
+The board belongs to the room. Guests open the same one with **Board** in the thread's header, and
 everyone sees a card land where it was dropped and a note once its author clicks away from it.
 Anyone in the room can move, edit or delete any note; each note names who added it. A board
 holds up to 50 notes of 280 characters. Agents never see the board, so use a message, not a note,
@@ -45,7 +46,7 @@ for anything an agent should act on.
 
 The board lasts as long as the link: stopping sharing or creating a new link starts an empty
 one, and removing a guest removes their notes. Someone who continued the thread on their own
-machine does not get the board in their T3 Code; they still see it on the guest page.
+machine does not get the board in their T3 Code; they still see it in the shared thread.
 
 ## Remove a guest
 
@@ -74,7 +75,7 @@ your key.
 
 A typed name proves nothing, so the switch above is per guest and per link. To approve someone
 for every link, list their GitHub username under **Settings → Labs → Guest links → Approved
-contributors**. When they join a link and choose **Sign in with GitHub** on the shared page, their
+contributors**. When they join a link and choose **Sign in with GitHub** in the shared thread, their
 browser goes to GitHub and comes back, and from then on their messages are sent without asking on
 that thread. You can also approve a signed-in guest from the guest names in the thread header.
 
@@ -82,7 +83,7 @@ The first sign-in ties the username to that GitHub account, so someone who takes
 is not approved. Removing a username applies to links that person joins afterwards; turn off
 **Send without asking** on a thread to stop them there now. The same API key rule applies.
 
-The shared page offers the sign-in only when the server that runs the thread was started with a
+The shared thread offers the sign-in only when the server that runs the thread was started with a
 GitHub app's client ID in `T3CODE_GITHUB_APP_CLIENT_ID` and its client secret in
 `T3CODE_GITHUB_APP_CLIENT_SECRET`. The app must list
 `https://<your T3 Connect host>/api/guest/sign-in/callback` as a callback URL. T3 Code asks GitHub
@@ -150,11 +151,18 @@ mobile app does not show guests' own turns.
 
 ## What a guest sees
 
+A guest gets T3 Code in their browser with the thread in the sidebar, under **Shared with me** and
+the address of the machine that shared it. Threads from other links they joined in that browser
+are listed there too, and someone who uses T3 Code with their own machines sees shared threads
+beside their own. A shared thread is listed for as long as its link lasts.
+
 A guest sees the thread's recent history and everything after, in the same timeline you see, as
 it streams: messages and their files, the agent's replies with the images they show from your
 machine, its reasoning, plans, questions, and its work, with command output when they expand a
-command. Their composer shows the thread's model, but they cannot change it. They do not see diffs, and they cannot act on the thread: no forking,
-reverting, opening files on your machine, or answering the agent for you.
+command. Their composer shows the thread's model, but they cannot change it. They do not see
+diffs, and they cannot act on the thread: no forking, reverting, opening files on your machine,
+stopping a turn, or answering the agent for you. Nothing else on your machine is listed for them:
+no other thread, project, terminal, or setting.
 
 Guests also see each other's names, who is away, the messages each of them has waiting, and the
 turns guests [ran on their own machines](#your-turns-show-in-the-room).
@@ -162,6 +170,22 @@ turns guests [ran on their own machines](#your-turns-show-in-the-room).
 Anything the agent read or printed can show, such as a value from a file, and a guest can
 [take a copy of the conversation](#continue-on-your-own-machine) that stays with them after you stop
 sharing. Share only threads you are comfortable showing.
+
+### Where the link opens
+
+A guest link normally opens on your machine's T3 Connect address. If you run a hosted copy of the
+T3 Code web app, start the server with its address in `T3CODE_HOSTED_APP_URL` (for example
+`https://app.example.org`) and new links open there instead, naming your machine:
+`https://app.example.org/guest?host=<your T3 Connect host>#<invite>`.
+
+The hosted app follows a link only to a machine in its own T3 Connect domain: with the app at
+`app.example.org`, that is `<name>.example.org`. Build the hosted app with `VITE_GUEST_HOST_ZONE`
+set to the domain if your machines' addresses are somewhere else. A link that names any other
+host is refused before anything is sent to it.
+
+The guest's browser keeps a token for each thread it joined, in the hosted app's storage. The
+token lasts as long as the link, reads that one thread, and sends messages for you to approve;
+it does not sign in to your machine.
 
 ## Guest attachments
 

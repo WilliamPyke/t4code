@@ -1,7 +1,8 @@
-import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { isGuestEnvironment, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { Outlet, createFileRoute, redirect, useMatches } from "@tanstack/react-router";
 import { useState } from "react";
 
+import { GuestThreadRoute } from "../components/guest/GuestThreadView";
 import { ThreadRouteView } from "../components/ThreadRouteView";
 import { isAppModalPage } from "../components/sidebar/mainAppLocation";
 import { SidebarInset } from "../components/ui/sidebar";
@@ -28,12 +29,20 @@ function ChatRouteLayout() {
     setBackgroundTarget(threadTarget);
   }
   const shownTarget = modalOpen ? backgroundTarget : threadTarget;
+  // A thread someone shared is not this client's to operate: it gets the guest's pane, which
+  // has none of ChatView's controls, and no link prompt can start a turn in it.
+  const guestThreadRef =
+    shownTarget?.kind === "server" && isGuestEnvironment(shownTarget.threadRef.environmentId)
+      ? shownTarget.threadRef
+      : null;
   return (
     <>
-      {shownTarget?.kind === "server" && !modalOpen ? (
+      {shownTarget?.kind === "server" && !modalOpen && guestThreadRef === null ? (
         <ThreadLinkPrompt threadRef={shownTarget.threadRef} />
       ) : null}
-      {shownTarget ? (
+      {guestThreadRef !== null ? (
+        <GuestThreadRoute threadRef={guestThreadRef} />
+      ) : shownTarget ? (
         <ThreadRouteView target={shownTarget} background={modalOpen} />
       ) : modalOpen ? (
         <SidebarInset className="h-dvh" />
@@ -49,7 +58,8 @@ export const Route = createFileRoute("/_chat")({
   beforeLoad: async ({ context, location }) => {
     if (
       context.authGateState.status !== "authenticated" &&
-      context.authGateState.status !== "hosted-static"
+      context.authGateState.status !== "hosted-static" &&
+      context.authGateState.status !== "guest"
     ) {
       throw redirect({ to: "/pair", replace: true });
     }

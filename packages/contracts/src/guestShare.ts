@@ -308,8 +308,22 @@ export const GuestRedeemRequest = Schema.Struct({
       description: "a single line of text",
     }),
   ),
+  /**
+   * Asks for the session token in the response body. A page on another origin than the owner's
+   * host cannot use the cookie, so it keeps the token and sends it as a bearer.
+   */
+  returnToken: Schema.optional(Schema.Boolean),
 });
 export type GuestRedeemRequest = typeof GuestRedeemRequest.Type;
+
+/** What a redeem that asked for its token gets back. An older server answers 204 with no body. */
+export const GuestRedeemResult = Schema.Struct({
+  token: TrimmedNonEmptyString,
+  shareId: GuestShareId,
+  /** The shared thread, which the guest's stream names too. */
+  threadId: Schema.optional(ThreadId),
+});
+export type GuestRedeemResult = typeof GuestRedeemResult.Type;
 
 /**
  * The fields of a guest message. The page posts them as multipart form data, with each file as a
@@ -442,6 +456,12 @@ export const GUEST_SIGN_IN_COOKIE = "__Host-t3_guest_sign_in";
 export const GUEST_ROUTE_PREFIX = "/api/guest";
 /** Starts a guest's GitHub sign-in (POST) and returns the GitHub address to open: `?share=<id>`. */
 export const GUEST_SIGN_IN_ROUTE = `${GUEST_ROUTE_PREFIX}/sign-in`;
+/**
+ * Starts the sign-in for a guest page on the hosted app (form POST with `token` and `share`). It
+ * is a navigation, not a fetch, so the answer can set the sign-in cookie on this host before it
+ * sends the browser on to GitHub.
+ */
+export const GUEST_SIGN_IN_BEGIN_ROUTE = `${GUEST_ROUTE_PREFIX}/sign-in/begin`;
 /** GitHub sends the guest's browser back here (GET) with `code` and `state`. */
 export const GUEST_SIGN_IN_CALLBACK_ROUTE = `${GUEST_ROUTE_PREFIX}/sign-in/callback`;
 /** Mints a short-lived token the guest's own T3 Code uses to read the export: `?share=<id>`. */
@@ -456,6 +476,8 @@ export const GUEST_ROOM_UPDATES_ROUTE = `${GUEST_ROUTE_PREFIX}/room/updates`;
 export const GUEST_BOARD_ROUTE = `${GUEST_ROUTE_PREFIX}/board`;
 /** The guest page and guest routes name the share they mean with this query parameter. */
 export const GUEST_SHARE_PARAM = "share";
+/** On the hosted app, the guest page names the owner's host with this query parameter. */
+export const GUEST_HOST_PARAM = "host";
 
 /**
  * One session cookie per share, so a guest keeps every link they joined on a host, and a page

@@ -33,6 +33,7 @@ import * as Persistence from "../platform/persistence.ts";
 import { runCachePersistence } from "./cachePersistence.ts";
 import * as ManagedRelay from "../relay/managedRelay.ts";
 import { isAuthorizationFailure, request, subscribeDynamic } from "../rpc/client.ts";
+import { fetchGuestHistoryPage, guestShareEndpoint } from "../rpc/guestSession.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
 import { applyOrchestrationV2ProjectionEvent } from "./orchestrationV2Projection.ts";
 import { THREAD_SNAPSHOT_IDLE_TTL_MS } from "./threadRetention.ts";
@@ -757,18 +758,29 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               ? [undefined]
               : ["conversation" as const, undefined];
         let nextCursor: string | null = null;
-        for (const view of views) {
-          const pageResult = yield* fetchEnvironmentThreadHistoryPage({
-            prepared: preparedOption.value,
-            threadId,
-            cursor: requestCursor,
-            throughEntryId: workAnchorId ?? throughEntryId,
-            view,
-            signer: dpopSigner,
-            remoteAuthorization,
-          }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient.value), Effect.result);
-          if (Result.isFailure(pageResult))
-            return yield* failLoad(formatHistoryError(pageResult.failure));
+        // A shared thread pages through its guest route, which takes only the cursor.
+        const guestEndpoint = guestShareEndpoint(preparedOption.value);
+        for (const view of guestEndpoint === null ? views : views.slice(-1)) {
+          const pageResult =
+            guestEndpoint === null
+              ? yield* fetchEnvironmentThreadHistoryPage({
+                  prepared: preparedOption.value,
+                  threadId,
+                  cursor: requestCursor,
+                  throughEntryId: workAnchorId ?? throughEntryId,
+                  view,
+                  signer: dpopSigner,
+                  remoteAuthorization,
+                }).pipe(
+                  Effect.provideService(HttpClient.HttpClient, httpClient.value),
+                  Effect.mapError(formatHistoryError),
+                  Effect.result,
+                )
+              : yield* fetchGuestHistoryPage(guestEndpoint, requestCursor).pipe(
+                  Effect.mapError(formatHistoryError),
+                  Effect.result,
+                );
+          if (Result.isFailure(pageResult)) return yield* failLoad(pageResult.failure);
           const page = pageResult.success;
           const complete = view !== "conversation";
           const keepPaging =

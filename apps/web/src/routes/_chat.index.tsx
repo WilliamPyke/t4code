@@ -1,14 +1,17 @@
 import { workspaceAreaProps } from "../lib/workspaceFocus";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
-import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import { createFileRoute, useRouter } from "@tanstack/react-router";
+import { useAtomValue } from "@effect/atom-react";
+import { guestEnvironmentId, scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { createFileRoute, Navigate, useRouter } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { isElectron } from "../env";
 import { NoProjectsHero } from "../components/NoProjectsHero";
 import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
 import { Button } from "../components/ui/button";
+import { GuestNotice } from "../components/guest/GuestThreadView";
 import { HostedEmptyState } from "../components/HostedEmptyState";
+import { guestSharesAtom } from "../guest/guestShares";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
 import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
@@ -24,10 +27,34 @@ import { useEnvironments } from "../state/environments";
 function ChatIndexRouteView() {
   const { authGateState } = Route.useRouteContext();
   const { environments, isReady } = useEnvironments();
+  const latestShare = useAtomValue(guestSharesAtom).at(-1);
 
-  if (authGateState.status === "hosted-static") {
+  if (authGateState.status === "hosted-static" || authGateState.status === "guest") {
     if (!isReady) return null;
-    if (environments.length === 0) return <HostedEmptyState />;
+    if (environments.length === 0) {
+      if (latestShare !== undefined) {
+        return (
+          <Navigate
+            to="/$environmentId/$threadId"
+            params={{
+              environmentId: guestEnvironmentId(latestShare.shareId),
+              threadId: latestShare.threadId,
+            }}
+            replace
+          />
+        );
+      }
+      return authGateState.status === "guest" ? (
+        <SidebarInset className="flex h-dvh">
+          <GuestNotice
+            title="The threads shared with you have ended"
+            detail="Ask the owner for a new link."
+          />
+        </SidebarInset>
+      ) : (
+        <HostedEmptyState />
+      );
+    }
   }
 
   return <IndexDraftLanding />;

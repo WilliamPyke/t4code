@@ -31,6 +31,8 @@ export function connectionRouteId(target: ConnectionTarget): string {
       return "primary";
     case "RelayConnectionTarget":
       return RELAY_ROUTE_ID;
+    case "GuestConnectionTarget":
+      return `guest:${target.shareId}`;
     case "BearerConnectionTarget":
     case "SshConnectionTarget":
       return target.connectionId;
@@ -66,7 +68,12 @@ export function routeEntry(
 }
 
 export function routeHttpBaseUrl(route: ConnectionRoute): string | null {
-  if (route.target._tag === "PrimaryConnectionTarget") return route.target.httpBaseUrl;
+  if (
+    route.target._tag === "PrimaryConnectionTarget" ||
+    route.target._tag === "GuestConnectionTarget"
+  ) {
+    return route.target.httpBaseUrl;
+  }
   const profile = Option.getOrNull(route.profile);
   return profile?._tag === "BearerConnectionProfile" ? profile.httpBaseUrl : null;
 }
@@ -87,6 +94,8 @@ export function connectionRouteKind(route: ConnectionRoute): ConnectionRouteKind
       return "relay";
     case "SshConnectionTarget":
       return "ssh";
+    case "GuestConnectionTarget":
+      return "public";
     case "PrimaryConnectionTarget":
     case "BearerConnectionTarget": {
       const hostname = routeHostname(route);

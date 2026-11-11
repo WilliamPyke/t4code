@@ -18,7 +18,9 @@ import * as Redacted from "effect/Redacted";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as AssetSigner from "../assets/AssetSigner.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
+import * as PayloadSigner from "./PayloadSigner.ts";
 
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
@@ -859,6 +861,56 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer))(
         }
       }).pipe(
         Effect.provide(layerEnvironmentAuth({ desktopBootstrapToken: "desktop-bootstrap-token" })),
+      ),
+    );
+
+    it.effect("takes a guest share's session token for nothing but the guest routes", () =>
+      Effect.gen(function* () {
+        const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+        const sessions = yield* SessionStore.SessionStore;
+        // What GuestShareService hands a guest: claims signed under its own key, stored nowhere.
+        const signer = yield* PayloadSigner.make("guest-share-signing-key");
+        const claims = Buffer.from(
+          JSON.stringify({ kind: "session", threadId: "thread-1", shareId: "share-1" }),
+        ).toString("base64url");
+        const token = `${claims}.${yield* signer.sign(claims)}`;
+        const upgrade = (request: object) =>
+          serverAuth.authenticateWebSocketUpgrade(
+            { cookies: {}, headers: { host: "localhost:13773" }, ...request } as never,
+            "rpc",
+          );
+        const refusals = [
+          yield* Effect.flip(serverAuth.authenticateHttpRequest(makeBearerRequest(token))),
+          yield* Effect.flip(
+            serverAuth.authenticateHttpRequest(makeCookieRequest(sessions.cookieName, token)),
+          ),
+          yield* Effect.flip(serverAuth.authenticateMcpClient(makeBearerRequest(token))),
+          yield* Effect.flip(upgrade({ url: `/ws?wsTicket=${token}` })),
+          yield* Effect.flip(
+            upgrade({ url: "/ws", headers: { authorization: `Bearer ${token}` } }),
+          ),
+          yield* Effect.flip(upgrade({ url: "/ws", cookies: { [sessions.cookieName]: token } })),
+        ];
+        for (const error of refusals) {
+          expect(EnvironmentAuth.isServerAuthCredentialError(error)).toBe(true);
+        }
+        // An asset URL's token is checked against the asset key before anything is read.
+        const assets = yield* AssetSigner.AssetSigner;
+        expect(yield* assets.verify(claims, token.slice(claims.length + 1))).toBe(false);
+      }).pipe(
+        Effect.provide(
+          Layer.merge(
+            EnvironmentAuth.layer.pipe(
+              Layer.provide(ManagedPolicy.layerTest()),
+              Layer.provideMerge(SqlitePersistence.layerMemory),
+              Layer.provide(ServerEnvironment.layerIdentity),
+            ),
+            AssetSigner.layer,
+          ).pipe(
+            Layer.provideMerge(ServerSecretStore.layer),
+            Layer.provideMerge(layerServerConfig()),
+          ),
+        ),
       ),
     );
   },

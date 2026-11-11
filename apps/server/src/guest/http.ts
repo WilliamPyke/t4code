@@ -12,6 +12,7 @@ import {
   GUEST_ROOM_UPDATES_ROUTE,
   GUEST_ROUTE_PREFIX,
   GUEST_SHARE_PARAM,
+  GUEST_SIGN_IN_BEGIN_ROUTE,
   GUEST_SIGN_IN_CALLBACK_ROUTE,
   GUEST_SIGN_IN_COOKIE,
   GUEST_SIGN_IN_ROUTE,
@@ -21,6 +22,7 @@ import {
   GUEST_SHARE_TTL_MS,
   GuestHandoff,
   GuestRedeemRequest,
+  GuestRedeemResult,
   GuestStreamEvent,
   GuestSubmitRequest,
   GuestTurnRequest,
@@ -62,6 +64,7 @@ const FILE_HEADERS = {
 };
 
 const decodeRedeem = Schema.decodeUnknownEffect(GuestRedeemRequest);
+const encodeRedeemResult = Schema.encodeSync(GuestRedeemResult);
 const decodeSubmit = Schema.decodeUnknownEffect(GuestSubmitRequest);
 /** Encodes thread data for a guest. It takes only what the service's redactor returned. */
 const encodeForGuest = <S extends Schema.Top>(schema: S) => {
@@ -102,14 +105,29 @@ const badRequest = HttpServerResponse.json(
   { status: 400, headers: NO_STORE },
 );
 
-const sessionFor = (request: HttpServerRequest.HttpServerRequest, shareId: string | null) =>
-  shareId === null ? "" : (request.cookies[guestSessionCookieName(shareId)] ?? "");
+const bearerOf = (request: HttpServerRequest.HttpServerRequest) =>
+  /^Bearer (.+)$/.exec(request.headers["authorization"] ?? "")?.[1] ?? "";
+
+/**
+ * The session for a share: the bearer a page on another origin sends, or this origin's cookie.
+ * A bearer signed for another share is dropped, so `?share=` always names the share acted on.
+ */
+const sessionFor = Effect.fnUntraced(function* (
+  request: HttpServerRequest.HttpServerRequest,
+  shareId: string | null,
+) {
+  if (shareId === null) return "";
+  const bearer = bearerOf(request);
+  if (bearer === "") return request.cookies[guestSessionCookieName(shareId)] ?? "";
+  const guestShares = yield* GuestShareService;
+  return (yield* guestShares.sessionShareId(bearer)) === shareId ? bearer : "";
+});
 
 const requestedShareId = (request: HttpServerRequest.HttpServerRequest) =>
   new URLSearchParams(request.url.split("?", 2)[1] ?? "").get(GUEST_SHARE_PARAM);
 
 /** The session for the share the request names in `?share=`. */
-const sessionToken = Effect.map(HttpServerRequest.HttpServerRequest, (request) =>
+const sessionToken = Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
   sessionFor(request, requestedShareId(request)),
 );
 
@@ -170,8 +188,13 @@ const redeemRoute = HttpRouter.add(
     if (body._tag === "None") return yield* badRequest;
     const guestShares = yield* GuestShareService;
     return yield* guestShares.redeem(body.value).pipe(
-      Effect.flatMap(({ token, shareId }) =>
-        HttpServerResponse.empty({ status: 204, headers: NO_STORE }).pipe(
+      Effect.flatMap(({ token, shareId, threadId }) =>
+        (body.value.returnToken === true
+          ? HttpServerResponse.jsonUnsafe(encodeRedeemResult({ token, shareId, threadId }), {
+              headers: NO_STORE,
+            })
+          : HttpServerResponse.empty({ status: 204, headers: NO_STORE })
+        ).pipe(
           HttpServerResponse.setCookie(guestSessionCookieName(shareId), token, {
             httpOnly: true,
             secure: true,
@@ -241,7 +264,7 @@ const submitRoute = HttpRouter.add(
     // The session is checked before the body is read, so only a guest can make the server parse
     // and store up to 10 MB.
     const shareId = requestedShareId(request);
-    const session = sessionFor(request, shareId);
+    const session = yield* sessionFor(request, shareId);
     yield* guestShares.check(session);
     const submission = yield* readSubmission;
     if (submission === null || submission.fields.shareId !== shareId) return yield* badRequest;
@@ -266,10 +289,7 @@ const streamRoute = HttpRouter.add(
   }),
 );
 
-const bearerToken = Effect.map(
-  HttpServerRequest.HttpServerRequest,
-  (request) => /^Bearer (.+)$/.exec(request.headers["authorization"] ?? "")?.[1] ?? "",
-);
+const bearerToken = Effect.map(HttpServerRequest.HttpServerRequest, bearerOf);
 
 const encodeHandoff = Schema.encodeEffect(Schema.toCodecJson(GuestHandoff));
 const encodeExport = encodeForGuest(Schema.toCodecJson(SharedThreadExport));
@@ -387,19 +407,55 @@ const signInRoute = HttpRouter.add(
     const guestShares = yield* GuestShareService;
     return yield* guestShares.signIn(yield* sessionToken).pipe(
       Effect.flatMap(({ url, cookie }) =>
-        HttpServerResponse.jsonUnsafe({ url }, { headers: NO_STORE }).pipe(
-          // Lax, unlike the session: it has to come back on the navigation from GitHub.
-          HttpServerResponse.setCookie(GUEST_SIGN_IN_COOKIE, cookie, {
-            httpOnly: true,
-            secure: true,
-            sameSite: "lax",
-            path: "/",
-            maxAge: Duration.millis(GUEST_SIGN_IN_TTL_MS),
-          }),
-        ),
+        HttpServerResponse.jsonUnsafe({ url }, { headers: NO_STORE }).pipe(signInCookie(cookie)),
       ),
       Effect.catchTags({ GuestShareAccessError: errorResponse }),
     );
+  }),
+);
+
+const signInCookie = (cookie: string) =>
+  // Lax, unlike the session: it has to come back on the navigation from GitHub.
+  HttpServerResponse.setCookie(GUEST_SIGN_IN_COOKIE, cookie, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: Duration.millis(GUEST_SIGN_IN_TTL_MS),
+  });
+
+// The hosted app's guest page posts a form here: a fetch from another origin could not store the
+// sign-in cookie, and the callback needs it. The service refuses every origin but that app's.
+const signInBeginRoute = HttpRouter.add(
+  "POST",
+  GUEST_SIGN_IN_BEGIN_ROUTE,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    if (Number(request.headers["content-length"] ?? "0") > JSON_MAX_BODY_BYTES) {
+      return yield* badRequest;
+    }
+    const form = yield* request.text.pipe(
+      Effect.provideService(HttpIncomingMessage.MaxBodySize, ByteSize.bytes(JSON_MAX_BODY_BYTES)),
+      Effect.map((text) => new URLSearchParams(text)),
+      Effect.option,
+    );
+    if (form._tag === "None") return yield* badRequest;
+    const session = form.value.get("token") ?? "";
+    const guestShares = yield* GuestShareService;
+    if ((yield* guestShares.sessionShareId(session)) !== form.value.get(GUEST_SHARE_PARAM)) {
+      return yield* badRequest;
+    }
+    return yield* guestShares
+      .signInFromHostedApp({ session, origin: request.headers["origin"] ?? null })
+      .pipe(
+        Effect.flatMap(({ url, cookie }) =>
+          HttpServerResponse.redirect(url, {
+            status: 303,
+            headers: { ...NO_STORE, "referrer-policy": "no-referrer" },
+          }).pipe(signInCookie(cookie)),
+        ),
+        Effect.catchTags({ GuestShareAccessError: errorResponse }),
+      );
   }),
 );
 
@@ -574,6 +630,7 @@ export const layer = Layer.mergeAll(
   roomUpdatesRoute,
   boardRoute,
   signInRoute,
+  signInBeginRoute,
   signInCallbackRoute,
   renderRoute,
   itemRoute,

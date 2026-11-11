@@ -50,6 +50,8 @@ import {
   type PrimaryEnvironmentTarget,
 } from "../environments/primary/target";
 import { clearComposerDraftsEnvironment } from "../composerDraftStore";
+import { guestShareRegistrations, layerGuestShareAccess } from "../guest/guestShares";
+import { isGuestOnlySession } from "../guestPage";
 import { isHostedStaticApp } from "../hostedPairing";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
 import { randomUUID } from "../lib/utils";
@@ -626,15 +628,25 @@ export function secondaryRegistrationsToRetainAfterTopologyRead(
 const layerPlatformConnectionSource = Layer.effect(
   PlatformConnectionSource.PlatformConnectionSource,
   Effect.gen(function* () {
+    // Threads shared with this browser are listed beside whatever the platform itself runs.
+    const withGuestShares = (
+      registrations: Stream.Stream<ReadonlyArray<PlatformConnectionRegistration>>,
+    ) =>
+      Stream.zipLatestWith(registrations, guestShareRegistrations, (platform, guests) => [
+        ...platform,
+        ...guests,
+      ]);
     if (isHostedStaticApp() || isLocalEnvironmentDisabled()) {
       return PlatformConnectionSource.PlatformConnectionSource.of({
-        registrations: Stream.empty,
+        registrations: withGuestShares(Stream.concat(Stream.succeed([]), Stream.never)),
       });
     }
     const cacheRef = yield* Ref.make(new Map<string, CachedPlatformRegistration>());
     const rejectedRef = yield* Ref.make(new Map<string, RejectedSecondaryBootstrap>());
 
     const buildPlatformRegistrations = Effect.gen(function* () {
+      // A guest has no session on this page's host; see isGuestOnlySession.
+      if (isGuestOnlySession()) return [] as ReadonlyArray<PlatformConnectionRegistration>;
       const previous = yield* Ref.get(cacheRef);
       const nowEpochMs = yield* Clock.currentTimeMillis;
       const next = new Map<string, CachedPlatformRegistration>();
@@ -783,8 +795,10 @@ const layerPlatformConnectionSource = Layer.effect(
     }).pipe(Effect.provide(FetchHttpClient.layer));
 
     return PlatformConnectionSource.PlatformConnectionSource.of({
-      registrations: Stream.tick(PLATFORM_POLL_INTERVAL).pipe(
-        Stream.mapEffect(() => buildPlatformRegistrations),
+      registrations: withGuestShares(
+        Stream.tick(PLATFORM_POLL_INTERVAL).pipe(
+          Stream.mapEffect(() => buildPlatformRegistrations),
+        ),
       ),
     });
   }),
@@ -825,7 +839,8 @@ type ConnectionPlatformLayerSource =
   | typeof layerCapabilities
   | typeof layerPlatformConnectionSource
   | typeof layerEnvironmentOwnedDataCleanup
-  | typeof layerRpcRequestObserver;
+  | typeof layerRpcRequestObserver
+  | typeof layerGuestShareAccess;
 
 export const layer: Layer.Layer<
   Layer.Success<ConnectionPlatformLayerSource>,
@@ -839,4 +854,5 @@ export const layer: Layer.Layer<
   layerPlatformConnectionSource,
   layerEnvironmentOwnedDataCleanup,
   layerRpcRequestObserver,
+  layerGuestShareAccess,
 );
