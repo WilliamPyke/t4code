@@ -30,7 +30,6 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -96,18 +95,19 @@ const layerConnect = Layer.mock(CloudManagedEndpointRuntime)({
   })),
 });
 // The providers the fake registry reports. Tests set how the thread's provider is signed in.
-// The GitHub account the next finished sign-in proves. Null means the guest has not finished.
+// The GitHub account the next finished sign-in proves. Null means GitHub refuses the code.
 const githubAccount = Ref.makeUnsafe<GuestAccount | null>(null);
+// The fake state is the session it was started for, so finishing needs no table.
 const layerSignIn = Layer.mock(GuestSignIn.GuestSignIn)({
   enabled: true,
-  start: () =>
-    Effect.succeed({
-      userCode: "ABCD-1234",
-      verificationUri: "https://github.com/login/device",
-      expiresAt: 0,
-      interval: 5,
-    }),
-  poll: () => Effect.map(Ref.get(githubAccount), Option.fromNullishOr),
+  start: ({ session, redirectUri }) =>
+    Effect.succeed({ state: Buffer.from(session).toString("base64url"), url: redirectUri }),
+  finish: ({ state }) =>
+    Effect.flatMap(Ref.get(githubAccount), (account) =>
+      account === null
+        ? Effect.fail(new GuestSignIn.GuestSignInError({ reason: "failed" }))
+        : Effect.succeed({ session: Buffer.from(state, "base64url").toString(), account }),
+    ),
 });
 const providers = Ref.makeUnsafe<ReadonlyArray<ServerProvider>>([]);
 const layerProviders = Layer.mock(ProviderRegistry.ProviderRegistry)({
@@ -388,16 +388,47 @@ it.effect("trusts a guest who signs in as a saved contributor, and no one else",
       .getThreadRecords(threadId, [])
       .pipe(Effect.map(({ thread }) => thread.guestShare!.guests!));
 
-    yield* Ref.set(githubAccount, null);
-    yield* guestShares.signIn(sam.token);
-    assert.deepEqual(yield* guestShares.signInPoll(sam.token), { status: "pending" });
-    assert.isUndefined((yield* guests)[0]?.account);
+    /** The guest starts, and GitHub sends the browser that holds `cookie` back. */
+    const signIn = Effect.fn(function* (token: string, cookieOf = (cookie: string) => cookie) {
+      const started = yield* guestShares.signIn(token);
+      const cookie = cookieOf(started.cookie);
+      const state = started.cookie.split(".")[1]!;
+      return {
+        ...started,
+        location: yield* guestShares.signInFinish({ state, code: "code", cookie }),
+      };
+    });
+    const page = `/guest?share=${sam.shareId}`;
 
+    // GitHub refusing the code records no one.
+    yield* Ref.set(githubAccount, null);
+    const refused = yield* signIn(sam.token);
+    // GitHub sends the guest back to the host the link is served from.
+    assert.equal(refused.url, "https://env.t3.test/api/guest/sign-in/callback");
+    assert.equal(refused.location, `${page}&sign_in=failed`);
+
+    // Nor does a callback from a browser that did not start the sign-in: Eve cannot have
+    // someone else approve on GitHub and be recorded as them.
     yield* Ref.set(githubAccount, { login: "sam-dev", id: 7 });
-    assert.deepEqual(yield* guestShares.signInPoll(sam.token), { status: "signed_in" });
+    const eveStarted = yield* guestShares.signIn(eve.token);
+    assert.equal(
+      (yield* signIn(sam.token, () => eveStarted.cookie)).location,
+      `${page}&sign_in=failed`,
+    );
+    assert.equal((yield* signIn(sam.token, () => "")).location, "/guest?sign_in=failed");
+    assert.equal(
+      yield* guestShares.signInFinish({ state: null, code: "code", cookie: eveStarted.cookie }),
+      `${page}&sign_in=failed`,
+    );
+    assert.deepEqual(
+      (yield* guests).map(({ account }) => account),
+      [undefined, undefined],
+    );
+
+    assert.equal((yield* signIn(sam.token)).location, page);
     // Someone else's account is recorded, but their messages still wait for the owner.
     yield* Ref.set(githubAccount, { login: "eve", id: 8 });
-    yield* guestShares.signInPoll(eve.token);
+    yield* signIn(eve.token);
     assert.deepEqual(
       (yield* guests).map(({ account, trusted }) => ({ account, trusted })),
       [
@@ -411,7 +442,7 @@ it.effect("trusts a guest who signs in as a saved contributor, and no one else",
     ]);
     const mallory = yield* guestShares.redeem({ credential, name: "Mallory" });
     yield* Ref.set(githubAccount, { login: "sam-dev", id: 99 });
-    yield* guestShares.signInPoll(mallory.token);
+    yield* signIn(mallory.token);
     assert.isUndefined((yield* guests)[2]?.trusted);
   }).pipe(Effect.provide(layerTest)),
 );

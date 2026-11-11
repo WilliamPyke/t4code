@@ -82,8 +82,14 @@ security: a plan sign-in covers only the account holder's own prompts. Add a
 driver to it only after reading that provider's terms.
 
 A guest's typed name is not an identity. A guest can prove a GitHub account with
-the device flow ([GuestSignIn](../../apps/server/src/guest/GuestSignIn.ts)): the
-server reads the login and id, then drops the token. The owner's saved
+the web redirect flow ([GuestSignIn](../../apps/server/src/guest/GuestSignIn.ts)):
+the server reads the login and id, then drops the token. It is not the device
+flow, because GitHub's device page shows the approver the IP and location of the
+machine that asked for the code, which is the owner's. The callback arrives
+without the guest session (that cookie is `SameSite=Strict`), so a one-time
+`state` held in memory names the session, and a separate `SameSite=Lax` cookie
+must match it: otherwise a guest could pass their GitHub link to someone else and
+be recorded as that person. The owner's saved
 contributors are matched by login the first time and by id after that, because a
 login can be renamed away and taken by someone else.
 

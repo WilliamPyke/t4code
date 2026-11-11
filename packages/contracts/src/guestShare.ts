@@ -349,27 +349,27 @@ export type RoomUpdates = typeof RoomUpdates.Type;
 export const GuestHandoff = Schema.Struct({ token: TrimmedNonEmptyString });
 export type GuestHandoff = typeof GuestHandoff.Type;
 
-/** What a guest does to sign in: open the address and type the code. */
-export const GuestSignInPrompt = Schema.Struct({
-  userCode: TrimmedNonEmptyString,
-  verificationUri: TrimmedNonEmptyString,
-  /** Epoch milliseconds. */
-  expiresAt: Schema.Number,
-  /** Seconds the page waits between asking whether the guest finished. */
-  interval: Schema.Number,
-});
-export type GuestSignInPrompt = typeof GuestSignInPrompt.Type;
+/** Where the guest's browser goes on GitHub to sign in. */
+export const GuestSignInStart = Schema.Struct({ url: TrimmedNonEmptyString });
+export type GuestSignInStart = typeof GuestSignInStart.Type;
 
-export const GuestSignInStatus = Schema.Struct({
-  status: Schema.Literals(["pending", "signed_in", "expired", "denied", "failed"]),
-});
-export type GuestSignInStatus = typeof GuestSignInStatus.Type;
+/** How long a guest has to finish on GitHub once they start. */
+export const GUEST_SIGN_IN_TTL_MS = 10 * 60 * 1000;
+/** Why a sign-in did not finish, as the guest page's address carries it back from GitHub. */
+export const GuestSignInFailure = Schema.Literals(["expired", "denied", "failed"]);
+export type GuestSignInFailure = typeof GuestSignInFailure.Type;
+export const GUEST_SIGN_IN_PARAM = "sign_in";
+/**
+ * Ties a started sign-in to the browser that started it, so a guest cannot have someone else
+ * finish theirs. `__Host-` stops another host on the same domain from setting it.
+ */
+export const GUEST_SIGN_IN_COOKIE = "__Host-t3_guest_sign_in";
 
 export const GUEST_ROUTE_PREFIX = "/api/guest";
-/** Starts a guest's GitHub sign-in (POST) and returns the code to type: `?share=<id>`. */
+/** Starts a guest's GitHub sign-in (POST) and returns the GitHub address to open: `?share=<id>`. */
 export const GUEST_SIGN_IN_ROUTE = `${GUEST_ROUTE_PREFIX}/sign-in`;
-/** Asks whether the guest finished signing in (POST): `?share=<id>`. */
-export const GUEST_SIGN_IN_POLL_ROUTE = `${GUEST_ROUTE_PREFIX}/sign-in/poll`;
+/** GitHub sends the guest's browser back here (GET) with `code` and `state`. */
+export const GUEST_SIGN_IN_CALLBACK_ROUTE = `${GUEST_ROUTE_PREFIX}/sign-in/callback`;
 /** Mints a short-lived token the guest's own T3 Code uses to read the export: `?share=<id>`. */
 export const GUEST_HANDOFF_ROUTE = `${GUEST_ROUTE_PREFIX}/handoff`;
 /** The thread's export, for a bearer handoff token. Called by another T3 Code server. */
