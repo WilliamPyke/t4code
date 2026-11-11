@@ -51,7 +51,7 @@ import { useUiStateStore } from "../uiStateStore";
 import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
 import { hasGuestShares } from "../guest/guestShares";
-import { GUEST_PAGE_PATH, setGuestOnlySession } from "../guestPage";
+import { isGuestEntryPath, setGuestOnlySession } from "../guestPage";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
 import { useHostedPromptLinkLanding } from "../components/promptLinks/HostedPromptLinkLanding";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
@@ -65,7 +65,7 @@ import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
     // A guest link asks for a name before anything connects, and must not trigger pairing.
-    if (location.pathname === GUEST_PAGE_PATH) {
+    if (isGuestEntryPath(location.pathname)) {
       return {
         authGateState: {
           status: "guest",
@@ -166,7 +166,7 @@ function RootRouteBranch() {
     authGateState.status === "hosted-static",
   );
 
-  if (pathname === GUEST_PAGE_PATH) return <Outlet />;
+  if (isGuestEntryPath(pathname)) return <Outlet />;
 
   if (pathname === "/pair" || pathname === "/connect" || pathname === "/connect-agent") {
     return <Outlet />;

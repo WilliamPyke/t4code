@@ -58,6 +58,7 @@ import * as RelayHttpApi from "./Api.ts";
 import * as RelayConfiguration from "../Config.ts";
 import * as RelayDb from "../db.ts";
 import * as EnvironmentCredentials from "../environments/EnvironmentCredentials.ts";
+import * as GuestLinks from "../guestLinks/GuestLinks.ts";
 import * as HeldHooks from "../hooks/HeldHooks.ts";
 import * as HookInbox from "../hooks/HookInbox.ts";
 import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
@@ -1421,7 +1422,12 @@ describe("relay routing fallback", () => {
                 Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
               ),
             ),
-            Layer.provide([layerPublisher, layerSignatures, Layer.mock(HeldHooks.HeldHooks, {})]),
+            Layer.provide([
+              layerPublisher,
+              layerSignatures,
+              Layer.mock(HeldHooks.HeldHooks, {}),
+              Layer.mock(GuestLinks.GuestLinks, {}),
+            ]),
           ),
         ),
         Layer.provide(layerAuth),

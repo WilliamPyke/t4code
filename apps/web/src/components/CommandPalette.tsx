@@ -129,6 +129,7 @@ import { reportProjectFailure, useProjectPin } from "../hooks/useProjectGroupUpd
 import {
   useEnvironmentProviders,
   useEnvironments,
+  useGuestOnly,
   usePrimaryEnvironmentId,
 } from "../state/environments";
 import {
@@ -464,6 +465,7 @@ function OpenCommandPaletteDialog(props: {
     reportFailure: false,
   });
   const { environments } = useEnvironments();
+  const guestOnly = useGuestOnly();
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
@@ -1554,7 +1556,7 @@ function OpenCommandPaletteDialog(props: {
       openAddProjectFlow();
     },
   };
-  actionItems.push(addProjectAction);
+  if (!guestOnly) actionItems.push(addProjectAction);
 
   if (wslAddProjectEnvironmentOption) {
     actionItems.push({

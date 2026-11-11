@@ -9,6 +9,7 @@ import {
   GuestShareCreateError,
   type GuestShareCreateInput,
   type GuestShareCreateResult,
+  type ThreadGuestShare,
   type GuestAccount,
   GuestId,
   guestContributorFor,
@@ -44,7 +45,7 @@ import {
   TurnItemId,
 } from "@t3tools/contracts";
 import { chatMarkdownImageSources } from "@t3tools/shared/markdownPipeline";
-import { buildGuestLink } from "@t3tools/shared/guestLinks";
+import { buildGuestLink, buildShortGuestLink } from "@t3tools/shared/guestLinks";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
 import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 import * as NodeOS from "node:os";
@@ -91,6 +92,7 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import { type GuestRedactor, type GuestSafe, makeGuestRedactor } from "./guestRedaction.ts";
+import * as GuestLinkNames from "./GuestLinkNames.ts";
 import * as GuestSignIn from "./GuestSignIn.ts";
 import { guestShareView, guestThreadModel } from "./guestView.ts";
 import { roomUpdatesOf } from "./roomUpdates.ts";
@@ -207,6 +209,8 @@ export class GuestShareService extends Context.Service<
     readonly create: (
       input: GuestShareCreateInput,
     ) => Effect.Effect<GuestShareCreateResult, GuestShareCreateError>;
+    /** Succeeds while the invite still leads to a share. Joins no one. */
+    readonly checkInvite: (credential: string) => Effect.Effect<void, GuestShareAccessError>;
     /** Joins the invite's share as a new guest and returns the session token for their cookie. */
     readonly redeem: (
       request: GuestRedeemRequest,
@@ -352,6 +356,7 @@ const make = Effect.gen(function* () {
   const git = yield* GitWorkflow.GitWorkflowService;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const guestSignIn = yield* GuestSignIn.GuestSignIn;
+  const linkNames = yield* GuestLinkNames.GuestLinkNames;
   const managedEndpoint = yield* CloudManagedEndpointRuntime;
   const { attachmentsDir } = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -496,6 +501,20 @@ const make = Effect.gen(function* () {
     };
   });
 
+  // The readable name only resolves through the hosted app, so a server without one has none.
+  const linkFor = Effect.fn("GuestShareService.linkFor")(function* (
+    host: string,
+    share: ThreadGuestShare,
+  ) {
+    const credential = yield* signInvite(share.id);
+    const url = buildGuestLink({ host, credential, hostedAppUrl });
+    if (hostedAppUrl === null) return { url, share };
+    const name = yield* linkNames.register({ host, credential, expiresAt: share.expiresAt });
+    return name === null
+      ? { url, share }
+      : { url, shortUrl: buildShortGuestLink({ name, hostedAppUrl }), share };
+  });
+
   const create = Effect.fn("GuestShareService.create")(function* (input: GuestShareCreateInput) {
     if (!(yield* sharingEnabled)) {
       return yield* new GuestShareCreateError({ reason: "disabled" });
@@ -504,8 +523,22 @@ const make = Effect.gen(function* () {
     if (host === null) {
       return yield* new GuestShareCreateError({ reason: "connect_unavailable" });
     }
-    const shareId = GuestShareId.make(base64UrlEncode(yield* random.randomBytes(SHARE_ID_BYTES)));
     const now = yield* DateTime.now;
+    if (input.replace !== true) {
+      const current = yield* orchestrator.getThreadRecords(input.threadId, []).pipe(
+        Effect.map(({ thread }) => thread.guestShare),
+        Effect.orElseSucceed(() => null),
+      );
+      if (
+        current &&
+        current.host === host &&
+        current.joinsClosed !== true &&
+        DateTime.toEpochMillis(now) < Date.parse(current.expiresAt)
+      ) {
+        return yield* linkFor(host, current);
+      }
+    }
+    const shareId = GuestShareId.make(base64UrlEncode(yield* random.randomBytes(SHARE_ID_BYTES)));
     const expiresAt = DateTime.formatIso(DateTime.add(now, { milliseconds: GUEST_SHARE_TTL_MS }));
     yield* orchestrator
       .dispatch({
@@ -523,8 +556,11 @@ const make = Effect.gen(function* () {
     if (!thread.guestShare || thread.guestShare.id !== shareId) {
       return yield* new GuestShareCreateError({ reason: "changed" });
     }
-    const credential = yield* signInvite(shareId);
-    return { url: buildGuestLink({ host, credential, hostedAppUrl }), share: thread.guestShare };
+    return yield* linkFor(host, thread.guestShare);
+  });
+
+  const checkInvite = Effect.fn("GuestShareService.checkInvite")(function* (credential: string) {
+    yield* authorize(credential, "invite");
   });
 
   const redeem = Effect.fn("GuestShareService.redeem")(function* (request: GuestRedeemRequest) {
@@ -876,8 +912,12 @@ const make = Effect.gen(function* () {
     ) {
       return yield* inactive;
     }
-    // Read once; a provider configured mid-share shows after the guest reconnects.
+    // Read once; a provider or owner name set mid-share shows after the guest reconnects.
     const providers = yield* providerRegistry.getProviders;
+    const ownerName = yield* serverSettings.getSettings.pipe(
+      Effect.map((settings) => settings.guestOwnerName),
+      Effect.orElseSucceed(() => ""),
+    );
     const viewOf = (current: OrchestrationV2AppThread) =>
       guestShareView(
         current,
@@ -885,6 +925,7 @@ const make = Effect.gen(function* () {
         guestId,
         providerAllowsDirect(current, providers),
         guestSignIn.enabled,
+        ownerName,
       );
     const initialView = viewOf(snapshot.projection.thread);
     if (initialView === null) return yield* inactive;
@@ -1352,6 +1393,7 @@ const make = Effect.gen(function* () {
 
   return GuestShareService.of({
     create,
+    checkInvite,
     redeem,
     check,
     sessionShareId,

@@ -28,8 +28,10 @@ expired work again when you turn it back on.
 The thread header names who has joined. On web, click the names to see who has the thread open
 right now.
 
-Choose **Stop sharing** to end the link for everyone at once. Archiving the thread, creating a new
-link, or unlinking the machine from T3 Connect also ends it. You can send or dismiss guest messages
+To invite someone later, choose **Share with guests** again and **Show link**: it is the same link.
+
+Choose **Stop sharing** to end the link for everyone at once. Archiving the thread, choosing
+**Replace link**, or unlinking the machine from T3 Connect also ends it. You can send or dismiss guest messages
 from the mobile app.
 
 ## See the room as a board
@@ -151,8 +153,9 @@ mobile app does not show guests' own turns.
 
 ## What a guest sees
 
-A guest gets T3 Code in their browser with the thread in the sidebar, under **Shared with me** and
-the address of the machine that shared it. Threads from other links they joined in that browser
+A guest gets T3 Code in their browser with the thread in the sidebar, under **Shared with me**. To
+put your name over your threads there, set **Settings → Labs → Guest links → Name shown to
+guests**; a guest sees a new name the next time they open the thread. Threads from other links they joined in that browser
 are listed there too, and someone who uses T3 Code with their own machines sees shared threads
 beside their own. A shared thread is listed for as long as its link lasts.
 
@@ -177,6 +180,11 @@ A guest link normally opens on your machine's T3 Connect address. If you run a h
 T3 Code web app, start the server with its address in `T3CODE_HOSTED_APP_URL` (for example
 `https://app.example.org`) and new links open there instead, naming your machine:
 `https://app.example.org/guest?host=<your T3 Connect host>#<invite>`.
+
+With a hosted app, the link you copy is a short readable one, such as
+`https://app.example.org/r/tulip-otter-harbor`. T3 Connect keeps what the name stands for until the
+link expires, and the hosted app looks it up. The name is the key to the thread, so treat it like
+the full link.
 
 The hosted app follows a link only to a machine in its own T3 Connect domain: with the app at
 `app.example.org`, that is `<name>.example.org`. Build the hosted app with `VITE_GUEST_HOST_ZONE`

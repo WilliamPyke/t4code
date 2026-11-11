@@ -1443,6 +1443,8 @@ export const ServerSettings = Schema.Struct({
   guestContributors: Schema.Array(GuestContributor).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  /** Who guests are told shared a thread from this machine. Empty tells them nothing. */
+  guestOwnerName: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   /**
    * Beta: links to the user's other machines, both ways. Off refuses new links, calls over links
    * and tasks on another machine; tasks already running there finish.
@@ -1867,6 +1869,7 @@ export const ServerSettingsPatch = Schema.Struct({
   hideTaggedThreads: Schema.optionalKey(Schema.Boolean),
   guestSharingEnabled: Schema.optionalKey(Schema.Boolean),
   guestContributors: Schema.optionalKey(Schema.Array(GuestContributor)),
+  guestOwnerName: Schema.optionalKey(Schema.String),
   linkedEnvironmentsEnabled: Schema.optionalKey(Schema.Boolean),
   promptSuggestionsEnabled: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(

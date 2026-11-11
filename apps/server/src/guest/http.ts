@@ -209,6 +209,25 @@ const redeemRoute = HttpRouter.add(
   }),
 );
 
+const decodeInvite = Schema.decodeUnknownEffect(Schema.Struct({ credential: Schema.String }));
+
+/** Lets a link's landing page say it has ended before asking for a name. */
+const inviteRoute = HttpRouter.add(
+  "POST",
+  `${GUEST_ROUTE_PREFIX}/invite`,
+  Effect.gen(function* () {
+    const body = yield* readJson.pipe(Effect.flatMap(decodeInvite), Effect.option);
+    if (body._tag === "None") return yield* badRequest;
+    const guestShares = yield* GuestShareService;
+    return yield* guestShares
+      .checkInvite(body.value.credential)
+      .pipe(
+        Effect.as(HttpServerResponse.empty({ status: 204, headers: NO_STORE })),
+        Effect.catchTags({ GuestShareAccessError: errorResponse }),
+      );
+  }),
+);
+
 // The parser stops a request with too many parts or bytes before it reaches the disk; the
 // service checks the exact limits and types.
 const UPLOAD_LIMITS = Multipart.limitsServices({
@@ -621,6 +640,7 @@ const mediaRoute = HttpRouter.add(
 
 export const layer = Layer.mergeAll(
   redeemRoute,
+  inviteRoute,
   sessionRoute,
   submitRoute,
   streamRoute,

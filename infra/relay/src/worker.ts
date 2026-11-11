@@ -71,6 +71,7 @@ import * as ManagedTunnelLimits from "./environments/ManagedTunnelLimits.ts";
 import * as T3ChatAccounts from "./t3chat/T3ChatAccounts.ts";
 import * as MobileRegistrations from "./agentActivity/MobileRegistrations.ts";
 import * as HookForwarder from "./hooks/HookForwarder.ts";
+import * as GuestLinks from "./guestLinks/GuestLinks.ts";
 import * as HeldHooks from "./hooks/HeldHooks.ts";
 import * as HookInbox from "./hooks/HookInbox.ts";
 import * as HookInboxObject from "./hooks/HookInboxObject.ts";
@@ -104,6 +105,7 @@ const layerRelayApi = Layer.mergeAll(
   RelayHttpApi.layerTokenApi,
   RelayHttpApi.layerDpopClientApi,
   RelayHttpApi.layerServerApi,
+  RelayHttpApi.layerGuestLinksApi,
 );
 
 const CloudMintKeyPair = Alchemy.KeyPair("CloudMintKeyPair");
@@ -216,6 +218,13 @@ export const layer = Api.make(
         period: MobileTelemetry.MOBILE_TELEMETRY_RATE_LIMIT.periodSeconds,
       },
     });
+    const guestLinkRateLimit = yield* Cloudflare.RateLimit("GUEST_LINK_RATE_LIMIT", {
+      namespaceId: 1004,
+      simple: {
+        limit: GuestLinks.GUEST_LINK_RESOLVE_RATE_LIMIT.limit,
+        period: GuestLinks.GUEST_LINK_RESOLVE_RATE_LIMIT.periodSeconds,
+      },
+    });
     const mobileSourceMaps = yield* Cloudflare.R2.ReadBucket(observability.mobileSourceMaps);
     const mobileTelemetryToken = yield* observability.mobileTelemetryIngestToken.token;
     const mobileTracesUrl = yield* observability.traces.otelTracesEndpoint;
@@ -292,6 +301,7 @@ export const layer = Api.make(
           EnvironmentPublishSignatures.layer,
           ManagedEndpointReaper.layer,
           HeldHooks.layer,
+          GuestLinks.layer,
         ),
       ),
       Layer.provideMerge(
@@ -425,7 +435,13 @@ export const layer = Api.make(
     );
 
     const layerApp = Layer.mergeAll(
-      layerRelayApi,
+      layerRelayApi.pipe(
+        Layer.provide(
+          Layer.succeed(GuestLinks.GuestLinkRateLimiter, {
+            allow: allowWith(guestLinkRateLimit, "relay.guest_links.rate_limiter_failed_open"),
+          }),
+        ),
+      ),
       HookForwarder.layerApi.pipe(
         Layer.provide(HookForwarder.layer),
         Layer.provide(layerHookRateLimiter),

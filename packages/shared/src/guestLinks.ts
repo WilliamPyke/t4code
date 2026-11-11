@@ -19,6 +19,16 @@ export function buildGuestLink(input: {
   return url.toString();
 }
 
+const SHORT_GUEST_LINK_PATH = "/r";
+
+/** The readable form of a guest link: the hosted app asks the relay what the name stands for. */
+export function buildShortGuestLink(input: {
+  readonly name: string;
+  readonly hostedAppUrl: string;
+}): string {
+  return new URL(`${SHORT_GUEST_LINK_PATH}/${input.name}`, input.hostedAppUrl).toString();
+}
+
 const HOST_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
 /**

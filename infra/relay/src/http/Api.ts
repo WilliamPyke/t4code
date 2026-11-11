@@ -47,6 +47,7 @@ import {
   RelayEnvironmentLinkUnavailableError,
   RelayEnvironmentLinkLimitExceededError,
   RelayEnvironmentPrincipal,
+  RelayRateLimitedError,
   type RelayEnvironmentConnectRequest,
   type RelayManagedEndpointOrigin,
   RelayManagedEndpointRecoveryProofPayload,
@@ -66,6 +67,7 @@ import * as DpopProofs from "../auth/DpopProofs.ts";
 import * as RelayTokens from "../auth/RelayTokens.ts";
 import * as EnvironmentCredentials from "../environments/EnvironmentCredentials.ts";
 import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
+import * as GuestLinks from "../guestLinks/GuestLinks.ts";
 import * as HeldHooks from "../hooks/HeldHooks.ts";
 import * as HookInbox from "../hooks/HookInbox.ts";
 import * as LiveActivities from "../agentActivity/LiveActivities.ts";
@@ -471,6 +473,29 @@ export const layerHealthApi = HttpApiBuilder.group(
           return { ok: true, service: "relay" as const };
         },
         Effect.catch(() => relayInternalErrorResponse("database_unavailable")),
+      ),
+    );
+  }),
+);
+
+export const layerGuestLinksApi = HttpApiBuilder.group(
+  RelayApi,
+  "guestLinks",
+  Effect.fnUntraced(function* (handlers) {
+    const guestLinks = yield* GuestLinks.GuestLinks;
+    const rateLimiter = yield* GuestLinks.GuestLinkRateLimiter;
+    return handlers.handle(
+      "resolve",
+      Effect.fn("relay.api.guestLinks.resolve")(
+        function* ({ params, request }) {
+          if (!(yield* rateLimiter.allow(request.headers["cf-connecting-ip"] ?? "unknown"))) {
+            return yield* new RelayRateLimitedError({ code: "rate_limited" });
+          }
+          return { link: yield* guestLinks.resolve(params.name) };
+        },
+        Effect.catchTags({
+          GuestLinkPersistenceError: () => relayInternalErrorResponse("persistence_failed"),
+        }),
       ),
     );
   }),
@@ -1199,6 +1224,7 @@ export const layerServerApi = HttpApiBuilder.group(
     const publisher = yield* AgentActivityPublisher.AgentActivityPublisher;
     const publishSignatures = yield* EnvironmentPublishSignatures.EnvironmentPublishSignatures;
     const heldHooks = yield* HeldHooks.HeldHooks;
+    const guestLinks = yield* GuestLinks.GuestLinks;
     const requireOwnEnvironment =
       /* Request instrumentation already owns the span; keep this helper in that context. */
       Effect.fnUntraced(function* (environmentId: string) {
@@ -1425,6 +1451,23 @@ export const layerServerApi = HttpApiBuilder.group(
           });
           return payload;
         }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
+        "registerGuestLink",
+        Effect.fn("relay.api.server.registerGuestLink")(
+          function* ({ params, payload }) {
+            yield* requireOwnEnvironment(params.environmentId);
+            const name = yield* guestLinks.register({
+              environmentId: params.environmentId,
+              ...payload,
+            });
+            return { name };
+          },
+          Effect.catchTags({
+            GuestLinkPersistenceError: () => relayInternalErrorResponse("persistence_failed"),
+          }),
+          mapRelayCommonApiErrors("not_authorized"),
+        ),
       )
       .handle(
         "wakeHeldHooks",

@@ -89,6 +89,41 @@ export function placeBoardCards(
   return placed;
 }
 
+const NOTE_WIDTH = 192;
+const NOTE_HEIGHT = 128;
+const NOTE_GAP = 16;
+const NOTE_COLUMNS = 3;
+const NOTE_ROWS = 24;
+
+/**
+ * Where a new note goes: `wanted`, or the nearest spot right of or below it that covers no note
+ * and no card. A card is taken to be as tall as a grid row, since its height is the browser's.
+ */
+export function placeBoardNote(
+  wanted: BoardPoint,
+  notes: ReadonlyArray<BoardPoint>,
+  cards: ReadonlyArray<BoardPoint>,
+): BoardPoint {
+  const covers = (at: BoardPoint, other: BoardPoint, width: number, height: number) =>
+    at.x < other.x + width &&
+    other.x < at.x + NOTE_WIDTH &&
+    at.y < other.y + height &&
+    other.y < at.y + NOTE_HEIGHT;
+  for (let slot = 0; slot < NOTE_COLUMNS * NOTE_ROWS; slot += 1) {
+    const at = {
+      x: wanted.x + (slot % NOTE_COLUMNS) * (NOTE_WIDTH + NOTE_GAP),
+      y: wanted.y + Math.floor(slot / NOTE_COLUMNS) * (NOTE_HEIGHT + NOTE_GAP),
+    };
+    if (
+      !notes.some((note) => covers(at, note, NOTE_WIDTH, NOTE_HEIGHT)) &&
+      !cards.some((card) => covers(at, card, BOARD_CARD_WIDTH, CARD_ROW_HEIGHT))
+    ) {
+      return at;
+    }
+  }
+  return wanted;
+}
+
 /** A curve from the header of one card to the header of another, leaving and arriving level. */
 export function boardConnectorPath(from: BoardPoint, to: BoardPoint): string {
   const headerY = 18;
@@ -228,7 +263,38 @@ const GuestContext = Schema.Struct({
   guest: Schema.Struct({ name: Schema.String, text: Schema.String }),
 });
 const decodeGuestContext = Schema.decodeUnknownOption(GuestContext);
-const textOf = (value: unknown) => (typeof value === "string" ? value.trim() : "");
+const EXCERPT_LENGTH = 280;
+const TABLE_RULE = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/;
+
+/**
+ * A message as a card shows it: one run of plain text, without code blocks, heading and list
+ * marks, table rules or emphasis marks. A message that is only a code block keeps its text.
+ */
+function boardExcerpt(markdown: string): string {
+  const lines: Array<string> = [];
+  let fenced = false;
+  for (const raw of markdown.split(/\r?\n/)) {
+    if (/^\s*(?:```|~~~)/.test(raw)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced || TABLE_RULE.test(raw)) continue;
+    const heading = /^\s*#{1,6}\s+(.*)$/.exec(raw)?.[1];
+    const line = (heading ?? raw)
+      .replace(/^\s*(?:>\s?)*(?:(?:[-*+]|\d+[.)])\s+)?(?:\[[ xX]\]\s+)?/, "")
+      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/`+|\*\*|~~/g, "")
+      .replace(/(^|[^\w*])[*_]([^*_\n]+)[*_](?![\w*])/g, "$1$2")
+      .replace(/\|/g, " ")
+      .trim();
+    if (line === "") continue;
+    lines.push(heading !== undefined && !/[.:!?]$/.test(line) ? `${line}:` : line);
+  }
+  const text = (lines.length === 0 ? markdown : lines.join(" ")).replace(/\s+/g, " ").trim();
+  return text.length > EXCERPT_LENGTH ? `${text.slice(0, EXCERPT_LENGTH).trimEnd()}…` : text;
+}
+
+const textOf = (value: unknown) => (typeof value === "string" ? boardExcerpt(value) : "");
 
 /** The newest messages of a thread, oldest first, for the thread's card. */
 export function boardMessages(

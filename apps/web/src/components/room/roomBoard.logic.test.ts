@@ -11,6 +11,7 @@ import {
   boardMessages,
   dropBoardEdit,
   placeBoardCards,
+  placeBoardNote,
   putBoardEdit,
   resolveBoard,
   screenToBoard,
@@ -44,6 +45,23 @@ describe("placeBoardCards", () => {
     expect(placed["guest:a"]).toEqual(saved["guest:a"]);
     const spots = Object.values(placed).map((point) => `${point.x}:${point.y}`);
     expect(new Set(spots).size).toBe(3);
+  });
+});
+
+describe("placeBoardNote", () => {
+  it("puts a new note where asked, or beside the notes and cards already there", () => {
+    const wanted = { x: 500, y: 96 };
+    expect(placeBoardNote(wanted, [], [])).toEqual(wanted);
+
+    const first = placeBoardNote(wanted, [wanted], []);
+    expect(first).toEqual({ x: 708, y: 96 });
+    // A note dragged a little off the spot still covers it.
+    expect(placeBoardNote(wanted, [{ x: 520, y: 140 }, first], []).x).toBeGreaterThan(708);
+    // The thread card sits under the spot: the note goes past its right edge.
+    expect(placeBoardNote(wanted, [], [{ x: 440, y: 72 }]).x).toBeGreaterThanOrEqual(760);
+    // A full row sends the next note below the cards.
+    const row = [wanted, first, { x: 916, y: 96 }];
+    expect(placeBoardNote(wanted, row, [])).toEqual({ x: 500, y: 240 });
   });
 });
 
@@ -119,5 +137,26 @@ describe("boardMessages", () => {
       { id: "4", author: "Sam", text: "Why 15 minutes?" },
       { id: "5", author: null, text: "The token TTL is 900s." },
     ]);
+
+    const reply = [
+      "## Done",
+      "",
+      "- Fixed `a.ts`, see [the diff](https://example.com/diff).",
+      "",
+      "```ts",
+      "const a = 1;",
+      "```",
+      "",
+      "| File | Change |",
+      "| --- | :-: |",
+      "| a.ts | **fixed** |",
+    ].join("\n");
+    expect(boardMessages([{ id: "7", type: "assistant_message", text: reply }], 1)).toEqual([
+      { id: "7", author: null, text: "Done: Fixed a.ts, see the diff. File Change a.ts fixed" },
+    ]);
+    // A reply that is only code still shows something.
+    expect(
+      boardMessages([{ id: "8", type: "assistant_message", text: "```sh\nls\n```" }], 1)[0]?.text,
+    ).toBe("```sh ls ```");
   });
 });

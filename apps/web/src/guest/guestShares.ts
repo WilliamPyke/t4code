@@ -27,6 +27,8 @@ const JoinedGuestShare = Schema.Struct({
   threadId: ThreadId,
   token: Schema.String,
   title: Schema.String,
+  /** Who shared it, once the owner's server has said. */
+  owner: Schema.optional(Schema.String),
   joinedAt: Schema.String,
 });
 export type JoinedGuestShare = typeof JoinedGuestShare.Type;
@@ -136,8 +138,13 @@ export const layerGuestShareAccess = Layer.succeed(
       return Effect.sync(() => {
         appAtomRegistry.update(guestRoomAtom(shareId), (room) => ({ ...room, view }));
         const share = findGuestShare(shareId);
-        if (share !== null && share.title !== view.title) {
-          rememberGuestShare({ ...share, title: view.title });
+        if (share !== null && (share.title !== view.title || share.owner !== view.ownerName)) {
+          const { owner: _, ...rest } = share;
+          rememberGuestShare({
+            ...rest,
+            title: view.title,
+            ...(view.ownerName === undefined ? {} : { owner: view.ownerName }),
+          });
         }
       });
     }),

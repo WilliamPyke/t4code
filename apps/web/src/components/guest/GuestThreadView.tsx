@@ -56,6 +56,7 @@ import {
 import { useIncrementalTimelineEntries } from "~/hooks/useIncrementalTimelineEntries";
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { useStableCallback } from "~/hooks/useStableCallback";
+import { configuredHostedAppUrl } from "~/hostedPairing";
 import { useTheme } from "~/hooks/useTheme";
 import { cn } from "~/lib/utils";
 import { deriveActiveWorkStartedAt, derivePhase } from "~/session-logic";
@@ -333,7 +334,7 @@ function GuestThread({
   const files = useGuestFiles(endpoint);
   // Expanded rows read detail and command output through the guest routes.
   const [turnItemSource] = useState(() => guestTurnItemSource(endpoint));
-  const attachmentUrlById = new Map(
+  const loadedUrls = new Map(
     items.flatMap(({ item }) =>
       item.type === "user_message"
         ? item.attachments.flatMap((attachment) => {
@@ -343,6 +344,14 @@ function GuestThread({
         : [],
     ),
   );
+  // The timeline compares this by identity and sets state when it changes, so keep one per content.
+  const [attachmentUrlById, setAttachmentUrlById] = useState(loadedUrls);
+  if (
+    loadedUrls.size !== attachmentUrlById.size ||
+    [...loadedUrls].some(([id, url]) => attachmentUrlById.get(id) !== url)
+  ) {
+    setAttachmentUrlById(loadedUrls);
+  }
   const entries = useIncrementalTimelineEntries(threadKey, {
     visibleTurnItems: items,
     optimisticMessages: NO_OPTIMISTIC_MESSAGES,
@@ -629,7 +638,11 @@ function ContinueOnMyMachine({
       return;
     }
     setError(null);
-    const url = buildJoinLink({ host, token: handoff.token });
+    const url = buildJoinLink({
+      host,
+      token: handoff.token,
+      origin: configuredHostedAppUrl(),
+    });
     if (tab === null) {
       window.location.href = url;
       return;

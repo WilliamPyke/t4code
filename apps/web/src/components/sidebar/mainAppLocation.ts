@@ -1,6 +1,6 @@
 import { useNavigate, type AnyRouter } from "@tanstack/react-router";
 
-import { GUEST_PAGE_PATH } from "../../guestPage";
+import { GUEST_PAGE_PATH, isGuestEntryPath } from "../../guestPage";
 import { withoutAssistantCitationHash } from "../../lib/assistantCitationNavigation";
 
 /** Settings and Usage open as modals over the last main-app view. */
@@ -25,6 +25,7 @@ export function startMainAppLocationTracking(router: AnyRouter): () => void {
   const record = () => {
     const { pathname } = router.state.location;
     if (isAppModalPage(pathname) || SHELL_LESS_PATHS.has(pathname)) return;
+    if (isGuestEntryPath(pathname)) return;
     const href = withoutAssistantCitationHash(router.state.location.href);
     appModalReturnHref = href;
     if (!isSidebarUtilityPage(pathname)) mainAppHref = href;

@@ -243,11 +243,17 @@ export type GuestPresence = typeof GuestPresence.Type;
 export const GuestPresenceInput = Schema.Struct({ threadId: ThreadId });
 export type GuestPresenceInput = typeof GuestPresenceInput.Type;
 
-export const GuestShareCreateInput = Schema.Struct({ threadId: ThreadId });
+export const GuestShareCreateInput = Schema.Struct({
+  threadId: ThreadId,
+  /** Ends a link people can still join with and makes a new one, instead of returning it. */
+  replace: Schema.optional(Schema.Boolean),
+});
 export type GuestShareCreateInput = typeof GuestShareCreateInput.Type;
 
 export const GuestShareCreateResult = Schema.Struct({
   url: TrimmedNonEmptyString,
+  /** A readable link that leads to `url`, when the server's relay could name it. */
+  shortUrl: Schema.optional(TrimmedNonEmptyString),
   share: ThreadGuestShare,
 });
 export type GuestShareCreateResult = typeof GuestShareCreateResult.Type;

@@ -137,10 +137,48 @@ function GuestLinksRow() {
     >
       {settings.guestSharingEnabled ? (
         <div className="mt-2 mb-2 border-l-2 border-border/60 ps-3">
+          <GuestOwnerName />
           <GuestContributors />
         </div>
       ) : null}
     </SettingsRow>
+  );
+}
+
+/** The name guests see over the threads this machine shares. Saved when the field loses focus. */
+function GuestOwnerName() {
+  const saved = useScopedSettings((settings) => settings.guestOwnerName);
+  const updateSettings = useUpdateScopedSettings();
+  const [draft, setDraft] = useState<string | null>(null);
+  const save = () => {
+    const name = draft?.trim();
+    if (name !== undefined && name !== saved) updateSettings({ guestOwnerName: name });
+    setDraft(null);
+  };
+  return (
+    <form
+      className="flex flex-col gap-2 py-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        save();
+      }}
+    >
+      <p className="text-xs text-muted-foreground">
+        Name shown to guests: it labels your threads in their sidebar. Leave it empty to show no
+        name.
+      </p>
+      <div className="max-w-sm">
+        <Input
+          size="sm"
+          value={draft ?? saved}
+          maxLength={GUEST_NAME_MAX_LENGTH}
+          placeholder="Your name"
+          aria-label="Name shown to guests"
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={save}
+        />
+      </div>
+    </form>
   );
 }
 

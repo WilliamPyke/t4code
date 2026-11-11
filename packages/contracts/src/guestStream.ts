@@ -22,6 +22,8 @@ export type GuestThreadModel = typeof GuestThreadModel.Type;
 export const GuestShareView = Schema.Struct({
   shareId: GuestShareId,
   title: Schema.String,
+  /** Who shared the thread, when the owner chose a name to show. Absent from an older server. */
+  ownerName: Schema.optional(TrimmedNonEmptyString),
   /** The guest this view is for. */
   guestName: TrimmedNonEmptyString,
   /** Absent for the one guest of a link made before several could join. */

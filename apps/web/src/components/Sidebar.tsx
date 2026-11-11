@@ -143,6 +143,7 @@ import {
   useEnvironmentIdentities,
   useConnectedEnvironmentIds,
   useEnvironmentMachines,
+  useGuestOnly,
   usePrimaryEnvironmentId,
 } from "../state/environments";
 import {
@@ -1027,6 +1028,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [searchHighlightKey, setSearchHighlightKey] = useState<string | null>(null);
   const connectedEnvironmentIds = useConnectedEnvironmentIds();
+  const guestOnly = useGuestOnly();
   const queuePendingFileDrop = useSidebarPendingFileDropStore((s) => s.queuePendingFileDrop);
   const clearPendingFileDrop = useSidebarPendingFileDropStore((s) => s.clearPendingFileDrop);
   const [renamingThreadRef, setRenamingThreadRef] = useState<ScopedThreadRef | null>(null);
@@ -3205,6 +3207,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               }
               onNewProject={openAddProjectCommandPalette}
               onNewThread={handleNewThreadClick}
+              newThreadHidden={guestOnly}
               newThreadDisabled={projects.length === 0}
               newThreadShortcutLabel={newThreadShortcutLabel}
               newThreadInProjectShortcutLabel={newThreadInProjectShortcutLabel}
@@ -3647,6 +3650,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             </TooltipProvider>
           ) : null}
           {!isSearchingThreads &&
+          !guestOnly &&
           !hasProjectFolders &&
           visibleDraftSessionCount === 0 &&
           pinnedThreads.length +

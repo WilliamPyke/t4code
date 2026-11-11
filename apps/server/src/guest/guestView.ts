@@ -1,3 +1,4 @@
+import { GUEST_NAME_MAX_LENGTH } from "@t3tools/contracts";
 import type {
   GuestId,
   GuestShareView,
@@ -33,6 +34,8 @@ export function guestShareView(
   providerAllowsDirect: boolean,
   /** This server can sign a guest in with GitHub. */
   signIn = false,
+  /** The owner's `guestOwnerName` setting, as they typed it. */
+  ownerName = "",
 ): GuestShareView | null {
   const share = thread.guestShare;
   if (!share) return null;
@@ -45,9 +48,11 @@ export function guestShareView(
         : null
       : (guest?.name ?? null);
   if (guestName === null) return null;
+  const shownOwnerName = ownerName.trim().slice(0, GUEST_NAME_MAX_LENGTH).trim();
   return {
     shareId: share.id,
     title: thread.title,
+    ...(shownOwnerName === "" ? {} : { ownerName: shownOwnerName }),
     guestName,
     ...(guestId === undefined ? {} : { guestId }),
     guests,

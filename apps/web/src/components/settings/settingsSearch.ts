@@ -491,6 +491,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [
       "beta share guest invite link teammate watch t3 connect tunnel",
       "approved contributors github auto approve send without asking",
+      "name shown to guests owner display name",
     ],
   },
   {

@@ -1217,6 +1217,49 @@ export const RelayWakeHeldHooksResponse = Schema.Struct({
 });
 export type RelayWakeHeldHooksResponse = typeof RelayWakeHeldHooksResponse.Type;
 
+/** Readable stand-in for a guest link: three words, e.g. `tulip-otter-harbor`. */
+export const RELAY_GUEST_LINK_NAME_PATTERN = /^[a-z]{2,12}(?:-[a-z]{2,12}){2}$/;
+
+export const RelayGuestLinkTarget = Schema.Struct({
+  host: TrimmedNonEmptyString,
+  credential: TrimmedNonEmptyString,
+});
+export type RelayGuestLinkTarget = typeof RelayGuestLinkTarget.Type;
+
+export const RelayGuestLinkRegistrationRequest = Schema.Struct({
+  ...RelayGuestLinkTarget.fields,
+  expiresAt: Schema.String,
+});
+
+export const RelayGuestLinkRegistrationResponse = Schema.Struct({ name: Schema.String });
+
+export const RelayGuestLinkResolveResponse = Schema.Struct({
+  link: Schema.NullOr(RelayGuestLinkTarget),
+});
+
+export class RelayRateLimitedError extends Schema.TaggedError<RelayRateLimitedError>()(
+  "RelayRateLimitedError",
+  { code: Schema.Literal("rate_limited") },
+  { httpApiStatus: 429 },
+) {
+  override get message(): string {
+    return "Too many requests; try again in a minute";
+  }
+}
+
+const RelayGuestLinksGroup = HttpApiGroup.make("guestLinks")
+  .add(
+    HttpApiEndpoint.get("resolve", "/v1/guest-links/:name", {
+      params: Schema.Struct({ name: Schema.String }),
+      success: RelayGuestLinkResolveResponse,
+      error: [RelayRateLimitedError, RelayInternalError],
+    }).annotate(OpenApi.Summary, "Resolve a guest link's readable name"),
+  )
+  .annotate(
+    OpenApi.Description,
+    "Readable names for guest links. No sign-in: the name is the key.",
+  );
+
 const RelayServerGroup = HttpApiGroup.make("server")
   .add(
     HttpApiEndpoint.post(
@@ -1262,6 +1305,12 @@ const RelayServerGroup = HttpApiGroup.make("server")
         error: RelayAuthAndInternalErrors,
       },
     ).annotate(OpenApi.Summary, "Update an environment's link preferences"),
+    HttpApiEndpoint.post("registerGuestLink", "/v1/environments/:environmentId/guest-links", {
+      params: Schema.Struct({ environmentId: EnvironmentId }),
+      payload: RelayGuestLinkRegistrationRequest,
+      success: RelayGuestLinkRegistrationResponse,
+      error: RelayAuthAndInternalErrors,
+    }).annotate(OpenApi.Summary, "Give a guest link a readable name"),
     HttpApiEndpoint.post("wakeHeldHooks", "/v1/environments/:environmentId/hooks/wake", {
       params: Schema.Struct({ environmentId: EnvironmentId }),
       success: RelayWakeHeldHooksResponse,
@@ -1317,6 +1366,7 @@ export const RelayApi = HttpApi.make("RelayApi")
     RelayTokenGroup,
     RelayDpopClientGroup,
     RelayServerGroup,
+    RelayGuestLinksGroup,
     RelayHooksGroup,
     RelayMobileTelemetryGroup,
   )

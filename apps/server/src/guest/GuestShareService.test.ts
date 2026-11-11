@@ -44,6 +44,7 @@ import {
   sweepStalePendingAttachments,
 } from "../attachmentStore.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as GuestLinkNames from "./GuestLinkNames.ts";
 import * as GuestSignIn from "./GuestSignIn.ts";
 import { CloudManagedEndpointRuntime } from "../cloud/ManagedEndpointRuntime.ts";
 import * as ServerConfig from "../config.ts";
@@ -100,6 +101,9 @@ const layerConnect = Layer.mock(CloudManagedEndpointRuntime)({
 // The GitHub account the next finished sign-in proves. Null means GitHub refuses the code.
 const githubAccount = Ref.makeUnsafe<GuestAccount | null>(null);
 // The fake state is the session it was started for, so finishing needs no table.
+const layerLinkNames = Layer.mock(GuestLinkNames.GuestLinkNames)({
+  register: () => Effect.succeed("tulip-otter-harbor"),
+});
 const layerSignIn = Layer.mock(GuestSignIn.GuestSignIn)({
   enabled: true,
   start: ({ session, redirectUri }) =>
@@ -205,6 +209,7 @@ const layerTest = GuestShareService.layer.pipe(
   Layer.provide(layerProviders),
   Layer.provide(layerCheckout),
   Layer.provide(layerSignIn),
+  Layer.provide(layerLinkNames),
   Layer.provideMerge(ServerSettings.layerTest({ guestSharingEnabled: true })),
   Layer.provide(layerConnect),
   Layer.provideMerge(layerAnalytics),
@@ -256,11 +261,15 @@ it.effect("lets each browser join an invite as its own guest until the owner sto
     assert.equal(taken.reason, "name_taken");
     // Each guest's page names them, lists everyone, and shows what the others asked.
     yield* guestShares.submit(session, { shareId: eve.shareId, text: "Sam's question" }, []);
+    yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+      guestOwnerName: "  Will  ",
+    });
     const [eveView] = Array.from(
       yield* Stream.runCollect(Stream.take(yield* guestShares.stream(eve.token), 1)),
     );
     if (eveView?.type !== "view") return assert.fail("Expected the share view first.");
     assert.equal(eveView.view.guestName, "Eve");
+    assert.equal(eveView.view.ownerName, "Will");
     assert.deepEqual(
       eveView.view.guests.map((guest) => guest.name),
       ["Sam", "Eve"],
@@ -883,7 +892,9 @@ it.effect("starts a stream with the runs and items already in the thread", () =>
 it.effect("redeems only a short invite whose signature and share id are both current", () =>
   Effect.gen(function* () {
     const { guestShares, credential: replaced } = yield* shareThread;
-    const { url } = yield* guestShares.create({ threadId });
+    const again = yield* guestShares.create({ threadId });
+    assert.equal(again.url.slice(again.url.indexOf("#") + 1), replaced);
+    const { url } = yield* guestShares.create({ threadId, replace: true });
     const credential = url.slice(url.indexOf("#") + 1);
     assert.match(credential, /^[\w-]{22}\.[\w-]{22}$/);
 
@@ -1895,7 +1906,7 @@ it.effect("keeps a connected guest's images while other shares come and go", () 
     }
 
     // A new link on the thread starts empty: its guest gets nothing the last guest was sent.
-    const { url } = yield* guestShares.create({ threadId });
+    const { url } = yield* guestShares.create({ threadId, replace: true });
     const next = yield* guestShares.redeem({
       credential: url.slice(url.indexOf("#") + 1),
       name: "Kim",

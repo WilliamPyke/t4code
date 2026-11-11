@@ -199,3 +199,19 @@ export const relayDpopProofs = pgTable(
     index("idx_relay_dpop_proofs_expires_at").on(table.expiresAt),
   ],
 );
+
+export const relayGuestLinks = pgTable(
+  "relay_guest_links",
+  {
+    name: varchar("name", { length: 64 }).primaryKey(),
+    environmentId: varchar("environment_id", { length: 191 }).notNull(),
+    host: varchar("host", { length: 255 }).notNull(),
+    credential: varchar("credential", { length: 255 }).notNull(),
+    expiresAt: varchar("expires_at", { length: 64 }).notNull(),
+    createdAt: varchar("created_at", { length: 64 }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_relay_guest_links_credential").on(table.credential),
+    index("idx_relay_guest_links_expires_at").on(table.expiresAt),
+  ],
+);

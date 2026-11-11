@@ -7,8 +7,10 @@ import {
 import { Discovery } from "@t3tools/client-runtime/relay";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
+import { useState } from "react";
 
 import { environmentCatalog } from "../connection/catalog";
+import { guestSharesAtom } from "../guest/guestShares";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import {
   environmentPresentations,
@@ -54,6 +56,19 @@ export function useEnvironments() {
     environments,
     presentationById,
   };
+}
+
+/**
+ * Whether this person is here only as a guest: they joined a shared thread and have no
+ * environment of their own, so nothing can start a thread or take a project.
+ */
+export function useGuestOnly(): boolean {
+  const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
+  const joined = useAtomValue(guestSharesAtom).length > 0;
+  // A guest whose link just ended is still only a guest until the page loads again.
+  const [wasGuest, setWasGuest] = useState(joined);
+  if (joined && !wasGuest) setWasGuest(true);
+  return catalog.isReady && catalog.entries.size === 0 && (joined || wasGuest);
 }
 
 /** Provider statuses change on every push, so they live apart from the presentations. */

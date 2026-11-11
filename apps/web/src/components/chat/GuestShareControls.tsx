@@ -108,14 +108,20 @@ function GuestShareDialog({
   const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "guest link" });
   const [state, setState] = useState<CreateState>({ status: "idle" });
 
-  const create = async () => {
+  const nowMinute = useNowMinute();
+  const joinable =
+    activeShare !== null &&
+    activeShare.joinsClosed !== true &&
+    activeShare.expiresAt.slice(0, 16) > nowMinute;
+
+  const create = async (replace: boolean) => {
     setState({ status: "creating" });
     const result = await createGuestShare({
       environmentId: threadRef.environmentId,
-      input: { threadId: threadRef.threadId },
+      input: { threadId: threadRef.threadId, replace },
     });
     if (result._tag === "Success") {
-      setState({ status: "created", url: result.value.url });
+      setState({ status: "created", url: result.value.shortUrl ?? result.value.url });
       return;
     }
     if (isAtomCommandInterrupted(result)) {
@@ -161,9 +167,11 @@ function GuestShareDialog({
             </div>
           ) : (
             <p className="text-muted-foreground text-sm">
-              {activeShare !== null
-                ? "A new link ends the current one."
-                : `Up to ${GUEST_SHARE_MAX_GUESTS} people can join with the link. It expires in 24 hours.`}
+              {joinable
+                ? "This thread already has a link. Show it to invite more people, or replace it to end it for everyone who has it."
+                : activeShare !== null
+                  ? "No one new can join with the current link. A new link ends it."
+                  : `Up to ${GUEST_SHARE_MAX_GUESTS} people can join with the link. It expires in 24 hours.`}
             </p>
           )}
           {state.status === "failed" ? (
@@ -187,12 +195,26 @@ function GuestShareDialog({
               >
                 Cancel
               </Button>
+              {joinable ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void create(true)}
+                  disabled={!canCreate || state.status === "creating"}
+                >
+                  Replace link
+                </Button>
+              ) : null}
               <Button
                 size="sm"
-                onClick={() => void create()}
+                onClick={() => void create(false)}
                 disabled={!canCreate || state.status === "creating"}
               >
-                {state.status === "creating" ? "Creating..." : "Create link"}
+                {state.status === "creating"
+                  ? "Working..."
+                  : joinable
+                    ? "Show link"
+                    : "Create link"}
               </Button>
             </>
           )}

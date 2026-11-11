@@ -39,6 +39,12 @@ tokens never enter `SessionStore`, so no RPC, WebSocket, or MCP path can accept
 one. Guest routes also require T3 Connect to still serve the link's hostname;
 the request's Host header is not checked, because a LAN client can forge it.
 
+With a hosted app, the server also asks its relay for a readable name for the invite
+([GuestLinkNames](../../apps/server/src/guest/GuestLinkNames.ts)). That is the one place an
+invite is stored: the relay keeps host and invite until the link expires, and anyone who can
+guess a live name can join, so the relay counts lookups per address. An invite the owner
+replaced or closed still resolves and is then refused by the owner's server.
+
 A guest's page can be on another origin than the owner's host: the hosted app
 opens guest links when the owner's server is told about it
 (`T3CODE_HOSTED_APP_URL`). The session cookie is `SameSite=Strict` and cannot

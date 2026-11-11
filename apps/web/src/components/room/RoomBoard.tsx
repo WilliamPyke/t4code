@@ -32,6 +32,7 @@ import {
   dropBoardEdit,
   panBoardBy,
   placeBoardCards,
+  placeBoardNote,
   putBoardEdit,
   resolveBoard,
   screenToBoard,
@@ -170,7 +171,11 @@ export function RoomBoard({
   };
   const addNote = () => {
     const bounds = surfaceRef.current?.getBoundingClientRect();
-    const at = screenToBoard(view, { x: (bounds?.width ?? 600) / 2 - 90, y: 96 });
+    const at = placeBoardNote(
+      screenToBoard(view, { x: (bounds?.width ?? 600) / 2 - 90, y: 96 }),
+      shown.notes,
+      Object.values(positions),
+    );
     const id = randomUUID();
     send(
       { kind: "note", id },
