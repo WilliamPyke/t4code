@@ -9,10 +9,13 @@ import {
   GuestShareCreateError,
   type GuestShareCreateInput,
   type GuestShareCreateResult,
+  type GuestAccount,
   GuestId,
   guestContributorFor,
-  type GuestSignInPrompt,
-  type GuestSignInStatus,
+  GUEST_SHARE_PARAM,
+  GUEST_SIGN_IN_CALLBACK_ROUTE,
+  GUEST_SIGN_IN_PARAM,
+  type GuestSignInFailure,
   type GuestPresence,
   GuestShareId,
   type GuestRedeemRequest,
@@ -218,12 +221,22 @@ export class GuestShareService extends Context.Service<
     readonly stream: (
       session: string,
     ) => Effect.Effect<Stream.Stream<GuestSafe<GuestStreamEvent>>, GuestShareAccessError>;
-    /** Starts the guest's GitHub sign-in and returns the code they type on GitHub. */
-    readonly signIn: (session: string) => Effect.Effect<GuestSignInPrompt, GuestShareAccessError>;
-    /** Whether the guest finished. Once they have, the share records their account. */
-    readonly signInPoll: (
+    /**
+     * Starts the guest's GitHub sign-in. `url` is where their browser goes on GitHub, and
+     * `cookie` is what that browser must bring back for the sign-in to finish.
+     */
+    readonly signIn: (
       session: string,
-    ) => Effect.Effect<GuestSignInStatus, GuestShareAccessError>;
+    ) => Effect.Effect<{ readonly url: string; readonly cookie: string }, GuestShareAccessError>;
+    /**
+     * Finishes the sign-in GitHub sent a browser back for, recording the account on the share
+     * when everything matches. Returns where on this host the browser goes next.
+     */
+    readonly signInFinish: (input: {
+      readonly state: string | null;
+      readonly code: string | null;
+      readonly cookie: string | null;
+    }) => Effect.Effect<string>;
     /** The guests with a thread's shared page open, now and as that changes. */
     readonly presence: (threadId: ThreadId) => Stream.Stream<GuestPresence>;
     /** A token the guest's own T3 Code reads the thread's export with, for a few minutes. */
@@ -519,21 +532,19 @@ const make = Effect.gen(function* () {
   const signIn = Effect.fn("GuestShareService.signIn")(function* (session: string) {
     const { share, guestId } = yield* authorize(session, "session");
     if (guestId === undefined) return yield* new GuestShareAccessError({ reason: "unavailable" });
-    return yield* guestSignIn
-      .start(`${share.id}:${guestId}`)
+    const { state, url } = yield* guestSignIn
+      .start({ session, redirectUri: `https://${share.host}${GUEST_SIGN_IN_CALLBACK_ROUTE}` })
       .pipe(Effect.mapError(() => new GuestShareAccessError({ reason: "sign_in_failed" })));
+    return { url, cookie: `${share.id}.${state}` };
   });
 
-  const signInPoll = Effect.fn("GuestShareService.signInPoll")(function* (session: string) {
+  const identify = Effect.fn("GuestShareService.identify")(function* (
+    session: string,
+    account: GuestAccount,
+  ) {
+    // The share is checked again: it can have ended while the guest was on GitHub.
     const { thread, share, guestId } = yield* authorize(session, "session");
     if (guestId === undefined) return yield* new GuestShareAccessError({ reason: "unavailable" });
-    const polled = yield* guestSignIn.poll(`${share.id}:${guestId}`).pipe(Effect.result);
-    if (polled._tag === "Failure") {
-      const { reason } = polled.failure;
-      return { status: reason === "unavailable" ? "failed" : reason } satisfies GuestSignInStatus;
-    }
-    if (Option.isNone(polled.success)) return { status: "pending" } satisfies GuestSignInStatus;
-    const account = polled.success.value;
     const contributors = yield* serverSettings.getSettings.pipe(
       Effect.map((settings) => settings.guestContributors),
       Effect.orElseSucceed(() => []),
@@ -559,7 +570,40 @@ const make = Effect.gen(function* () {
       trusted: contributor !== undefined,
     });
     yield* analytics.record("feature.used", { feature: "guest_share.sign_in" });
-    return { status: "signed_in" } satisfies GuestSignInStatus;
+  });
+
+  const signInFinish = Effect.fn("GuestShareService.signInFinish")(function* (input: {
+    readonly state: string | null;
+    readonly code: string | null;
+    readonly cookie: string | null;
+  }) {
+    // The cookie is `<share id>.<state>`, set in the browser that started this sign-in.
+    const [shareId = "", expected = ""] = (input.cookie ?? "").split(".");
+    const back = (failure?: GuestSignInFailure) => {
+      const params = new URLSearchParams();
+      if (shareId !== "") params.set(GUEST_SHARE_PARAM, shareId);
+      if (failure !== undefined) params.set(GUEST_SIGN_IN_PARAM, failure);
+      return params.size === 0 ? "/guest" : `/guest?${params}`;
+    };
+    // Without this, a guest could send their GitHub link to someone else and be recorded as
+    // that person's account once they approved it.
+    if (
+      input.state === null ||
+      expected === "" ||
+      !timingSafeEqualBase64Url(input.state, expected)
+    ) {
+      return back("failed");
+    }
+    const finished = yield* guestSignIn
+      .finish({ state: input.state, code: input.code })
+      .pipe(Effect.result);
+    if (finished._tag === "Failure") {
+      const { reason } = finished.failure;
+      return back(reason === "unavailable" ? "failed" : reason);
+    }
+    const { session, account } = finished.success;
+    const identified = yield* identify(session, account).pipe(Effect.result);
+    return back(identified._tag === "Failure" ? "failed" : undefined);
   });
 
   /** Whether the provider the thread runs on takes a guest's message without the owner's Send. */
@@ -1262,7 +1306,7 @@ const make = Effect.gen(function* () {
     check,
     submit,
     signIn,
-    signInPoll,
+    signInFinish,
     stream,
     presence,
     handoff,

@@ -74,17 +74,19 @@ your key.
 
 A typed name proves nothing, so the switch above is per guest and per link. To approve someone
 for every link, list their GitHub username under **Settings → Labs → Guest links → Approved
-contributors**. When they join a link and choose **Sign in with GitHub** on the shared page, they
-type a code on GitHub, and from then on their messages are sent without asking on that thread. You
-can also approve a signed-in guest from the guest names in the thread header.
+contributors**. When they join a link and choose **Sign in with GitHub** on the shared page, their
+browser goes to GitHub and comes back, and from then on their messages are sent without asking on
+that thread. You can also approve a signed-in guest from the guest names in the thread header.
 
 The first sign-in ties the username to that GitHub account, so someone who takes the username later
 is not approved. Removing a username applies to links that person joins afterwards; turn off
 **Send without asking** on a thread to stop them there now. The same API key rule applies.
 
 The shared page offers the sign-in only when the server that runs the thread was started with a
-GitHub app's client ID in `T3CODE_GITHUB_APP_CLIENT_ID`. T3 Code reads the guest's username and
-account number, then discards the token.
+GitHub app's client ID in `T3CODE_GITHUB_APP_CLIENT_ID` and its client secret in
+`T3CODE_GITHUB_APP_CLIENT_SECRET`. The app must list
+`https://<your T3 Connect host>/api/guest/sign-in/callback` as a callback URL. T3 Code asks GitHub
+for no permissions, reads the guest's username and account number, then discards the token.
 
 ## Continue on your own machine
 

@@ -12,8 +12,10 @@ import {
   GUEST_ROOM_UPDATES_ROUTE,
   GUEST_ROUTE_PREFIX,
   GUEST_SHARE_PARAM,
-  GUEST_SIGN_IN_POLL_ROUTE,
+  GUEST_SIGN_IN_CALLBACK_ROUTE,
+  GUEST_SIGN_IN_COOKIE,
   GUEST_SIGN_IN_ROUTE,
+  GUEST_SIGN_IN_TTL_MS,
   GUEST_MESSAGE_MAX_ATTACHMENT_BYTES,
   GUEST_MESSAGE_MAX_ATTACHMENTS,
   GUEST_SHARE_TTL_MS,
@@ -384,21 +386,40 @@ const signInRoute = HttpRouter.add(
   Effect.gen(function* () {
     const guestShares = yield* GuestShareService;
     return yield* guestShares.signIn(yield* sessionToken).pipe(
-      Effect.map((prompt) => HttpServerResponse.jsonUnsafe(prompt, { headers: NO_STORE })),
+      Effect.flatMap(({ url, cookie }) =>
+        HttpServerResponse.jsonUnsafe({ url }, { headers: NO_STORE }).pipe(
+          // Lax, unlike the session: it has to come back on the navigation from GitHub.
+          HttpServerResponse.setCookie(GUEST_SIGN_IN_COOKIE, cookie, {
+            httpOnly: true,
+            secure: true,
+            sameSite: "lax",
+            path: "/",
+            maxAge: Duration.millis(GUEST_SIGN_IN_TTL_MS),
+          }),
+        ),
+      ),
       Effect.catchTags({ GuestShareAccessError: errorResponse }),
     );
   }),
 );
 
-const signInPollRoute = HttpRouter.add(
-  "POST",
-  GUEST_SIGN_IN_POLL_ROUTE,
+// GitHub sends the guest's browser here. It answers with a redirect to the guest page either way.
+const signInCallbackRoute = HttpRouter.add(
+  "GET",
+  GUEST_SIGN_IN_CALLBACK_ROUTE,
   Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const query = new URLSearchParams(request.url.split("?", 2)[1] ?? "");
     const guestShares = yield* GuestShareService;
-    return yield* guestShares.signInPoll(yield* sessionToken).pipe(
-      Effect.map((status) => HttpServerResponse.jsonUnsafe(status, { headers: NO_STORE })),
-      Effect.catchTags({ GuestShareAccessError: errorResponse }),
-    );
+    const location = yield* guestShares.signInFinish({
+      state: query.get("state"),
+      code: query.get("code"),
+      cookie: request.cookies[GUEST_SIGN_IN_COOKIE] ?? null,
+    });
+    // The address held the code; it is not passed on to the page that loads next.
+    return HttpServerResponse.redirect(location, {
+      headers: { ...NO_STORE, "referrer-policy": "no-referrer" },
+    });
   }),
 );
 
@@ -553,7 +574,7 @@ export const layer = Layer.mergeAll(
   roomUpdatesRoute,
   boardRoute,
   signInRoute,
-  signInPollRoute,
+  signInCallbackRoute,
   renderRoute,
   itemRoute,
   historyRoute,

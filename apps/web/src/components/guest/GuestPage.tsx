@@ -7,12 +7,12 @@ import {
   GUEST_NAME_MAX_LENGTH,
   GUEST_ROUTE_PREFIX,
   GUEST_SHARE_PARAM,
-  GUEST_SIGN_IN_POLL_ROUTE,
+  GUEST_SIGN_IN_PARAM,
   GUEST_SIGN_IN_ROUTE,
   type GuestAccount,
   GuestHandoff,
-  GuestSignInPrompt,
-  GuestSignInStatus,
+  GuestSignInFailure,
+  GuestSignInStart,
   guestMessageAuthorName,
   GuestMessageId,
   type GuestRedeemRequest,
@@ -89,6 +89,8 @@ interface GuestEntry {
   /** Unspent invite from the URL hash, if this load came from a link. */
   readonly credential: string | null;
   readonly shareId: string | null;
+  /** Why the GitHub sign-in this load came back from did not finish, if it did not. */
+  readonly signInFailure: GuestSignInFailure | null;
 }
 
 let capturedEntry: GuestEntry | null = null;
@@ -128,10 +130,8 @@ function takeGuestEntry(): GuestEntry {
     try {
       credential = decodeURIComponent(window.location.hash.slice(1)).trim();
     } catch {}
-    const shareId =
-      credential !== ""
-        ? inviteShareId(credential)
-        : new URLSearchParams(window.location.search).get(GUEST_SHARE_PARAM);
+    const query = new URLSearchParams(window.location.search);
+    const shareId = credential !== "" ? inviteShareId(credential) : query.get(GUEST_SHARE_PARAM);
     // The share stays in the URL, so a reload or bookmark finds this browser's session for it.
     window.history.replaceState(
       window.history.state,
@@ -140,11 +140,16 @@ function takeGuestEntry(): GuestEntry {
         ? window.location.pathname
         : `${window.location.pathname}?${GUEST_SHARE_PARAM}=${encodeURIComponent(shareId)}`,
     );
-    capturedEntry = { credential: credential === "" ? null : credential, shareId };
+    capturedEntry = {
+      credential: credential === "" ? null : credential,
+      shareId,
+      signInFailure: Option.getOrNull(decodeSignInFailure(query.get(GUEST_SIGN_IN_PARAM))),
+    };
   }
   return capturedEntry;
 }
 
+const decodeSignInFailure = Schema.decodeUnknownOption(GuestSignInFailure);
 const decodeErrorBody = Schema.decodeUnknownOption(Schema.Struct({ message: Schema.String }));
 const decodeHistoryPage = Schema.decodeUnknownOption(
   Schema.toCodecJson(OrchestrationV2ThreadHistoryPage),
@@ -174,8 +179,7 @@ async function fetchGuestHistoryPage(
 }
 
 const decodeHandoff = Schema.decodeUnknownOption(GuestHandoff);
-const decodeSignInPrompt = Schema.decodeUnknownOption(GuestSignInPrompt);
-const decodeSignInStatus = Schema.decodeUnknownOption(GuestSignInStatus);
+const decodeSignInStart = Schema.decodeUnknownOption(GuestSignInStart);
 
 /** Posts to a guest route with no body. Resolves to its answer, or to a message for the guest. */
 async function postGuestAction<A>(
@@ -308,7 +312,7 @@ export function GuestPage() {
           credential={credential}
           onJoined={() => {
             // This browser joined; a remount must open the session, not the name form again.
-            capturedEntry = { credential: null, shareId };
+            capturedEntry = { credential: null, shareId, signInFailure: null };
             setAccess("session");
           }}
         />
@@ -678,14 +682,15 @@ function GuestThread({
 
 const SIGN_IN_FAILED = "Could not sign in with GitHub. Try again.";
 const SIGN_IN_ENDINGS = {
-  expired: "The GitHub code expired. Try again.",
+  expired: "The GitHub sign-in took too long. Try again.",
   denied: "The sign-in was cancelled on GitHub.",
   failed: SIGN_IN_FAILED,
 } as const;
 
 /**
- * Proves who the guest is to the owner. The guest types a code on GitHub; the owner's server
- * learns their username and nothing else, and the owner can then approve them by account.
+ * Proves who the guest is to the owner. The guest's browser goes to GitHub and comes back; the
+ * owner's server learns their username and nothing else, and the owner can then approve them by
+ * account.
  */
 function GuestGitHubSignIn({
   shareId,
@@ -696,76 +701,31 @@ function GuestGitHubSignIn({
   readonly account: GuestAccount | undefined;
   readonly available: boolean;
 }) {
-  const [prompt, setPrompt] = useState<GuestSignInPrompt | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- asks the owner's server whether the guest finished signing in on GitHub
-  useEffect(() => {
-    if (prompt === null) return;
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const ask = async () => {
-      const answer = await postGuestAction(
-        GUEST_SIGN_IN_POLL_ROUTE,
-        shareId,
-        decodeSignInStatus,
-        SIGN_IN_FAILED,
-      );
-      if (stopped) return;
-      if (typeof answer === "string") {
-        setPrompt(null);
-        setError(answer);
-        return;
-      }
-      if (answer.status === "pending") {
-        timer = setTimeout(() => void ask(), prompt.interval * 1_000);
-        return;
-      }
-      // Signed in: the account arrives with the share's next update.
-      setPrompt(null);
-      if (answer.status !== "signed_in") setError(SIGN_IN_ENDINGS[answer.status]);
-    };
-    timer = setTimeout(() => void ask(), prompt.interval * 1_000);
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-    };
-  }, [prompt, shareId]);
+  const [error, setError] = useState<string | null>(() => {
+    const failure = takeGuestEntry().signInFailure;
+    return failure === null ? null : SIGN_IN_ENDINGS[failure];
+  });
 
   if (account !== undefined) {
     return <span className="shrink-0 text-xs text-muted-foreground">@{account.login}</span>;
   }
   if (!available) return null;
-  if (prompt !== null) {
-    return (
-      <span className="shrink-0 text-xs text-muted-foreground">
-        Enter <strong className="font-mono text-foreground">{prompt.userCode}</strong> on{" "}
-        <a
-          href={prompt.verificationUri}
-          target="_blank"
-          rel="noreferrer"
-          className="underline underline-offset-2"
-        >
-          GitHub
-        </a>
-      </span>
-    );
-  }
   const start = async () => {
     setBusy(true);
     const started = await postGuestAction(
       GUEST_SIGN_IN_ROUTE,
       shareId,
-      decodeSignInPrompt,
+      decodeSignInStart,
       SIGN_IN_FAILED,
     );
-    setBusy(false);
     if (typeof started === "string") {
+      setBusy(false);
       setError(started);
       return;
     }
-    setError(null);
-    setPrompt(started);
+    // The page leaves for GitHub, and loads again when GitHub sends the guest back.
+    window.location.assign(started.url);
   };
   return (
     <>
