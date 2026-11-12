@@ -10,6 +10,7 @@ import {
   GUEST_MEDIA_ROUTE,
   GUEST_RENDER_ROUTE,
   GUEST_ROOM_ACTIVITY_ROUTE,
+  GUEST_ROOM_ARTIFACT_ROUTE,
   GUEST_ROOM_TURN_ROUTE,
   GUEST_ROOM_UPDATES_ROUTE,
   GUEST_ROUTE_PREFIX,
@@ -35,6 +36,7 @@ import {
   OrchestrationV2CommandOutputFrame,
   OrchestrationV2GetTurnItemResult,
   OrchestrationV2ThreadHistoryPage,
+  RoomArtifactRead,
   RoomBoardChange,
   RoomUpdates,
   SharedThreadExport,
@@ -92,14 +94,16 @@ const errorResponse = (error: GuestShareAccessError) =>
           ? 403
           : error.reason === "ended"
             ? 410
-            : error.reason === "too_fast"
-              ? 429
-              : error.reason === "empty" ||
-                  error.reason === "too_many_files" ||
-                  error.reason === "too_large" ||
-                  error.reason === "unsupported_file"
-                ? 400
-                : 409,
+            : error.reason === "artifact_gone"
+              ? 404
+              : error.reason === "too_fast"
+                ? 429
+                : error.reason === "empty" ||
+                    error.reason === "too_many_files" ||
+                    error.reason === "too_large" ||
+                    error.reason === "unsupported_file"
+                  ? 400
+                  : 409,
       headers: NO_STORE,
     },
   );
@@ -263,9 +267,11 @@ export const readSubmission = Effect.gen(function* () {
         }),
     ),
   );
-  const fields = yield* decodeSubmit({ shareId: parts.shareId, text: parts.text ?? "" }).pipe(
-    Effect.option,
-  );
+  const fields = yield* decodeSubmit({
+    shareId: parts.shareId,
+    text: parts.text ?? "",
+    ...(parts.artifactId === undefined ? {} : { artifactId: parts.artifactId }),
+  }).pipe(Effect.option);
   if (fields._tag === "None") return null;
   const files = parts.file;
   const uploads: ReadonlyArray<GuestUpload> = Array.isArray(files)
@@ -353,8 +359,8 @@ const exportRoute = HttpRouter.add(
   }),
 );
 
-// A turn's text at its limits, in the widest characters, JSON-escaped.
-const TURN_MAX_BODY_BYTES = 128 * 1024;
+// A turn's text and the artifact it fills at their limits, in the widest characters, JSON-escaped.
+const TURN_MAX_BODY_BYTES = 256 * 1024;
 const decodeTurn = Schema.decodeUnknownEffect(GuestTurnRequest);
 
 // Posted by the guest's own T3 Code server, like the export: a bearer, not a cookie.
@@ -421,6 +427,29 @@ const roomUpdatesRoute = HttpRouter.add(
         Effect.map((body) => HttpServerResponse.jsonUnsafe(body, { headers: NO_STORE })),
         Effect.catchTags({ GuestShareAccessError: errorResponse }),
       );
+  }),
+);
+
+const encodeArtifact = encodeForGuest(Schema.toCodecJson(RoomArtifactRead));
+
+// Read by the guest's own T3 Code server when its user takes an artifact card to their agent.
+const roomArtifactRoute = HttpRouter.add(
+  "GET",
+  GUEST_ROOM_ARTIFACT_ROUTE,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const noteId = new URLSearchParams(request.url.split("?", 2)[1] ?? "").get("note");
+    if (!noteId) return yield* badRequest;
+    const guestShares = yield* GuestShareService;
+    return yield* guestShares.roomArtifact(yield* bearerToken, noteId).pipe(
+      Effect.flatMap((result) =>
+        encodeArtifact(result).pipe(
+          Effect.mapError(() => new GuestShareAccessError({ reason: "unavailable" })),
+        ),
+      ),
+      Effect.map((body) => HttpServerResponse.jsonUnsafe(body, { headers: NO_STORE })),
+      Effect.catchTags({ GuestShareAccessError: errorResponse }),
+    );
   }),
 );
 
@@ -697,6 +726,7 @@ export const layer = Layer.mergeAll(
   roomTurnRoute,
   roomActivityRoute,
   roomUpdatesRoute,
+  roomArtifactRoute,
   boardRoute,
   boardCursorRoute,
   signInRoute,

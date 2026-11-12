@@ -42,6 +42,18 @@ function summarize(
   if (url.pathname === "/join") {
     const join = parseJoinLink(url.search);
     if (!join.ok) return join;
+    if (join.value.artifact !== undefined) {
+      return {
+        ok: true,
+        value: {
+          title: "Take this artifact to your agent",
+          description:
+            "It opens as a draft in your thread from this room, with the artifact attached. Nothing runs until you press Send.",
+          prompt: join.value.artifact.prompt,
+          details: [`Shared from ${join.value.host}`],
+        },
+      };
+    }
     if (join.value.task !== undefined) {
       return {
         ok: true,

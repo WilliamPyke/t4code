@@ -125,6 +125,8 @@ export function roomCodeStateOf(
 
 /** A task card's id, as a turn that answers it names it. */
 const RoomTaskId = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
+/** A card's id on a room's board, as the client that added it named it. */
+const RoomBoardNoteId = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
 
 /**
  * The kind of the context record on the owner's own message that takes a task card from the
@@ -153,6 +155,11 @@ export const ThreadGuestMessage = Schema.Struct({
   guestId: Schema.optional(GuestId),
   /** Went to the agent without the owner reading it, because its author was trusted then. */
   direct: Schema.optional(Schema.Boolean),
+  /**
+   * The artifact card the reply fills once the owner sends it. The owner's server attaches the
+   * card when it sends the message; one removed by then leaves a plain message.
+   */
+  artifactId: Schema.optional(RoomBoardNoteId),
 });
 export type ThreadGuestMessage = typeof ThreadGuestMessage.Type;
 
@@ -249,17 +256,31 @@ export const ROOM_BOARD_QUOTE_MAX_LENGTH = 280;
 export const ROOM_ARTIFACT_MAX_LENGTH = 16_000;
 export const ROOM_BOARD_MAX_ARTIFACTS = 6;
 
-/**
- * What an agent wrote into an artifact card: markdown, or a whole HTML page. Only the owner's
- * server writes it, from a turn its owner sent from the board with an arrow to the card.
- */
-export const RoomArtifactContent = Schema.Struct({
+const RoomArtifactVersionFields = {
   body: Schema.String.check(Schema.isMaxLength(ROOM_ARTIFACT_MAX_LENGTH)),
   /** The body was longer than the board keeps. */
   truncated: Schema.optional(Schema.Boolean),
+  /** The guest whose agent wrote this version, on their own machine. Absent: the owner's agent. */
+  guestId: Schema.optional(GuestId),
+  /** The guest whose message the owner's agent answered with this version. */
+  askedBy: Schema.optional(GuestId),
   /** The turn that wrote it, as the machine that ran it named it. */
   turnId: ThreadGuestTurn.fields.id,
   updatedAt: IsoDateTime,
+};
+
+/** The version of an artifact that the current one replaced, kept so anyone can go back to it. */
+export const RoomArtifactPrevious = Schema.Struct(RoomArtifactVersionFields);
+export type RoomArtifactPrevious = typeof RoomArtifactPrevious.Type;
+
+/**
+ * What an agent wrote into an artifact card: markdown, or a whole HTML page. Only the owner's
+ * server writes it: from a turn of the owner's agent that was asked to fill the card, or from a
+ * turn a guest's agent ran on their own machine and posted to the room.
+ */
+export const RoomArtifactContent = Schema.Struct({
+  ...RoomArtifactVersionFields,
+  previous: Schema.optional(RoomArtifactPrevious),
 });
 export type RoomArtifactContent = typeof RoomArtifactContent.Type;
 
@@ -270,7 +291,7 @@ export type RoomArtifactContent = typeof RoomArtifactContent.Type;
  */
 export const RoomBoardNote = Schema.Struct({
   /** The client that adds the note names it. */
-  id: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+  id: RoomBoardNoteId,
   text: Schema.String.check(Schema.isMaxLength(ROOM_BOARD_NOTE_MAX_LENGTH)),
   ...RoomBoardPoint.fields,
   /** The guest who added it. Absent on the owner's notes. */
@@ -368,6 +389,11 @@ export const RoomBoardChange = Schema.Union([
     to: RoomBoardEdge.fields.to,
   }),
   Schema.Struct({ type: Schema.Literal("edge.remove"), edgeId: RoomBoardEdge.fields.id }),
+  /**
+   * Swaps an artifact's content with the version it replaced, so a second restore undoes the
+   * first. An artifact with no earlier version stays as it is.
+   */
+  Schema.Struct({ type: Schema.Literal("artifact.restore"), noteId: RoomBoardNote.fields.id }),
 ]);
 export type RoomBoardChange = typeof RoomBoardChange.Type;
 
@@ -383,6 +409,8 @@ export const RoomAgentActivity = Schema.Struct({
   prompt: Schema.String.check(Schema.isMaxLength(GUEST_AGENT_PROMPT_MAX_LENGTH)),
   /** The task card the turn answers. */
   taskId: Schema.optional(RoomTaskId),
+  /** The artifact card the turn's reply will fill. */
+  artifactId: Schema.optional(RoomBoardNoteId),
   /** Where the guest's code is. Absent from an older machine. */
   code: Schema.optional(RoomCodeState),
 });
@@ -690,6 +718,8 @@ export const GuestSubmitRequest = Schema.Struct({
       of reaching the new one. */
   shareId: GuestShareId,
   text: TrimmedString.check(Schema.isMaxLength(GUEST_MESSAGE_MAX_LENGTH)),
+  /** The artifact card the reply should fill, which the owner sees before sending it. */
+  artifactId: Schema.optional(RoomBoardNoteId),
 });
 export type GuestSubmitRequest = typeof GuestSubmitRequest.Type;
 
@@ -721,8 +751,9 @@ export const SharedThreadCheckout = Schema.Struct({
 export type SharedThreadCheckout = typeof SharedThreadCheckout.Type;
 
 /**
- * Lets the guest's own T Code post the turns it runs back to the room and read what the room
- * said since, until the share ends or the guest is removed. The token opens nothing else.
+ * Lets the guest's own T Code post the turns it runs back to the room, read what the room said
+ * since, and read an artifact card its user takes to their agent, until the share ends or the
+ * guest is removed. The token opens nothing else.
  */
 export const SharedThreadRoom = Schema.Struct({
   token: TrimmedNonEmptyString,
@@ -777,6 +808,18 @@ export const GuestTurnRequest = Schema.Struct({
   /** The task card this turn answers. One that is not this guest's task is ignored. */
   taskId: Schema.optional(RoomTaskId),
   code: ThreadGuestTurn.fields.code,
+  /**
+   * The artifact card the user asked this turn to fill, and what goes in it: made from the
+   * whole reply, which `reply` may cut. One not on the share's board is ignored. Kept apart
+   * from the turn, which the room stores at its shorter length.
+   */
+  artifact: Schema.optional(
+    Schema.Struct({
+      noteId: RoomBoardNoteId,
+      body: RoomArtifactContent.fields.body,
+      truncated: RoomArtifactContent.fields.truncated,
+    }),
+  ),
 });
 export type GuestTurnRequest = typeof GuestTurnRequest.Type;
 
@@ -789,9 +832,20 @@ export const GuestAgentActivityRequest = Schema.Struct({
   state: Schema.Literals(["running", "idle"]),
   prompt: Schema.optional(RoomAgentActivity.fields.prompt),
   taskId: RoomAgentActivity.fields.taskId,
+  artifactId: RoomAgentActivity.fields.artifactId,
   code: RoomAgentActivity.fields.code,
 });
 export type GuestAgentActivityRequest = typeof GuestAgentActivityRequest.Type;
+
+/**
+ * An artifact card as the guest's own T Code reads it, so the user's agent can revise it: its
+ * title and what it shows now. Absent `body`: nothing filled it yet.
+ */
+export const RoomArtifactRead = Schema.Struct({
+  title: RoomBoardNote.fields.text,
+  body: Schema.optional(RoomArtifactContent.fields.body),
+});
+export type RoomArtifactRead = typeof RoomArtifactRead.Type;
 
 /**
  * One thing said in a room, as a thread joined from it reads it back. A guest's name is on the
@@ -855,6 +909,8 @@ export const GUEST_ROOM_TURN_ROUTE = `${GUEST_ROUTE_PREFIX}/room/turns`;
 export const GUEST_ROOM_ACTIVITY_ROUTE = `${GUEST_ROUTE_PREFIX}/room/activity`;
 /** What happened in the room since `?after=<ISO time>`, for a bearer room token. */
 export const GUEST_ROOM_UPDATES_ROUTE = `${GUEST_ROUTE_PREFIX}/room/updates`;
+/** One artifact card of the room's board, `?note=<id>`, as a `RoomArtifactRead`, for a room token. */
+export const GUEST_ROOM_ARTIFACT_ROUTE = `${GUEST_ROUTE_PREFIX}/room/artifact`;
 /** A guest's change to the room's board (POST), a `RoomBoardChange` as JSON: `?share=<id>`. */
 export const GUEST_BOARD_ROUTE = `${GUEST_ROUTE_PREFIX}/board`;
 /** Where a guest's pointer is on the room's board (POST), a `GuestCursorRequest`: `?share=<id>`. */

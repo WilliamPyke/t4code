@@ -1621,6 +1621,11 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:shared-thread:take-task",
       tag: WS_METHODS.sharedThreadTakeTask,
     }),
+    // Finds the thread joined from a room and reads an artifact card there for its draft.
+    takeSharedRoomArtifact: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:shared-thread:take-artifact",
+      tag: WS_METHODS.sharedThreadTakeArtifact,
+    }),
     // Which guests have a shared thread open. Mounted only while the owner's guest list is open.
     guestPresence: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:guest-share:presence",

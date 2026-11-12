@@ -1,5 +1,7 @@
 import {
   GuestId,
+  GuestShareId,
+  type OrchestrationV2TurnItem,
   ROOM_ARTIFACT_MAX_LENGTH,
   ROOM_BOARD_MAX_ARTIFACTS,
   type RoomBoard,
@@ -12,7 +14,9 @@ import {
   EMPTY_ROOM_BOARD,
   type RoomBoardScope,
   applyRoomBoardChange,
+  roomArtifactAfterFill,
   roomArtifactBody,
+  roomArtifactRequestOf,
   roomBoardWithCards,
 } from "./roomBoard.ts";
 
@@ -100,6 +104,67 @@ describe("applyRoomBoardChange", () => {
     expect(renamed.notes[0]).toMatchObject({ text: "The plan", kind: "artifact", artifact });
     const added = applied(filled, put("a6", { text: "Other" }));
     expect(added.notes.at(-1)?.artifact).toBeUndefined();
+  });
+
+  it("swaps an artifact with the version it replaced, and back, for anyone", () => {
+    const first = { body: "# One", turnId: "run:1", updatedAt: "2026-11-12T00:00:00.000Z" };
+    const second = roomArtifactAfterFill(roomArtifactAfterFill(undefined, first), {
+      body: "# Two",
+      guestId: sam,
+      turnId: "run:2",
+      updatedAt: "2026-11-12T00:01:00.000Z",
+    });
+    // Only one step is kept: the version replaced loses its own earlier one.
+    const third = roomArtifactAfterFill(second, { ...first, body: "# Three", turnId: "run:3" });
+    const { previous: _first, ...secondAlone } = second;
+    expect(third.previous).toStrictEqual(secondAlone);
+    const board: RoomBoard = {
+      positions: {},
+      notes: [
+        { id: "a", text: "Plan", x: 0, y: 0, kind: "artifact", artifact: second },
+        { id: "empty", text: "Empty", x: 0, y: 0, kind: "artifact" },
+        { id: "note", text: "Note", x: 0, y: 0 },
+      ],
+    };
+    const restore = (noteId: string): RoomBoardChange => ({ type: "artifact.restore", noteId });
+    const restored = Result.getOrThrow(applyRoomBoardChange(board, scope, null, restore("a")));
+    expect(restored.notes[0]?.artifact).toStrictEqual({ ...first, previous: secondAlone });
+    // Restoring again undoes the restore.
+    expect(applied(restored, restore("a")).notes[0]?.artifact).toEqual(second);
+    // No earlier version, not an artifact, or no such card: nothing happens.
+    for (const noteId of ["empty", "note", "gone"]) {
+      expect(applied(board, restore(noteId))).toBe(board);
+    }
+  });
+});
+
+describe("roomArtifactRequestOf", () => {
+  const shareId = GuestShareId.make("share:mine");
+  const record = (share: string) => ({
+    version: 1,
+    contextId: "room-artifact_1",
+    kind: "room-artifact",
+    label: 'Artifact "Plan"',
+    shareId: share,
+    noteId: "note:plan",
+    title: "Plan",
+  });
+  const message = (context: object) =>
+    ({ type: "user_message", text: "Draw it", context }) as unknown as OrchestrationV2TurnItem;
+
+  it("finds the card a message of this share asked for, and the guest message it was", () => {
+    expect(roomArtifactRequestOf([message({ records: [record(shareId)] })], shareId)).toEqual({
+      noteId: "note:plan",
+    });
+    const guest = { guestMessageId: "guest-message:1", name: "Sam", text: "Draw it" };
+    expect(
+      roomArtifactRequestOf([message({ guest, records: [record(shareId)] })], shareId),
+    ).toEqual({ noteId: "note:plan", guestMessageId: "guest-message:1" });
+    // Another share's card, or none, is no request here.
+    expect(roomArtifactRequestOf([message({ records: [record("share:old")] })], shareId)).toBe(
+      undefined,
+    );
+    expect(roomArtifactRequestOf([message({ records: [] })], shareId)).toBeUndefined();
   });
 });
 

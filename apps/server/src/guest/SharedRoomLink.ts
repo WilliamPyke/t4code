@@ -2,6 +2,7 @@ import {
   CommandId,
   GUEST_AGENT_PROMPT_MAX_LENGTH,
   GUEST_ROOM_ACTIVITY_ROUTE,
+  GUEST_ROOM_ARTIFACT_ROUTE,
   GUEST_ROOM_TURN_ROUTE,
   GUEST_ROOM_UPDATES_ROUTE,
   GUEST_TURN_PROMPT_MAX_LENGTH,
@@ -13,7 +14,7 @@ import {
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
-  RoomArtifactContextRecord,
+  RoomArtifactRead,
   ROOM_TASK_CONTEXT_KIND,
   ROOM_UPDATES_MAX_CHARS,
   RoomTaskContextPayload,
@@ -23,12 +24,13 @@ import {
   type RunId,
   type SharedThreadCatchUpResult,
   type SharedThreadRoom,
+  type SharedThreadTakeArtifactResult,
   SharedThreadJoinError,
   ThreadId,
   type ThreadRoomLink,
 } from "@t3tools/contracts";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
-import { roomArtifactBody } from "@t3tools/shared/roomBoard";
+import { roomArtifactBody, roomArtifactRequestOf } from "@t3tools/shared/roomBoard";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -57,7 +59,7 @@ const SETTLED_RUN = new Set(["completed", "interrupted", "failed", "cancelled", 
 const MAX_UPDATES_BYTES = 512 * 1024;
 const decodeUpdates = Schema.decodeUnknownEffect(Schema.toCodecJson(RoomUpdates));
 const decodeRoomTask = Schema.decodeUnknownOption(RoomTaskContextPayload);
-const isRoomArtifactRecord = Schema.is(RoomArtifactContextRecord);
+const decodeArtifact = Schema.decodeUnknownEffect(RoomArtifactRead);
 
 /** A room's update as this machine keeps it: no characters nobody can see, a one-line name. */
 const sanitizeUpdate = (update: RoomUpdate): ReadonlyArray<RoomUpdate> => {
@@ -154,21 +156,15 @@ function roomTaskOfRun(
   return undefined;
 }
 
-/**
- * The artifact card of this share that one of a run's messages asked the owner's agent to fill.
- * Only the owner's own send attaches one; a guest's message reaches the agent with no records.
- */
-function roomArtifactOfRun(
+/** What a finished run puts in the artifact card it was asked to fill, from its whole reply. */
+function artifactOfRun(
+  noteId: string | undefined,
   items: ReadonlyArray<OrchestrationV2TurnItem>,
-  shareId: GuestShareId,
-): string | undefined {
-  for (const item of items) {
-    if (item.type !== "user_message" || item.context?.guest !== undefined) continue;
-    for (const record of item.context?.records ?? []) {
-      if (isRoomArtifactRecord(record) && record.shareId === shareId) return record.noteId;
-    }
-  }
-  return undefined;
+): NonNullable<GuestTurnRequest["artifact"]> | undefined {
+  const reply = noteId === undefined ? "" : replyOf(items);
+  if (noteId === undefined || reply === "") return undefined;
+  const { body, truncated } = roomArtifactBody(reply);
+  return { noteId, body, ...(truncated ? { truncated } : {}) };
 }
 
 /** The start of a run's prompt, as the room shows it while the run goes on. */
@@ -212,6 +208,15 @@ export class SharedRoomLink extends Context.Service<
       shareId: GuestShareId,
       taskId: string,
     ) => Effect.Effect<ThreadId | null>;
+    /**
+     * Finds the thread joined from this room and reads an artifact card from the room, for the
+     * user to send to their agent from that thread. Sends and changes nothing.
+     */
+    readonly takeArtifact: (
+      host: string,
+      shareId: GuestShareId,
+      artifactId: string,
+    ) => Effect.Effect<SharedThreadTakeArtifactResult, SharedThreadJoinError>;
     /** Posts one finished run if its thread is connected. Never fails: the turn is local first. */
     readonly publishRun: (threadId: ThreadId, runId: RunId) => Effect.Effect<void>;
     /**
@@ -349,29 +354,39 @@ const make = Effect.gen(function* () {
     };
   }, Effect.scoped);
 
+  /** The thread here joined from a room, with its link, or null when none still is. */
+  const joinedThread = Effect.fn("SharedRoomLink.joinedThread")(function* (
+    host: string,
+    shareId: GuestShareId,
+  ) {
+    const stored = yield* secrets.get(roomIndexName(host, shareId));
+    if (Option.isNone(stored)) return null;
+    const threadId = ThreadId.make(new TextDecoder().decode(stored.value));
+    const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+    const link = thread.roomLink ?? null;
+    const now = yield* DateTime.now;
+    // The index outlives a thread that left, was deleted, or joined the room again elsewhere.
+    if (
+      link === null ||
+      link.host !== host.toLowerCase() ||
+      link.shareId !== shareId ||
+      thread.deletedAt !== null ||
+      DateTime.toEpochMillis(now) >= Date.parse(link.expiresAt)
+    ) {
+      return null;
+    }
+    return { threadId, link, now };
+  });
+
   const takeTask = Effect.fn("SharedRoomLink.takeTask")(
     function* (host: string, shareId: GuestShareId, taskId: string) {
-      const stored = yield* secrets.get(roomIndexName(host, shareId));
-      if (Option.isNone(stored)) return null;
-      const threadId = ThreadId.make(new TextDecoder().decode(stored.value));
-      const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
-      const link = thread.roomLink ?? null;
-      const now = yield* DateTime.now;
-      // The index outlives a thread that left, was deleted, or joined the room again elsewhere.
-      if (
-        link === null ||
-        link.host !== host.toLowerCase() ||
-        link.shareId !== shareId ||
-        thread.deletedAt !== null ||
-        DateTime.toEpochMillis(now) >= Date.parse(link.expiresAt)
-      ) {
-        return null;
-      }
-      yield* setLink(threadId, {
-        ...link,
-        task: { id: taskId, takenAt: DateTime.formatIso(now) },
+      const joined = yield* joinedThread(host, shareId);
+      if (joined === null) return null;
+      yield* setLink(joined.threadId, {
+        ...joined.link,
+        task: { id: taskId, takenAt: DateTime.formatIso(joined.now) },
       });
-      return threadId;
+      return joined.threadId;
     },
     Effect.catch((cause) =>
       Effect.logWarning("Could not take a task to a joined thread", { cause }).pipe(
@@ -379,6 +394,61 @@ const make = Effect.gen(function* () {
       ),
     ),
   );
+
+  const takeArtifact = Effect.fn("SharedRoomLink.takeArtifact")(function* (
+    host: string,
+    shareId: GuestShareId,
+    artifactId: string,
+  ) {
+    const joined = yield* joinedThread(host, shareId).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not find a joined thread", { cause }).pipe(Effect.as(null)),
+      ),
+    );
+    if (joined === null) return { threadId: null, artifact: null };
+    const { threadId, link } = joined;
+    const url = sharedThreadRouteUrl(link.host, GUEST_ROOM_ARTIFACT_ROUTE);
+    const token = yield* secrets
+      .get(tokenSecretName(threadId))
+      .pipe(Effect.orElseSucceed(() => Option.none<Uint8Array>()));
+    if (url === null || Option.isNone(token)) {
+      yield* disconnect(threadId);
+      return yield* fail("room_ended");
+    }
+    const response = yield* http
+      .execute(
+        HttpClientRequest.get(url).pipe(
+          HttpClientRequest.bearerToken(new TextDecoder().decode(token.value)),
+          HttpClientRequest.setUrlParams({ note: artifactId }),
+        ),
+      )
+      .pipe(
+        Effect.timeout(REQUEST_TIMEOUT),
+        Effect.mapError(() => fail("unreachable")),
+      );
+    if (response.status === 410) {
+      yield* disconnect(threadId);
+      return yield* fail("room_ended");
+    }
+    if (response.status === 404) return { threadId, artifact: null };
+    if (response.status === 429) return yield* fail("too_fast");
+    if (response.status !== 200) return yield* fail("unreachable");
+    if (Number(response.headers["content-length"] ?? "0") > MAX_UPDATES_BYTES) {
+      return yield* fail("invalid_response");
+    }
+    const read = yield* response.json.pipe(
+      Effect.flatMap(decodeArtifact),
+      Effect.timeout(REQUEST_TIMEOUT),
+      Effect.mapError(() => fail("invalid_response")),
+    );
+    // It goes to this user's agent, so nothing they cannot see comes along.
+    const body = read.body === undefined ? "" : sanitizeLinkedPrompt(read.body).text;
+    const artifact: RoomArtifactRead = {
+      title: sanitizeLinkedPrompt(read.title).text.replace(/\s+/g, " "),
+      ...(body === "" ? {} : { body }),
+    };
+    return { threadId, artifact };
+  }, Effect.scoped);
 
   /** Clears the task a posted turn answered, unless the user took another since. */
   const finishTask = (threadId: ThreadId, taskId: string) =>
@@ -404,7 +474,10 @@ const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => null),
     );
 
-  /** A run as the room hears of it: its items, the task it answers, and where the code is. */
+  /**
+   * A run as the room hears of it: its items, the task it answers, where the code is, and the
+   * room's artifact card the user asked it to fill.
+   */
   const runFacts = Effect.fn("SharedRoomLink.runFacts")(function* (
     threadId: ThreadId,
     thread: OrchestrationV2AppThread,
@@ -421,8 +494,13 @@ const make = Effect.gen(function* () {
       runs.find((run) => run.id === runId),
     );
     const code = yield* codeOf(thread);
+    const artifactId =
+      link.shareId === undefined
+        ? undefined
+        : roomArtifactRequestOf(turnItems, link.shareId)?.noteId;
     return {
       turnItems,
+      artifactId,
       about: {
         ...(taskId === undefined ? {} : { taskId }),
         ...(code === null ? {} : { code }),
@@ -442,10 +520,15 @@ const make = Effect.gen(function* () {
       if (url === null || Option.isNone(token) || now >= Date.parse(link.expiresAt)) {
         return yield* disconnect(threadId);
       }
-      const { turnItems, about } = yield* runFacts(threadId, thread, link, runId);
+      const { turnItems, about, artifactId } = yield* runFacts(threadId, thread, link, runId);
       const turn = guestTurnOf(runId, turnItems);
       if (turn === null) return;
-      const request: GuestTurnRequest = { ...turn, ...about };
+      const artifact = artifactOfRun(artifactId, turnItems);
+      const request: GuestTurnRequest = {
+        ...turn,
+        ...about,
+        ...(artifact === undefined ? {} : { artifact }),
+      };
       const response = yield* http
         .execute(
           HttpClientRequest.post(url).pipe(
@@ -483,12 +566,16 @@ const make = Effect.gen(function* () {
       const request: GuestAgentActivityRequest =
         state === "idle"
           ? { id: runId, state }
-          : yield* Effect.map(runFacts(threadId, thread, link, runId), ({ turnItems, about }) => ({
-              id: runId,
-              state,
-              prompt: runPromptOf(turnItems),
-              ...about,
-            }));
+          : yield* Effect.map(
+              runFacts(threadId, thread, link, runId),
+              ({ turnItems, about, artifactId }) => ({
+                id: runId,
+                state,
+                prompt: runPromptOf(turnItems),
+                ...about,
+                ...(artifactId === undefined ? {} : { artifactId }),
+              }),
+            );
       const response = yield* http
         .execute(
           HttpClientRequest.post(url).pipe(
@@ -536,19 +623,21 @@ const make = Effect.gen(function* () {
           turn: { id: turn.id, reply: turn.reply },
         });
       }
-      const noteId = roomArtifactOfRun(turnItems, share.id);
-      const reply = noteId === undefined ? "" : replyOf(turnItems);
-      if (noteId === undefined || reply === "") return;
-      const { body, truncated } = roomArtifactBody(reply);
+      const request = roomArtifactRequestOf(turnItems, share.id);
+      const artifact = artifactOfRun(request?.noteId, turnItems);
+      if (request === undefined || artifact === undefined) return;
+      const askedBy =
+        request.guestMessageId === undefined
+          ? undefined
+          : share.messages.find((message) => message.id === request.guestMessageId)?.guestId;
       yield* orchestrator.dispatch({
         type: "thread.room-artifact.fill",
         commandId: CommandId.make(`server:room-artifact:${runId}`),
         threadId,
         shareId: share.id,
-        noteId,
         turnId: runId,
-        body,
-        ...(truncated ? { truncated } : {}),
+        ...artifact,
+        ...(askedBy === undefined ? {} : { askedBy }),
       });
     },
     Effect.catch((cause) => Effect.logWarning("Could not show a turn on the board", { cause })),
@@ -602,6 +691,7 @@ const make = Effect.gen(function* () {
     leave,
     catchUp,
     takeTask,
+    takeArtifact,
     publishRun,
     publishActivity,
     drain: worker.drain,

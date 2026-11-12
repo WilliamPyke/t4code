@@ -488,6 +488,18 @@ it.effect("sends a trusted guest's message itself only while the provider is on 
     );
     assert.isTrue(opened?.type === "view" && opened.view.direct);
 
+    // A message for an artifact card goes the same way, with the card this board has.
+    yield* guestShares.changeBoard(
+      { threadId },
+      { type: "note.put", noteId: "plan", text: "Plan", x: 0, y: 0, kind: "artifact" },
+    );
+    const forCard = (artifactId: string) =>
+      guestShares.submit(sam.token, { shareId: sam.shareId, text: "Draw it", artifactId }, []);
+    assert.equal((yield* Effect.flip(forCard("gone"))).reason, "artifact_gone");
+    yield* forCard("plan");
+    const drawn = (yield* orchestrator.getThreadRecords(threadId, ["messages"])).messages.at(-1);
+    assert.deepInclude(drawn?.context?.records[0], { kind: "room-artifact", noteId: "plan" });
+
     yield* trust(false);
     yield* ask("Fourth");
     assert.equal((yield* state).waiting.at(-1), "pending");
@@ -851,6 +863,12 @@ it.effect("shows the room a guest's agent while its turn runs, and never stores 
       yield* guestShares.postActivity(token, { ...running(`run:task-${taskId}`), taskId: "task" });
       assert.deepEqual(yield* Queue.take(owner), [{ ...shown[0], taskId: "task" }]);
     }
+    // And the artifact card its reply will fill, when the card is one on this board.
+    yield* put("plan", { kind: "artifact" });
+    yield* guestShares.postActivity(token, { ...running("run:plan"), artifactId: "plan" });
+    assert.deepEqual(yield* Queue.take(owner), [{ ...shown[0], artifactId: "plan" }]);
+    yield* guestShares.postActivity(token, { ...running("run:not-plan"), artifactId: "note" });
+    assert.deepEqual(yield* Queue.take(owner), shown);
 
     // A guest's board says where the owner's code is too, once git does.
     yield* Ref.set(checkout, { branch: "fix/login", synced: true });
@@ -890,6 +908,72 @@ it.effect("shows the room a guest's agent while its turn runs, and never stores 
       "ended",
     );
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("lets a guest's own machine read an artifact card and fill it with its turn", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const token = (yield* guestShares.exportThread((yield* guestShares.handoff(sam.token)).token))
+      .room!.token;
+    const put = (noteId: string, fields: object = {}) =>
+      guestShares.changeBoard(
+        { threadId },
+        { type: "note.put", noteId, text: "Plan", x: 0, y: 0, ...fields },
+      );
+    yield* put("plan", { kind: "artifact" });
+    yield* put("note");
+    const card = Effect.map(
+      orchestrator.getThreadRecords(threadId, ["runs", "messages"]),
+      (records) => ({
+        ...records,
+        plan: records.thread.guestShare?.board?.notes.find((note) => note.id === "plan"),
+      }),
+    );
+
+    const read = Effect.map(guestShares.roomArtifact(token, "plan"), ({ title, body }) => ({
+      title,
+      body,
+    }));
+    assert.deepEqual(yield* read, { title: "Plan", body: undefined });
+    // Only an artifact on this board, and only for the room token of someone in the room.
+    for (const noteId of ["note", "gone"]) {
+      assert.equal(
+        (yield* Effect.flip(guestShares.roomArtifact(token, noteId))).reason,
+        "artifact_gone",
+      );
+    }
+    assert.equal(
+      (yield* Effect.flip(guestShares.roomArtifact(sam.token, "plan"))).reason,
+      "invalid",
+    );
+
+    const page = "<!doctype html><html><body>Hi</body></html>";
+    yield* guestShares.postTurn(token, {
+      id: "run:1",
+      prompt: "Draw it",
+      reply: "Here it is.",
+      artifact: { noteId: "plan", body: `Here:\n\`\`\`html\n${page}\u200B\n\`\`\`` },
+    });
+    const filled = yield* card;
+    const samId = filled.thread.guestShare!.guests![0]!.id;
+    // The card holds the page alone, as from any reply, and says whose agent wrote it.
+    assert.deepInclude(filled.plan?.artifact, { body: page, guestId: samId, turnId: "run:1" });
+    assert.deepEqual(yield* read, { title: "Plan", body: page });
+    // A card that is not an artifact here takes nothing; the turn still shows.
+    yield* guestShares.postTurn(token, {
+      id: "run:2",
+      prompt: "Draw it",
+      reply: "Done.",
+      artifact: { noteId: "note", body: "# Other" },
+    });
+    const after = yield* card;
+    assert.deepEqual(after.plan?.artifact, filled.plan?.artifact);
+    assert.lengthOf(after.thread.guestShare?.turns ?? [], 2);
+    // Nothing reached the owner's agent.
+    assert.lengthOf(after.runs, 0);
+    assert.lengthOf(after.messages, 0);
+  }).pipe(Effect.provide(layerTest)),
 );
 
 it.effect("shows each person's pointer on the board to everyone else while they have it open", () =>

@@ -10,9 +10,11 @@ import {
   type EnvironmentId,
   GuestShareId,
   repositoryGroupingKeyOf,
+  type RoomArtifactRead,
   type SharedThreadPreview,
   type ThreadId,
 } from "@t3tools/contracts";
+import { roomArtifactContextRecord } from "@t3tools/shared/composerContextReferences";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import type { JoinLink } from "@t3tools/shared/promptLinks";
 import { useNavigate } from "@tanstack/react-router";
@@ -31,6 +33,7 @@ import {
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 
+import { takeRoomArtifactToDraft } from "../chat/roomTaskDraft";
 import { sortScopedProjectsForSidebar } from "../Sidebar.logic";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
@@ -51,7 +54,8 @@ const messageOf = (error: unknown, fallback: string) =>
 /**
  * Brings a thread someone shared to the user's own machine; every turn in it runs here. The
  * preview says before anything is created when the thread will show its turns to a room. A task
- * card's link lands as a draft in the thread joined from that room, joining first if needed.
+ * card's link lands as a draft in the thread joined from that room, joining first if needed, and
+ * so does an artifact card's, with the card as the room has it attached.
  */
 export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
   const navigate = useNavigate();
@@ -70,16 +74,45 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
   const takeSharedRoomTask = useAtomCommand(serverEnvironment.takeSharedRoomTask, {
     reportFailure: false,
   });
+  const takeSharedRoomArtifact = useAtomCommand(serverEnvironment.takeSharedRoomArtifact, {
+    reportFailure: false,
+  });
   const [state, setState] = useState<JoinState>({ status: "confirm" });
   const source = { host: link.host, token: link.token };
   const task = link.task;
+  const artifact = link.artifact;
 
-  const openThread = (environmentId: EnvironmentId, threadId: ThreadId) => {
+  const openThread = (
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+    taken: RoomArtifactRead | null = null,
+  ) => {
+    const threadRef = scopeThreadRef(environmentId, threadId);
     if (task !== undefined) {
       // A note from the board comes the same way, and answers nothing in the room.
-      placeLinkedPrompt(scopeThreadRef(environmentId, threadId), task.prompt, [
+      placeLinkedPrompt(threadRef, task.prompt, [
         "If this is a task card, your agent's reply answers it in the room.",
       ]);
+    }
+    if (artifact !== undefined && taken === null) {
+      // A room on an older server names no share, so the card cannot be read from it.
+      placeLinkedPrompt(threadRef, artifact.prompt, [
+        "The room did not give the artifact, so the reply will not fill it.",
+      ]);
+    } else if (artifact !== undefined && taken !== null) {
+      const record = roomArtifactContextRecord({
+        batch: randomUUID(),
+        shareId: GuestShareId.make(artifact.shareId),
+        noteId: artifact.artifactId,
+        title: taken.title,
+        current: taken.body,
+      });
+      placeLinkedPrompt(
+        threadRef,
+        artifact.prompt,
+        ["The artifact as it is now goes with it, and your agent's reply replaces it in the room."],
+        () => takeRoomArtifactToDraft({ threadRef, record }),
+      );
     }
     void navigate({
       to: "/$environmentId/$threadId",
@@ -98,10 +131,46 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
     return result._tag === "Success" ? result.value.threadId : null;
   };
 
+  /**
+   * Opens the artifact's draft in the thread joined from its room on this environment, if one is,
+   * with the card read from the room. Returns whether it did, after saying why it could not.
+   */
+  const takeArtifactOn = async (environmentId: EnvironmentId): Promise<boolean> => {
+    if (artifact === undefined) return false;
+    const result = await takeSharedRoomArtifact({
+      environmentId,
+      input: {
+        host: link.host,
+        shareId: GuestShareId.make(artifact.shareId),
+        artifactId: artifact.artifactId,
+      },
+    });
+    if (result._tag === "Failure") {
+      if (isAtomCommandInterrupted(result)) return false;
+      setState({
+        status: "failed",
+        message: messageOf(squashAtomCommandFailure(result), "Could not read the artifact."),
+      });
+      return true;
+    }
+    const { threadId, artifact: taken } = result.value;
+    if (threadId === null) return false;
+    if (taken === null) {
+      setState({ status: "failed", message: "This artifact is no longer on the board." });
+      return true;
+    }
+    openThread(environmentId, threadId, taken);
+    return true;
+  };
+
   /** Asks each of the user's own machines, the ones with projects; joins when none is in the room. */
-  const takeTaskToJoinedThread = async () => {
+  const takeToJoinedThread = async () => {
     setState({ status: "working", title: "Looking for your thread from this room..." });
     for (const environmentId of new Set(projects.map((project) => project.environmentId))) {
+      if (artifact !== undefined) {
+        if (await takeArtifactOn(environmentId)) return;
+        continue;
+      }
       const threadId = await takeTaskOn(environmentId);
       if (threadId !== null) return openThread(environmentId, threadId);
     }
@@ -170,6 +239,13 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
       });
       return;
     }
+    // An artifact is read from the room the new thread just joined; it opens the thread itself.
+    if (artifact !== undefined) {
+      if (!(await takeArtifactOn(project.environmentId))) {
+        openThread(project.environmentId, result.value.threadId);
+      }
+      return;
+    }
     // A room on an older server names no share, so its task cannot be taken: it stays a draft.
     await takeTaskOn(project.environmentId);
     openThread(project.environmentId, result.value.threadId);
@@ -196,7 +272,16 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
 
   switch (state.status) {
     case "confirm":
-      return task === undefined ? (
+      return artifact !== undefined ? (
+        <JoinPage
+          title="Take this artifact to your agent?"
+          description={`"${artifact.prompt.text}" goes into your thread from this room as a draft, after you join it if you have not, with what the artifact shows now attached for your agent to revise. Nothing is sent until you send it. When your agent finishes, its reply replaces the artifact for everyone in the room.`}
+        >
+          <Button size="sm" onClick={() => void takeToJoinedThread()}>
+            Continue
+          </Button>
+        </JoinPage>
+      ) : task === undefined ? (
         <JoinPage
           title="Bring this shared thread to your machine?"
           description={`T Code will ask ${link.host} for the conversation. You get your own thread: your turns run here, on your own provider login.`}
@@ -210,7 +295,7 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
           title="Take this to your agent?"
           description={`"${task.prompt.text}" goes into your thread from this room as a draft, after you join it if you have not. Nothing is sent until you send it. If it is a task card, your agent's reply then answers it in the room.`}
         >
-          <Button size="sm" onClick={() => void takeTaskToJoinedThread()}>
+          <Button size="sm" onClick={() => void takeToJoinedThread()}>
             Continue
           </Button>
         </JoinPage>
@@ -252,7 +337,13 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
             preview.live === true
               ? "Everyone in the room sees each prompt you send in it as your agent starts on it, your agent's final reply when it finishes, and your thread's branch name and whether it is pushed; you can leave the room from the thread."
               : "Nothing you do in it is sent back."
-          }${task === undefined ? "" : " Once you join, the task goes into the thread as a draft."}`}
+          }${
+            task !== undefined
+              ? " Once you join, the task goes into the thread as a draft."
+              : artifact !== undefined
+                ? " Once you join, your request goes into the thread as a draft, with the artifact."
+                : ""
+          }`}
         >
           {checkout !== null && project !== undefined ? (
             <Button size="sm" onClick={() => joinWithCode(project)}>

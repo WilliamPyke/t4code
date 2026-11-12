@@ -67,6 +67,8 @@ import {
   type BoardPoint,
   type BoardPresence,
   type BoardPrompt,
+  type BoardPromptContext,
+  type BoardRect,
   type BoardTarget,
   type BoardValue,
   type BoardView,
@@ -76,6 +78,8 @@ import {
   INITIAL_BOARD_VIEW,
   NO_BOARD_EDITS,
   boardAgents,
+  boardArtifactAuthor,
+  boardArtifactWriting,
   boardCardBox,
   boardChangeOf,
   boardChangeQueue,
@@ -85,6 +89,7 @@ import {
   boardEditKey,
   boardNoteBox,
   boardNoteMessage,
+  boardNewNoteSize,
   boardNoteQuote,
   boardNoteSize,
   boardPersonKey,
@@ -99,7 +104,7 @@ import {
   panBoardBy,
   parseBoardLink,
   placeBoardCards,
-  placeBoardNote,
+  placeBoardItem,
   putBoardEdit,
   resolveBoard,
   roomCodeStatus,
@@ -108,7 +113,7 @@ import {
   settleBoardValue,
   zoomBoardAt,
 } from "./roomBoard.logic";
-import { RoomArtifactBody } from "./RoomBoardArtifact";
+import { RoomArtifactBody, RoomArtifactMeta } from "./RoomBoardArtifact";
 import { BoardPromptBox } from "./RoomBoardPrompt";
 
 const guestCardId = (guest: ThreadGuest) => roomBoardGuestCard(guest.id);
@@ -119,6 +124,8 @@ const GRID = 22;
 // How far past the cards and notes the arrows' drawing area reaches.
 const EDGE_MARGIN = 400;
 const FOLLOW_NOTICE_MS = 4_000;
+// About what three clamped lines of a quote hold on a note of the default width.
+const QUOTE_CLAMP_LENGTH = 90;
 
 /** What an arrow does: carries a card into a message from the thread, or takes its reply. */
 type EdgeRole = "plain" | "context" | "artifact";
@@ -198,10 +205,12 @@ function ResizeHandle({
     start.current = null;
     onEnd();
   };
+  // A 24px grip centred on the corner: half of it is outside the card, so it covers only the
+  // card's corner padding and never its buttons or text.
   return (
     <div
       aria-hidden
-      className="absolute right-0 bottom-0 z-10 grid size-4 cursor-nwse-resize touch-none place-items-center opacity-0 transition-opacity group-hover/item:opacity-100"
+      className="absolute -right-3 -bottom-3 z-10 grid size-6 cursor-nwse-resize touch-none place-items-center opacity-40 transition-opacity group-hover/item:opacity-100"
       onPointerDown={(event) => {
         const box = event.currentTarget.parentElement;
         if (event.button !== 0 || box === null) return;
@@ -223,7 +232,7 @@ function ResizeHandle({
       onPointerUp={release}
       onPointerCancel={release}
     >
-      <span className="size-1.5 rounded-br-xs border-e-2 border-b-2 border-muted-foreground" />
+      <span className="size-2 -translate-x-1 -translate-y-1 rounded-br-xs border-e-2 border-b-2 border-muted-foreground" />
     </div>
   );
 }
@@ -312,7 +321,11 @@ export function RoomBoard({
   ownerAssignable = true,
   formerPeople = NO_FORMER_PEOPLE,
   onPrompt,
+  onTakeArtifact,
+  ownerWritingArtifactId = null,
+  needsApproval = false,
   promptPlaceholder,
+  artifactPromptPlaceholder,
   canFillArtifacts = false,
 }: {
   readonly title: string;
@@ -365,7 +378,17 @@ export function RoomBoard({
   readonly formerPeople?: BoardPeople["guests"];
   /** Sends a message from the thread's card and says whether it went. Absent: no prompt box. */
   readonly onPrompt?: ((prompt: BoardPrompt) => Promise<boolean>) | undefined;
+  /** A guest whose own machine is in the room: opens the artifact prompt as a draft in their T Code. */
+  readonly onTakeArtifact?:
+    | ((prompt: BoardPrompt & { readonly artifactId: string }) => void)
+    | undefined;
+  /** The artifact the owner's running turn will fill, if any. Guests' come from `running[].artifactId`. */
+  readonly ownerWritingArtifactId?: string | null | undefined;
+  /** The owner's thread is waiting for the owner to approve something. */
+  readonly needsApproval?: boolean | undefined;
   readonly promptPlaceholder?: string | undefined;
+  /** What the prompt box on an artifact card says it does; "Ask for a change" when absent. */
+  readonly artifactPromptPlaceholder?: string | undefined;
   /** Whether a reply sent from the board may fill an artifact card. */
   readonly canFillArtifacts?: boolean | undefined;
 }) {
@@ -462,14 +485,52 @@ export function RoomBoard({
       ? null
       : boardPromptContext(shown, people, messages);
   const fillsArtifact = prompt !== null && canFillArtifacts;
+  // Each artifact card then has a box of its own, and the arrows into it carry cards too.
+  const artifactPrompts = new Map<string, BoardPromptContext>(
+    fillsArtifact
+      ? shown.notes.flatMap((note) =>
+          note.kind === "artifact"
+            ? [[note.id, boardPromptContext(shown, people, messages, noteRef(note.id))] as const]
+            : [],
+        )
+      : [],
+  );
+  const contextEdges = new Set([
+    ...(prompt?.edgeIds ?? []),
+    ...[...artifactPrompts.values()].flatMap((context) => [...context.edgeIds]),
+  ]);
   const edgeRole = (id: string): EdgeRole =>
-    prompt === null
-      ? "plain"
-      : prompt.edgeIds.has(id)
-        ? "context"
-        : fillsArtifact && prompt.artifactEdgeId === id
-          ? "artifact"
-          : "plain";
+    contextEdges.has(id)
+      ? "context"
+      : fillsArtifact && prompt?.artifactEdgeId === id
+        ? "artifact"
+        : "plain";
+  const artifactPromptOf = (note: RoomBoardNote) => {
+    const context = artifactPrompts.get(note.id);
+    if (context === undefined || onPrompt === undefined) return undefined;
+    return (
+      <BoardPromptBox
+        cards={context.cards}
+        artifactId={note.id}
+        fills={null}
+        label="Ask for a change to this artifact"
+        placeholder={artifactPromptPlaceholder ?? "Ask for a change"}
+        onPrompt={onPrompt}
+        onTake={
+          onTakeArtifact === undefined
+            ? undefined
+            : (taken) => onTakeArtifact({ ...taken, artifactId: note.id })
+        }
+      />
+    );
+  };
+  const restoreOf = (note: RoomBoardNote) =>
+    onChange === undefined || !canEdit || note.artifact?.previous === undefined
+      ? undefined
+      : () =>
+          queueChange(noteRef(note.id), () =>
+            onChange({ type: "artifact.restore", noteId: note.id }),
+          );
   const send = (target: BoardTarget, value: BoardValue) => {
     if (onChange === undefined) return;
     held.current.delete(boardEditKey(target));
@@ -570,16 +631,37 @@ export function RoomBoard({
   const full = shown.notes.length >= ROOM_BOARD_MAX_NOTES;
   const artifactsFull =
     shown.notes.filter((note) => note.kind === "artifact").length >= ROOM_BOARD_MAX_ARTIFACTS;
+  // A new card lands in view, clear of everything there at the size the browser drew it.
+  const freeSpot = (kind: RoomBoardNote["kind"]): BoardPoint => {
+    const surface = surfaceRef.current;
+    const size = boardNewNoteSize(kind);
+    if (surface === null) return placeBoardItem(size, screenToBoard(view, { x: 300, y: 200 }), []);
+    const bounds = surface.getBoundingClientRect();
+    const corner = screenToBoard(view, { x: 0, y: 0 });
+    const within = {
+      ...corner,
+      width: bounds.width / view.zoom,
+      height: bounds.height / view.zoom,
+    };
+    const taken: Array<BoardRect> = [];
+    for (const item of surface.querySelectorAll<HTMLElement>("[data-board-item]")) {
+      taken.push({
+        x: item.offsetLeft,
+        y: item.offsetTop,
+        width: item.offsetWidth,
+        height: item.offsetHeight,
+      });
+    }
+    return placeBoardItem(
+      size,
+      { x: within.x + within.width / 2, y: within.y + within.height / 2 },
+      taken,
+      within,
+    );
+  };
   const addCard = (fields: Pick<RoomBoardNote, "kind" | "url">, wanted?: BoardPoint) => {
     if (!canEdit || full) return;
-    const bounds = surfaceRef.current?.getBoundingClientRect();
-    const at =
-      wanted ??
-      placeBoardNote(
-        screenToBoard(view, { x: (bounds?.width ?? 600) / 2 - 90, y: 96 }),
-        shown.notes,
-        Object.values(positions),
-      );
+    const at = wanted ?? freeSpot(fields.kind);
     const id = randomUUID();
     send(
       { kind: "note", id },
@@ -949,7 +1031,7 @@ export function RoomBoard({
             <BoardCard
               at={positions[ROOM_BOARD_THREAD_CARD]!}
               title={title}
-              kind={agentWorking ? "agent working" : "thread"}
+              kind={needsApproval ? "needs approval" : agentWorking ? "agent working" : "thread"}
               id={ROOM_BOARD_THREAD_CARD}
               size={sizes[ROOM_BOARD_THREAD_CARD]}
               dropTarget={onUseNote === undefined ? undefined : THREAD_DROP}
@@ -962,24 +1044,40 @@ export function RoomBoard({
                 prompt === null || onPrompt === undefined ? undefined : (
                   <BoardPromptBox
                     cards={prompt.cards}
-                    artifact={fillsArtifact ? prompt.artifact : null}
-                    placeholder={promptPlaceholder}
+                    artifactId={fillsArtifact ? (prompt.artifact?.id ?? null) : null}
+                    fills={fillsArtifact ? (prompt.artifact?.text ?? null) : null}
+                    label="Message from the board"
+                    placeholder={promptPlaceholder ?? "Ask the agent"}
                     onPrompt={onPrompt}
                   />
                 )
               }
             >
+              {needsApproval ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <p role="status" className="min-w-0 flex-1 text-xs font-medium text-warning">
+                    {viewer === null
+                      ? "Waiting for your approval"
+                      : "Waiting for the owner's approval"}
+                  </p>
+                  <Button size="xs" onPointerDown={stopPointer} onClick={onOpenThread}>
+                    Open thread
+                  </Button>
+                </div>
+              ) : null}
               <ThreadMessages messages={messages} />
               <RoomCode
                 code={ownerCode}
                 onOpenPullRequest={onOpenPullRequest}
                 openingPullRequest={openingPullRequest}
               />
-              <div>
-                <Button size="xs" variant="outline" onClick={onOpenThread}>
-                  Open thread
-                </Button>
-              </div>
+              {needsApproval ? null : (
+                <div>
+                  <Button size="xs" variant="outline" onClick={onOpenThread}>
+                    Open thread
+                  </Button>
+                </div>
+              )}
             </BoardCard>
           ) : null}
           {guestCards.map((guest) => {
@@ -1074,6 +1172,16 @@ export function RoomBoard({
               onTake={takeOf(note)}
               onUse={messageOf(note)}
               onGive={giveOf(note)}
+              artifactAuthor={
+                note.artifact === undefined ? undefined : boardArtifactAuthor(note.artifact, people)
+              }
+              artifactWriting={
+                note.kind === "artifact"
+                  ? boardArtifactWriting(note.id, running, ownerWritingArtifactId, people)
+                  : null
+              }
+              onRestore={restoreOf(note)}
+              artifactPrompt={artifactPromptOf(note)}
             />
           ))}
           {edges.map((edge) => {
@@ -1106,7 +1214,9 @@ export function RoomBoard({
           })}
           <BoardFollowContext value={follow}>{cursorLayer}</BoardFollowContext>
         </div>
-        {prompt === null ? null : <ArrowLegend fillsArtifact={fillsArtifact} />}
+        {prompt === null ? null : (
+          <ArrowLegend fillsArtifact={fillsArtifact} artifactBoxes={artifactPrompts.size > 0} />
+        )}
         {room === null ? (
           <p className="pointer-events-none absolute inset-x-0 bottom-6 text-center text-sm text-muted-foreground">
             Share this thread with guests and each person who joins gets a card here.
@@ -1161,12 +1271,21 @@ interface CardResize {
 }
 
 /** What the coloured arrows do, said where people see them. */
-function ArrowLegend({ fillsArtifact }: { readonly fillsArtifact: boolean }) {
+function ArrowLegend({
+  fillsArtifact,
+  artifactBoxes,
+}: {
+  readonly fillsArtifact: boolean;
+  /** Artifact cards have prompt boxes of their own. */
+  readonly artifactBoxes: boolean;
+}) {
   return (
     <div className="pointer-events-none absolute bottom-3 left-3 flex flex-col gap-1 rounded-md border border-border bg-card/90 px-2 py-1.5 text-2xs text-muted-foreground">
       <span className="flex items-center gap-1.5">
         <span aria-hidden className="h-0.5 w-4 rounded-full bg-info" />
-        Arrow into the thread: that card goes with your message
+        {artifactBoxes
+          ? "Arrow into the thread or an artifact: that card goes with each message to it"
+          : "Arrow into the thread: that card goes with each message"}
       </span>
       {fillsArtifact ? (
         <span className="flex items-center gap-1.5">
@@ -1178,7 +1297,20 @@ function ArrowLegend({ fillsArtifact }: { readonly fillsArtifact: boolean }) {
   );
 }
 
-function LinkHandle({ from, link }: { readonly from: string; readonly link: LinkHandlers }) {
+/**
+ * A 24px grip centred on the card's right edge, level with its header. Cards and notes keep 12px
+ * of padding at the right of their header so it covers none of their buttons.
+ */
+function LinkHandle({
+  from,
+  link,
+  on,
+}: {
+  readonly from: string;
+  readonly link: LinkHandlers;
+  /** A card's header is taller than a note's; the grip sits level with its middle. */
+  readonly on: "card" | "note";
+}) {
   return (
     <Tooltip>
       <TooltipTrigger
@@ -1186,14 +1318,19 @@ function LinkHandle({ from, link }: { readonly from: string; readonly link: Link
           <button
             type="button"
             aria-label="Draw an arrow"
-            className="absolute top-2.5 -right-2 size-4 cursor-crosshair rounded-full border-2 border-primary bg-background opacity-0 transition-opacity group-hover/item:opacity-100 focus-visible:opacity-100"
+            className={cn(
+              "group/link absolute -right-3 z-10 grid size-6 cursor-crosshair touch-none place-items-center",
+              on === "card" ? "top-1.5" : "top-0",
+            )}
             onPointerDown={(event) => link.onStart(from, event)}
             onPointerMove={link.onMove}
             onPointerUp={link.onEnd}
             onPointerCancel={link.onEnd}
           />
         }
-      />
+      >
+        <span className="size-3.5 rounded-full border-2 border-primary bg-background opacity-0 transition-opacity group-hover/item:opacity-100 group-focus-visible/link:opacity-100" />
+      </TooltipTrigger>
       <TooltipPopup side="right">Drag to another card to draw an arrow</TooltipPopup>
     </Tooltip>
   );
@@ -1220,6 +1357,10 @@ function BoardNote({
   onTake,
   onUse,
   onGive,
+  artifactAuthor,
+  artifactWriting,
+  onRestore,
+  artifactPrompt,
 }: {
   readonly note: RoomBoardNote;
   readonly people: BoardPeople;
@@ -1252,6 +1393,13 @@ function BoardNote({
   readonly onUse: (() => void) | undefined;
   /** Opens the note as a draft for this guest's own agent. */
   readonly onGive: (() => void) | undefined;
+  /** Whose agent wrote the artifact's current version. */
+  readonly artifactAuthor: string | undefined;
+  /** Whose agents are writing the artifact now, or null. */
+  readonly artifactWriting: string | null;
+  readonly onRestore: (() => Promise<boolean>) | undefined;
+  /** The artifact's own prompt box, when the viewer may ask for it to change. */
+  readonly artifactPrompt: ReactNode | undefined;
 }) {
   const target = { kind: "note", id: note.id } as const;
   const author = boardPersonName(people, note.guestId);
@@ -1259,6 +1407,7 @@ function BoardNote({
   const plain = note.kind === undefined && note.pinnedTo === undefined;
   const artifact = note.kind === "artifact";
   const size = boardNoteSize(note);
+  const [quoteOpen, setQuoteOpen] = useState(false);
   return (
     <div
       className={cn(
@@ -1272,7 +1421,7 @@ function BoardNote({
       data-board-item={noteRef(note.id)}
     >
       <div
-        className="flex h-6 cursor-grab items-center gap-1 ps-3 active:cursor-grabbing"
+        className="flex h-6 cursor-grab items-center gap-1 ps-3 pe-3 active:cursor-grabbing"
         {...dragHandlers(
           (dx, dy, event) => onMove(note, dx, dy, event),
           () => onDrop(note),
@@ -1370,9 +1519,29 @@ function BoardNote({
           </div>
         )}
         {quote === undefined ? null : (
-          <blockquote className="mx-3 mb-1.5 line-clamp-3 shrink-0 border-s-2 border-warning/60 ps-2 text-2xs italic opacity-70 [overflow-wrap:anywhere]">
-            {quote}
-          </blockquote>
+          <div className="mx-3 mb-1.5 flex shrink-0 flex-col items-start gap-0.5">
+            <blockquote
+              className={cn(
+                "border-s-2 border-warning/60 ps-2 text-2xs italic opacity-70 [overflow-wrap:anywhere]",
+                !quoteOpen && "line-clamp-3",
+                quoteOpen && size !== undefined && "max-h-40 overflow-y-auto",
+              )}
+              data-board-scroll={quoteOpen ? "" : undefined}
+            >
+              {quote}
+            </blockquote>
+            {quote.length > QUOTE_CLAMP_LENGTH ? (
+              <button
+                type="button"
+                aria-expanded={quoteOpen}
+                className="text-2xs underline-offset-2 opacity-60 hover:underline hover:opacity-100"
+                onPointerDown={stopPointer}
+                onClick={() => setQuoteOpen((open) => !open)}
+              >
+                {quoteOpen ? "Show less" : "Show all"}
+              </button>
+            ) : null}
+          </div>
         )}
         <textarea
           aria-label={
@@ -1449,9 +1618,22 @@ function BoardNote({
             </Button>
           </div>
         )}
-        {artifact ? <RoomArtifactBody artifact={note.artifact} /> : null}
+        {artifact ? (
+          <RoomArtifactMeta
+            author={artifactAuthor}
+            updatedAt={note.artifact?.updatedAt}
+            writing={artifactWriting}
+            onRestore={onRestore}
+          />
+        ) : null}
+        {artifact ? (
+          <RoomArtifactBody artifact={note.artifact} promptable={artifactPrompt !== undefined} />
+        ) : null}
+        {artifact && artifactPrompt !== undefined ? (
+          <div className="shrink-0 border-t border-border px-3 pt-2 pb-3">{artifactPrompt}</div>
+        ) : null}
       </div>
-      {link === undefined ? null : <LinkHandle from={noteRef(note.id)} link={link} />}
+      {link === undefined ? null : <LinkHandle from={noteRef(note.id)} link={link} on="note" />}
       {onResize === undefined ? null : (
         <ResizeHandle
           onResize={(from, dx, dy) => onResize(note, from, dx, dy)}
@@ -1612,7 +1794,7 @@ function BoardCard({
       {footer === undefined ? null : (
         <div className="shrink-0 border-t border-border px-3 pt-2 pb-3">{footer}</div>
       )}
-      {link === undefined ? null : <LinkHandle from={cardRef(id)} link={link} />}
+      {link === undefined ? null : <LinkHandle from={cardRef(id)} link={link} on="card" />}
       {resize === undefined ? null : (
         <ResizeHandle
           onResize={(from, dx, dy) => resize.onResize(id, from, dx, dy)}

@@ -153,7 +153,10 @@ function CommentForm({
     const trimmed = text.trim();
     if (trimmed === "" || busy) return;
     setBusy(true);
-    const at = pinnedCommentSpot(room.board);
+    const at = pinnedCommentSpot(
+      room.board,
+      room.people.guests.map((guest) => guest.id),
+    );
     const quote = reply === undefined ? "" : boardReplyQuote(reply);
     const taken = await room.onChange({
       type: "note.put",

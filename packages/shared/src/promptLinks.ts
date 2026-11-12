@@ -191,11 +191,23 @@ export interface JoinLinkTask {
   readonly prompt: LinkedPrompt;
 }
 
+/**
+ * An artifact card someone took from a room to their own agent: the room's share, the card, and
+ * what they asked for, which lands as a draft in the thread joined from that room with the card's
+ * current content attached. The reply then fills the card.
+ */
+export interface JoinLinkArtifact {
+  readonly shareId: string;
+  readonly artifactId: string;
+  readonly prompt: LinkedPrompt;
+}
+
 /** A shared thread to bring to this machine: its owner's host and a guest's handoff token. */
 export interface JoinLink {
   readonly host: string;
   readonly token: string;
   readonly task?: JoinLinkTask;
+  readonly artifact?: JoinLinkArtifact;
 }
 
 export function parseJoinLink(search: string): PromptLinkResult<JoinLink> {
@@ -206,14 +218,31 @@ export function parseJoinLink(search: string): PromptLinkResult<JoinLink> {
     return { ok: false, error: "This link does not say which shared thread to open." };
   }
   const taskId = optionalParam(params, "task");
-  if (taskId === null) return { ok: true, value: { host, token } };
+  const artifactId = optionalParam(params, "artifact");
+  if (taskId === null && artifactId === null) return { ok: true, value: { host, token } };
   const shareId = optionalParam(params, "share");
   const prompt = readPrompt(params);
   if (!prompt.ok) return prompt;
-  if (shareId === null || prompt.value === null || taskId.length > 64) {
-    return { ok: false, error: "This link names a task T Code cannot read." };
+  const cardId = taskId ?? artifactId ?? "";
+  if (
+    shareId === null ||
+    prompt.value === null ||
+    cardId.length > 64 ||
+    (taskId !== null && artifactId !== null)
+  ) {
+    return {
+      ok: false,
+      error: `This link names ${taskId === null ? "an artifact" : "a task"} T Code cannot read.`,
+    };
   }
-  return { ok: true, value: { host, token, task: { shareId, taskId, prompt: prompt.value } } };
+  const card = { shareId, prompt: prompt.value };
+  return {
+    ok: true,
+    value:
+      taskId === null
+        ? { host, token, artifact: { ...card, artifactId: cardId } }
+        : { host, token, task: { ...card, taskId } },
+  };
 }
 
 export function buildJoinLink(input: {
@@ -221,6 +250,11 @@ export function buildJoinLink(input: {
   readonly token: string;
   readonly origin?: string;
   readonly task?: { readonly shareId: string; readonly taskId: string; readonly text: string };
+  readonly artifact?: {
+    readonly shareId: string;
+    readonly artifactId: string;
+    readonly text: string;
+  };
 }): string {
   const url = new URL("/join", input.origin ?? DEFAULT_HOSTED_APP_URL);
   url.searchParams.set("host", input.host);
@@ -229,6 +263,10 @@ export function buildJoinLink(input: {
     url.searchParams.set("share", input.task.shareId);
     url.searchParams.set("task", input.task.taskId);
     url.searchParams.set("prompt", input.task.text);
+  } else if (input.artifact) {
+    url.searchParams.set("share", input.artifact.shareId);
+    url.searchParams.set("artifact", input.artifact.artifactId);
+    url.searchParams.set("prompt", input.artifact.text);
   }
   return url.toString();
 }

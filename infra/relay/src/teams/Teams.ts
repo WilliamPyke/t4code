@@ -745,12 +745,13 @@ const make = Effect.gen(function* () {
       // Comments pin to one thread's replies, no agent fills an artifact here, and a task here is
       // always for a named member.
       if (
-        change.type === "note.put" &&
-        (change.pinnedTo !== undefined ||
-          change.kind === "artifact" ||
-          (change.assignee !== undefined &&
-            change.assignee !== null &&
-            change.assignee.guestId === undefined))
+        change.type === "artifact.restore" ||
+        (change.type === "note.put" &&
+          (change.pinnedTo !== undefined ||
+            change.kind === "artifact" ||
+            (change.assignee !== undefined &&
+              change.assignee !== null &&
+              change.assignee.guestId === undefined)))
       ) {
         return yield* refuse("board_rejected");
       }

@@ -13668,7 +13668,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             : {
                 ...command,
                 text: guestSend.text,
-                context: { version: 1 as const, records: [], guest: guestSend.guest },
+                // Only what the server attached: never a record the client sent.
+                context: {
+                  version: 1 as const,
+                  records: [...guestSend.records],
+                  guest: guestSend.guest,
+                },
               };
         cancelUnsettledEffects = yield* dispatchMessage(dispatched, events, effects);
         yield* recordSubagentFollowup(dispatched, events).pipe(mapDispatchError(command));

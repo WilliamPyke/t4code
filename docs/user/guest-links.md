@@ -68,7 +68,8 @@ arrow into those, are listed under it; remove any you do not want to send. When 
 the listed cards go with your message, each with who wrote it.
 
 For the owner, that is a message on the shared thread, as if sent from its composer: it uses the
-thread's model and mode, and waits behind a turn that is running. The cards show as a **Board**
+model and mode picked in the thread's composer, and waits behind a turn that is running. While the
+thread waits for you to approve something, its card says so. The cards show as a **Board**
 chip on the message; open it to read exactly what your agent got. Your agent reads each card as
 the words of whoever wrote it, so a guest's note is background, not your instruction.
 
@@ -78,16 +79,30 @@ owner reads all of it before choosing **Send**, unless the guest may
 
 ### Artifacts
 
-An **Artifact** is a card your agent writes into. Add one, give it a title, and draw an arrow from
-the thread's card to it. When the owner prompts from the board, the agent is told its reply fills
-that card, and the chip on the message says so. Once the turn finishes, the card shows the
-agent's final reply to everyone in the room: markdown as text, or, when the reply holds a whole
-HTML page in an `html` code block, the live page. Prompt again with the same arrow to revise it;
-the agent gets what the card shows now. An interrupted or failed turn leaves the card as it was.
+An **Artifact** is a card an agent writes into. Add one and give it a title. To ask for it, use the
+message box on the artifact card itself, or draw an arrow from the thread's card to it and prompt
+from the thread's card. The agent is told its reply fills that card, and gets what the card shows
+now to revise. Once the turn finishes, the card shows the agent's final reply to everyone in the
+room: markdown as text, or, when the reply holds a whole HTML page in an `html` code block, the
+live page. An interrupted or failed turn leaves the card as it was.
 
-Anyone in the room can add, rename or delete an artifact, but only the owner's own message from
-the board fills one; a guest's message never does. A board holds up to 6 artifacts, each up to
-16,000 characters, and a longer reply is cut.
+Anyone in the room can prompt an artifact, each through an agent they may drive:
+
+- The owner's message runs on the owner's agent, as above.
+- A guest who [continued on their machine](#continue-on-your-own-machine) can take it to their own
+  agent. It opens as a draft in their thread from this room, with the artifact's current content
+  attached so they can read what goes to their agent. Nothing runs until they send it; when their
+  turn finishes, its reply fills the card.
+- Any other guest's prompt goes to the owner as a waiting message, which says which artifact
+  sending it fills. When the owner sends it (or it goes through because the guest may
+  [send without asking](#let-a-guest-send-without-asking)), the owner's agent gets the artifact
+  as it is then, and its reply fills the card. If the artifact was deleted first, the message goes
+  as a plain message.
+
+The card says whose agent is writing it while a turn runs, and whose agent wrote it, and for whom.
+When two agents finish close together, the last one wins. Each card keeps the version it replaced:
+anyone can go back to it, and back again. A board holds up to 6 artifacts, each up to 16,000
+characters, and a longer reply is cut.
 
 ### Take a task to your agent
 

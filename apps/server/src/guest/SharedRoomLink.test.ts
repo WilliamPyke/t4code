@@ -50,7 +50,7 @@ const items = [
 
 /** A thread its owner shares: the events its runs send, and each run's items. */
 interface OwnerThread {
-  readonly share: Pick<ThreadGuestShare, "id" | "board">;
+  readonly share: Pick<ThreadGuestShare, "id" | "board" | "messages">;
   readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
   readonly itemsOf: (runId: string) => ReadonlyArray<OrchestrationV2TurnItem>;
 }
@@ -63,6 +63,7 @@ interface OwnerThread {
 const world = Effect.fn(function* (
   statuses: ReadonlyArray<number | { readonly status: number; readonly body: unknown }>,
   owner?: OwnerThread,
+  joinedItemsOf?: (runId: string) => ReadonlyArray<OrchestrationV2TurnItem>,
 ) {
   const link = yield* Ref.make<ThreadRoomLink | null>(null);
   const replies = yield* Ref.make(statuses);
@@ -95,8 +96,9 @@ const world = Effect.fn(function* (
                     branch: null,
                     deletedAt: null,
                   } as unknown as OrchestrationV2AppThread,
-                  turnItems:
-                    owner === undefined ? items : owner.itemsOf(filter?.turnItemRunIds?.[0] ?? ""),
+                  turnItems: (owner?.itemsOf ?? joinedItemsOf ?? (() => items))(
+                    filter?.turnItemRunIds?.[0] ?? "",
+                  ),
                   runs: (filter?.runIds ?? []).map((id) => ({
                     id,
                     requestedAt: DateTime.makeUnsafe(at),
@@ -502,7 +504,7 @@ it.effect("answers the owner's task only with a finished turn of theirs that was
     const settled = (id: string, status: string) =>
       ({ type: "run.updated", threadId, payload: { id, status } }) as never;
     const { answers, layer } = yield* world([], {
-      share: { id: shareId, board: { positions: {}, notes: [] } },
+      share: { id: shareId, board: { positions: {}, notes: [] }, messages: [] },
       events: [
         settled("run:cancelled", "cancelled"),
         settled("run:failed", "failed"),
@@ -528,12 +530,100 @@ it.effect("answers the owner's task only with a finished turn of theirs that was
   }),
 );
 
-it.effect("fills the owner's artifact card only with a finished turn of theirs sent for it", () =>
+it.effect(
+  "fills the owner's artifact card only with a finished turn their server sent for it",
+  () =>
+    Effect.gen(function* () {
+      const shareId = GuestShareId.make("share:mine");
+      const fills = (share: string, guest?: object) => ({
+        version: 1,
+        ...(guest === undefined ? {} : { guest }),
+        records: [
+          {
+            version: 1,
+            contextId: "room-artifact_1",
+            kind: "room-artifact",
+            label: 'Artifact "Plan"',
+            shareId: share,
+            noteId: "note:plan",
+            title: "Plan",
+          },
+        ],
+      });
+      const page = "<!doctype html><html><body>Plan</body></html>";
+      const turn = (context: object, reply: string) => [
+        item(1, { type: "user_message", text: "Draw the plan", context }),
+        item(2, { type: "assistant_message", text: "Working on it." }),
+        item(3, { type: "assistant_message", text: reply }),
+      ];
+      // A guest's message carries only the records the owner's server attached when it sent it.
+      const guest = { guestMessageId: "guest-message:1", name: "Sam", text: "Draw the plan" };
+      const runs: Record<string, ReadonlyArray<OrchestrationV2TurnItem>> = {
+        "run:cancelled": turn(fills(shareId), "Stopped."),
+        "run:failed": turn(fills(shareId), "Broke."),
+        "run:guest": turn(fills(shareId, guest), "# Sam's plan"),
+        "run:old-share": turn(fills("share:old"), "Old room."),
+        "run:artifact": turn(fills(shareId), ["Here it is:", "```html", page, "```"].join("\n")),
+      };
+      const settled = (id: string, status: string) =>
+        ({ type: "run.updated", threadId, payload: { id, status } }) as never;
+      const sam = "guest:sam";
+      const { answers, layer } = yield* world([], {
+        share: {
+          id: shareId,
+          board: { positions: {}, notes: [] },
+          messages: [
+            {
+              id: guest.guestMessageId,
+              text: guest.text,
+              status: "sent",
+              submittedAt: "1970-01-01T00:00:00.000Z",
+              guestId: sam,
+              artifactId: "note:plan",
+            },
+          ],
+        } as never,
+        events: [
+          settled("run:cancelled", "cancelled"),
+          settled("run:failed", "failed"),
+          settled("run:guest", "completed"),
+          settled("run:old-share", "completed"),
+          settled("run:artifact", "completed"),
+        ],
+        itemsOf: (runId) => runs[runId] ?? [],
+      });
+      yield* Effect.gen(function* () {
+        yield* SharedRoomLink.SharedRoomLink;
+        // Runs are taken in order, so the first fill shows none came before it.
+        assert.deepEqual(yield* Queue.take(answers), {
+          type: "thread.room-artifact.fill",
+          commandId: "server:room-artifact:run:guest",
+          threadId,
+          shareId,
+          noteId: "note:plan",
+          turnId: "run:guest",
+          body: "# Sam's plan",
+          askedBy: sam,
+        } as never);
+        assert.deepEqual(yield* Queue.take(answers), {
+          type: "thread.room-artifact.fill",
+          commandId: "server:room-artifact:run:artifact",
+          threadId,
+          shareId,
+          noteId: "note:plan",
+          turnId: "run:artifact",
+          body: page,
+        } as never);
+        assert.equal(yield* Queue.size(answers), 0);
+      }).pipe(Effect.provide(layer));
+    }),
+);
+
+it.effect("fills the room's artifact card with the user's own turn, from its whole reply", () =>
   Effect.gen(function* () {
-    const shareId = GuestShareId.make("share:mine");
-    const fills = (share: string, guest?: object) => ({
+    const shareId = GuestShareId.make("share:room");
+    const asks = (share: string) => ({
       version: 1,
-      ...(guest === undefined ? {} : { guest }),
       records: [
         {
           version: 1,
@@ -546,46 +636,77 @@ it.effect("fills the owner's artifact card only with a finished turn of theirs s
         },
       ],
     });
-    const page = "<!doctype html><html><body>Plan</body></html>";
-    const turn = (context: object, reply: string) => [
-      item(1, { type: "user_message", text: "Draw the plan", context }),
-      item(2, { type: "assistant_message", text: "Working on it." }),
-      item(3, { type: "assistant_message", text: reply }),
-    ];
-    const guest = { guestMessageId: "guest-message:1", name: "Sam", text: "Draw the plan" };
+    const page = `<!doctype html><html><body>${"x".repeat(GUEST_TURN_REPLY_MAX_LENGTH)}</body></html>`;
     const runs: Record<string, ReadonlyArray<OrchestrationV2TurnItem>> = {
-      "run:cancelled": turn(fills(shareId), "Stopped."),
-      "run:failed": turn(fills(shareId), "Broke."),
-      "run:guest": turn(fills(shareId, guest), "A guest asked."),
-      "run:old-share": turn(fills("share:old"), "Old room."),
-      "run:artifact": turn(fills(shareId), ["Here it is:", "```html", page, "```"].join("\n")),
-    };
-    const settled = (id: string, status: string) =>
-      ({ type: "run.updated", threadId, payload: { id, status } }) as never;
-    const { answers, layer } = yield* world([], {
-      share: { id: shareId, board: { positions: {}, notes: [] } },
-      events: [
-        settled("run:cancelled", "cancelled"),
-        settled("run:failed", "failed"),
-        settled("run:guest", "completed"),
-        settled("run:old-share", "completed"),
-        settled("run:artifact", "completed"),
+      "run:artifact": [
+        item(1, { type: "user_message", text: "Draw it", context: asks(shareId) }),
+        item(2, { type: "assistant_message", text: ["```html", page, "```"].join("\n") }),
       ],
-      itemsOf: (runId) => runs[runId] ?? [],
-    });
+      "run:other-room": [
+        item(1, { type: "user_message", text: "Draw it", context: asks("share:other") }),
+        item(2, { type: "assistant_message", text: "Elsewhere." }),
+      ],
+    };
+    const { posts, layer } = yield* world([204, 204, 204], undefined, (runId) => runs[runId] ?? []);
     yield* Effect.gen(function* () {
-      yield* SharedRoomLink.SharedRoomLink;
-      // Runs are taken in order, so the first fill shows none came before it.
-      assert.deepEqual(yield* Queue.take(answers), {
-        type: "thread.room-artifact.fill",
-        commandId: "server:room-artifact:run:artifact",
-        threadId,
-        shareId,
-        noteId: "note:plan",
-        turnId: "run:artifact",
-        body: page,
-      } as never);
-      assert.equal(yield* Queue.size(answers), 0);
+      const rooms = yield* SharedRoomLink.SharedRoomLink;
+      yield* rooms.connect(threadId, "sam.t3.test", { ...room, shareId });
+      yield* rooms.publishActivity(threadId, RunId.make("run:artifact"), "running");
+      yield* rooms.publishRun(threadId, RunId.make("run:artifact"));
+      yield* rooms.publishRun(threadId, RunId.make("run:other-room"));
+      const [running, finished, other] = (yield* Ref.get(posts)).map(
+        (post) => (post as { turn: Record<string, unknown> }).turn,
+      );
+      assert.equal(running?.artifactId, "note:plan");
+      // The room keeps the reply short; the card gets the whole page.
+      assert.equal(String(finished?.reply).length, GUEST_TURN_REPLY_MAX_LENGTH);
+      assert.deepEqual(finished?.artifact, { noteId: "note:plan", body: page });
+      // A card of another room is not this room's to fill.
+      assert.isUndefined(other?.artifact);
     }).pipe(Effect.provide(layer));
+  }),
+);
+
+it.effect("reads an artifact card for the user to send to their agent, and sends nothing", () =>
+  Effect.gen(function* () {
+    const shareId = GuestShareId.make("share:room");
+    const { link, posts, layer } = yield* world([
+      { status: 200, body: { title: " Plan\n", body: "<p>Hi\u200B</p>" } },
+      404,
+      429,
+      { status: 200, body: { title: "x".repeat(281) } },
+      410,
+    ]);
+    yield* Effect.gen(function* () {
+      const rooms = yield* SharedRoomLink.SharedRoomLink;
+      const take = (share = shareId) => rooms.takeArtifact("sam.t3.test", share, "note:plan");
+      const reason = Effect.map(Effect.flip(take()), (error) => error.reason);
+      // No thread here joined the room, so nothing is asked.
+      assert.deepEqual(yield* take(), { threadId: null, artifact: null });
+      yield* rooms.connect(threadId, "sam.t3.test", { ...room, shareId });
+      assert.deepEqual(yield* take(GuestShareId.make("share:other")), {
+        threadId: null,
+        artifact: null,
+      });
+      // Characters nobody can see are removed before the user's agent could read them.
+      assert.deepEqual(yield* take(), {
+        threadId,
+        artifact: { title: "Plan", body: "<p>Hi</p>" },
+      });
+      assert.deepEqual((yield* Ref.get(posts))[0], {
+        url: "https://sam.t3.test/api/guest/room/artifact",
+        authorization: "Bearer room-token",
+        params: { note: "note:plan" },
+      });
+      // A card the room no longer has; a busy room; one that breaks its limits; one that ended.
+      assert.deepEqual(yield* take(), { threadId, artifact: null });
+      assert.equal(yield* reason, "too_fast");
+      assert.equal(yield* reason, "invalid_response");
+      assert.isNotNull(yield* Ref.get(link));
+      assert.equal(yield* reason, "room_ended");
+      assert.isNull(yield* Ref.get(link));
+    }).pipe(Effect.provide(layer));
+    // The mock orchestrator dies on any command but the room link's: no message, no run.
+    assert.lengthOf(yield* Ref.get(posts), 5);
   }),
 );

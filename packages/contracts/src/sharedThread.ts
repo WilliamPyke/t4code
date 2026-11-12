@@ -9,7 +9,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import { RoomUpdate, SharedThreadCheckout } from "./guestShare.ts";
+import { RoomArtifactRead, RoomBoardNote, RoomUpdate, SharedThreadCheckout } from "./guestShare.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
 
@@ -50,6 +50,24 @@ export type SharedThreadTakeTaskInput = typeof SharedThreadTakeTaskInput.Type;
 /** The thread joined from that room on this machine, or null when there is none to take it to. */
 export const SharedThreadTakeTaskResult = Schema.Struct({ threadId: Schema.NullOr(ThreadId) });
 export type SharedThreadTakeTaskResult = typeof SharedThreadTakeTaskResult.Type;
+
+/** An artifact card someone takes from a room to their own agent, to fill it from here. */
+export const SharedThreadTakeArtifactInput = Schema.Struct({
+  host: TrimmedNonEmptyString,
+  shareId: GuestShareId,
+  artifactId: RoomBoardNote.fields.id,
+});
+export type SharedThreadTakeArtifactInput = typeof SharedThreadTakeArtifactInput.Type;
+
+/**
+ * The thread joined from that room on this machine, or null when there is none, and the card as
+ * the room has it now, or null when the room no longer has it. Nothing is sent or changed.
+ */
+export const SharedThreadTakeArtifactResult = Schema.Struct({
+  threadId: Schema.NullOr(ThreadId),
+  artifact: Schema.NullOr(RoomArtifactRead),
+});
+export type SharedThreadTakeArtifactResult = typeof SharedThreadTakeArtifactResult.Type;
 
 export const SharedThreadCatchUpInput = Schema.Struct({ threadId: ThreadId });
 export type SharedThreadCatchUpInput = typeof SharedThreadCatchUpInput.Type;

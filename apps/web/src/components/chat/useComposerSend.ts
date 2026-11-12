@@ -121,7 +121,14 @@ import {
   prepareTurnAttachments,
   restoreComposerDraft,
 } from "./chatViewSend";
-import { readRoomTaskDraft, takeRoomTaskToDraft, withRoomTaskContext } from "./roomTaskDraft";
+import {
+  readRoomArtifactDraft,
+  readRoomTaskDraft,
+  takeRoomArtifactToDraft,
+  takeRoomTaskToDraft,
+  withRoomArtifact,
+  withRoomTaskContext,
+} from "./roomTaskDraft";
 import type {
   EnvironmentProject,
   EnvironmentThreadShell,
@@ -728,6 +735,9 @@ export function useComposerSend(input: ComposerSendInput) {
     const roomTaskAtSend = isServerThread
       ? readRoomTaskDraft(scopeThreadRef(activeThread.environmentId, threadIdForSend))
       : undefined;
+    const roomArtifactAtSend = isServerThread
+      ? readRoomArtifactDraft(scopeThreadRef(activeThread.environmentId, threadIdForSend))
+      : undefined;
     const sendSnapshot = snapshotComposerSend({
       prompt: promptForSend,
       images: composerImages,
@@ -1250,15 +1260,20 @@ export function useComposerSend(input: ComposerSendInput) {
             messageId: messageIdForSend,
             role: "user",
             attachments: turnAttachmentsResult.value,
-            ...withMessageContext({
-              text: outgoingMessageText,
-              context: withRoomTaskContext(
-                buildOutgoingMessageContext(
-                  boundAttachmentIds(turnAttachmentsResult.value, composerAttachmentsSnapshot),
-                ),
-                roomTaskAtSend,
+            ...withMessageContext(
+              withRoomArtifact(
+                {
+                  text: outgoingMessageText,
+                  context: withRoomTaskContext(
+                    buildOutgoingMessageContext(
+                      boundAttachmentIds(turnAttachmentsResult.value, composerAttachmentsSnapshot),
+                    ),
+                    roomTaskAtSend,
+                  ),
+                },
+                roomArtifactAtSend,
               ),
-            }),
+            ),
           },
           modelSelection: ctxSelectedModelSelection,
           titleSeed: title,
@@ -1366,6 +1381,7 @@ export function useComposerSend(input: ComposerSendInput) {
         optimisticBlobPreviews.release(optimisticMessage);
         const retryComposerImages = restoreComposerDraft(composerDraftTarget, sendSnapshot);
         if (roomTaskAtSend !== undefined) takeRoomTaskToDraft(roomTaskAtSend);
+        if (roomArtifactAtSend !== undefined) takeRoomArtifactToDraft(roomArtifactAtSend);
         if (currentRouteThreadKeyRef.current === routeThreadKey) {
           promptRef.current = messageTextForSend;
           composerImagesRef.current = retryComposerImages;

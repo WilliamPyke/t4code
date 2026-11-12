@@ -21,13 +21,19 @@ import {
   type OrchestrationMessageContext,
   type OrchestrationV2AppThread,
   type OrchestrationV2ServerCommand,
+  type RoomArtifactContextRecord,
   type ThreadGuestMessage,
   type ThreadGuestShare,
 } from "@t3tools/contracts";
 import {
+  formatComposerContextReference,
+  roomArtifactContextRecord,
+} from "@t3tools/shared/composerContextReferences";
+import {
   EMPTY_ROOM_BOARD,
   ROOM_BOARD_FULL,
   applyRoomBoardChange,
+  roomArtifactAfterFill,
   roomBoardWithEdges,
   roomBoardWithoutCards,
   type RoomBoardScope,
@@ -67,6 +73,7 @@ export const GUEST_FAILURE = {
   boardFull: ROOM_BOARD_FULL,
   removed: "The owner removed you from this thread.",
   memberJoined: "This member already joined.",
+  artifactGone: "This artifact is no longer on the board.",
 } as const;
 
 const isExpired = (share: ThreadGuestShare, now: DateTime.Utc) =>
@@ -198,19 +205,33 @@ function boardWithTaskAnswered(
 }
 
 /**
- * The board with an artifact card showing what the owner's agent replied. Only an artifact card
- * takes it; any other id, or the same turn again, leaves the board as it was.
+ * The board with an artifact card showing what an agent replied, and the version it replaced
+ * kept. Only an artifact card takes it; any other id, or the same turn again, leaves the board
+ * as it was. The last turn to finish wins.
  */
 function boardWithArtifactFilled(
   board: RoomBoard,
   noteId: string,
-  content: RoomArtifactContent,
+  content: Omit<RoomArtifactContent, "previous">,
 ): RoomBoard {
   const note = board.notes.find((candidate) => candidate.id === noteId);
-  if (note?.kind !== "artifact" || note.artifact?.turnId === content.turnId) return board;
-  const filled: RoomBoardNote = { ...note, artifact: content };
+  const sameTurn = (version: Pick<RoomArtifactContent, "turnId" | "guestId"> | undefined) =>
+    version?.turnId === content.turnId && version.guestId === content.guestId;
+  // A turn that already wrote it, even one someone restored away since, writes nothing again.
+  if (note?.kind !== "artifact" || sameTurn(note.artifact) || sameTurn(note.artifact?.previous)) {
+    return board;
+  }
+  const filled: RoomBoardNote = {
+    ...note,
+    artifact: roomArtifactAfterFill(note.artifact, content),
+  };
   return { ...board, notes: board.notes.map((other) => (other === note ? filled : other)) };
 }
+
+const artifactOn = (share: ThreadGuestShare, noteId: string | undefined) =>
+  noteId === undefined
+    ? undefined
+    : share.board?.notes.find((note) => note.id === noteId && note.kind === "artifact");
 
 const resolveMessage = (
   share: ThreadGuestShare,
@@ -320,6 +341,9 @@ export function decideGuestShareCommand(input: {
       ) {
         return Result.fail(GUEST_FAILURE.busy);
       }
+      if (command.artifactId !== undefined && artifactOn(share, command.artifactId) === undefined) {
+        return Result.fail(GUEST_FAILURE.artifactGone);
+      }
       const attachments = command.attachments ?? [];
       const pendingBytes = [...pendingAttachments(share), ...attachments].reduce(
         (total, attachment) => total + attachment.sizeBytes,
@@ -340,6 +364,7 @@ export function decideGuestShareCommand(input: {
             ...(attachments.length === 0 ? {} : { attachments }),
             ...(command.guestId === undefined ? {} : { guestId: command.guestId }),
             ...(command.direct === true ? { direct: true } : {}),
+            ...(command.artifactId === undefined ? {} : { artifactId: command.artifactId }),
           },
         ]),
       };
@@ -448,11 +473,22 @@ export function decideGuestShareCommand(input: {
       if (turns.some((turn) => turn.guestId === command.guestId && turn.id === command.turn.id)) {
         return Result.succeed(thread);
       }
-      const { truncated, taskId, ...turn } = command.turn;
-      const board =
+      const { truncated, taskId, artifact, ...turn } = command.turn;
+      const answered =
         taskId === undefined || share.board === undefined
           ? share.board
           : boardWithTaskAnswered(share.board, taskId, command.guestId, turn);
+      // The guest's own agent wrote it, on their machine; the owner's agent never sees the post.
+      const board =
+        artifact === undefined || answered === undefined
+          ? answered
+          : boardWithArtifactFilled(answered, artifact.noteId, {
+              body: artifact.body,
+              ...(artifact.truncated === true ? { truncated: true } : {}),
+              guestId: command.guestId,
+              turnId: turn.id,
+              updatedAt: DateTime.formatIso(now),
+            });
       return withShare({
         ...share,
         turns: [
@@ -485,6 +521,7 @@ export function decideGuestShareCommand(input: {
       const board = boardWithArtifactFilled(share.board, command.noteId, {
         body: command.body,
         ...(command.truncated === true ? { truncated: true } : {}),
+        ...(command.askedBy === undefined ? {} : { askedBy: command.askedBy }),
         turnId: command.turnId,
         updatedAt: DateTime.formatIso(now),
       });
@@ -508,10 +545,10 @@ export function decideGuestShareCommand(input: {
 }
 
 /**
- * Marks a guest message sent. `text` is what the agent receives: it names the guest so the agent
- * does not mistake it for the owner's words, and so a guest cannot start a slash command. It also
- * says whether the owner read the message first, so the agent knows how far to rely on it.
- * `guest` lets clients show the guest's own text with their name beside it.
+ * Marks a guest message sent. `text` names the guest, and whether the owner read it, so the agent
+ * neither mistakes it for the owner's words nor runs a guest's slash command. `guest` lets clients
+ * show the guest's own text with their name. `records`, the only ones the message carries, hold
+ * the artifact card it names as this board has it now, or nothing once the card is gone.
  */
 export function decideGuestMessageSend(input: {
   readonly thread: OrchestrationV2AppThread;
@@ -522,6 +559,7 @@ export function decideGuestMessageSend(input: {
     readonly thread: OrchestrationV2AppThread;
     readonly text: string;
     readonly guest: GuestMessageAttribution;
+    readonly records: ReadonlyArray<RoomArtifactContextRecord>;
   },
   string
 > {
@@ -530,13 +568,28 @@ export function decideGuestMessageSend(input: {
   const message = share.messages.find((candidate) => candidate.id === input.guestMessageId);
   const name = guestMessageAuthorName(share, message ?? {});
   const guestText = message?.text ?? "";
+  const artifact = artifactOn(share, message?.artifactId);
+  const records =
+    artifact === undefined
+      ? []
+      : [
+          roomArtifactContextRecord({
+            batch: input.guestMessageId,
+            shareId: share.id,
+            noteId: artifact.id,
+            title: artifact.text,
+            current: artifact.artifact?.body,
+          }),
+        ];
+  const chips = records.map((record) => `\n\n${formatComposerContextReference(record)}`).join("");
   return Result.map(resolveMessage(share, input.guestMessageId, "sent"), (next) => ({
     thread: { ...input.thread, guestShare: next, updatedAt: input.now },
     text:
-      message?.direct === true
+      (message?.direct === true
         ? `Message from guest ${name}, sent without the owner reading it:\n\n${guestText}`
-        : `Message from guest ${name}, sent by the owner:\n\n${guestText}`,
+        : `Message from guest ${name}, sent by the owner:\n\n${guestText}`) + chips,
     guest: { guestMessageId: input.guestMessageId, name, text: guestText, shareId: share.id },
+    records,
   }));
 }
 

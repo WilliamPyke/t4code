@@ -18,10 +18,13 @@ export function placeLinkedPrompt(
   target: ComposerThreadTarget,
   prompt: LinkedPrompt,
   notes: ReadonlyArray<string> = [],
+  /** Runs once the prompt is the thread's draft, which may wait for the user to replace theirs. */
+  onPlaced?: () => void,
 ): void {
   warnAboutHiddenCharacters(prompt);
   const place = () => {
     useComposerDraftStore.getState().setPrompt(target, prompt.text);
+    onPlaced?.();
     toastManager.add({
       type: "info",
       title: "Prompt added from a link",

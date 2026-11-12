@@ -54,6 +54,7 @@ import {
   RoomBoardNote,
   RoomTaskContextPayload,
   SharedThreadMessage,
+  ThreadGuestMessage,
   ThreadGuestShare,
   ThreadRoomLink,
 } from "./guestShare.ts";
@@ -3493,6 +3494,8 @@ const OrchestrationV2InternalCommand = Schema.Union([
     attachments: Schema.optional(Schema.Array(ChatAttachment)),
     /** The server sends this message itself, right after recording it. */
     direct: Schema.optional(Schema.Boolean),
+    /** An artifact card on the share's board that the reply should fill. */
+    artifactId: ThreadGuestMessage.fields.artifactId,
   }),
   /** Shows a turn a guest ran on their own machine. It changes the share and nothing else. */
   Schema.Struct({
@@ -3532,6 +3535,8 @@ const OrchestrationV2InternalCommand = Schema.Union([
     turnId: RoomArtifactContent.fields.turnId,
     body: RoomArtifactContent.fields.body,
     truncated: RoomArtifactContent.fields.truncated,
+    /** The guest whose message the turn answered, when the owner sent one. */
+    askedBy: RoomArtifactContent.fields.askedBy,
   }),
   /** Connects a thread joined from a room to it, or with null ends that. */
   Schema.Struct({

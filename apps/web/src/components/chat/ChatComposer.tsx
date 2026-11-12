@@ -224,13 +224,19 @@ import {
 } from "./composerSubmission";
 import { ComposerPromptLengthValidation } from "./ComposerPromptLengthValidation";
 import { pendingDraftWork } from "./pendingDraftWork";
-import { dropRoomTaskDraft, useRoomTaskDraft } from "./roomTaskDraft";
+import { RoomArtifactContextChip } from "./RoomBoardContextChips";
+import {
+  dropRoomArtifactDraft,
+  dropRoomTaskDraft,
+  useRoomArtifactDraft,
+  useRoomTaskDraft,
+} from "./roomTaskDraft";
 import { importComposerThreadAttachment } from "./composerThreadImport";
 import { observeResize } from "~/lib/observeResize";
 
 const isEnvironmentRequestInvalidError = Schema.is(EnvironmentRequestInvalidError);
 import { toastManager } from "../ui/toast";
-import { BuildingIcon, ListTodoIcon, PlayIcon } from "lucide-react";
+import { BuildingIcon, ListTodoIcon, PanelsTopLeftIcon, PlayIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { useManagedPolicy } from "../../state/managedPolicy";
 import { hasProviderSetup } from "./ProviderStatusBanner";
@@ -2468,21 +2474,38 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     />
   );
   const roomTask = useRoomTaskDraft(routeThreadRef);
-  const ownBannerItems: readonly ComposerBannerStackItem[] =
-    roomTask === undefined
-      ? props.bannerItems
+  const roomArtifact = useRoomArtifactDraft(routeThreadRef);
+  const roomBannerItems: readonly ComposerBannerStackItem[] = [
+    ...(roomTask === undefined
+      ? []
       : [
-          ...props.bannerItems,
           {
             id: "room-task",
-            variant: "info",
+            variant: "info" as const,
             icon: <ListTodoIcon />,
             title: "Sending this answers a task on the board",
             description: <span className="line-clamp-2">{roomTask.text}</span>,
             dismissLabel: "Do not answer the task",
             onDismiss: () => dropRoomTaskDraft(routeThreadRef),
           },
-        ];
+        ]),
+    // The card's content goes to the agent with the message, so it is shown before Send.
+    ...(roomArtifact === undefined
+      ? []
+      : [
+          {
+            id: "room-artifact",
+            variant: "info" as const,
+            icon: <PanelsTopLeftIcon />,
+            title: `Your agent's reply replaces "${roomArtifact.record.title}" on the board`,
+            description: <RoomArtifactContextChip record={roomArtifact.record} />,
+            dismissLabel: "Do not fill the artifact",
+            onDismiss: () => dropRoomArtifactDraft(routeThreadRef),
+          },
+        ]),
+  ];
+  const ownBannerItems =
+    roomBannerItems.length === 0 ? props.bannerItems : [...props.bannerItems, ...roomBannerItems];
   // An open question owns the space above the composer. Only a machine problem,
   // which is why an answer could not go through, stays beside it.
   const bannerItems: readonly ComposerBannerStackItem[] =

@@ -469,7 +469,7 @@ it.effect("fills an artifact card with the owner's turn, and nothing else on the
         author,
         change: { type: "note.put", noteId, text: "Plan", x: 0, y: 0, ...fields },
       });
-    const fill = (noteId: string, turnId: string, share = shareId) =>
+    const fill = (noteId: string, turnId: string, share = shareId, askedBy?: GuestId) =>
       orchestrator.dispatch({
         type: "thread.room-artifact.fill",
         commandId: CommandId.make(`fill:${commands++}`),
@@ -478,6 +478,7 @@ it.effect("fills an artifact card with the owner's turn, and nothing else on the
         noteId,
         turnId,
         body: `# Plan from ${turnId}`,
+        ...(askedBy === undefined ? {} : { askedBy }),
       });
     const read = Effect.map(
       orchestrator.getThreadRecords(threadId, ["runs", "messages"]),
@@ -510,12 +511,152 @@ it.effect("fills an artifact card with the owner's turn, and nothing else on the
       [renamed?.text, renamed?.size, renamed?.artifact],
       ["The plan", { w: 480, h: 360 }, artifact],
     );
-    yield* fill("artifact", "run:2");
-    assert.equal((yield* read).notes.get("artifact")?.artifact?.body, "# Plan from run:2");
+    yield* fill("artifact", "run:2", shareId, alex);
+    const second = (yield* read).notes.get("artifact")?.artifact;
+    // The version it replaced is kept, without its own earlier one, and says who asked for it.
+    assert.deepEqual(
+      [second?.body, second?.askedBy, second?.previous],
+      ["# Plan from run:2", alex, artifact],
+    );
+    // A guest's own agent fills it from their machine; a card not on this board takes nothing.
+    const post = (id: string, noteId: string) =>
+      orchestrator.dispatch({
+        type: "thread.guest-turn.post",
+        commandId: CommandId.make(`turn:${commands++}`),
+        threadId,
+        shareId,
+        guestId: sam,
+        turn: { id, prompt: "Redo it", reply: "Short.", artifact: { noteId, body: `# ${id}` } },
+      });
+    yield* post("run:sam", "artifact");
+    yield* post("run:elsewhere", "note:of-another-share");
+    yield* post("run:note", "note");
+    const bySam = (yield* read).notes.get("artifact")?.artifact;
+    assert.deepEqual(
+      [bySam?.body, bySam?.guestId, bySam?.turnId, bySam?.previous?.body],
+      ["# run:sam", sam, "run:sam", "# Plan from run:2"],
+    );
+    assert.isUndefined((yield* read).notes.get("note")?.artifact);
+    // Anyone may go back to the version it replaced, and forward again.
+    const restore = (author: GuestId | null) =>
+      orchestrator.dispatch({
+        type: "thread.guest-board.change",
+        commandId: CommandId.make(`board:${commands++}`),
+        threadId,
+        shareId,
+        author,
+        change: { type: "artifact.restore", noteId: "artifact" },
+      });
+    yield* restore(sam);
+    const restored = (yield* read).notes.get("artifact")?.artifact;
+    assert.deepEqual(
+      [restored?.body, restored?.guestId, restored?.previous?.body],
+      ["# Plan from run:2", undefined, "# run:sam"],
+    );
+    yield* restore(null);
+    assert.deepEqual((yield* read).notes.get("artifact")?.artifact, bySam);
+    // A turn whose version is the one kept, answered again, does not write it back.
+    yield* fill("artifact", "run:2", shareId, alex);
+    assert.deepEqual((yield* read).notes.get("artifact")?.artifact, bySam);
+    // The room keeps the guest's turn at its own length, without the artifact.
+    const turns = (yield* read).thread.guestShare?.turns ?? [];
+    assert.notInclude(JSON.stringify(turns), "noteId");
     // Shown only: nothing for the agent, and no run.
     const after = yield* read;
     assert.lengthOf(after.runs, 0);
     assert.lengthOf(after.messages, 0);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("sends a guest's message for an artifact with the card as this board has it", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* setup;
+    yield* orchestrator.dispatch({
+      type: "thread.guest-share.redeem",
+      commandId: CommandId.make("redeem:sam"),
+      threadId,
+      shareId,
+      guestId: sam,
+      guestName: "Sam",
+    });
+    let commands = 0;
+    const board = (change: RoomBoardChange) =>
+      orchestrator.dispatch({
+        type: "thread.guest-board.change",
+        commandId: CommandId.make(`board:${commands++}`),
+        threadId,
+        shareId,
+        author: null,
+        change,
+      });
+    const put = (noteId: string, fields: Partial<NotePut> = {}) =>
+      board({ type: "note.put", noteId, text: "Plan", x: 0, y: 0, ...fields });
+    const submit = (id: GuestMessageId, artifactId: string) =>
+      orchestrator.dispatch({
+        type: "thread.guest-message.submit",
+        commandId: CommandId.make(`submit:${commands++}`),
+        threadId,
+        shareId,
+        guestId: sam,
+        guestMessageId: id,
+        text: "Make it blue",
+        artifactId,
+      });
+    yield* put("plan", { kind: "artifact" });
+    yield* put("later", { kind: "artifact", text: "Later" });
+    yield* put("note");
+    yield* orchestrator.dispatch({
+      type: "thread.room-artifact.fill",
+      commandId: CommandId.make("fill:plan"),
+      threadId,
+      shareId,
+      noteId: "plan",
+      turnId: "run:0",
+      body: "# The plan",
+    });
+    // Only a card that is an artifact on this board can be named.
+    for (const artifactId of ["note", "gone"]) {
+      const refused = yield* Effect.exit(
+        submit(GuestMessageId.make(`m:${artifactId}`), artifactId),
+      );
+      assert.isTrue(Exit.isFailure(refused));
+    }
+    yield* submit(guestMessageId, "plan");
+    const waiting = (yield* orchestrator.getThreadRecords(threadId, [])).thread.guestShare
+      ?.messages[0];
+    assert.equal(waiting?.artifactId, "plan");
+
+    // The client's records are dropped; the card comes from the board when the owner sends.
+    yield* sendGuestMessage(orchestrator, "send-plan");
+    const sentOf = (id: string) =>
+      Effect.map(orchestrator.getThreadRecords(threadId, ["messages"]), ({ messages }) =>
+        messages.find((message) => message.id === MessageId.make(id)),
+      );
+    const sent = yield* sentOf("send-plan");
+    const records = sent?.context?.records ?? [];
+    assert.lengthOf(records, 1);
+    assert.deepInclude(records[0], {
+      kind: "room-artifact",
+      shareId,
+      noteId: "plan",
+      title: "Plan",
+      current: "# The plan",
+    });
+    assert.isTrue(
+      sent?.text.startsWith(
+        'Message from guest Sam, sent by the owner:\n\nMake it blue\n\n[Artifact "Plan"](t3-context://v1/room-artifact/',
+      ),
+    );
+    assert.equal(sent?.context?.guest?.text, "Make it blue");
+
+    // A card removed before the owner sends leaves a plain message.
+    const later = GuestMessageId.make("guest-message:later");
+    yield* submit(later, "later");
+    yield* board({ type: "note.remove", noteId: "later" });
+    yield* sendGuestMessage(orchestrator, "send-later", later);
+    const plain = yield* sentOf("send-later");
+    assert.deepEqual(plain?.context?.records, []);
+    assert.equal(plain?.text, "Message from guest Sam, sent by the owner:\n\nMake it blue");
   }).pipe(Effect.provide(layerTest)),
 );
 

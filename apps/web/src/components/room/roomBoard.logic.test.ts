@@ -16,17 +16,23 @@ import {
   EMPTY_ROOM_BOARD,
   INITIAL_BOARD_VIEW,
   NO_BOARD_EDITS,
+  type BoardPoint,
   type BoardPresence,
+  type BoardRect,
   appendNoteToDraft,
   boardAgentCode,
   boardAgents,
+  boardArtifactAuthor,
+  boardArtifactWriting,
   boardCardBox,
   boardChangeOf,
   boardChangeQueue,
   boardConnector,
   boardCursorAt,
   boardCursorColor,
+  boardItemRects,
   boardMessages,
+  boardNewNoteSize,
   boardNoteBox,
   boardPromptContext,
   boardReplyQuote,
@@ -39,7 +45,7 @@ import {
   parseBoardLink,
   pinnedCommentSpot,
   placeBoardCards,
-  placeBoardNote,
+  placeBoardItem,
   putBoardEdit,
   resolveBoard,
   roomCodeStatus,
@@ -78,20 +84,51 @@ describe("placeBoardCards", () => {
   });
 });
 
-describe("placeBoardNote", () => {
-  it("puts a new note where asked, or beside the notes and cards already there", () => {
-    const wanted = { x: 500, y: 96 };
-    expect(placeBoardNote(wanted, [], [])).toEqual(wanted);
+describe("placeBoardItem", () => {
+  const covers = (at: BoardPoint, size: { w: number; h: number }, rect: BoardRect) =>
+    at.x < rect.x + rect.width &&
+    rect.x < at.x + size.w &&
+    at.y < rect.y + rect.height &&
+    rect.y < at.y + size.h;
+  const inside = (at: BoardPoint, size: { w: number; h: number }, view: BoardRect) =>
+    at.x >= view.x &&
+    at.y >= view.y &&
+    at.x + size.w <= view.x + view.width &&
+    at.y + size.h <= view.y + view.height;
 
-    const first = placeBoardNote(wanted, [wanted], []);
-    expect(first).toEqual({ x: 708, y: 96 });
-    // A note dragged a little off the spot still covers it.
-    expect(placeBoardNote(wanted, [{ x: 520, y: 140 }, first], []).x).toBeGreaterThan(708);
-    // The thread card sits under the spot: the note goes past its right edge.
-    expect(placeBoardNote(wanted, [], [{ x: 440, y: 72 }]).x).toBeGreaterThanOrEqual(760);
-    // A full row sends the next note below the cards.
-    const row = [wanted, first, { x: 916, y: 96 }];
-    expect(placeBoardNote(wanted, row, [])).toEqual({ x: 500, y: 240 });
+  it("centres a new item on the spot asked for when nothing is there", () => {
+    expect(placeBoardItem({ w: 200, h: 100 }, { x: 500, y: 300 }, [])).toEqual({ x: 400, y: 250 });
+  });
+
+  it("lands a new artifact fully in view, clear of every card and note at its real size", () => {
+    const view = { x: 0, y: 0, width: 1280, height: 800 };
+    const artifact = boardNewNoteSize("artifact");
+    const taken: Array<BoardRect> = [
+      // The thread's card, resized and in the middle, with a guest's card and notes around it.
+      { x: 440, y: 120, width: 420, height: 560 },
+      { x: 80, y: 72, width: 320, height: 240 },
+      { x: 900, y: 40, width: 192, height: 300 },
+      { x: 900, y: 400, width: 380, height: 440 },
+    ];
+    const at = placeBoardItem(artifact, { x: 640, y: 400 }, taken, view);
+    expect(inside(at, artifact, view)).toBe(true);
+    expect(taken.some((rect) => covers(at, artifact, rect))).toBe(false);
+  });
+
+  it("keeps searching outward past nearby cards, and falls back to the least covered spot", () => {
+    const view = { x: -200, y: -100, width: 900, height: 600 };
+    const note = boardNewNoteSize(undefined);
+    const middle = { x: 250, y: 200 };
+    const blocker = { x: 100, y: 80, width: 300, height: 240 };
+    const at = placeBoardItem(note, middle, [blocker], view);
+    expect(covers(at, note, blocker)).toBe(false);
+    expect(inside(at, note, view)).toBe(true);
+    // A view taken up whole still gets the item inside it, where it covers least.
+    const wall = { x: -200, y: -100, width: 900, height: 600 };
+    const corner = { x: -200, y: -100, width: 700, height: 600 };
+    const crowded = placeBoardItem(note, middle, [wall, corner], view);
+    expect(inside(crowded, note, view)).toBe(true);
+    expect(crowded.x).toBeGreaterThan(500 - note.w);
   });
 });
 
@@ -339,6 +376,22 @@ describe("pinnedCommentSpot", () => {
       notes: [{ id: "c", text: "Why?", ...first, pinnedTo: "message:1" }],
     });
     expect(next).not.toEqual(first);
+  });
+
+  it("does not land on a guest's card, which sits beside the thread's until someone moves it", () => {
+    const empty: RoomBoard = { positions: {}, notes: [] };
+    const guestCard = placeBoardCards(["thread", "guest:sam"], {})["guest:sam"]!;
+    const spot = pinnedCommentSpot(empty, ["sam"]);
+    const [card] = boardItemRects(empty, ["thread", "guest:sam"]).filter(
+      (rect) => rect.x === guestCard.x && rect.y === guestCard.y,
+    );
+    expect(card).toBeDefined();
+    const clear =
+      spot.x >= card!.x + card!.width ||
+      spot.x + 192 <= card!.x ||
+      spot.y >= card!.y + card!.height ||
+      spot.y + 200 <= card!.y;
+    expect(clear).toBe(true);
   });
 });
 
@@ -650,10 +703,79 @@ describe("boardPromptContext", () => {
     expect(context.artifactEdgeId).toBe("card:thread>note:empty");
   });
 
+  it("gathers the cards pointing into an artifact for its own box, never the artifact itself", () => {
+    const shared = board(
+      [note("a"), note("b"), note("art", { text: "Mockup", kind: "artifact" }), note("c")],
+      [
+        arrow("note:a", "note:art"),
+        arrow("note:b", "note:a"),
+        arrow("note:art", "note:a"),
+        arrow("note:art", "card:thread"),
+        arrow("card:thread", "note:art"),
+        arrow("note:c", "card:thread"),
+      ],
+    );
+    const context = boardPromptContext(shared, people, [], "note:art");
+    expect(context.cards.map((card) => card.ref)).toEqual(["note:a", "note:b"]);
+    expect([...context.edgeIds]).toEqual(["note:a>note:art", "note:b>note:a"]);
+    expect(context.artifact).toBeNull();
+    // The thread's card still carries the artifact and fills it.
+    const thread = boardPromptContext(shared, people);
+    expect(thread.cards.map((card) => card.ref)).toEqual([
+      "note:art",
+      "note:c",
+      "note:a",
+      "note:b",
+    ]);
+    expect(thread.artifactEdgeId).toBe("card:thread>note:art");
+  });
+
   it("shows an artifact as a page only when it is a whole HTML document", () => {
     expect(isBoardHtmlArtifact("\n  <!DOCTYPE html><html></html>")).toBe(true);
     expect(isBoardHtmlArtifact('<html lang="en"><body>Hi</body></html>')).toBe(true);
     expect(isBoardHtmlArtifact("# Plan\n\n<html> is a tag")).toBe(false);
     expect(isBoardHtmlArtifact("<div>Hi</div>")).toBe(false);
+  });
+});
+
+describe("boardArtifactAuthor", () => {
+  const sam = GuestId.make("sam");
+  const eve = GuestId.make("eve");
+  const guests = [
+    { id: sam, name: "Sam" },
+    { id: eve, name: "Eve" },
+  ];
+
+  it("names whose agent wrote an artifact, and the guest who asked the owner's", () => {
+    const owner = { guests, viewer: null };
+    const asSam = { guests, viewer: sam };
+    expect(boardArtifactAuthor({}, owner)).toBe("Your agent");
+    expect(boardArtifactAuthor({ askedBy: sam }, owner)).toBe("Your agent, asked by Sam");
+    expect(boardArtifactAuthor({ askedBy: sam }, asSam)).toBe("Owner's agent, asked by you");
+    expect(boardArtifactAuthor({ guestId: sam }, owner)).toBe("Sam's agent");
+    expect(boardArtifactAuthor({ guestId: sam, askedBy: sam }, asSam)).toBe("Your agent");
+  });
+
+  it("says whose agents are writing an artifact now, the owner's first", () => {
+    const owner = { guests, viewer: null, ownerName: "Alex" };
+    const running = [
+      { guestId: sam, prompt: "", artifactId: "art" },
+      { guestId: eve, prompt: "", artifactId: "other" },
+    ];
+    expect(boardArtifactWriting("art", [], null, owner)).toBeNull();
+    expect(boardArtifactWriting("art", running, null, { guests, viewer: sam })).toBe(
+      "Your agent is writing…",
+    );
+    expect(boardArtifactWriting("art", running, "art", owner)).toBe(
+      "Your agent and Sam's agent are writing…",
+    );
+    expect(
+      boardArtifactWriting(
+        "art",
+        [...running, { guestId: eve, prompt: "", artifactId: "art" }],
+        "art",
+        { guests, viewer: eve, ownerName: "Alex" },
+      ),
+    ).toBe("Alex's agent, Sam's agent and your agent are writing…");
   });
 });

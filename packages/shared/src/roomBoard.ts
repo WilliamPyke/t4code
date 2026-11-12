@@ -6,7 +6,12 @@ import {
   isRoomBoardUrl,
   roomBoardCardRef,
   roomBoardNoteRef,
+  RoomArtifactContextRecord,
   type GuestId,
+  type GuestMessageId,
+  type GuestShareId,
+  type OrchestrationV2TurnItem,
+  type RoomArtifactContent,
   type RoomBoard,
   type RoomBoardChange,
   type RoomBoardEdge,
@@ -14,6 +19,7 @@ import {
   type RoomBoardSize,
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 
 export const ROOM_BOARD_FULL = "This board has as many notes as it holds. Remove one first.";
 
@@ -227,7 +233,53 @@ export function applyRoomBoardChange(
       return board.edges?.some((edge) => edge.id === change.edgeId) === true
         ? Result.succeed(roomBoardWithEdges(board, (edge) => edge.id !== change.edgeId))
         : Result.succeed(board);
+    case "artifact.restore": {
+      const note = board.notes.find((candidate) => candidate.id === change.noteId);
+      const current = note?.kind === "artifact" ? note.artifact : undefined;
+      if (note === undefined || current?.previous === undefined) return Result.succeed(board);
+      const { previous, ...shown } = current;
+      const restored: RoomBoardNote = { ...note, artifact: { ...previous, previous: shown } };
+      return Result.succeed({
+        ...board,
+        notes: board.notes.map((other) => (other === note ? restored : other)),
+      });
+    }
   }
+}
+
+/**
+ * An artifact's content after an agent wrote `next` into it: the version it replaces is kept,
+ * without its own earlier one, so the card can go back one step.
+ */
+export function roomArtifactAfterFill(
+  current: RoomArtifactContent | undefined,
+  next: Omit<RoomArtifactContent, "previous">,
+): RoomArtifactContent {
+  if (current === undefined) return next;
+  const { previous: _older, ...replaced } = current;
+  return { ...next, previous: replaced };
+}
+
+const isRoomArtifactRecord = Schema.is(RoomArtifactContextRecord);
+
+/**
+ * The artifact card of this share that one of a run's messages asked its agent to fill, and the
+ * guest message it was, if a guest's. A guest's message carries only records the owner's server
+ * attached, so the share id names a card of that server's own board.
+ */
+export function roomArtifactRequestOf(
+  items: ReadonlyArray<OrchestrationV2TurnItem>,
+  shareId: GuestShareId,
+): { readonly noteId: string; readonly guestMessageId?: GuestMessageId } | undefined {
+  for (const item of items) {
+    if (item.type !== "user_message") continue;
+    for (const record of item.context?.records ?? []) {
+      if (!isRoomArtifactRecord(record) || record.shareId !== shareId) continue;
+      const guestMessageId = item.context?.guest?.guestMessageId;
+      return { noteId: record.noteId, ...(guestMessageId === undefined ? {} : { guestMessageId }) };
+    }
+  }
+  return undefined;
 }
 
 const HTML_DOCUMENT = /^(?:<!doctype html|<html)/i;

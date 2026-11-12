@@ -74,6 +74,7 @@ import { GuestMessageAttachments } from "./GuestMessageAttachments";
 import { GuestMessageName, guestBubbleClassName } from "./guestMessageStyle";
 import { GuestTurnList } from "./GuestTurnList";
 import { guestShareDialogThreadAtom } from "./guestShareDialogState";
+import { guestMessageArtifactTitle } from "./roomBoardPrompt";
 
 function useThreadGuestShare(threadRef: ScopedThreadRef | null): ThreadGuestShare | null {
   return useQuietThreadProjection(threadRef)?.projection.thread.guestShare ?? null;
@@ -702,6 +703,7 @@ export function GuestPendingMessages({
       {pending.map((message) => {
         const busy = busyIds.has(message.id);
         const guestName = guestMessageAuthorName(share, message);
+        const artifactTitle = guestMessageArtifactTitle(share.board, message);
         return (
           <li key={message.id} className="flex flex-col items-end gap-1">
             <GuestMessageName name={guestName} />
@@ -723,6 +725,11 @@ export function GuestPendingMessages({
                 </p>
               ) : null}
             </div>
+            {artifactTitle === null ? null : (
+              <p className="me-1 max-w-[80%] text-xs text-muted-foreground">
+                {`Sending this gives your agent the artifact "${artifactTitle}", and its reply replaces it on the board.`}
+              </p>
+            )}
             {canOperate ? (
               <div className="flex items-center gap-1 pe-1">
                 <Button

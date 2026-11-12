@@ -160,6 +160,8 @@ function roomCardAuthor(card: RoomBoardContextCard): string {
       return "the room owner's agent";
     case "guest":
       return `${card.name ?? "a guest"} (a guest)`;
+    case "guest_agent":
+      return `${card.name ?? "a guest"}'s agent (a guest's agent)`;
     case undefined:
       return "someone in the room";
   }

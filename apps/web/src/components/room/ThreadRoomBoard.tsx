@@ -4,12 +4,14 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import { deriveThreadStructureRuntime } from "@t3tools/client-runtime/state/thread-execution";
 import {
   AuthOrchestrationOperateScope,
   type GuestShareId,
   type RoomBoardChange,
   type RoomBoardNote,
   type ScopedThreadRef,
+  type ServerProvider,
   type ThreadGuest,
   roomCodeStateOf,
 } from "@t3tools/contracts";
@@ -26,15 +28,21 @@ import {
   useThreadShell,
   useThreadVisibleTurnItems,
 } from "~/state/entities";
+import { useEnvironmentProviders } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { useEnvironmentScope } from "~/state/session";
-import { threadEnvironment } from "~/state/threads";
+import { environmentThreadDetails, threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useOrchestrationCommand } from "~/state/use-orchestration-command";
 import { vcsEnvironment } from "~/state/vcs";
 
-import { boardContextCards, ownerBoardPromptMessage } from "../chat/roomBoardPrompt";
+import {
+  boardContextCards,
+  boardTurnSelection,
+  ownerBoardPromptMessage,
+  ownerWritingArtifactId,
+} from "../chat/roomBoardPrompt";
 import { takeRoomTaskToDraft } from "../chat/roomTaskDraft";
 import { resolveQuickAction } from "../GitActionsControl.logic";
 import { SidebarInset } from "../ui/sidebar";
@@ -50,6 +58,7 @@ import {
 } from "./roomBoard.logic";
 
 const NO_GUESTS: ReadonlyArray<ThreadGuest> = [];
+const NO_PROVIDERS: ReadonlyArray<ServerProvider> = [];
 const GIT_ACTIONS = ["runStackedAction", "pull", "publishRepository"] as const;
 
 /** The share of a thread its owner reads, and how they change its board when they may. */
@@ -156,11 +165,21 @@ export function ThreadRoomBoard({ threadRef }: { readonly threadRef: ScopedThrea
     takeRoomTaskToDraft({ threadRef, shareId: share.id, taskId: task.id, text: task.text });
   };
   const agentWorking = structure !== null && deriveThreadAgentWorking(structure);
+  const writingArtifactId =
+    structure === null
+      ? null
+      : ownerWritingArtifactId(
+          items.map((projected) => projected.item),
+          deriveThreadStructureRuntime(structure)?.activeRunId,
+          share?.id,
+        );
+  const pendingRequests = useAtomValue(environmentThreadDetails.pendingRequestsAtom(threadRef));
+  const providers = useEnvironmentProviders().get(threadRef.environmentId) ?? NO_PROVIDERS;
   const canSend = useEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope);
   const startTurn = useOrchestrationCommand(threadEnvironment.startTurn, "send the message");
   const sendingRef = useRef(false);
-  // The owner's own message on their own thread, sent as the composer sends one; while a turn
-  // runs it waits behind it, so the reply that fills an artifact is this message's.
+  // The owner's own message on their own thread, sent as the composer would send one now; while
+  // a turn runs it waits behind it, so the reply that fills an artifact is this message's.
   const sendFromBoard = async (prompt: BoardPrompt) => {
     if (share === null || shell === null || sendingRef.current) return false;
     const message = ownerBoardPromptMessage({
@@ -171,6 +190,17 @@ export function ThreadRoomBoard({ threadRef }: { readonly threadRef: ScopedThrea
       artifactId: prompt.artifactId,
     });
     if (message.text === "") return false;
+    // What the owner picked in this thread's composer and has not sent with yet.
+    const draft = useComposerDraftStore.getState().getComposerDraft(threadRef);
+    const picked =
+      draft?.activeProvider === null || draft?.activeProvider === undefined
+        ? undefined
+        : draft.modelSelectionByProvider[draft.activeProvider];
+    const turn = boardTurnSelection({
+      selection: picked ?? shell.modelSelection,
+      providers,
+      text: message.text,
+    });
     sendingRef.current = true;
     const result = await startTurn({
       environmentId: threadRef.environmentId,
@@ -179,12 +209,13 @@ export function ThreadRoomBoard({ threadRef }: { readonly threadRef: ScopedThrea
         message: {
           messageId: newMessageId(),
           role: "user",
-          text: message.text,
+          text: turn.text,
           ...(message.context === undefined ? {} : { context: message.context }),
           attachments: [],
         },
-        runtimeMode: shell.runtimeMode,
-        interactionMode: shell.interactionMode,
+        modelSelection: turn.modelSelection,
+        runtimeMode: draft?.runtimeMode ?? shell.runtimeMode,
+        interactionMode: draft?.interactionMode ?? shell.interactionMode,
         ...(agentWorking ? { dispatchMode: "queue" as const } : {}),
         createdAt: new Date().toISOString(),
       },
@@ -282,6 +313,9 @@ export function ThreadRoomBoard({ threadRef }: { readonly threadRef: ScopedThrea
         onPrompt={share !== null && canSend ? sendFromBoard : undefined}
         promptPlaceholder="Ask your agent"
         canFillArtifacts
+        artifactPromptPlaceholder="Ask your agent to change this"
+        ownerWritingArtifactId={writingArtifactId}
+        needsApproval={(pendingRequests?.approvals.length ?? 0) > 0}
       />
     </SidebarInset>
   );

@@ -254,9 +254,12 @@ const COMPOSER_CONTEXT_ROOM_CARDS_MAX = 60;
 export const RoomBoardContextCard = Schema.Struct({
   /** As the board names the card, such as "Note from Sam" or 'Artifact "Plan"'. */
   label: ContextLabel,
-  /** The room's owner, their agent (an artifact's content), or a guest. Absent when unknown. */
-  author: Schema.optional(Schema.Literals(["owner", "owner_agent", "guest"])),
-  /** The guest's name. */
+  /**
+   * The room's owner, their agent or a guest's (an artifact's content), or a guest. Absent when
+   * unknown.
+   */
+  author: Schema.optional(Schema.Literals(["owner", "owner_agent", "guest", "guest_agent"])),
+  /** The guest's name, for a guest or their agent. */
   name: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(GUEST_NAME_MAX_LENGTH))),
   text: BoundedString(ROOM_ARTIFACT_MAX_LENGTH),
 });

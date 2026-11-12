@@ -480,6 +480,9 @@ describe("Teams", () => {
           refusal("board_rejected"),
         );
       }
+      expect(yield* refused("ann", { type: "artifact.restore", noteId: "task" })).toMatchObject(
+        refusal("board_rejected"),
+      );
       // Cards and notes take sizes here as on a room's board.
       const sized = yield* change("ann", {
         type: "card.resize",

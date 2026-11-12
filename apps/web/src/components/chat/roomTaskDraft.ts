@@ -4,11 +4,13 @@ import {
   type GuestShareId,
   type OrchestrationMessageContext,
   ROOM_TASK_CONTEXT_KIND,
+  type RoomArtifactContextRecord,
   type RoomTaskContextPayload,
   type ScopedThreadRef,
   type UnknownContextRecord,
 } from "@t3tools/contracts";
-import { create } from "zustand";
+import { formatComposerContextReference } from "@t3tools/shared/composerContextReferences";
+import { create, type StoreApi, type UseBoundStore } from "zustand";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { randomUUID } from "~/lib/utils";
@@ -26,24 +28,80 @@ export interface RoomTaskDraft {
 
 const useRoomTaskDrafts = create<Readonly<Record<string, RoomTaskDraft>>>(() => ({}));
 
-export function dropRoomTaskDraft(threadRef: ScopedThreadRef) {
-  const key = scopedThreadKey(threadRef);
-  const { [key]: dropped, ...rest } = useRoomTaskDrafts.getState();
-  if (dropped !== undefined) useRoomTaskDrafts.setState(rest, true);
+/**
+ * An artifact card the user took from a room to this thread's agent, with what the card shows
+ * now. The composer shows it until the user sends the draft, which then carries it, so the reply
+ * fills the card in the room once the turn finishes; or drops it. It sends nothing.
+ */
+export interface RoomArtifactDraft {
+  readonly threadRef: ScopedThreadRef;
+  readonly record: RoomArtifactContextRecord;
 }
 
+const useRoomArtifactDrafts = create<Readonly<Record<string, RoomArtifactDraft>>>(() => ({}));
+
+const dropFrom =
+  <T>(store: UseBoundStore<StoreApi<Readonly<Record<string, T>>>>) =>
+  (threadRef: ScopedThreadRef) => {
+    const { [scopedThreadKey(threadRef)]: dropped, ...rest } = store.getState();
+    if (dropped !== undefined) store.setState(rest, true);
+  };
+
+export const dropRoomTaskDraft = dropFrom(useRoomTaskDrafts);
+export const dropRoomArtifactDraft = dropFrom(useRoomArtifactDrafts);
+
 let watchingDrafts = false;
-/** A draft sent, cleared or emptied takes its task with it, so an unrelated message answers none. */
+/**
+ * A draft sent, cleared or emptied takes its task and artifact with it, so an unrelated message
+ * answers or fills none.
+ */
 function watchDrafts() {
   if (watchingDrafts) return;
   watchingDrafts = true;
   useComposerDraftStore.subscribe((drafts) => {
+    const empty = (threadRef: ScopedThreadRef) =>
+      (drafts.getComposerDraft(threadRef)?.prompt.trim() ?? "") === "";
     for (const task of Object.values(useRoomTaskDrafts.getState())) {
-      if ((drafts.getComposerDraft(task.threadRef)?.prompt.trim() ?? "") === "") {
-        dropRoomTaskDraft(task.threadRef);
-      }
+      if (empty(task.threadRef)) dropRoomTaskDraft(task.threadRef);
+    }
+    for (const artifact of Object.values(useRoomArtifactDrafts.getState())) {
+      if (empty(artifact.threadRef)) dropRoomArtifactDraft(artifact.threadRef);
     }
   });
+}
+
+/** Ties the thread's draft to an artifact card. Call it after the prompt is in the draft. */
+export function takeRoomArtifactToDraft(draft: RoomArtifactDraft) {
+  watchDrafts();
+  useRoomArtifactDrafts.setState(
+    { ...useRoomArtifactDrafts.getState(), [scopedThreadKey(draft.threadRef)]: draft },
+    true,
+  );
+}
+
+export const readRoomArtifactDraft = (threadRef: ScopedThreadRef): RoomArtifactDraft | undefined =>
+  useRoomArtifactDrafts.getState()[scopedThreadKey(threadRef)];
+
+export const useRoomArtifactDraft = (threadRef: ScopedThreadRef): RoomArtifactDraft | undefined =>
+  useRoomArtifactDrafts((drafts) => drafts[scopedThreadKey(threadRef)]);
+
+/**
+ * A message with the artifact card it fills: the card's chip after the text, so the user sees in
+ * the thread what went to their agent, and its record, which tells the agent so.
+ */
+export function withRoomArtifact(
+  message: { readonly text: string; readonly context: OrchestrationMessageContext | undefined },
+  artifact: RoomArtifactDraft | undefined,
+): { readonly text: string; readonly context: OrchestrationMessageContext | undefined } {
+  if (artifact === undefined) return message;
+  const { context } = message;
+  return {
+    text: `${message.text}\n\n${formatComposerContextReference(artifact.record)}`,
+    context:
+      context === undefined
+        ? { version: 1, records: [artifact.record] }
+        : { ...context, records: [...context.records, artifact.record] },
+  };
 }
 
 /** Ties the thread's draft to a task. Call it after the task's text is in the draft. */

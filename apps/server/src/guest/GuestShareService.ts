@@ -35,6 +35,7 @@ import {
   providerAllowsDirectGuestSend,
   repositoryGroupingKeyOf,
   type RoomAgentsEvent,
+  type RoomArtifactRead,
   type RoomBoardChange,
   type RoomCodeState,
   roomCodeStateOf,
@@ -61,6 +62,7 @@ import {
 import { chatMarkdownImageSources } from "@t3tools/shared/markdownPipeline";
 import { buildGuestLink, buildShortGuestLink } from "@t3tools/shared/guestLinks";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
+import { roomArtifactBody } from "@t3tools/shared/roomBoard";
 import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 import * as NodeOS from "node:os";
 
@@ -170,6 +172,7 @@ interface RoomLive {
       readonly id: string;
       readonly prompt: string;
       readonly taskId?: string;
+      readonly artifactId?: string;
       readonly code?: RoomCodeState;
     }
   >;
@@ -200,6 +203,7 @@ const GUEST_ACCESS_MESSAGES = {
   too_fast: "Too many requests at once. Try again in a minute.",
   team_member_required:
     "This thread is shared with a team. Open it from the team's page in T Code while signed in.",
+  artifact_gone: GUEST_FAILURE.artifactGone,
 } as const;
 
 /** What a guest is told. The message comes from `reason`, never from a cause. */
@@ -228,6 +232,7 @@ export class GuestShareAccessError extends Schema.TaggedError<GuestShareAccessEr
       "too_fast",
       "removed",
       "team_member_required",
+      "artifact_gone",
     ]),
   },
 ) {
@@ -246,13 +251,15 @@ const GUEST_FAILURE_REASONS = new Map<unknown, GuestShareAccessError["reason"]>(
   [GUEST_FAILURE.filesBusy, "files_busy"],
   [GUEST_FAILURE.boardFull, "board_full"],
   [GUEST_FAILURE.removed, "removed"],
+  [GUEST_FAILURE.artifactGone, "artifact_gone"],
 ]);
 const guestFailureReason = (cause: unknown): GuestShareAccessError["reason"] =>
   GUEST_FAILURE_REASONS.get(cause) ?? "rejected";
 
 const SessionClaims = Schema.Struct({
   // A handoff token only opens the thread's export, and only for a few minutes. A room token only
-  // posts the guest's own turns and reads what the room said, for as long as the share lasts.
+  // posts the guest's own turns and reads what the room said and its artifact cards, for as long
+  // as the share lasts.
   kind: Schema.Literals(["session", "handoff", "room"]),
   threadId: ThreadId,
   shareId: GuestShareId,
@@ -374,6 +381,11 @@ export class GuestShareService extends Context.Service<
       roomToken: string,
       after: string | null,
     ) => Effect.Effect<GuestSafe<RoomUpdates>, GuestShareAccessError>;
+    /** One artifact card of the board, for the guest's own machine. Changes nothing here. */
+    readonly roomArtifact: (
+      roomToken: string,
+      noteId: string,
+    ) => Effect.Effect<GuestSafe<RoomArtifactRead>, GuestShareAccessError>;
     /**
      * Changes one card or note on a shared thread's board: for its owner, who names the thread,
      * or for a guest, who shows their session. Everyone in the room sees the result.
@@ -1013,6 +1025,7 @@ const make = Effect.gen(function* () {
       text: request.text,
       ...(attachments.length === 0 ? {} : { attachments }),
       ...(direct ? { direct } : {}),
+      ...(request.artifactId === undefined ? {} : { artifactId: request.artifactId }),
     }).pipe(Effect.onError(() => removeStored(attachments)));
     if (direct) {
       const sendId = yield* commandId("send");
@@ -1186,6 +1199,7 @@ const make = Effect.gen(function* () {
           guestId,
           prompt: agent.prompt,
           ...(agent.taskId === undefined ? {} : { taskId: agent.taskId }),
+          ...(agent.artifactId === undefined ? {} : { artifactId: agent.artifactId }),
           ...(agent.code === undefined ? {} : { code: agent.code }),
         }))
         .toSorted((left, right) => left.guestId.localeCompare(right.guestId)),
@@ -1555,13 +1569,26 @@ const make = Effect.gen(function* () {
     if (!allowTurnPost(`${share.id}:${guestId}`, DateTime.toEpochMillis(yield* DateTime.now))) {
       return yield* new GuestShareAccessError({ reason: "too_fast" });
     }
+    const { artifact: posted, ...turn } = request;
+    // What fills the card is taken from the body again, as from any reply, so a guest's machine
+    // can put no more in it than an agent's reply would.
+    const filled =
+      posted === undefined ? undefined : roomArtifactBody(sanitizeLinkedPrompt(posted.body).text);
+    const artifact =
+      posted === undefined || filled === undefined || filled.body === ""
+        ? undefined
+        : {
+            noteId: posted.noteId,
+            body: filled.body,
+            ...(posted.truncated === true || filled.truncated ? { truncated: true } : {}),
+          };
     yield* dispatchGuestCommand({
       type: "thread.guest-turn.post",
       commandId: yield* commandId("turn"),
       threadId: thread.id,
       shareId: share.id,
       guestId,
-      turn: { ...request, prompt, reply },
+      turn: { ...turn, prompt, reply, ...(artifact === undefined ? {} : { artifact }) },
     });
     yield* clearAgent(share.id, guestId, request.id);
     yield* analytics.record("feature.used", { feature: "guest_share.turn" });
@@ -1579,6 +1606,9 @@ const make = Effect.gen(function* () {
       task?.kind === "task" && (task.assignee === undefined || task.assignee.guestId === guestId)
         ? task.id
         : undefined;
+    const artifactId = share.board?.notes.find(
+      (note) => note.id === request.artifactId && note.kind === "artifact",
+    )?.id;
     if (!allowActivity(`${share.id}:${guestId}`, DateTime.toEpochMillis(yield* DateTime.now))) {
       return yield* new GuestShareAccessError({ reason: "too_fast" });
     }
@@ -1595,6 +1625,7 @@ const make = Effect.gen(function* () {
         id: request.id,
         prompt,
         ...(taskId === undefined ? {} : { taskId }),
+        ...(artifactId === undefined ? {} : { artifactId }),
         ...(request.code === undefined ? {} : { code: request.code }),
         until: now + AGENT_ACTIVITY_TTL_MS,
       }),
@@ -1694,6 +1725,27 @@ const make = Effect.gen(function* () {
         after,
       }),
     );
+  });
+
+  const roomArtifact = Effect.fn("GuestShareService.roomArtifact")(function* (
+    token: string,
+    noteId: string,
+  ) {
+    const { thread, share, guestId } = yield* authorize(token, "room");
+    if (guestId === undefined) return yield* new GuestShareAccessError({ reason: "ended" });
+    if (!allowUpdatesRead(`${share.id}:${guestId}`, DateTime.toEpochMillis(yield* DateTime.now))) {
+      return yield* new GuestShareAccessError({ reason: "too_fast" });
+    }
+    const note = share.board?.notes.find(
+      (candidate) => candidate.id === noteId && candidate.kind === "artifact",
+    );
+    if (note === undefined) return yield* new GuestShareAccessError({ reason: "artifact_gone" });
+    const { redactor } = yield* redactorFor(thread);
+    // The same card the guest's board shows them.
+    return redactor.redact<RoomArtifactRead>({
+      title: note.text,
+      ...(note.artifact === undefined ? {} : { body: note.artifact.body }),
+    });
   });
 
   const unavailable = new GuestShareAccessError({ reason: "unavailable" });
@@ -1885,6 +1937,7 @@ const make = Effect.gen(function* () {
     roomCursors,
     moveCursor,
     roomUpdates,
+    roomArtifact,
     changeBoard,
     render,
     item,

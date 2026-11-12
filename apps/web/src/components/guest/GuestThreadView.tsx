@@ -36,7 +36,7 @@ import {
   type ThreadGuestMessage,
   type ThreadGuestMessageStatus,
 } from "@t3tools/contracts";
-import { buildJoinLink } from "@t3tools/shared/promptLinks";
+import { buildJoinLink, PROMPT_LINK_MAX_PROMPT_LENGTH } from "@t3tools/shared/promptLinks";
 import type { LegendListRef } from "@legendapp/list/react";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -69,14 +69,19 @@ import { configuredHostedAppUrl } from "~/hostedPairing";
 import { useTheme } from "~/hooks/useTheme";
 import { cn } from "~/lib/utils";
 import { deriveActiveWorkStartedAt, derivePhase, deriveThreadAgentWorking } from "~/session-logic";
-import { threadEnvironment, useEnvironmentThread } from "~/state/threads";
+import { environmentThreadDetails, threadEnvironment, useEnvironmentThread } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { ComposerControl, ComposerControlIcon } from "../chat/ComposerControl";
 import type { ExpandedImagePreview } from "../chat/ExpandedImagePreview";
 import { GuestMessageAttachments } from "../chat/GuestMessageAttachments";
 import { HostImageUrlContext } from "../chat/hostImageUrl";
 import { PierreEntryIcon } from "../chat/PierreEntryIcon";
-import { boardContextCards, guestBoardPromptText } from "../chat/roomBoardPrompt";
+import {
+  boardContextCards,
+  guestBoardPromptText,
+  guestMessageArtifactTitle,
+  ownerWritingArtifactId,
+} from "../chat/roomBoardPrompt";
 import { GuestMessageName, guestBubbleClassName } from "../chat/guestMessageStyle";
 import { GuestTurnList } from "../chat/GuestTurnList";
 import { MessagesTimeline, type MessagesTimelineHistoryControls } from "../chat/MessagesTimeline";
@@ -195,10 +200,13 @@ async function postGuestMessage(
   endpoint: GuestShareEndpoint,
   text: string,
   files: ReadonlyArray<File>,
+  /** The artifact card the reply should fill once the owner sends it. */
+  artifactId: string | null = null,
 ): Promise<string | null> {
   const form = new FormData();
   form.append("shareId", endpoint.shareId);
   form.append("text", text);
+  if (artifactId !== null) form.append("artifactId", artifactId);
   for (const file of files) form.append("file", file, file.name);
   return guestShareRequest(endpoint, `${GUEST_ROUTE_PREFIX}/messages`, {
     init: { method: "POST", body: form },
@@ -281,6 +289,7 @@ function GuestThreadSession({
   // Mounting the thread opens the share's stream, which also says who is in the room.
   const thread = useEnvironmentThread(threadRef.environmentId, threadRef.threadId);
   const projection = Option.getOrNull(thread.data);
+  const pendingRequests = useAtomValue(environmentThreadDetails.pendingRequestsAtom(threadRef));
   const loadEarlier = useAtomCommand(threadEnvironment.loadEarlierHistory, {
     label: "load earlier thread history",
     reportFailure: false,
@@ -326,9 +335,7 @@ function GuestThreadSession({
   // The task becomes this guest's, and a draft in their own T Code; neither sends anything.
   const takeTask = (task: RoomBoardNote) => {
     const opened = openOnMyMachine(endpoint, share.host, {
-      shareId: share.shareId,
-      taskId: task.id,
-      text: task.text,
+      task: { shareId: share.shareId, taskId: task.id, text: task.text },
     });
     if (guestId !== undefined && task.assignee?.guestId !== guestId) {
       void postBoardChange(endpoint, {
@@ -342,18 +349,18 @@ function GuestThreadSession({
     }
     void opened.then(reportOpenFailure);
   };
-  // A message for the owner to approve, like one from the composer. It never fills an artifact.
+  const boardPromptText = (prompt: BoardPrompt) =>
+    guestBoardPromptText(prompt.text, boardContextCards(view.board, view.guests, prompt.cards));
+  // A message for the owner to approve, like one from the composer. One for an artifact names
+  // the card, and the owner's server attaches it when the owner sends the message.
   const messageOwner = async (prompt: BoardPrompt) => {
-    const text = guestBoardPromptText(
-      prompt.text,
-      boardContextCards(view.board, view.guests, prompt.cards),
-    );
+    const text = boardPromptText(prompt);
     const failure =
       text === ""
         ? "Write a message first."
         : text.length > GUEST_MESSAGE_MAX_LENGTH
           ? "This message and its cards are too long. Remove a card or shorten the message."
-          : await postGuestMessage(endpoint, text, []);
+          : await postGuestMessage(endpoint, text, [], prompt.artifactId);
     if (failure !== null) {
       toastManager.add({
         type: "error",
@@ -366,10 +373,29 @@ function GuestThreadSession({
   // The same draft a task makes. The room answers only a task card, so a note answers nothing.
   const giveNote = (note: RoomBoardNote) =>
     void openOnMyMachine(endpoint, share.host, {
-      shareId: share.shareId,
-      taskId: note.id,
-      text: boardNoteMessage(note),
+      task: { shareId: share.shareId, taskId: note.id, text: boardNoteMessage(note) },
     }).then(reportOpenFailure);
+  // A draft in this guest's own T Code, which reads the card from the room there. Their agent
+  // runs only when they send it, and its reply then fills the card.
+  const takeArtifact = (prompt: BoardPrompt & { readonly artifactId: string }) => {
+    const text = boardPromptText(prompt);
+    if (text === "" || text.length > PROMPT_LINK_MAX_PROMPT_LENGTH) {
+      reportOpenFailure(
+        text === ""
+          ? "Write what you want changed first."
+          : "This message and its cards are too long. Remove a card or shorten the message.",
+      );
+      return;
+    }
+    void openOnMyMachine(endpoint, share.host, {
+      artifact: { shareId: share.shareId, artifactId: prompt.artifactId, text },
+    }).then(reportOpenFailure);
+  };
+  // As the board offers giving a note to this guest's own agent: once their machine is in the room.
+  const ownMachineInRoom =
+    guestId !== undefined &&
+    ((view.turns ?? []).some((turn) => turn.guestId === guestId) ||
+      running.some((agent) => agent.guestId === guestId));
   return (
     <>
       {/* Hidden, not unmounted, so the board does not cost the guest their draft or place. */}
@@ -423,8 +449,16 @@ function GuestThreadSession({
           onChange={(change) => postBoardChange(endpoint, change)}
           onCursor={(presence) => postBoardCursor(endpoint, presence)}
           onPrompt={messageOwner}
+          onTakeArtifact={ownMachineInRoom ? takeArtifact : undefined}
+          ownerWritingArtifactId={ownerWritingArtifactId(
+            projection.visibleTurnItems.map((row) => row.item),
+            deriveThreadStructureRuntime(projection)?.activeRunId,
+            view.shareId,
+          )}
+          needsApproval={(pendingRequests?.approvals.length ?? 0) > 0}
           promptPlaceholder="Message the owner"
-          canFillArtifacts={false}
+          canFillArtifacts
+          artifactPromptPlaceholder="Ask the owner to change this"
           onUseNote={(text) => {
             // Only a draft in the message box: the guest sends it, and the owner still approves it.
             flushSync(() => {
@@ -665,6 +699,11 @@ function GuestThread({
                               endpoint={endpoint}
                               fileUrl={(id) => files.url(GUEST_ATTACHMENT_ROUTE, { id })}
                               message={message}
+                              artifactTitle={
+                                message.status === "pending"
+                                  ? guestMessageArtifactTitle(board, message)
+                                  : null
+                              }
                               author={
                                 message.guestId === guestId
                                   ? "You"
@@ -807,14 +846,14 @@ function GuestGitHubSignIn({
 }
 
 /**
- * Opens the guest's own T Code on a short-lived handoff token, with a task card as a draft when
- * given one. Call it in the click itself: a tab opened after a request counts as a popup.
- * Resolves to what went wrong, or null.
+ * Opens the guest's own T Code on a short-lived handoff token, with a task or artifact card as a
+ * draft when given one. Call it in the click itself: a tab opened after a request counts as a
+ * popup. Resolves to what went wrong, or null.
  */
 async function openOnMyMachine(
   endpoint: GuestShareEndpoint,
   host: string,
-  task?: { readonly shareId: string; readonly taskId: string; readonly text: string },
+  card: Pick<Parameters<typeof buildJoinLink>[0], "task" | "artifact"> = {},
 ): Promise<string | null> {
   const tab = window.open("", "_blank");
   const handoff = await postGuestAction(
@@ -831,7 +870,7 @@ async function openOnMyMachine(
     host,
     token: handoff.token,
     origin: configuredHostedAppUrl(),
-    ...(task === undefined ? {} : { task }),
+    ...card,
   });
   if (tab === null) {
     window.location.href = url;
@@ -899,6 +938,7 @@ function UnplacedGuestMessage({
   fileUrl,
   message,
   author,
+  artifactTitle,
 }: {
   readonly endpoint: GuestShareEndpoint;
   /** Where a file of the message has loaded to, once it has. */
@@ -906,6 +946,8 @@ function UnplacedGuestMessage({
   readonly message: ThreadGuestMessage;
   /** "You", or the name of the other guest who wrote it. */
   readonly author: string;
+  /** The artifact card the reply fills once the owner sends it. */
+  readonly artifactTitle: string | null;
 }) {
   // A dismissed message's files are deleted, so only their names remain.
   const served = message.status !== "dismissed";
@@ -929,7 +971,11 @@ function UnplacedGuestMessage({
         />
         {message.text ? <span>{message.text}</span> : null}
       </div>
-      <p className="me-1 text-2xs text-muted-foreground">{STATUS_LABEL[message.status]}</p>
+      <p className="me-1 text-2xs text-muted-foreground">
+        {artifactTitle === null
+          ? STATUS_LABEL[message.status]
+          : `${STATUS_LABEL[message.status]} · the reply replaces "${artifactTitle}"`}
+      </p>
     </div>
   );
 }

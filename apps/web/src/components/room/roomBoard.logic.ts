@@ -7,8 +7,10 @@ import {
   isRoomBoardUrl,
   isRoomBranchName,
   roomBoardCardRef,
+  roomBoardGuestCard,
   roomBoardNoteRef,
   type RoomAgentActivity,
+  type RoomArtifactContent,
   type RoomBoard,
   type RoomBoardChange,
   type RoomBoardEdge,
@@ -103,48 +105,133 @@ export function placeBoardCards(
 }
 
 const NOTE_WIDTH = 192;
-const NOTE_HEIGHT = 128;
-const NOTE_GAP = 16;
-const NOTE_COLUMNS = 3;
-const NOTE_ROWS = 24;
+const NOTE_HEIGHT = 144;
+// Guesses for heights the browser decides, used only where nothing on screen can be measured.
+const COMMENT_HEIGHT = 200;
+const THREAD_CARD_HEIGHT = 420;
 
-/**
- * Where a new note goes: `wanted`, or the nearest spot right of or below it that covers no note
- * and no card. A card is taken to be as tall as a grid row, since its height is the browser's.
- */
-export function placeBoardNote(
-  wanted: BoardPoint,
-  notes: ReadonlyArray<BoardPoint>,
-  cards: ReadonlyArray<BoardPoint>,
-): BoardPoint {
-  const covers = (at: BoardPoint, other: BoardPoint, width: number, height: number) =>
-    at.x < other.x + width &&
-    other.x < at.x + NOTE_WIDTH &&
-    at.y < other.y + height &&
-    other.y < at.y + NOTE_HEIGHT;
-  for (let slot = 0; slot < NOTE_COLUMNS * NOTE_ROWS; slot += 1) {
-    const at = {
-      x: wanted.x + (slot % NOTE_COLUMNS) * (NOTE_WIDTH + NOTE_GAP),
-      y: wanted.y + Math.floor(slot / NOTE_COLUMNS) * (NOTE_HEIGHT + NOTE_GAP),
-    };
-    if (
-      !notes.some((note) => covers(at, note, NOTE_WIDTH, NOTE_HEIGHT)) &&
-      !cards.some((card) => covers(at, card, BOARD_CARD_WIDTH, CARD_ROW_HEIGHT))
-    ) {
-      return at;
-    }
-  }
-  return wanted;
+/** Something on the board, or the part of it a view shows, in board pixels. */
+export interface BoardRect extends BoardPoint {
+  readonly width: number;
+  readonly height: number;
 }
 
-/** Where a comment pinned to a reply lands on the board: beside the thread's card. */
-export function pinnedCommentSpot(board: RoomBoard): BoardPoint {
-  const thread = placeBoardCards([ROOM_BOARD_THREAD_CARD], board.positions)[
-    ROOM_BOARD_THREAD_CARD
-  ]!;
-  return placeBoardNote({ x: thread.x + BOARD_CARD_WIDTH + CARD_GAP, y: thread.y }, board.notes, [
-    thread,
-  ]);
+/** How big a new card of this kind is, for finding it a spot. */
+export const boardNewNoteSize = (kind: RoomBoardNote["kind"]): RoomBoardSize =>
+  kind === "artifact" ? BOARD_ARTIFACT_SIZE : { w: NOTE_WIDTH, h: NOTE_HEIGHT };
+
+const PLACE_GAP = 16;
+const PLACE_REACH = 1_200;
+const PLACE_STEPS = 60;
+
+/**
+ * Where a new item of `size` goes: centred on `around` when that is clear, else the nearest spot
+ * that is clear of everything `taken` by a small gap and, when `within` has room, fully inside it.
+ * With no clear spot, the one that covers the least.
+ */
+export function placeBoardItem(
+  size: RoomBoardSize,
+  around: BoardPoint,
+  taken: ReadonlyArray<BoardRect>,
+  within?: BoardRect,
+): BoardPoint {
+  const area =
+    within !== undefined &&
+    within.width >= size.w + PLACE_GAP * 2 &&
+    within.height >= size.h + PLACE_GAP * 2
+      ? within
+      : undefined;
+  const reach = area === undefined ? PLACE_REACH : Math.max(area.width, area.height);
+  const step = Math.max(PLACE_GAP, Math.ceil(reach / PLACE_STEPS));
+  const reachSteps = Math.ceil(reach / step);
+  const start = { x: around.x - size.w / 2, y: around.y - size.h / 2 };
+  const inside = (at: BoardPoint) =>
+    area === undefined ||
+    (at.x >= area.x + PLACE_GAP &&
+      at.y >= area.y + PLACE_GAP &&
+      at.x + size.w <= area.x + area.width - PLACE_GAP &&
+      at.y + size.h <= area.y + area.height - PLACE_GAP);
+  const covered = (at: BoardPoint) => {
+    let sum = 0;
+    for (const rect of taken) {
+      const w =
+        Math.min(at.x + size.w, rect.x + rect.width + PLACE_GAP) -
+        Math.max(at.x, rect.x - PLACE_GAP);
+      const h =
+        Math.min(at.y + size.h, rect.y + rect.height + PLACE_GAP) -
+        Math.max(at.y, rect.y - PLACE_GAP);
+      if (w > 0 && h > 0) sum += w * h;
+    }
+    return sum;
+  };
+  const offsets: Array<readonly [number, number]> = [];
+  for (let i = -reachSteps; i <= reachSteps; i += 1) {
+    for (let j = -reachSteps; j <= reachSteps; j += 1) offsets.push([i, j]);
+  }
+  offsets.sort(
+    ([ai, aj], [bi, bj]) => ai * ai + aj * aj - (bi * bi + bj * bj) || aj - bj || ai - bi,
+  );
+  let best: BoardPoint | null = null;
+  let bestCovered = Number.POSITIVE_INFINITY;
+  for (const [i, j] of offsets) {
+    const at = { x: Math.round(start.x + i * step), y: Math.round(start.y + j * step) };
+    if (!inside(at)) continue;
+    const cover = covered(at);
+    if (cover === 0) return at;
+    if (cover < bestCovered) {
+      best = at;
+      bestCovered = cover;
+    }
+  }
+  return best ?? { x: Math.round(start.x), y: Math.round(start.y) };
+}
+
+/**
+ * What is on a board and where, at the sizes it was given or, for heights the browser decides,
+ * a guess. For when nothing on screen can be measured.
+ */
+export function boardItemRects(
+  board: RoomBoard,
+  cardIds: ReadonlyArray<string>,
+): ReadonlyArray<BoardRect> {
+  const placed = { ...board.positions, ...placeBoardCards(cardIds, board.positions) };
+  const cards = Object.entries(placed).map(([id, at]) => ({
+    x: at.x,
+    y: at.y,
+    width: board.sizes?.[id]?.w ?? BOARD_CARD_WIDTH,
+    height:
+      board.sizes?.[id]?.h ??
+      (id === ROOM_BOARD_THREAD_CARD ? THREAD_CARD_HEIGHT : CARD_ROW_HEIGHT),
+  }));
+  const notes = board.notes.map((note) => {
+    const size = boardNoteSize(note);
+    return {
+      x: note.x,
+      y: note.y,
+      width: size?.w ?? NOTE_WIDTH,
+      height: size?.h ?? (note.pinnedTo === undefined ? NOTE_HEIGHT : COMMENT_HEIGHT),
+    };
+  });
+  return [...cards, ...notes];
+}
+
+/**
+ * Where a comment pinned to a reply lands on the board: beside the thread's card, or the nearest
+ * spot to that clear of the cards and notes there, including each guest's card.
+ */
+export function pinnedCommentSpot(
+  board: RoomBoard,
+  guestIds: ReadonlyArray<string> = [],
+): BoardPoint {
+  const cardIds = [ROOM_BOARD_THREAD_CARD, ...guestIds.map(roomBoardGuestCard)];
+  const thread = placeBoardCards(cardIds, board.positions)[ROOM_BOARD_THREAD_CARD]!;
+  const width = board.sizes?.[ROOM_BOARD_THREAD_CARD]?.w ?? BOARD_CARD_WIDTH;
+  const size = { w: NOTE_WIDTH, h: COMMENT_HEIGHT };
+  return placeBoardItem(
+    size,
+    { x: thread.x + width + CARD_GAP + size.w / 2, y: thread.y + size.h / 2 },
+    boardItemRects(board, cardIds),
+  );
 }
 
 /** Where a card or note is, how wide it is, and how far down the middle of its header is. */
@@ -153,8 +240,8 @@ export interface BoardBox extends BoardPoint {
   readonly headerY: number;
 }
 
-/** How big an artifact card is until someone resizes it. */
-const BOARD_ARTIFACT_SIZE: RoomBoardSize = { w: 380, h: 320 };
+/** How big an artifact card is until someone resizes it, with room for its prompt box. */
+const BOARD_ARTIFACT_SIZE: RoomBoardSize = { w: 380, h: 440 };
 
 const boardLength = (value: number) =>
   Math.round(Math.min(ROOM_BOARD_MAX_CARD_SIZE, Math.max(ROOM_BOARD_MIN_CARD_SIZE, value)));
@@ -789,13 +876,16 @@ export const isBoardHtmlArtifact = (body: string): boolean =>
 export const BOARD_PROMPT_MAX_CARDS = 8;
 const PROMPT_ARTIFACT_LENGTH = 4_000;
 
-/** What the thread's card does with the arrows at it: what goes with a message, and where the reply goes. */
+/**
+ * What a card with a prompt box does with the arrows at it: what goes with a message, and, for
+ * the thread's card, where the reply goes.
+ */
 export interface BoardPromptContext {
-  /** Every card with an arrow into the thread's card, and into those, nearest first. */
+  /** Every card with an arrow into the target, and into those, nearest first. */
   readonly cards: ReadonlyArray<BoardPromptCard>;
   /** The arrows that carry them. */
   readonly edgeIds: ReadonlySet<string>;
-  /** The artifact the thread's card points to, and the arrow that does. */
+  /** The artifact the thread's card points to, and the arrow that does. Null for an artifact's box. */
   readonly artifact: RoomBoardNote | null;
   readonly artifactEdgeId: string | null;
 }
@@ -837,26 +927,35 @@ function boardPromptCard(
 }
 
 /**
- * The cards a message from the thread's card carries: each note with an arrow into it, and each
- * note with an arrow into one of those, once each, nearest first and in the order the arrows were
- * drawn. Plus the artifact the thread's card has an arrow to, first drawn first.
+ * The cards a message from a prompt box carries: each note with an arrow into its card (`target`,
+ * as arrows name it; the thread's card by default), and each note with an arrow into one of
+ * those, once each, nearest first and in the order the arrows were drawn. Plus, for the thread's
+ * card, the artifact it has an arrow to, first drawn first.
  */
 export function boardPromptContext(
   board: RoomBoard,
   people: BoardPeople,
   messages: ReadonlyArray<BoardMessage> = [],
+  target: string = roomBoardCardRef(ROOM_BOARD_THREAD_CARD),
 ): BoardPromptContext {
   const thread = roomBoardCardRef(ROOM_BOARD_THREAD_CARD);
   const notes = new Map(board.notes.map((note) => [roomBoardNoteRef(note.id), note]));
   const edges = board.edges ?? [];
   const reached = new Set<string>();
   const cards: Array<BoardPromptCard> = [];
-  let frontier = [thread];
+  let frontier = [target];
   while (frontier.length > 0 && reached.size < BOARD_PROMPT_MAX_CARDS) {
     const next: Array<string> = [];
     for (const edge of edges) {
       const note = notes.get(edge.from);
-      if (!frontier.includes(edge.to) || note === undefined || reached.has(edge.from)) continue;
+      if (
+        !frontier.includes(edge.to) ||
+        note === undefined ||
+        edge.from === target ||
+        reached.has(edge.from)
+      ) {
+        continue;
+      }
       if (reached.size === BOARD_PROMPT_MAX_CARDS) break;
       reached.add(edge.from);
       next.push(edge.from);
@@ -865,10 +964,11 @@ export function boardPromptContext(
     }
     frontier = next;
   }
-  const carried = (ref: string) => ref === thread || reached.has(ref);
-  const artifactEdge = edges.find(
-    (edge) => edge.from === thread && notes.get(edge.to)?.kind === "artifact",
-  );
+  const carried = (ref: string) => ref === target || reached.has(ref);
+  const artifactEdge =
+    target === thread
+      ? edges.find((edge) => edge.from === thread && notes.get(edge.to)?.kind === "artifact")
+      : undefined;
   return {
     cards,
     edgeIds: new Set(
@@ -877,4 +977,45 @@ export function boardPromptContext(
     artifact: artifactEdge === undefined ? null : (notes.get(artifactEdge.to) ?? null),
     artifactEdgeId: artifactEdge?.id ?? null,
   };
+}
+
+const sentenceStart = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+/**
+ * Who wrote an artifact's current version: "Sam's agent", or "Your agent, asked by Sam" when the
+ * owner sent a guest's message.
+ */
+export function boardArtifactAuthor(
+  artifact: Pick<RoomArtifactContent, "guestId" | "askedBy">,
+  people: BoardPeople,
+): string {
+  const agent = boardAgentName(people, artifact.guestId);
+  const { askedBy } = artifact;
+  if (askedBy === undefined || askedBy === artifact.guestId) return sentenceStart(agent);
+  const asker = askedBy === people.viewer ? "you" : boardPersonName(people, askedBy);
+  return sentenceStart(`${agent}, asked by ${asker}`);
+}
+
+/**
+ * Whose agents are writing an artifact now, as its card says it: "Sam's agent is writing…", or
+ * null when none is. The owner's comes first.
+ */
+export function boardArtifactWriting(
+  noteId: string,
+  running: ReadonlyArray<RoomAgentActivity>,
+  ownerWritingArtifactId: string | null,
+  people: BoardPeople,
+): string | null {
+  const names = [
+    ...(ownerWritingArtifactId === noteId ? [boardAgentName(people, undefined)] : []),
+    ...new Set(
+      running
+        .filter((agent) => agent.artifactId === noteId)
+        .map((agent) => boardAgentName(people, agent.guestId)),
+    ),
+  ];
+  const last = names.at(-1);
+  if (last === undefined) return null;
+  const who = names.length === 1 ? last : `${names.slice(0, -1).join(", ")} and ${last}`;
+  return sentenceStart(`${who} ${names.length === 1 ? "is" : "are"} writing…`);
 }

@@ -155,6 +155,32 @@ describe("link round trips", () => {
       },
     });
     expect(parseJoinLink("?host=h&token=t&task=task-1&prompt=Fix").ok).toBe(false);
+
+    // So does what someone asked of an artifact card, which names the card instead of a task.
+    const artifact = buildJoinLink({
+      host: "sam.t3.test",
+      token: "payload.signature",
+      artifact: { shareId: "share-1", artifactId: "note-1", text: "Make it blue" },
+    });
+    expect(parseJoinLink(new URL(artifact).search)).toEqual({
+      ok: true,
+      value: {
+        host: "sam.t3.test",
+        token: "payload.signature",
+        artifact: {
+          shareId: "share-1",
+          artifactId: "note-1",
+          prompt: { text: "Make it blue", hiddenCharacters: 0 },
+        },
+      },
+    });
+    for (const search of [
+      "?host=h&token=t&artifact=note-1&prompt=Go",
+      "?host=h&token=t&share=s&artifact=note-1",
+      "?host=h&token=t&share=s&artifact=note-1&task=task-1&prompt=Go",
+    ]) {
+      expect(parseJoinLink(search).ok).toBe(false);
+    }
   });
 
   it("maps app scheme and hosted links to in-app paths, and nothing else", () => {

@@ -127,6 +127,7 @@ it.effect("keeps a JSON file a guest attaches as a file, not a form field", () =
     const form = new FormData();
     form.append("shareId", "share-1");
     form.append("text", "");
+    form.append("artifactId", "note:plan");
     form.append("file", new File(['{"a":1}'], "data.json", { type: "application/json" }));
     const request = HttpServerRequest.fromWeb(
       new Request("http://localhost/api/guest/messages?share=share-1", {
@@ -141,5 +142,7 @@ it.effect("keeps a JSON file a guest attaches as a file, not a form field", () =
       submission?.uploads.map((upload) => [upload.name, upload.contentType]),
       [["data.json", "application/json"]],
     );
+    // The artifact card a message is for comes along as a field.
+    assert.equal(submission?.fields.artifactId, "note:plan");
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
