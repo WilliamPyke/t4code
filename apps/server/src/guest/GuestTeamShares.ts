@@ -26,6 +26,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { makeRelayEnvironmentClient } from "../relay/relayEnvironmentClient.ts";
 import { forkParked } from "../serverActivation.ts";
+import * as ServerSettings from "../serverSettings.ts";
 
 const RELAY_TIMEOUT = "5 seconds";
 
@@ -57,6 +58,9 @@ const make = Effect.gen(function* () {
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const signature = yield* Signature.Signature;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
+  // The title each team thread was last listed under, so only a rename reaches the relay.
+  const listedTitles = new Map<ThreadId, string>();
 
   const relayClient = readRelayConnection.pipe(
     Effect.flatMap((connection) =>
@@ -75,6 +79,7 @@ const make = Effect.gen(function* () {
         params: { environmentId: yield* environment.getEnvironmentId },
         payload,
       });
+      listedTitles.set(payload.threadId, payload.title);
       return teamName;
     },
     Effect.timeout(RELAY_TIMEOUT),
@@ -87,6 +92,7 @@ const make = Effect.gen(function* () {
     "GuestTeamShares.unregister",
   )(
     function* (threadId) {
+      listedTitles.delete(threadId);
       const client = yield* relayClient;
       if (client === null) return;
       yield* client.unregisterTeamThread({
@@ -122,16 +128,68 @@ const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => Option.none()),
   );
 
-  // Ending the share ends its listing. Untraced: it sees every domain event of every thread.
+  const rename = Effect.fn("GuestTeamShares.rename")(
+    function* (threadId: ThreadId, title: string) {
+      const client = yield* relayClient;
+      if (client === null) return;
+      yield* client.renameTeamThread({
+        params: { environmentId: yield* environment.getEnvironmentId, threadId },
+        payload: { title },
+      });
+      listedTitles.set(threadId, title);
+    },
+    Effect.timeout(RELAY_TIMEOUT),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("Could not rename a thread on its team", { cause }),
+    ),
+  );
+
+  // Ending the share ends its listing, and a rename renames it. Untraced: it sees every domain
+  // event of every thread.
   const onEvent = Effect.fnUntraced(function* (event: OrchestrationV2DomainEvent) {
     if (
       (event.type === "thread.guest-share-updated" && event.payload.guestShare === null) ||
       (event.type === "thread.archived" && event.payload.guestShare?.team !== undefined)
     ) {
       yield* unregister(event.threadId);
+    } else if (
+      event.type === "thread.metadata-updated" &&
+      event.payload.guestShare?.team !== undefined &&
+      event.payload.archivedAt === null &&
+      listedTitles.get(event.threadId) !== event.payload.title
+    ) {
+      yield* rename(event.threadId, event.payload.title);
     }
   });
   yield* forkParked(Stream.runForEach(orchestrator.streamDomainEvents, onEvent));
+
+  // With guest links off no team thread opens, so the team stops listing them until they are on.
+  const setListed = Effect.fn("GuestTeamShares.setListed")(
+    function* (listed: boolean) {
+      const client = yield* relayClient;
+      if (client === null) return;
+      yield* client.setTeamThreadsListed({
+        params: { environmentId: yield* environment.getEnvironmentId },
+        payload: { listed },
+      });
+    },
+    Effect.timeout(RELAY_TIMEOUT),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("Could not list this machine's threads on its teams", { cause }),
+    ),
+  );
+  const settingsChanges = yield* serverSettings.subscribeChanges;
+  let sharingEnabled = yield* serverSettings.getSettings.pipe(
+    Effect.map((settings) => settings.guestSharingEnabled),
+    Effect.orElseSucceed(() => false),
+  );
+  yield* forkParked(
+    Stream.runForEach(settingsChanges, (settings) => {
+      if (settings.guestSharingEnabled === sharingEnabled) return Effect.void;
+      sharingEnabled = settings.guestSharingEnabled;
+      return setListed(sharingEnabled);
+    }),
+  );
 
   return GuestTeamShares.of({ register, unregister, verifyMember });
 });

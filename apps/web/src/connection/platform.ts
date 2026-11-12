@@ -50,13 +50,14 @@ import {
   type PrimaryEnvironmentTarget,
 } from "../environments/primary/target";
 import { clearComposerDraftsEnvironment } from "../composerDraftStore";
-import { guestShareRegistrations, layerGuestShareAccess } from "../guest/guestShares";
+import { guestShareRegistrations } from "../guest/guestShares";
 import { isGuestOnlySession } from "../guestPage";
 import { isHostedStaticApp } from "../hostedPairing";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
 import { randomUUID } from "../lib/utils";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { acknowledgeRpcRequest, trackRpcRequestSent } from "../rpc/requestLatencyState";
+import { layerTeamGuestShareAccess } from "../teams/teamGuestShareAccess";
 import {
   desktopLocalConnectionId,
   readDesktopSecondaryBootstrapsResult,
@@ -840,7 +841,7 @@ type ConnectionPlatformLayerSource =
   | typeof layerPlatformConnectionSource
   | typeof layerEnvironmentOwnedDataCleanup
   | typeof layerRpcRequestObserver
-  | typeof layerGuestShareAccess;
+  | typeof layerTeamGuestShareAccess;
 
 export const layer: Layer.Layer<
   Layer.Success<ConnectionPlatformLayerSource>,
@@ -854,5 +855,5 @@ export const layer: Layer.Layer<
   layerPlatformConnectionSource,
   layerEnvironmentOwnedDataCleanup,
   layerRpcRequestObserver,
-  layerGuestShareAccess,
+  layerTeamGuestShareAccess,
 );

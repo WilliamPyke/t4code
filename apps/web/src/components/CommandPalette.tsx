@@ -77,6 +77,7 @@ import {
   SquarePenIcon,
   TextSearchIcon,
   UserPlusIcon,
+  UsersRoundIcon,
 } from "lucide-react";
 import { openThreadFind } from "./chat/threadFindStore";
 import {
@@ -250,6 +251,8 @@ import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
 import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
 import { openGuestShareDialog } from "./chat/guestShareDialogState";
 import { openUseInAnotherApp } from "./mcp/UseInAnotherAppDialog";
+import { openNewTeamDialog } from "./teams/NewTeamDialog";
+import { useTeams } from "../teams/teams";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { settingsForThisPlatform, SETTINGS_SECTION_LABELS } from "./settings/settingsSearch";
 import { primaryServerKeybindingsAtom } from "../state/server";
@@ -485,6 +488,7 @@ function OpenCommandPaletteDialog(props: {
   const activeThreadServerConfig = useServerConfigs().get(
     activeThread?.environmentId ?? ("" as EnvironmentId),
   );
+  const { accountId: teamsAccountId, teams } = useTeams();
   const canShareActiveThreadWithGuest = useAtomValue(
     canShareWithGuestAtom(activeThread?.environmentId ?? ("" as EnvironmentId)),
   );
@@ -1446,6 +1450,45 @@ function OpenCommandPaletteDialog(props: {
       icon: <UserPlusIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
         openGuestShareDialog(threadRef);
+      },
+    });
+  }
+
+  if (teamsAccountId !== null) {
+    if (teams !== null && teams.length > 0) {
+      actionItems.push({
+        kind: "submenu",
+        value: "action:open-team",
+        searchTerms: ["team", "teams", "members", "shared threads", "board"],
+        title: "Open team...",
+        icon: <UsersRoundIcon className={ITEM_ICON_CLASS} />,
+        addonIcon: <UsersRoundIcon className={ADDON_ICON_CLASS} />,
+        groups: [
+          {
+            value: "teams",
+            label: "Teams",
+            items: teams.map((team) => ({
+              kind: "action" as const,
+              value: `action:open-team:${team.id}`,
+              searchTerms: [team.name, "team"],
+              title: team.name,
+              icon: <UsersRoundIcon className={ITEM_ICON_CLASS} />,
+              run: async () => {
+                await navigate({ to: "/teams/$teamId", params: { teamId: team.id } });
+              },
+            })),
+          },
+        ],
+      });
+    }
+    actionItems.push({
+      kind: "action",
+      value: "action:new-team",
+      searchTerms: ["new team", "create team", "team", "teammates"],
+      title: "New team",
+      icon: <UsersRoundIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        openNewTeamDialog();
       },
     });
   }

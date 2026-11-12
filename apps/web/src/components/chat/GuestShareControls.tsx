@@ -15,18 +15,21 @@ import {
   type ModelSelection,
   providerAllowsDirectGuestSend,
   type ScopedThreadRef,
+  type SharedThreadCatchUpResult,
   type ThreadGuest,
   type ThreadGuestShare,
 } from "@t3tools/contracts";
 import {
   roomCatchUpFailureMessage,
   roomCatchUpOutcome,
+  roomSummaryOutcome,
 } from "@t3tools/client-runtime/room-catch-up";
 import { useNavigate } from "@tanstack/react-router";
 import { CheckIcon, CopyIcon, RadioIcon, UserIcon } from "lucide-react";
 import { useState } from "react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
+import { useComposerHandleContext } from "~/composerHandleContext";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { ensureLocalApi } from "~/localApi";
 import { useNowMinute } from "~/hooks/useNowMinute";
@@ -539,11 +542,29 @@ export function RoomLinkIndicator({ threadRef }: { readonly threadRef: ScopedThr
     serverEnvironment.catchUpSharedRoom.permissionAtom(threadRef.environmentId),
   );
   const catchUpSharedRoom = useAtomCommand(serverEnvironment.catchUpSharedRoom, "catch up");
+  const composerRef = useComposerHandleContext();
   const nowMinute = useNowMinute();
   const [leaving, setLeaving] = useState(false);
   const [catchUp, setCatchUp] = useState<"idle" | "working" | string>("idle");
   // The server clears an ended link when it next posts a turn or catches up.
   if (roomLink === null || roomLink.expiresAt.slice(0, 16) <= nowMinute) return null;
+  // Both buttons catch up and share one status line; `use` returns what it says.
+  const catchUpThen = async (use: (result: SharedThreadCatchUpResult) => string) => {
+    setCatchUp("working");
+    const result = await catchUpSharedRoom({
+      environmentId: threadRef.environmentId,
+      input: { threadId: threadRef.threadId },
+    });
+    if (result._tag === "Failure") {
+      setCatchUp(
+        isAtomCommandInterrupted(result)
+          ? "idle"
+          : roomCatchUpFailureMessage(squashAtomCommandFailure(result)),
+      );
+      return;
+    }
+    setCatchUp(use(result.value));
+  };
   return (
     <div className="flex shrink-0 items-center gap-1 text-muted-foreground text-xs">
       <RadioIcon aria-hidden className="size-3.5" />
@@ -553,29 +574,43 @@ export function RoomLinkIndicator({ threadRef }: { readonly threadRef: ScopedThr
         size="xs"
         variant="ghost-muted"
         disabled={!canCatchUp || catchUp === "working"}
-        onClick={async () => {
-          setCatchUp("working");
-          const result = await catchUpSharedRoom({
-            environmentId: threadRef.environmentId,
-            input: { threadId: threadRef.threadId },
-          });
-          if (result._tag === "Failure") {
-            setCatchUp(
-              isAtomCommandInterrupted(result)
-                ? "idle"
-                : roomCatchUpFailureMessage(squashAtomCommandFailure(result)),
-            );
-            return;
-          }
-          const { record, status } = roomCatchUpOutcome(result.value);
-          // Only attached: the user reads the chip and sends the message themselves.
-          if (record !== null) {
-            useComposerDraftStore.getState().addRoomUpdatesContexts(threadRef, [record]);
-          }
-          setCatchUp(status);
-        }}
+        onClick={() =>
+          void catchUpThen((value) => {
+            const { record, status } = roomCatchUpOutcome(value);
+            // Only attached: the user reads the chip and sends the message themselves.
+            if (record !== null) {
+              useComposerDraftStore.getState().addRoomUpdatesContexts(threadRef, [record]);
+            }
+            return status;
+          })
+        }
       >
         Catch up
+      </Button>
+      <Button
+        size="xs"
+        variant="ghost-muted"
+        disabled={!canCatchUp || catchUp === "working"}
+        onClick={() =>
+          void catchUpThen((value) => {
+            // Only a draft: the user reads, edits and sends the request to their own agent.
+            const store = useComposerDraftStore.getState();
+            const outcome = roomSummaryOutcome(
+              value,
+              store.getComposerDraft(threadRef)?.prompt ?? "",
+            );
+            if (outcome.record !== null && outcome.prompt !== null) {
+              store.setPrompt(threadRef, outcome.prompt);
+              // Appended after the request, which refers to it as attached.
+              store.addRoomUpdatesContexts(threadRef, [outcome.record], { insertAtCaret: false });
+              // After the editor has taken the new prompt, so the caret lands at its end.
+              window.requestAnimationFrame(() => composerRef?.current?.focusAtEnd());
+            }
+            return outcome.status;
+          })
+        }
+      >
+        Summarize what I missed
       </Button>
       <Button
         size="xs"

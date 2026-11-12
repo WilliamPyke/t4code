@@ -235,6 +235,13 @@ export const layer = Api.make(
         period: Teams.TEAM_RATE_LIMIT.periodSeconds,
       },
     });
+    const teamBoardRateLimit = yield* Cloudflare.RateLimit("TEAM_BOARD_RATE_LIMIT", {
+      namespaceId: 1006,
+      simple: {
+        limit: Teams.TEAM_BOARD_RATE_LIMIT.limit,
+        period: Teams.TEAM_BOARD_RATE_LIMIT.periodSeconds,
+      },
+    });
     const mobileSourceMaps = yield* Cloudflare.R2.ReadBucket(observability.mobileSourceMaps);
     const mobileTelemetryToken = yield* observability.mobileTelemetryIngestToken.token;
     const mobileTracesUrl = yield* observability.traces.otelTracesEndpoint;
@@ -455,6 +462,9 @@ export const layer = Api.make(
             }),
             Layer.succeed(Teams.TeamRateLimiter, {
               allow: allowWith(teamRateLimit, "relay.teams.rate_limiter_failed_open"),
+            }),
+            Layer.succeed(Teams.TeamBoardRateLimiter, {
+              allow: allowWith(teamBoardRateLimit, "relay.team_boards.rate_limiter_failed_open"),
             }),
           ),
         ),

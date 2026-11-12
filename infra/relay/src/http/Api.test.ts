@@ -108,6 +108,7 @@ describe("managed endpoint provisioning errors", () => {
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
           Layer.mock(RelayDb.RelayTransactions, {}),
           Layer.mock(HookInbox.HookInbox, {}),
+          Layer.mock(Teams.Teams, {}),
         ),
       ),
       Layer.provide(
@@ -227,6 +228,7 @@ describe("device listing compatibility", () => {
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
           Layer.mock(RelayDb.RelayTransactions, {}),
           Layer.mock(HookInbox.HookInbox, {}),
+          Layer.mock(Teams.Teams, {}),
         ),
       ),
       Layer.provide(
@@ -314,6 +316,7 @@ describe("Cloudflare rate-limit retry hint", () => {
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
           Layer.mock(RelayDb.RelayTransactions, {}),
           Layer.mock(HookInbox.HookInbox, {}),
+          Layer.mock(Teams.Teams, {}),
         ),
       ),
       Layer.provide(
@@ -526,6 +529,7 @@ function layerRelayUnlinkTest(input?: {
     Layer.mock(HookInbox.HookInbox, {
       clear: input?.clearInbox ?? (() => Effect.void),
     }),
+    Layer.mock(Teams.Teams, { unlistEnvironment: () => Effect.void }),
     Layer.succeed(
       RelayDb.RelayTransactions,
       RelayDb.RelayTransactions.of({

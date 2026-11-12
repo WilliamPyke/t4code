@@ -1616,6 +1616,11 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:shared-thread:catch-up",
       tag: WS_METHODS.sharedThreadCatchUp,
     }),
+    // Finds the thread joined from a room and has its next turn answer a task card there.
+    takeSharedRoomTask: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:shared-thread:take-task",
+      tag: WS_METHODS.sharedThreadTakeTask,
+    }),
     // Which guests have a shared thread open. Mounted only while the owner's guest list is open.
     guestPresence: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:guest-share:presence",

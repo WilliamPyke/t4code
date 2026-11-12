@@ -113,6 +113,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.sharedThreadJoin]: "guest-share",
   [WS_METHODS.sharedThreadLeave]: "guest-share",
   [WS_METHODS.sharedThreadCatchUp]: "guest-share",
+  [WS_METHODS.sharedThreadTakeTask]: "guest-share",
   [WS_METHODS.cloudGetRelayClientStatus]: "cloud",
   [WS_METHODS.cloudInstallRelayClient]: "cloud",
   [WS_METHODS.pullRequestsList]: "pull-requests",

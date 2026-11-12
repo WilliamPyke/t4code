@@ -1,3 +1,4 @@
+import type { RoomBoard } from "@t3tools/contracts";
 import type {
   RelayAgentActivityAggregateState,
   RelayAgentActivityState,
@@ -274,6 +275,8 @@ export const relayTeamThreads = pgTable(
     ownerUserId: varchar("owner_user_id", { length: 191 }).notNull(),
     expiresAt: varchar("expires_at", { length: 64 }).notNull(),
     updatedAt: varchar("updated_at", { length: 64 }).notNull(),
+    /** Set while the machine has guest links off; the listing comes back when they are on. */
+    hidden: boolean("hidden").notNull().default(false),
   },
   (table) => [
     primaryKey({ columns: [table.environmentId, table.threadId] }),
@@ -281,3 +284,13 @@ export const relayTeamThreads = pgTable(
     index("idx_relay_team_threads_expires_at").on(table.expiresAt),
   ],
 );
+
+/** A team's one board. `version` counts the changes, so concurrent writers both land. */
+export const relayTeamBoards = pgTable("relay_team_boards", {
+  teamId: varchar("team_id", { length: 64 })
+    .primaryKey()
+    .references(() => relayTeams.id, { onDelete: "cascade" }),
+  board: jsonb("board").$type<RoomBoard>().notNull(),
+  version: integer("version").notNull(),
+  updatedAt: varchar("updated_at", { length: 64 }).notNull(),
+});

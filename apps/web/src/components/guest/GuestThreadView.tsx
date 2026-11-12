@@ -30,6 +30,7 @@ import {
   type GuestThreadModel,
   type OrchestrationV2ThreadProjection,
   type RoomBoardChange,
+  type RoomBoardNote,
   type ScopedThreadRef,
   type ThreadGuest,
   type ThreadGuestMessage,
@@ -94,6 +95,7 @@ import {
 } from "../room/roomBoard.logic";
 import { Button } from "../ui/button";
 import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
+import { toastManager } from "../ui/toast";
 import { GuestHtmlRender } from "./GuestHtmlRender";
 import { openGuestFile, useGuestFiles } from "./guestFiles";
 import {
@@ -251,7 +253,7 @@ function GuestThreadSession({
 }) {
   // Stable for the share: the timeline's file and item sources hang off it.
   const [endpoint] = useState(() => guestShareEndpointOf(share));
-  const { view, online, running } = useAtomValue(guestRoomAtom(share.shareId));
+  const { view, online, running, ownerCode } = useAtomValue(guestRoomAtom(share.shareId));
   // Mounting the thread opens the share's stream, which also says who is in the room.
   const thread = useEnvironmentThread(threadRef.environmentId, threadRef.threadId);
   const projection = Option.getOrNull(thread.data);
@@ -292,6 +294,33 @@ function GuestThreadSession({
       }
     : undefined;
   const guestId = view.guestId;
+  // The task becomes this guest's, and a draft in their own T Code; neither sends anything.
+  const takeTask = (task: RoomBoardNote) => {
+    const opened = openOnMyMachine(endpoint, share.host, {
+      shareId: share.shareId,
+      taskId: task.id,
+      text: task.text,
+    });
+    if (guestId !== undefined && task.assignee?.guestId !== guestId) {
+      void postBoardChange(endpoint, {
+        type: "note.put",
+        noteId: task.id,
+        text: task.text,
+        x: task.x,
+        y: task.y,
+        assignee: { guestId },
+      });
+    }
+    void opened.then((error) => {
+      if (error !== null) {
+        toastManager.add({
+          type: "error",
+          title: "Could not open your T Code",
+          description: error,
+        });
+      }
+    });
+  };
   return (
     <>
       {/* Hidden, not unmounted, so the board does not cost the guest their draft or place. */}
@@ -325,6 +354,8 @@ function GuestThreadSession({
           )}
           agentWorking={deriveThreadAgentWorking(projection)}
           running={running}
+          ownerCode={ownerCode}
+          onTakeTask={takeTask}
           viewer={guestId}
           ownerName={view.ownerName}
           cursorLayer={
@@ -723,6 +754,42 @@ function GuestGitHubSignIn({
 }
 
 /**
+ * Opens the guest's own T Code on a short-lived handoff token, with a task card as a draft when
+ * given one. Call it in the click itself: a tab opened after a request counts as a popup.
+ * Resolves to what went wrong, or null.
+ */
+async function openOnMyMachine(
+  endpoint: GuestShareEndpoint,
+  host: string,
+  task?: { readonly shareId: string; readonly taskId: string; readonly text: string },
+): Promise<string | null> {
+  const tab = window.open("", "_blank");
+  const handoff = await postGuestAction(
+    endpoint,
+    GUEST_HANDOFF_ROUTE,
+    decodeHandoff,
+    "Could not start the handoff. Try again.",
+  );
+  if (typeof handoff === "string") {
+    tab?.close();
+    return handoff;
+  }
+  const url = buildJoinLink({
+    host,
+    token: handoff.token,
+    origin: configuredHostedAppUrl(),
+    ...(task === undefined ? {} : { task }),
+  });
+  if (tab === null) {
+    window.location.href = url;
+    return null;
+  }
+  tab.opener = null;
+  tab.location.href = url;
+  return null;
+}
+
+/**
  * Takes the guest to their own T Code with a short-lived token, where they get their own copy
  * of this thread. From then on their turns run on their machine, not the owner's.
  */
@@ -736,33 +803,10 @@ function ContinueOnMyMachine({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const start = async () => {
-    // Opened in the click itself: a tab opened after the request counts as a popup.
-    const tab = window.open("", "_blank");
     setBusy(true);
-    const handoff = await postGuestAction(
-      endpoint,
-      GUEST_HANDOFF_ROUTE,
-      decodeHandoff,
-      "Could not start the handoff. Try again.",
-    );
+    const failed = await openOnMyMachine(endpoint, host);
     setBusy(false);
-    if (typeof handoff === "string") {
-      tab?.close();
-      setError(handoff);
-      return;
-    }
-    setError(null);
-    const url = buildJoinLink({
-      host,
-      token: handoff.token,
-      origin: configuredHostedAppUrl(),
-    });
-    if (tab === null) {
-      window.location.href = url;
-      return;
-    }
-    tab.opener = null;
-    tab.location.href = url;
+    setError(failed);
   };
   return (
     <>

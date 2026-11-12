@@ -58,6 +58,24 @@ To turn a note into a message, drag it onto the thread's card or choose **Use as
 Its text lands in your message box, after anything you had written, and the note stays on the
 board. Nothing is sent until you send it, and a guest's message still waits for the owner.
 
+### Take a task to your agent
+
+Choose **Take it to my agent** on a task to make it yours and put its text in your own message
+box. For the owner, that is the shared thread. A guest's own T Code opens on the thread they
+[continued on their machine](#continue-on-your-own-machine) from this room, joining first if they
+have not. Nothing runs until you send it. While a guest's agent works on the task, its card says
+so; when that turn finishes, the card shows **Answered by** their agent with the start of its
+reply, and the task is ticked off. Untick it if the work is not done. An interrupted or failed
+turn leaves the task theirs and unanswered. The owner's own turns do not mark a task answered.
+
+### See where everyone's code is
+
+The thread's card shows the branch the owner's thread works on and whether it is pushed, and each
+guest's agent card shows the same for the thread on their machine, for example
+`fix/login · 2 commits not pushed`. On a pushed branch, **Copy fetch command** copies the git
+commands that fetch it and switch to it. When that machine knows of an open pull request for the
+branch, the card links to it.
+
 To comment on a message, choose **Comment for the room** beside it in the shared thread. The
 comment shows under that message for everyone, and on the board as a note with **Go to reply**;
 delete it from either place.
@@ -129,19 +147,23 @@ machine, then shows what comes over and offers:
 You get your own thread with the conversation as its history, and the agent is handed that history
 on your first message. Your turns run on your machine, with your own provider login, model, and
 permission mode, so this works on a Claude or ChatGPT plan. Share code back the usual way, with a
-branch or a pull request.
+branch or a pull request. A task someone took to their agent from the board joins the same way,
+then lands as a draft in the joined thread; see [Take a task to your agent](#take-a-task-to-your-agent).
 
 ### Your turns show in the room
 
 The thread stays connected to the room it came from. When a turn starts in it, T Code tells the
 owner's machine your agent is working and on what prompt; when the turn finishes, it sends the
-prompt and your agent's final reply. The owner and every guest see them as your agent's, for
-example **Sam's agent**. T Code tells you this before you
+prompt and your agent's final reply. With each, it also sends your thread's branch name, whether
+it is pushed, and any open pull request for it, so the room can
+[see where your code is](#see-where-everyones-code-is), and which task the turn answers, if you
+took one. The owner and every guest see them as your agent's, for example **Sam's agent**. T Code
+tells you this before you
 join, and the thread header says **Your turns show in the room** while it is on. Choose **Leave
 room** there to stop; your thread keeps working as a plain copy, and what the room already shows
 stays until the owner stops sharing.
 
-Only that text goes back: no files, command output, reasoning, or diffs. A long prompt or reply is
+Only that goes back: no files, command output, reasoning, or diffs. A long prompt or reply is
 shortened, and the room keeps the 10 most recent turns from all guests. A turn you interrupt, or
 one that fails, is not sent, and the room stops showing your agent as working. The room forgets
 that your agent is working, and the prompt it showed, once the turn ends or your machine stops
@@ -199,7 +221,8 @@ stopping a turn, or answering the agent for you. Nothing else on your machine is
 no other thread, project, terminal, or setting.
 
 Guests also see each other's names, who is away, the messages each of them has waiting, and the
-turns guests [ran on their own machines](#your-turns-show-in-the-room).
+turns guests [ran on their own machines](#your-turns-show-in-the-room). On the board they see the
+branch your thread works on, whether it is pushed, and its open pull request.
 
 Anything the agent read or printed can show, such as a value from a file, and a guest can
 [take a copy of the conversation](#continue-on-your-own-machine) that stays with them after you stop

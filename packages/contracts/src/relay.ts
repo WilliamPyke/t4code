@@ -11,10 +11,12 @@ import * as OpenApi from "effect/http-api/OpenApi";
 import {
   DpopFailureReason,
   EnvironmentId,
+  NonNegativeInt,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
+import { RoomBoard, RoomBoardChange } from "./guestShare.ts";
 
 export const RelayAgentAwarenessPlatform = Schema.Literals(["ios", "android"]);
 export type RelayAgentAwarenessPlatform = typeof RelayAgentAwarenessPlatform.Type;
@@ -1350,6 +1352,35 @@ export const RelayTeamThreadRegistrationRequest = Schema.Struct({
 });
 export type RelayTeamThreadRegistrationRequest = typeof RelayTeamThreadRegistrationRequest.Type;
 export const RelayTeamThreadRegistrationResponse = Schema.Struct({ teamName: Schema.String });
+export const RelayTeamThreadTitleRequest = Schema.Struct({ title: Schema.String });
+/** Hides or shows every thread a machine lists, as it turns guest links off or on. */
+export const RelayTeamThreadsListedRequest = Schema.Struct({ listed: Schema.Boolean });
+
+/**
+ * A team's one board, kept on the relay so it works while every member's machine is off. It has a
+ * card for each member, as `roomBoardGuestCard(userId)`, and one for each listed thread. People on
+ * it are named by user id wherever a room's board names a guest.
+ */
+export const teamBoardThreadCard = (environmentId: string, threadId: string) =>
+  `thread:${environmentId}:${threadId}`;
+
+/** Counts changes, so a reader can ask for the board only when it changed. */
+const RelayTeamBoardVersion = NonNegativeInt;
+export const RelayTeamBoardQuery = Schema.Struct({
+  since: Schema.optionalKey(Schema.FiniteFromString.check(Schema.isInt())),
+});
+export const RelayTeamBoardResponse = Schema.Struct({
+  version: RelayTeamBoardVersion,
+  /** Null when the board has not changed since the version the reader asked after. */
+  board: Schema.NullOr(RoomBoard),
+});
+export type RelayTeamBoardResponse = typeof RelayTeamBoardResponse.Type;
+export const RelayTeamBoardChangeRequest = Schema.Struct({ change: RoomBoardChange });
+export const RelayTeamBoardChangeResponse = Schema.Struct({
+  version: RelayTeamBoardVersion,
+  board: RoomBoard,
+});
+export type RelayTeamBoardChangeResponse = typeof RelayTeamBoardChangeResponse.Type;
 
 export const RelayTeamRequestErrorReason = Schema.Literals([
   "not_found",
@@ -1360,6 +1391,9 @@ export const RelayTeamRequestErrorReason = Schema.Literals([
   "too_many_threads",
   "invite_invalid",
   "not_shared",
+  "board_full",
+  "board_rejected",
+  "board_busy",
 ]);
 export type RelayTeamRequestErrorReason = typeof RelayTeamRequestErrorReason.Type;
 
@@ -1372,6 +1406,9 @@ const RELAY_TEAM_REQUEST_MESSAGES: Record<RelayTeamRequestErrorReason, string> =
   too_many_threads: `A team holds up to ${RELAY_TEAM_MAX_THREADS} shared threads.`,
   invite_invalid: "This invite has expired or is not valid. Ask for a new one.",
   not_shared: "This thread is no longer shared with the team.",
+  board_full: "This board has as many notes as it holds. Remove one first.",
+  board_rejected: "The board did not take this change.",
+  board_busy: "Many changes reached the board at once. Try again.",
 };
 
 export class RelayTeamRequestError extends Schema.TaggedError<RelayTeamRequestError>()(
@@ -1455,6 +1492,20 @@ const RelayTeamsGroup = HttpApiGroup.make("teams")
       success: RelayTeamAssertionResponse,
       error: RelayTeamErrors,
     }).annotate(OpenApi.Summary, "Sign a short-lived member assertion for a team thread's machine"),
+    HttpApiEndpoint.get("getTeamBoard", "/v1/teams/:teamId/board", {
+      headers: RelayBearerRequestHeaders,
+      params: RelayTeamParams,
+      query: RelayTeamBoardQuery,
+      success: RelayTeamBoardResponse,
+      error: RelayTeamErrors,
+    }).annotate(OpenApi.Summary, "Read the team's board, or learn it has not changed"),
+    HttpApiEndpoint.post("changeTeamBoard", "/v1/teams/:teamId/board/changes", {
+      headers: RelayBearerRequestHeaders,
+      params: RelayTeamParams,
+      payload: RelayTeamBoardChangeRequest,
+      success: RelayTeamBoardChangeResponse,
+      error: RelayTeamErrors,
+    }).annotate(OpenApi.Summary, "Make one change to the team's board"),
   )
   .middleware(RelayClientAuth)
   .annotate(OpenApi.Description, "Teams of signed-in people and the threads shared with them.");
@@ -1525,6 +1576,26 @@ const RelayServerGroup = HttpApiGroup.make("server")
         error: RelayAuthAndInternalErrors,
       },
     ).annotate(OpenApi.Summary, "Stop listing a thread this machine shared to a team"),
+    HttpApiEndpoint.post(
+      "renameTeamThread",
+      "/v1/environments/:environmentId/team-threads/:threadId/title",
+      {
+        params: Schema.Struct({ environmentId: EnvironmentId, threadId: ThreadId }),
+        payload: RelayTeamThreadTitleRequest,
+        success: RelayOkResponse,
+        error: RelayAuthAndInternalErrors,
+      },
+    ).annotate(OpenApi.Summary, "Show a listed thread's new title on its team"),
+    HttpApiEndpoint.post(
+      "setTeamThreadsListed",
+      "/v1/environments/:environmentId/team-threads/listed",
+      {
+        params: Schema.Struct({ environmentId: EnvironmentId }),
+        payload: RelayTeamThreadsListedRequest,
+        success: RelayOkResponse,
+        error: RelayAuthAndInternalErrors,
+      },
+    ).annotate(OpenApi.Summary, "Hide or show every thread this machine lists on teams"),
     HttpApiEndpoint.post("wakeHeldHooks", "/v1/environments/:environmentId/hooks/wake", {
       params: Schema.Struct({ environmentId: EnvironmentId }),
       success: RelayWakeHeldHooksResponse,

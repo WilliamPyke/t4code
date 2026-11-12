@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   GUEST_TURN_REPLY_MAX_LENGTH,
+  GuestShareId,
   type OrchestrationV2AppThread,
   type OrchestrationV2ServerCommand,
   type OrchestrationV2TurnItem,
@@ -11,8 +12,10 @@ import {
   ProviderInstanceId,
   ThreadId,
   type ThreadRoomLink,
+  type VcsStatusResult,
 } from "@t3tools/contracts";
 import { ROOM_UPDATES_NOTICE } from "@t3tools/shared/composerContextReferences";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
@@ -23,10 +26,12 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
+import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as McpToolAccessTestkit from "../mcp/McpToolAccess.testkit.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import * as SharedRoomLink from "./SharedRoomLink.ts";
 
 const threadId = ThreadId.make("thread:joined");
@@ -39,13 +44,18 @@ const items = [
   item(2, { type: "assistant_message", text: "Looking." }),
 ];
 
-/** This machine's joined thread, the room's replies, and what the room was sent. */
+/**
+ * This machine's joined thread, the room's replies, and what the room was sent. Every run was
+ * asked at `requestedAt`, and git says `status` about the thread's checkout.
+ */
 const world = Effect.fn(function* (
   statuses: ReadonlyArray<number | { readonly status: number; readonly body: unknown }>,
 ) {
   const link = yield* Ref.make<ThreadRoomLink | null>(null);
   const replies = yield* Ref.make(statuses);
   const posts = yield* Ref.make<ReadonlyArray<unknown>>([]);
+  const requestedAt = yield* Ref.make(0);
+  const status = yield* Ref.make({ isRepo: false, refName: null } as unknown as VcsStatusResult);
   const layer = SharedRoomLink.layer.pipe(
     Layer.provide(
       Layer.mock(Orchestrator.OrchestratorV2)({
@@ -54,15 +64,34 @@ const world = Effect.fn(function* (
           command.type === "thread.room-link.set"
             ? Ref.set(link, command.roomLink).pipe(Effect.as({} as never))
             : Effect.die("Only the room link changes here"),
-        getThreadRecords: () =>
-          Ref.get(link).pipe(
+        getThreadRecords: (_threadId, _fields, filter) =>
+          Effect.all([Ref.get(link), Ref.get(requestedAt)]).pipe(
             Effect.map(
-              (roomLink) =>
-                ({ thread: { roomLink } as OrchestrationV2AppThread, turnItems: items }) as never,
+              ([roomLink, at]) =>
+                ({
+                  thread: {
+                    roomLink,
+                    projectId: "project:joined",
+                    worktreePath: null,
+                    branch: null,
+                    deletedAt: null,
+                  } as unknown as OrchestrationV2AppThread,
+                  turnItems: items,
+                  runs: (filter?.runIds ?? []).map((id) => ({
+                    id,
+                    requestedAt: DateTime.makeUnsafe(at),
+                  })),
+                }) as never,
             ),
           ),
       }),
     ),
+    Layer.provide(
+      Layer.mock(ProjectService.ProjectService)({
+        getById: () => Effect.succeedSome({ workspaceRoot: "/repo" } as never),
+      }),
+    ),
+    Layer.provide(Layer.mock(GitWorkflow.GitWorkflowService)({ status: () => Ref.get(status) })),
     Layer.provide(
       Layer.succeed(
         HttpClient.HttpClient,
@@ -98,7 +127,7 @@ const world = Effect.fn(function* (
     Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-shared-room-" })),
     Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
-  return { link, posts, layer };
+  return { link, posts, layer, requestedAt, status };
 });
 
 it("shows the room a run's prompt and its last reply, cut to what the room keeps", () => {
@@ -363,4 +392,63 @@ it.effect("shows the room a run while it runs, and clears only a run the room wa
       assert.isNull(yield* Ref.get(link));
     }).pipe(Effect.provide(layer));
   }),
+);
+
+it.effect(
+  "answers a task with the first turn asked after it was taken, with where the code is",
+  () =>
+    Effect.gen(function* () {
+      const { link, posts, layer, requestedAt, status } = yield* world([204, 204, 204, 204]);
+      const shareId = GuestShareId.make("share:room");
+      yield* Effect.gen(function* () {
+        const rooms = yield* SharedRoomLink.SharedRoomLink;
+        // No thread here joined that room yet.
+        assert.isNull(yield* rooms.takeTask("sam.t3.test", shareId, "task:1"));
+        yield* rooms.connect(threadId, "Sam.T3.test", { ...room, shareId });
+        assert.equal((yield* Ref.get(link))?.shareId, shareId);
+        yield* TestClock.adjust("1 minute");
+        // Another room, even on the same host, has no thread here.
+        assert.isNull(
+          yield* rooms.takeTask("sam.t3.test", GuestShareId.make("share:other"), "task:1"),
+        );
+        assert.equal(yield* rooms.takeTask("SAM.t3.test", shareId, "task:1"), threadId);
+        yield* Ref.set(status, {
+          isRepo: true,
+          refName: "fix/login",
+          hasUpstream: true,
+          aheadCount: 2,
+          behindCount: 0,
+          hasWorkingTreeChanges: false,
+          pr: null,
+        } as unknown as VcsStatusResult);
+        const code = { branch: "fix/login", synced: false, ahead: 2, behind: 0 };
+
+        // A run asked before the task was taken does not answer it.
+        yield* rooms.publishRun(threadId, RunId.make("run:before"));
+        assert.equal((yield* Ref.get(link))?.task?.id, "task:1");
+
+        yield* Ref.set(requestedAt, 60_000);
+        yield* rooms.publishActivity(threadId, RunId.make("run:task"), "running");
+        yield* rooms.publishRun(threadId, RunId.make("run:task"));
+        // Answered once: the task is forgotten, so the next turn answers nothing.
+        assert.isUndefined((yield* Ref.get(link))?.task);
+        yield* rooms.publishRun(threadId, RunId.make("run:after"));
+
+        const sent = (yield* Ref.get(posts)).map(
+          (post) => (post as { turn: Record<string, unknown> }).turn,
+        );
+        assert.deepEqual(
+          sent.map(({ id, taskId, code }) => ({ id, taskId, code })),
+          [
+            { id: "run:before", taskId: undefined, code },
+            { id: "run:task", taskId: "task:1", code },
+            { id: "run:task", taskId: "task:1", code },
+            { id: "run:after", taskId: undefined, code },
+          ],
+        );
+        // Leaving the room leaves nothing to take a task to.
+        yield* rooms.leave(threadId);
+        assert.isNull(yield* rooms.takeTask("sam.t3.test", shareId, "task:2"));
+      }).pipe(Effect.provide(layer));
+    }),
 );

@@ -28,16 +28,45 @@ const share = {
     { id: sam, name: "Sam" },
     { id: alex, name: "Alex" },
   ],
+  // Where each guest's code is, and the board, are the room's alone: none of it may reach an
+  // agent through an update.
   turns: [
-    { id: "run:sam", guestId: sam, prompt: "Mine", reply: "Sam's reply", postedAt: minute(5) },
-    { id: "run:alex", guestId: alex, prompt: "", reply: "Alex's reply", postedAt: minute(6) },
+    {
+      id: "run:sam",
+      guestId: sam,
+      prompt: "Mine",
+      reply: "Sam's reply",
+      postedAt: minute(5),
+      code: { branch: "secret/sam-branch", synced: true },
+    },
+    {
+      id: "run:alex",
+      guestId: alex,
+      prompt: "",
+      reply: "Alex's reply",
+      postedAt: minute(6),
+      code: {
+        branch: "secret/alex-branch",
+        synced: false,
+        ahead: 2,
+        behind: 0,
+        pullRequest: { number: 7, url: "https://example.com/secret-pull" },
+      },
+    },
   ],
-  // The board is the room's alone: none of it may reach an agent through an update.
   board: {
     positions: {},
     notes: [
       { id: "c", text: "Board comment", x: 0, y: 0, guestId: alex, pinnedTo: "i3" },
-      { id: "t", text: "Board task", x: 0, y: 0, kind: "task", assignee: { guestId: sam } },
+      {
+        id: "t",
+        text: "Board task",
+        x: 0,
+        y: 0,
+        kind: "task",
+        assignee: { guestId: sam },
+        answer: { guestId: sam, excerpt: "Board answer", turnId: "run:sam" },
+      },
       { id: "l", text: "", x: 0, y: 0, kind: "link", url: "https://example.com/board" },
     ],
     edges: [{ id: "e", from: "note:c", to: "card:thread" }],
@@ -89,6 +118,12 @@ it("gives a joined thread what the room said after its cursor, without its own t
       ["guest_agent", "Sam's reply"],
     ],
   );
+  for (const guestId of [sam, alex]) {
+    const said = JSON.stringify(updates(null, guestId));
+    for (const roomOnly of ["Board", "secret", "pullRequest", "taskId"]) {
+      assert.notInclude(said, roomOnly);
+    }
+  }
   // Nothing new keeps the cursor where it was.
   assert.deepEqual(updates(minute(6)), { updates: [], truncated: false, cursor: minute(6) });
 });

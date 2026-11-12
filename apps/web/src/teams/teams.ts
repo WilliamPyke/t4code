@@ -1,10 +1,13 @@
 import { useAtomValue } from "@effect/atom-react";
 import { managedRelaySessionAtom } from "@t3tools/client-runtime/relay";
+import type { RoomBoardChange } from "@t3tools/contracts";
 import {
   RelayListTeamsResponse,
   RelayOkResponse,
   RelayTeam,
   RelayTeamAssertionResponse,
+  RelayTeamBoardChangeResponse,
+  RelayTeamBoardResponse,
   RelayTeamInviteAcceptResponse,
   RelayTeamInviteResponse,
   RelayTeamRequestError,
@@ -141,7 +144,7 @@ export function useTeam(teamId: string) {
 }
 
 /** Reloads what the sidebar and the team page show after a change. */
-function refreshTeams(teamId?: string) {
+export function refreshTeams(teamId?: string) {
   const accountId = appAtomRegistry.get(managedRelaySessionAtom)?.accountId;
   if (accountId === undefined) return;
   appAtomRegistry.refresh(teamsAtom(accountId));
@@ -207,13 +210,30 @@ export const acceptTeamInvite = (name: string) =>
     {},
   );
 
+/** The team's board, or null for it when it has not changed since version `since`. */
+export const readTeamBoard = (teamId: string, since: number | null) =>
+  run(
+    teamsRequest(
+      RelayTeamBoardResponse,
+      `${teamPath(teamId)}/board${since === null ? "" : `?since=${since}`}`,
+    ),
+  );
+
+export const changeTeamBoard = (teamId: string, change: RoomBoardChange) =>
+  run(
+    teamsRequest(RelayTeamBoardChangeResponse, `${teamPath(teamId)}/board/changes`, {
+      method: "POST",
+      body: { change },
+    }),
+  );
+
 /**
  * Joins a thread shared to the team: T Connect signs who this member is for the owner's machine,
  * which lets them in under their account. Joining again is how a member comes back.
  */
 export async function joinTeamThread(
   teamId: string,
-  thread: RelayTeamThread,
+  thread: Pick<RelayTeamThread, "environmentId" | "host" | "credential" | "title">,
 ): Promise<TeamsOutcome<JoinedGuestShare>> {
   const host = guestLinkHost(thread.host);
   if (host === null) {
@@ -233,7 +253,11 @@ export async function joinTeamThread(
     memberAssertion: assertion.value.token,
   });
   if (typeof joined === "string") return { ok: false, message: joined };
-  const share = { ...joined, title: thread.title || joined.title };
+  const share = {
+    ...joined,
+    title: thread.title || joined.title,
+    team: { id: teamId, environmentId: thread.environmentId, credential: thread.credential },
+  };
   rememberGuestShare(share);
   return { ok: true, value: share };
 }

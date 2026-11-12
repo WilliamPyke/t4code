@@ -182,10 +182,13 @@ const layerCheckout = Layer.mergeAll(
         Ref.get(checkout),
         (facts) =>
           ({
+            isRepo: facts !== null,
             refName: facts?.branch ?? null,
             hasUpstream: facts?.synced === true,
             aheadCount: 0,
+            behindCount: 0,
             hasWorkingTreeChanges: false,
+            pr: null,
           }) as VcsStatusResult,
       ),
   }),
@@ -825,6 +828,42 @@ it.effect("shows the room a guest's agent while its turn runs, and never stores 
     assert.deepEqual(yield* Queue.take(owner), shown);
     yield* TestClock.adjust("11 minutes");
     assert.deepEqual(yield* Queue.take(owner), []);
+
+    // The room sees where the guest's code is, and the task their agent is on only when the card
+    // is a task that is theirs to take.
+    const put = (noteId: string, fields: object) =>
+      guestShares.changeBoard(
+        { threadId },
+        { type: "note.put", noteId, text: "Fix login", x: 0, y: 0, ...fields },
+      );
+    yield* put("task", { kind: "task", assignee: { guestId: samId } });
+    yield* put("eves", { kind: "task", assignee: { guestId: thread.guestShare!.guests![1]!.id } });
+    yield* put("note", {});
+    const code = { branch: "fix/login", synced: false, ahead: 1, behind: 0 };
+    yield* guestShares.postActivity(token, { ...running("run:5"), taskId: "task", code });
+    assert.deepEqual(yield* Queue.take(owner), [{ ...shown[0], taskId: "task", code }]);
+    for (const taskId of ["eves", "note", "gone"]) {
+      yield* guestShares.postActivity(token, { ...running(`run:${taskId}`), taskId });
+      assert.deepEqual(yield* Queue.take(owner), shown);
+      yield* guestShares.postActivity(token, { ...running(`run:task-${taskId}`), taskId: "task" });
+      assert.deepEqual(yield* Queue.take(owner), [{ ...shown[0], taskId: "task" }]);
+    }
+
+    // A guest's board says where the owner's code is too, once git does.
+    yield* Ref.set(checkout, { branch: "fix/login", synced: true });
+    const ownerCode = yield* Queue.unbounded<unknown>();
+    yield* Stream.runForEach(yield* guestShares.stream(eve.token), (event) =>
+      event.type === "agents" && event.owner !== undefined
+        ? Queue.offer(ownerCode, event.owner)
+        : Effect.void,
+    ).pipe(Effect.forkScoped);
+    yield* TestClock.adjust("30 seconds");
+    assert.deepEqual(yield* Queue.take(ownerCode), {
+      branch: "fix/login",
+      synced: true,
+      ahead: 0,
+      behind: 0,
+    });
     // Nothing of it reached the thread record.
     const after = (yield* orchestrator.getThreadRecords(threadId, [])).thread;
     assert.deepEqual(

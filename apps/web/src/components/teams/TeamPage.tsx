@@ -1,4 +1,3 @@
-import { guestEnvironmentId } from "@t3tools/client-runtime/environment";
 import {
   RELAY_TEAM_NAME_MAX_LENGTH,
   type RelayTeam,
@@ -15,8 +14,8 @@ import { ensureLocalApi } from "~/localApi";
 import {
   createTeamInvite,
   deleteTeam,
-  joinTeamThread,
   leaveTeam,
+  refreshTeams,
   removeTeamMember,
   renameTeam,
   type TeamsOutcome,
@@ -27,14 +26,22 @@ import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 import { Input } from "../ui/input";
 import { SidebarInset } from "../ui/sidebar";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { MemberAvatar } from "./MemberAvatar";
+import { TeamBoard } from "./TeamBoard";
+import { useOpenTeamThread } from "./useOpenTeamThread";
 
 function TeamPageFrame({
   title,
+  actions,
+  fill = false,
   children,
 }: {
   readonly title: string;
+  readonly actions?: ReactNode;
+  /** The content fills the page and scrolls on its own, as a board does. */
+  readonly fill?: boolean;
   readonly children: ReactNode;
 }) {
   return (
@@ -42,12 +49,17 @@ function TeamPageFrame({
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
         <WorkspacePageHeader electron={isElectron} className="border-b border-border">
           <span className="truncate text-sm font-medium text-foreground">{title}</span>
+          {actions === undefined ? null : <div className="ms-auto flex shrink-0">{actions}</div>}
         </WorkspacePageHeader>
-        <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
+        <div className={fill ? "flex min-h-0 flex-1 flex-col" : "min-h-0 flex-1 overflow-y-auto"}>
+          {children}
+        </div>
       </div>
     </SidebarInset>
   );
 }
+
+type TeamView = "threads" | "board";
 
 function TeamNotice({ title, detail }: { readonly title: string; readonly detail?: string }) {
   return (
@@ -75,6 +87,7 @@ function SignInToSeeTeams() {
 /** A team's members and the threads shared with it, with what the signed-in member can change. */
 export function TeamPage({ teamId }: { readonly teamId: string }) {
   const { accountId, team, error, loading } = useTeam(teamId);
+  const [view, setView] = useState<TeamView>("threads");
   if (accountId === null) {
     return (
       <TeamPageFrame title="Team">
@@ -97,9 +110,34 @@ export function TeamPage({ teamId }: { readonly teamId: string }) {
       </TeamPageFrame>
     );
   }
+  const showView = (next: TeamView) => {
+    // The board's cards are the team's threads and members, so it opens on fresh ones.
+    if (next === "board") refreshTeams(teamId);
+    setView(next);
+  };
   return (
-    <TeamPageFrame title={team.name}>
-      <TeamDetails team={team} accountId={accountId} />
+    <TeamPageFrame
+      title={team.name}
+      fill={view === "board"}
+      actions={
+        <ToggleGroup
+          aria-label="Team view"
+          value={[view]}
+          onValueChange={(next) => {
+            const value = next[0];
+            if (value === "threads" || value === "board") showView(value);
+          }}
+        >
+          <Toggle value="threads">Threads</Toggle>
+          <Toggle value="board">Board</Toggle>
+        </ToggleGroup>
+      }
+    >
+      {view === "board" ? (
+        <TeamBoard team={team} accountId={accountId} onShowThreads={() => showView("threads")} />
+      ) : (
+        <TeamDetails team={team} accountId={accountId} />
+      )}
     </TeamPageFrame>
   );
 }
@@ -241,22 +279,8 @@ function TeamThreadRow({
   readonly team: RelayTeam;
   readonly thread: RelayTeamThread;
 }) {
-  const navigate = useNavigate();
-  const [state, setState] = useState<"idle" | "opening" | string>("idle");
+  const { state, open } = useOpenTeamThread(team.id, thread);
   const sharedBy = team.members.find((member) => member.userId === thread.ownerUserId)?.name;
-  const open = async () => {
-    setState("opening");
-    const joined = await joinTeamThread(team.id, thread);
-    if (!joined.ok) return setState(joined.message);
-    setState("idle");
-    void navigate({
-      to: "/$environmentId/$threadId",
-      params: {
-        environmentId: guestEnvironmentId(joined.value.shareId),
-        threadId: joined.value.threadId,
-      },
-    });
-  };
   return (
     <li className="flex items-center gap-3 px-3 py-2 text-sm">
       <div className="flex min-w-0 flex-1 flex-col">

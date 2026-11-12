@@ -524,6 +524,7 @@ export const layerTeamsApi = HttpApiBuilder.group(
     const teams = yield* Teams.Teams;
     const profiles = yield* TeamProfiles.TeamProfiles;
     const rateLimiter = yield* Teams.TeamRateLimiter;
+    const boardRateLimiter = yield* Teams.TeamBoardRateLimiter;
     const mint = yield* CloudMintSigner.CloudMintSigner;
     const config = yield* RelayConfiguration.RelayConfiguration;
     const random = yield* SecureRandom.SecureRandom;
@@ -656,6 +657,27 @@ export const layerTeamsApi = HttpApiBuilder.group(
             .pipe(Effect.catch(() => relayInternalErrorResponse("internal_error")));
           return { token };
         }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "getTeamBoard",
+        Effect.fn("relay.api.teams.getBoard")(function* ({ params, query }) {
+          const { userId } = yield* RelayClientPrincipal;
+          return yield* teams.board({ userId, teamId: params.teamId, since: query.since });
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "changeTeamBoard",
+        Effect.fn("relay.api.teams.changeBoard")(function* ({ params, payload }) {
+          const { userId } = yield* RelayClientPrincipal;
+          if (!(yield* boardRateLimiter.allow(userId))) {
+            return yield* new RelayRateLimitedError({ code: "rate_limited" });
+          }
+          return yield* teams.changeBoard({
+            userId,
+            teamId: params.teamId,
+            change: payload.change,
+          });
+        }, Effect.catchTags(teamErrorCases)),
       );
   }),
 );
@@ -711,6 +733,20 @@ export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnviron
             environmentId: link.environmentId,
             environmentPublicKey: link.environmentPublicKey,
           });
+    if (unlinked) {
+      // Its tunnel goes too, so the threads it listed on teams can no longer be opened.
+      const teams = yield* Teams.Teams;
+      yield* teams
+        .unlistEnvironment({ userId: input.userId, environmentId: input.environmentId })
+        .pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Could not unlist an unlinked machine's team threads", {
+              environmentId: input.environmentId,
+              errorTag: error._tag,
+            }),
+          ),
+        );
+    }
     // Deprovision after revocation commits; retry even if already revoked to finish failed Cloudflare cleanup.
     const deprovisioned = yield* managedEndpointProvider.deprovision({
       userId: input.userId,
@@ -1657,6 +1693,33 @@ export const layerServerApi = HttpApiBuilder.group(
           function* ({ params }) {
             yield* requireOwnEnvironment(params.environmentId);
             yield* teams.unregisterThread(params);
+            return { ok: true };
+          },
+          Effect.catchTags({ TeamPersistenceError: teamErrorCases.TeamPersistenceError }),
+          mapRelayCommonApiErrors("not_authorized"),
+        ),
+      )
+      .handle(
+        "renameTeamThread",
+        Effect.fn("relay.api.server.renameTeamThread")(
+          function* ({ params, payload }) {
+            yield* requireOwnEnvironment(params.environmentId);
+            yield* teams.renameThread({ ...params, title: payload.title });
+            return { ok: true };
+          },
+          Effect.catchTags({ TeamPersistenceError: teamErrorCases.TeamPersistenceError }),
+          mapRelayCommonApiErrors("not_authorized"),
+        ),
+      )
+      .handle(
+        "setTeamThreadsListed",
+        Effect.fn("relay.api.server.setTeamThreadsListed")(
+          function* ({ params, payload }) {
+            yield* requireOwnEnvironment(params.environmentId);
+            yield* teams.setThreadsListed({
+              environmentId: params.environmentId,
+              listed: payload.listed,
+            });
             return { ok: true };
           },
           Effect.catchTags({ TeamPersistenceError: teamErrorCases.TeamPersistenceError }),

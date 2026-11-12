@@ -6,8 +6,15 @@ import {
   RELAY_GUEST_LINK_NAME_PATTERN,
   RELAY_TEAM_MAX_MEMBERS,
   RELAY_TEAM_MAX_PER_USER,
+  teamBoardThreadCard,
 } from "@t3tools/contracts/relay";
-import { ThreadId } from "@t3tools/contracts";
+import {
+  GuestId,
+  ROOM_BOARD_MAX_NOTES,
+  ThreadId,
+  roomBoardGuestCard,
+  type RoomBoardChange,
+} from "@t3tools/contracts";
 import * as PgDrizzle from "drizzle-orm/effect-postgres";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
@@ -19,7 +26,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as RelayDb from "../db.ts";
 import * as Teams from "./Teams.ts";
 
-const MIGRATION = "20261112120000_teams";
+const MIGRATIONS = ["20261112120000_teams", "20261112180000_team_boards"];
 
 // Just enough of @effect/sql-pg's client for drizzle to run its queries on PGlite.
 const pgliteClient = (pg: PGlite) => {
@@ -42,12 +49,14 @@ const setup = Effect.gen(function* () {
     Effect.promise(() => PGlite.create()),
     (client) => Effect.promise(() => client.close()),
   );
-  const migration = yield* fs.readFileString(
-    yield* path.fromFileUrl(
-      new URL(`../../migrations/postgres/${MIGRATION}/migration.sql`, import.meta.url),
-    ),
-  );
-  yield* Effect.promise(() => pg.exec(migration));
+  for (const name of MIGRATIONS) {
+    const migration = yield* fs.readFileString(
+      yield* path.fromFileUrl(
+        new URL(`../../migrations/postgres/${name}/migration.sql`, import.meta.url),
+      ),
+    );
+    yield* Effect.promise(() => pg.exec(migration));
+  }
   const db = yield* PgDrizzle.makeWithDefaults().pipe(
     Effect.provideService(PgClient, pgliteClient(pg)),
   );
@@ -91,6 +100,17 @@ const withTeam = Effect.gen(function* () {
   yield* teams.acceptInvite({ userId: "ben", name: invite.name, profile: profile("Ben") });
   return { teams, team, invite };
 });
+
+type NotePut = Extract<RoomBoardChange, { type: "note.put" }>;
+const note = (noteId: string, fields: Partial<NotePut> = {}): RoomBoardChange => ({
+  type: "note.put",
+  noteId,
+  text: "Hi",
+  x: 0,
+  y: 0,
+  ...fields,
+});
+const move = (cardId: string): RoomBoardChange => ({ type: "card.move", cardId, x: 10, y: 20 });
 
 const refusal = (reason: Teams.TeamRequestError["reason"]) => ({
   _tag: "TeamRequestError",
@@ -279,6 +299,117 @@ describe("Teams", () => {
           teams.create({ userId: "u0", name: "One more", profile: profile("U0") }),
         ),
       ).toMatchObject(refusal("too_many_teams"));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "renames a listed thread, hides a machine's threads while guest links are off, and drops them when it is unlinked",
+    () =>
+      Effect.gen(function* () {
+        const { teams, team } = yield* withTeam;
+        const register = (userId: string, threadId: string) =>
+          teams.registerThread({
+            environmentId: "env-shared",
+            linkedUserIds: [userId],
+            request: share(team.id, threadId),
+          });
+        yield* register("ann", "a");
+        yield* register("ben", "b");
+        const listed = Effect.map(teams.get({ userId: "ann", teamId: team.id }), (read) =>
+          read.threads.map((thread) => `${thread.threadId}: ${thread.title}`).toSorted(),
+        );
+        yield* teams.renameThread({ environmentId: "env-shared", threadId: "a", title: "Ship it" });
+        expect(yield* listed).toEqual(["a: Ship it", "b: Fix the build"]);
+        yield* teams.setThreadsListed({ environmentId: "env-shared", listed: false });
+        expect(yield* listed).toEqual([]);
+        yield* teams.setThreadsListed({ environmentId: "env-shared", listed: true });
+        expect(yield* listed).toHaveLength(2);
+        yield* teams.unlistEnvironment({ userId: "ann", environmentId: "env-shared" });
+        expect(yield* listed).toEqual(["b: Fix the build"]);
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps one board for members, answers not modified, and lands concurrent changes", () =>
+    Effect.gen(function* () {
+      const { teams, team } = yield* withTeam;
+      expect(yield* teams.board({ userId: "ann", teamId: team.id, since: undefined })).toEqual({
+        version: 0,
+        board: { positions: {}, notes: [] },
+      });
+      expect(
+        yield* Effect.flip(teams.board({ userId: "eve", teamId: team.id, since: undefined })),
+      ).toMatchObject(refusal("not_found"));
+      expect(
+        yield* Effect.flip(
+          teams.changeBoard({ userId: "eve", teamId: team.id, change: note("x") }),
+        ),
+      ).toMatchObject(refusal("not_found"));
+
+      yield* Effect.all(
+        [
+          teams.changeBoard({ userId: "ann", teamId: team.id, change: note("from-ann") }),
+          teams.changeBoard({ userId: "ben", teamId: team.id, change: note("from-ben") }),
+        ],
+        { concurrency: "unbounded" },
+      );
+      const read = yield* teams.board({ userId: "ben", teamId: team.id, since: 0 });
+      expect(read.version).toBe(2);
+      expect(
+        read.board?.notes.map((added) => `${added.id} by ${added.guestId}`).toSorted(),
+      ).toEqual(["from-ann by ann", "from-ben by ben"]);
+      expect(yield* teams.board({ userId: "ben", teamId: team.id, since: 2 })).toEqual({
+        version: 2,
+        board: null,
+      });
+      // A change that changes nothing is not a new version.
+      expect(
+        (yield* teams.changeBoard({
+          userId: "ann",
+          teamId: team.id,
+          change: { type: "note.remove", noteId: "gone" },
+        })).version,
+      ).toBe(2);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("takes only the team's cards and members on its board, and caps its notes", () =>
+    Effect.gen(function* () {
+      const { teams, team } = yield* withTeam;
+      const change = (userId: string, boardChange: RoomBoardChange) =>
+        teams.changeBoard({ userId, teamId: team.id, change: boardChange });
+      const refused = (userId: string, boardChange: RoomBoardChange) =>
+        Effect.flip(change(userId, boardChange));
+      const threadCard = teamBoardThreadCard("env-ben", "thread-1");
+
+      yield* change("ann", move(roomBoardGuestCard("ben")));
+      expect(yield* refused("ann", move(roomBoardGuestCard("eve")))).toMatchObject(
+        refusal("board_rejected"),
+      );
+      expect(yield* refused("ann", move(threadCard))).toMatchObject(refusal("board_rejected"));
+      yield* teams.registerThread({
+        environmentId: "env-ben",
+        linkedUserIds: ["ben"],
+        request: share(team.id),
+      });
+      yield* change("ann", move(threadCard));
+
+      yield* change(
+        "ann",
+        note("task", { kind: "task", assignee: { guestId: GuestId.make("ben") } }),
+      );
+      for (const assignee of [{ guestId: GuestId.make("eve") }, {}]) {
+        expect(yield* refused("ann", note("other", { kind: "task", assignee }))).toMatchObject(
+          refusal("board_rejected"),
+        );
+      }
+      expect(yield* refused("ann", note("comment", { pinnedTo: "message-1" }))).toMatchObject(
+        refusal("board_rejected"),
+      );
+
+      for (let index = 1; index < ROOM_BOARD_MAX_NOTES; index++) {
+        yield* change("ben", note(`note-${index}`));
+      }
+      expect(yield* refused("ben", note("one-more"))).toMatchObject(refusal("board_full"));
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

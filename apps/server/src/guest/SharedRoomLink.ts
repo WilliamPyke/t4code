@@ -7,17 +7,21 @@ import {
   GUEST_TURN_PROMPT_MAX_LENGTH,
   GUEST_TURN_REPLY_MAX_LENGTH,
   type GuestAgentActivityRequest,
+  type GuestShareId,
   type GuestTurnRequest,
+  type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
+  type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
   ROOM_UPDATES_MAX_CHARS,
   type RoomUpdate,
   RoomUpdates,
+  roomCodeStateOf,
   type RunId,
   type SharedThreadCatchUpResult,
   type SharedThreadRoom,
   SharedThreadJoinError,
-  type ThreadId,
+  ThreadId,
   type ThreadRoomLink,
 } from "@t3tools/contracts";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
@@ -35,7 +39,9 @@ import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { base64UrlEncode } from "../auth/utils.ts";
+import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import { forkParked } from "../serverActivation.ts";
 import { clip } from "./roomUpdates.ts";
 
@@ -77,6 +83,21 @@ export const withoutRedirects = (client: HttpClient.HttpClient) =>
 
 // Thread ids can hold characters a file name cannot.
 const tokenSecretName = (threadId: ThreadId) => `shared-room-${base64UrlEncode(threadId)}`;
+// Which thread here joined a room, so a link to the room finds it without reading every thread.
+const roomIndexName = (host: string, shareId: GuestShareId) =>
+  `shared-room-thread-${base64UrlEncode(`${host.toLowerCase()}
+${shareId}`)}`;
+
+/** The task a run answers: the one the user took before asking it. */
+const taskOfRun = (
+  link: ThreadRoomLink,
+  run: Pick<OrchestrationV2Run, "requestedAt"> | undefined,
+): string | undefined =>
+  link.task !== undefined &&
+  run !== undefined &&
+  DateTime.toEpochMillis(run.requestedAt) >= Date.parse(link.task.takenAt)
+    ? link.task.id
+    : undefined;
 
 /** A finished run as the room shows it: the prompt and the last thing the agent said. */
 export function guestTurnOf(
@@ -135,6 +156,15 @@ export class SharedRoomLink extends Context.Service<
     readonly catchUp: (
       threadId: ThreadId,
     ) => Effect.Effect<SharedThreadCatchUpResult, SharedThreadJoinError>;
+    /**
+     * Has the next turn asked in the thread joined from this room answer a task card there.
+     * Returns that thread, or null when no thread here is in the room.
+     */
+    readonly takeTask: (
+      host: string,
+      shareId: GuestShareId,
+      taskId: string,
+    ) => Effect.Effect<ThreadId | null>;
     /** Posts one finished run if its thread is connected. Never fails: the turn is local first. */
     readonly publishRun: (threadId: ThreadId, runId: RunId) => Effect.Effect<void>;
     /**
@@ -155,6 +185,8 @@ const make = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const random = yield* SecureRandom.SecureRandom;
   const http = withoutRedirects(yield* HttpClient.HttpClient);
+  const projects = yield* ProjectService.ProjectService;
+  const git = yield* GitWorkflow.GitWorkflowService;
   // The last run posted per thread: a finished run is updated again when its checkpoint lands.
   const posted = new Map<ThreadId, RunId>();
   // The run each connected thread told its room is running, and when it last said so.
@@ -183,10 +215,14 @@ const make = Effect.gen(function* () {
     function* (threadId: ThreadId, host: string, room: SharedThreadRoom, cursor?: string) {
       if (sharedThreadRouteUrl(host, GUEST_ROOM_TURN_ROUTE) === null) return;
       yield* secrets.set(tokenSecretName(threadId), new TextEncoder().encode(room.token));
+      if (room.shareId !== undefined) {
+        yield* secrets.set(roomIndexName(host, room.shareId), new TextEncoder().encode(threadId));
+      }
       yield* setLink(threadId, {
         host: host.toLowerCase(),
         expiresAt: room.expiresAt,
         ...(cursor === undefined ? {} : { cursor }),
+        ...(room.shareId === undefined ? {} : { shareId: room.shareId }),
       });
     },
     Effect.catch((cause) =>
@@ -266,6 +302,87 @@ const make = Effect.gen(function* () {
     };
   }, Effect.scoped);
 
+  const takeTask = Effect.fn("SharedRoomLink.takeTask")(
+    function* (host: string, shareId: GuestShareId, taskId: string) {
+      const stored = yield* secrets.get(roomIndexName(host, shareId));
+      if (Option.isNone(stored)) return null;
+      const threadId = ThreadId.make(new TextDecoder().decode(stored.value));
+      const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+      const link = thread.roomLink ?? null;
+      const now = yield* DateTime.now;
+      // The index outlives a thread that left, was deleted, or joined the room again elsewhere.
+      if (
+        link === null ||
+        link.host !== host.toLowerCase() ||
+        link.shareId !== shareId ||
+        thread.deletedAt !== null ||
+        DateTime.toEpochMillis(now) >= Date.parse(link.expiresAt)
+      ) {
+        return null;
+      }
+      yield* setLink(threadId, {
+        ...link,
+        task: { id: taskId, takenAt: DateTime.formatIso(now) },
+      });
+      return threadId;
+    },
+    Effect.catch((cause) =>
+      Effect.logWarning("Could not take a task to a joined thread", { cause }).pipe(
+        Effect.as(null),
+      ),
+    ),
+  );
+
+  /** Clears the task a posted turn answered, unless the user took another since. */
+  const finishTask = (threadId: ThreadId, taskId: string) =>
+    orchestrator.getThreadRecords(threadId, []).pipe(
+      Effect.flatMap(({ thread }) => {
+        const link = thread.roomLink ?? null;
+        if (link?.task?.id !== taskId) return Effect.void;
+        const { task: _task, ...rest } = link;
+        return setLink(threadId, rest);
+      }),
+      Effect.catch((cause) => Effect.logWarning("Could not clear an answered task", { cause })),
+    );
+
+  /** Where the thread's code is, for the room. Null when git cannot say or there is no branch. */
+  const codeOf = (thread: OrchestrationV2AppThread) =>
+    projects.getById(thread.projectId).pipe(
+      Effect.flatMap((project) => {
+        const cwd = thread.worktreePath ?? Option.getOrUndefined(project)?.workspaceRoot;
+        return cwd === undefined
+          ? Effect.succeed(null)
+          : Effect.map(git.status({ cwd }), (status) => roomCodeStateOf(status, thread.branch));
+      }),
+      Effect.orElseSucceed(() => null),
+    );
+
+  /** A run as the room hears of it: its items, the task it answers, and where the code is. */
+  const runFacts = Effect.fn("SharedRoomLink.runFacts")(function* (
+    threadId: ThreadId,
+    thread: OrchestrationV2AppThread,
+    link: ThreadRoomLink,
+    runId: RunId,
+  ) {
+    const { turnItems, runs } = yield* orchestrator.getThreadRecords(
+      threadId,
+      ["turnItems", "runs"],
+      { turnItemRunIds: [runId], runIds: [runId] },
+    );
+    const taskId = taskOfRun(
+      link,
+      runs.find((run) => run.id === runId),
+    );
+    const code = yield* codeOf(thread);
+    return {
+      turnItems,
+      about: {
+        ...(taskId === undefined ? {} : { taskId }),
+        ...(code === null ? {} : { code }),
+      },
+    };
+  });
+
   const publishRun = Effect.fn("SharedRoomLink.publishRun")(
     function* (threadId: ThreadId, runId: RunId) {
       if (posted.get(threadId) === runId) return;
@@ -278,16 +395,15 @@ const make = Effect.gen(function* () {
       if (url === null || Option.isNone(token) || now >= Date.parse(link.expiresAt)) {
         return yield* disconnect(threadId);
       }
-      const { turnItems } = yield* orchestrator.getThreadRecords(threadId, ["turnItems"], {
-        turnItemRunIds: [runId],
-      });
+      const { turnItems, about } = yield* runFacts(threadId, thread, link, runId);
       const turn = guestTurnOf(runId, turnItems);
       if (turn === null) return;
+      const request: GuestTurnRequest = { ...turn, ...about };
       const response = yield* http
         .execute(
           HttpClientRequest.post(url).pipe(
             HttpClientRequest.bearerToken(new TextDecoder().decode(token.value)),
-            HttpClientRequest.bodyJsonUnsafe(turn),
+            HttpClientRequest.bodyJsonUnsafe(request),
           ),
         )
         .pipe(Effect.timeout(REQUEST_TIMEOUT));
@@ -295,6 +411,7 @@ const make = Effect.gen(function* () {
       if (response.status === 410) return yield* disconnect(threadId);
       if (response.status >= 200 && response.status < 300) {
         posted.set(threadId, runId);
+        if (about.taskId !== undefined) yield* finishTask(threadId, about.taskId);
         // The room stops showing the run as running once it has the turn.
         if (running.get(threadId)?.runId === runId) running.delete(threadId);
       } else yield* Effect.logWarning("The room refused a turn", { status: response.status });
@@ -319,15 +436,12 @@ const make = Effect.gen(function* () {
       const request: GuestAgentActivityRequest =
         state === "idle"
           ? { id: runId, state }
-          : {
+          : yield* Effect.map(runFacts(threadId, thread, link, runId), ({ turnItems, about }) => ({
               id: runId,
               state,
-              prompt: runPromptOf(
-                (yield* orchestrator.getThreadRecords(threadId, ["turnItems"], {
-                  turnItemRunIds: [runId],
-                })).turnItems,
-              ),
-            };
+              prompt: runPromptOf(turnItems),
+              ...about,
+            }));
       const response = yield* http
         .execute(
           HttpClientRequest.post(url).pipe(
@@ -391,6 +505,7 @@ const make = Effect.gen(function* () {
     connect,
     leave,
     catchUp,
+    takeTask,
     publishRun,
     publishActivity,
     drain: worker.drain,

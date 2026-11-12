@@ -45,6 +45,87 @@ export const GUEST_TURN_REPLY_MAX_LENGTH = 8_000;
 /** Guests' own turns a share keeps, newest last, so the thread record stays small. */
 export const GUEST_TURN_LIMIT = 10;
 
+const ROOM_BRANCH_MAX_LENGTH = 200;
+// What `git check-ref-format --branch` refuses, and characters nobody can see or that turn text.
+const BRANCH_FORBIDDEN = /[\p{C}\p{Z}~^:?*[\\]|\.\.|@\{|\/\/|\/\.|\.lock(?:\/|$)/u;
+
+/** Whether a branch name is one git takes and the room may show and put in a command. */
+export const isRoomBranchName = (name: string): boolean =>
+  name.length > 0 &&
+  name.length <= ROOM_BRANCH_MAX_LENGTH &&
+  !BRANCH_FORBIDDEN.test(name) &&
+  !/^[-./]|[./]$/.test(name) &&
+  name !== "@" &&
+  name !== "HEAD";
+
+/** Whether the branch's remote has all of it: no commits or edits it lacks. */
+export const isBranchSynced = (status: {
+  readonly hasUpstream: boolean;
+  readonly aheadCount: number;
+  readonly hasWorkingTreeChanges: boolean;
+}): boolean => status.hasUpstream && status.aheadCount === 0 && !status.hasWorkingTreeChanges;
+
+/**
+ * Where one person's code is, as the room shows it beside their thread or agent. Display only:
+ * it never reaches an agent.
+ */
+export const RoomCodeState = Schema.Struct({
+  branch: Schema.String.check(
+    Schema.makeFilter(isRoomBranchName, { expected: "a git branch name" }),
+  ),
+  /** The branch's remote has every commit and edit; see `isBranchSynced`. */
+  synced: Schema.Boolean,
+  /** Commits only this branch has, and only its remote has. Absent with no upstream. */
+  ahead: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  behind: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  /** The open pull request for the branch, as that machine's source control knows it. */
+  pullRequest: Schema.optional(
+    Schema.Struct({
+      number: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+      url: Schema.String.check(
+        Schema.isMaxLength(2_048),
+        Schema.makeFilter((url: string) => isRoomBoardUrl(url), {
+          expected: "an http or https URL",
+        }),
+      ),
+    }),
+  ),
+});
+export type RoomCodeState = typeof RoomCodeState.Type;
+
+/** What git says about a checkout, as the room shows it, or null when there is no branch to show. */
+export function roomCodeStateOf(
+  status: {
+    readonly isRepo: boolean;
+    readonly refName: string | null;
+    readonly hasUpstream: boolean;
+    readonly aheadCount: number;
+    readonly behindCount: number;
+    readonly hasWorkingTreeChanges: boolean;
+    readonly pr: {
+      readonly number: number;
+      readonly url: string;
+      readonly state: string;
+    } | null;
+  },
+  fallbackBranch: string | null,
+): RoomCodeState | null {
+  const branch = status.refName ?? fallbackBranch;
+  if (!status.isRepo || branch === null || !isRoomBranchName(branch)) return null;
+  const pr = status.pr;
+  return {
+    branch,
+    synced: isBranchSynced(status),
+    ...(status.hasUpstream ? { ahead: status.aheadCount, behind: status.behindCount } : {}),
+    ...(pr !== null && pr.state === "open" && isRoomBoardUrl(pr.url) && pr.url.length <= 2_048
+      ? { pullRequest: { number: pr.number, url: pr.url } }
+      : {}),
+  };
+}
+
+/** A task card's id, as a turn that answers it names it. */
+const RoomTaskId = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
+
 /** One catch-up from a room: how many messages, how long each, and how much in all. */
 export const ROOM_UPDATES_MAX_MESSAGES = 50;
 export const ROOM_UPDATE_MAX_LENGTH = 8_000;
@@ -81,6 +162,8 @@ export const ThreadGuestTurn = Schema.Struct({
   /** The prompt or the reply was longer than the room keeps. */
   truncated: Schema.optional(Schema.Boolean),
   postedAt: IsoDateTime,
+  /** Where the guest's code was when the turn finished. Absent from an older machine. */
+  code: Schema.optional(RoomCodeState),
 });
 export type ThreadGuestTurn = typeof ThreadGuestTurn.Type;
 
@@ -117,6 +200,29 @@ const RoomBoardUrl = Schema.String.check(
 export const RoomBoardAssignee = Schema.Struct({ guestId: Schema.optional(GuestId) });
 export type RoomBoardAssignee = typeof RoomBoardAssignee.Type;
 
+export const ROOM_TASK_ANSWER_MAX_LENGTH = 280;
+
+/** The start of an agent's reply, as a task card shows it: one paragraph of plain text. */
+export const roomTaskAnswerExcerpt = (reply: string): string => {
+  const text = reply.replace(/\s+/g, " ").trim();
+  return text.length <= ROOM_TASK_ANSWER_MAX_LENGTH
+    ? text
+    : `${text.slice(0, ROOM_TASK_ANSWER_MAX_LENGTH - 1).replace(/[\uD800-\uDBFF]$/, "")}…`;
+};
+
+/**
+ * Whose agent answered a task, and the start of its reply. Only the owner's server writes it,
+ * from a turn the guest's machine posted. Display only, like the rest of the board.
+ */
+export const RoomTaskAnswer = Schema.Struct({
+  /** The guest whose agent answered. */
+  guestId: GuestId,
+  excerpt: Schema.String.check(Schema.isMaxLength(ROOM_TASK_ANSWER_MAX_LENGTH)),
+  /** The turn that answered, as the guest's machine named it. */
+  turnId: ThreadGuestTurn.fields.id,
+});
+export type RoomTaskAnswer = typeof RoomTaskAnswer.Type;
+
 /**
  * A card someone added to the board: a note, unless `kind` says it is a task or a link. A note
  * with `pinnedTo` is a comment on that message of the thread.
@@ -135,7 +241,9 @@ export const RoomBoardNote = Schema.Struct({
   /** A link card's address. Clients read it; the server never fetches it. */
   url: Schema.optional(RoomBoardUrl),
   /** The id of the thread's message this comment is pinned to. */
-  pinnedTo: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
+  pinnedTo: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
+  /** A task a guest's agent answered. No board change sets it; it stays when the task changes. */
+  answer: Schema.optional(RoomTaskAnswer),
 });
 export type RoomBoardNote = typeof RoomBoardNote.Type;
 
@@ -215,6 +323,10 @@ export const GUEST_AGENT_PROMPT_MAX_LENGTH = 280;
 export const RoomAgentActivity = Schema.Struct({
   guestId: GuestId,
   prompt: Schema.String.check(Schema.isMaxLength(GUEST_AGENT_PROMPT_MAX_LENGTH)),
+  /** The task card the turn answers. */
+  taskId: Schema.optional(RoomTaskId),
+  /** Where the guest's code is. Absent from an older machine. */
+  code: Schema.optional(RoomCodeState),
 });
 export type RoomAgentActivity = typeof RoomAgentActivity.Type;
 
@@ -243,6 +355,8 @@ export type RoomViewport = typeof RoomViewport.Type;
 export const RoomAgentsEvent = Schema.Struct({
   type: Schema.Literal("agents"),
   running: Schema.Array(RoomAgentActivity),
+  /** Where the owner's code is, on a guest's stream once the owner's server could say. */
+  owner: Schema.optional(RoomCodeState),
 });
 export type RoomAgentsEvent = typeof RoomAgentsEvent.Type;
 
@@ -556,6 +670,8 @@ export const SharedThreadRoom = Schema.Struct({
   token: TrimmedNonEmptyString,
   /** When the share ends, so the guest's machine stops posting then. */
   expiresAt: IsoDateTime,
+  /** The share, so the guest's machine can find this thread again from a link to the room. */
+  shareId: Schema.optional(GuestShareId),
 });
 export type SharedThreadRoom = typeof SharedThreadRoom.Type;
 
@@ -584,6 +700,13 @@ export const ThreadRoomLink = Schema.Struct({
   expiresAt: IsoDateTime,
   /** The newest thing from the room this thread has: joining and each catch-up move it on. */
   cursor: Schema.optional(IsoDateTime),
+  /** Absent on a thread joined before rooms named their share. */
+  shareId: Schema.optional(GuestShareId),
+  /**
+   * The task card the user took to this thread's agent, and when: the first turn asked after
+   * that answers it.
+   */
+  task: Schema.optional(Schema.Struct({ id: RoomTaskId, takenAt: IsoDateTime })),
 });
 export type ThreadRoomLink = typeof ThreadRoomLink.Type;
 
@@ -593,6 +716,9 @@ export const GuestTurnRequest = Schema.Struct({
   prompt: ThreadGuestTurn.fields.prompt,
   reply: ThreadGuestTurn.fields.reply,
   truncated: ThreadGuestTurn.fields.truncated,
+  /** The task card this turn answers. One that is not this guest's task is ignored. */
+  taskId: Schema.optional(RoomTaskId),
+  code: ThreadGuestTurn.fields.code,
 });
 export type GuestTurnRequest = typeof GuestTurnRequest.Type;
 
@@ -604,6 +730,8 @@ export const GuestAgentActivityRequest = Schema.Struct({
   id: ThreadGuestTurn.fields.id,
   state: Schema.Literals(["running", "idle"]),
   prompt: Schema.optional(RoomAgentActivity.fields.prompt),
+  taskId: RoomAgentActivity.fields.taskId,
+  code: RoomAgentActivity.fields.code,
 });
 export type GuestAgentActivityRequest = typeof GuestAgentActivityRequest.Type;
 

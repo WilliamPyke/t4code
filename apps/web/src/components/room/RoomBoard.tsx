@@ -9,6 +9,7 @@ import {
   type RoomBoardChange,
   type RoomBoardNote,
   type RoomBoardViewport,
+  type RoomCodeState,
   type RoomCursor,
   type RoomViewport,
   type ThreadGuest,
@@ -19,6 +20,7 @@ import {
 import {
   ArrowLeftIcon,
   ExternalLinkIcon,
+  GitBranchIcon,
   LinkIcon,
   ListTodoIcon,
   MessageSquareShareIcon,
@@ -42,6 +44,7 @@ import {
   useState,
 } from "react";
 
+import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useStableCallback } from "~/hooks/useStableCallback";
 
 import { cn, randomUUID } from "~/lib/utils";
@@ -62,6 +65,8 @@ import {
   type BoardValue,
   type BoardView,
   EMPTY_ROOM_BOARD,
+  boardAgentCode,
+  boardAgentName,
   INITIAL_BOARD_VIEW,
   NO_BOARD_EDITS,
   boardAgents,
@@ -87,6 +92,8 @@ import {
   placeBoardNote,
   putBoardEdit,
   resolveBoard,
+  roomCodeStatus,
+  roomFetchCommand,
   screenToBoard,
   settleBoardValue,
   zoomBoardAt,
@@ -166,6 +173,15 @@ const NOT_FOLLOWING: BoardFollow = {
 /** The board's follow mode, for the pointers' layer its parent hands it. */
 const BoardFollowContext = createContext<BoardFollow>(NOT_FOLLOWING);
 
+/** A card a board shows in place of the thread's and the room's people's, as a team's has. */
+export interface BoardCardSpec {
+  readonly id: string;
+  readonly title: string;
+  readonly kind: string;
+  readonly dashed?: boolean;
+  readonly children: ReactNode;
+}
+
 /** A link being drawn from a card or note, to wherever the pointer is. */
 interface Linking {
   readonly from: string;
@@ -193,6 +209,12 @@ export function RoomBoard({
   onChange,
   onCursor,
   onUseNote,
+  ownerCode,
+  onTakeTask,
+  cards,
+  summary,
+  backLabel = "Thread",
+  ownerAssignable = true,
 }: {
   readonly title: string;
   /** Null when the thread is not shared, so there is no room to arrange a board for. */
@@ -218,6 +240,20 @@ export function RoomBoard({
   readonly onCursor: ((presence: BoardPresence) => void) | undefined;
   /** Puts a card's text in this person's message box for the thread. It sends nothing. */
   readonly onUseNote: ((text: string) => void) | undefined;
+  /** Where the owner's code is, once known. */
+  readonly ownerCode?: RoomCodeState | undefined;
+  /**
+   * Gives a task to this person and opens it as a draft for their own agent. It sends nothing.
+   * Absent when they have no agent to take it to.
+   */
+  readonly onTakeTask?: ((task: RoomBoardNote) => void) | undefined;
+  /** Replaces the thread's card and the room's people and agents. */
+  readonly cards?: ReadonlyArray<BoardCardSpec>;
+  /** Said beside the title instead of who joined the room. */
+  readonly summary?: string;
+  readonly backLabel?: string;
+  /** Whether a task can be for the owner, who has no card of their own. */
+  readonly ownerAssignable?: boolean;
 }) {
   const board = room?.board ?? EMPTY_ROOM_BOARD;
   const [edits, setEdits] = useState(NO_BOARD_EDITS);
@@ -287,9 +323,10 @@ export function RoomBoard({
 
   const guests = room?.guests ?? [];
   const people: BoardPeople = { guests, viewer, ownerName };
-  const agents = boardAgents(guests, room?.turns ?? [], running);
+  const guestCards = cards === undefined ? guests : [];
+  const agents = cards === undefined ? boardAgents(guests, room?.turns ?? [], running) : [];
   const positions = placeBoardCards(
-    [
+    cards?.map((card) => card.id) ?? [
       ROOM_BOARD_THREAD_CARD,
       ...guests.map(guestCardId),
       ...agents.map(({ guest }) => agentCardId(guest)),
@@ -484,12 +521,12 @@ export function RoomBoard({
       <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
         <Button size="sm" variant="ghost" onClick={onOpenThread}>
           <ArrowLeftIcon />
-          Thread
+          {backLabel}
         </Button>
         <h1 className="min-w-0 flex-1 truncate text-sm font-medium">
           {title}
           <span className="ms-2 font-normal text-muted-foreground">
-            {room === null ? "Not shared" : roomSummary(room, online.length)}
+            {room === null ? "Not shared" : (summary ?? roomSummary(room, online.length))}
           </span>
         </h1>
         {notice === null ? null : (
@@ -694,25 +731,43 @@ export function RoomBoard({
               )}
             </g>
           </svg>
-          <BoardCard
-            at={positions[ROOM_BOARD_THREAD_CARD]!}
-            title={title}
-            kind={agentWorking ? "agent working" : "thread"}
-            id={ROOM_BOARD_THREAD_CARD}
-            dropTarget={onUseNote === undefined ? undefined : THREAD_DROP}
-            highlighted={dropTarget === THREAD_DROP}
-            link={link}
-            onMove={dragBy}
-            onDrop={letGo}
-          >
-            <ThreadMessages messages={messages} />
-            <div>
-              <Button size="xs" variant="outline" onClick={onOpenThread}>
-                Open thread
-              </Button>
-            </div>
-          </BoardCard>
-          {guests.map((guest) => {
+          {cards?.map((card) => (
+            <BoardCard
+              key={card.id}
+              at={positions[card.id]!}
+              title={card.title}
+              kind={card.kind}
+              dashed={card.dashed === true}
+              id={card.id}
+              link={link}
+              onMove={dragBy}
+              onDrop={letGo}
+            >
+              {card.children}
+            </BoardCard>
+          ))}
+          {cards === undefined ? (
+            <BoardCard
+              at={positions[ROOM_BOARD_THREAD_CARD]!}
+              title={title}
+              kind={agentWorking ? "agent working" : "thread"}
+              id={ROOM_BOARD_THREAD_CARD}
+              dropTarget={onUseNote === undefined ? undefined : THREAD_DROP}
+              highlighted={dropTarget === THREAD_DROP}
+              link={link}
+              onMove={dragBy}
+              onDrop={letGo}
+            >
+              <ThreadMessages messages={messages} />
+              <RoomCode code={ownerCode} />
+              <div>
+                <Button size="xs" variant="outline" onClick={onOpenThread}>
+                  Open thread
+                </Button>
+              </div>
+            </BoardCard>
+          ) : null}
+          {guestCards.map((guest) => {
             const id = guestCardId(guest);
             const here = online.includes(guest.id);
             return (
@@ -734,7 +789,8 @@ export function RoomBoard({
               </BoardCard>
             );
           })}
-          {agents.map(({ guest, turns, running: now }) => {
+          {agents.map((agent) => {
+            const { guest, turns, running: now } = agent;
             const id = agentCardId(guest);
             const latest = turns.at(-1);
             return (
@@ -769,6 +825,7 @@ export function RoomBoard({
                     </p>
                   </>
                 ) : null}
+                <RoomCode code={boardAgentCode(agent)} />
               </BoardCard>
             );
           })}
@@ -778,6 +835,7 @@ export function RoomBoard({
               note={note}
               people={people}
               guests={guests}
+              ownerAssignable={ownerAssignable}
               canEdit={canEdit}
               link={link}
               onMove={dragNote}
@@ -788,6 +846,15 @@ export function RoomBoard({
               onPasteLink={full ? undefined : pasteLinkInto}
               onDelete={send}
               onOpenReply={onOpenReply}
+              worker={running.find((agent) => agent.taskId === note.id)}
+              onTake={
+                onTakeTask === undefined ||
+                note.kind !== "task" ||
+                note.done === true ||
+                note.text.trim() === ""
+                  ? undefined
+                  : () => onTakeTask(note)
+              }
               onUse={
                 onUseNote === undefined || boardNoteMessage(note).trim() === ""
                   ? undefined
@@ -897,6 +964,7 @@ function BoardNote({
   note,
   people,
   guests,
+  ownerAssignable,
   canEdit,
   link,
   onMove,
@@ -907,11 +975,14 @@ function BoardNote({
   onPasteLink,
   onDelete,
   onOpenReply,
+  worker,
+  onTake,
   onUse,
 }: {
   readonly note: RoomBoardNote;
   readonly people: BoardPeople;
   readonly guests: ReadonlyArray<ThreadGuest>;
+  readonly ownerAssignable: boolean;
   readonly canEdit: boolean;
   readonly link: LinkHandlers | undefined;
   readonly onMove: (
@@ -928,6 +999,9 @@ function BoardNote({
   readonly onPasteLink: ((note: RoomBoardNote, url: string) => void) | undefined;
   readonly onDelete: (target: BoardTarget, value: null) => void;
   readonly onOpenReply: (messageId: string) => void;
+  /** The guest's agent working on this task now. */
+  readonly worker: RoomAgentActivity | undefined;
+  readonly onTake: (() => void) | undefined;
   readonly onUse: (() => void) | undefined;
 }) {
   const target = { kind: "note", id: note.id } as const;
@@ -1046,15 +1120,22 @@ function BoardNote({
           onPasteLink(note, url);
         }}
       />
+      {note.kind === "task" ? <TaskProgress note={note} people={people} worker={worker} /> : null}
       {note.kind === "task" ? (
-        <div className="flex px-2 pb-2">
+        <div className="flex flex-wrap items-center gap-1 px-2 pb-2">
           <AssigneeMenu
             note={note}
             people={people}
             guests={guests}
+            ownerAssignable={ownerAssignable}
             canEdit={canEdit}
             onChange={onChange}
           />
+          {onTake === undefined ? null : (
+            <Button size="micro" variant="outline" onPointerDown={stopPointer} onClick={onTake}>
+              Take it to my agent
+            </Button>
+          )}
         </div>
       ) : null}
       {note.pinnedTo === undefined ? null : (
@@ -1074,24 +1155,56 @@ function BoardNote({
   );
 }
 
+/** A guest's agent working on a task, or the start of the reply that answered it. */
+function TaskProgress({
+  note,
+  people,
+  worker,
+}: {
+  readonly note: RoomBoardNote;
+  readonly people: BoardPeople;
+  readonly worker: RoomAgentActivity | undefined;
+}) {
+  if (worker !== undefined) {
+    return (
+      <p role="status" className="px-3 pb-2 text-2xs text-muted-foreground first-letter:uppercase">
+        {boardAgentName(people, worker.guestId)} is working on this
+      </p>
+    );
+  }
+  if (note.answer === undefined) return null;
+  return (
+    <div className="flex flex-col gap-0.5 px-3 pb-2">
+      <p className="text-2xs font-medium text-muted-foreground">
+        Answered by {boardAgentName(people, note.answer.guestId)}
+      </p>
+      <p className="line-clamp-4 border-s-2 border-guest/50 ps-2 text-xs [overflow-wrap:anywhere]">
+        {note.answer.excerpt}
+      </p>
+    </div>
+  );
+}
+
 /** Who a task is for, and the people in the room it can be given to. */
 function AssigneeMenu({
   note,
   people,
   guests,
+  ownerAssignable,
   canEdit,
   onChange,
 }: {
   readonly note: RoomBoardNote;
   readonly people: BoardPeople;
   readonly guests: ReadonlyArray<ThreadGuest>;
+  readonly ownerAssignable: boolean;
   readonly canEdit: boolean;
   readonly onChange: ChangeNote;
 }) {
   const label =
     note.assignee === undefined ? "No one" : boardPersonName(people, note.assignee.guestId);
   const choices: ReadonlyArray<RoomBoardAssignee> = [
-    {},
+    ...(ownerAssignable ? [{}] : []),
     ...guests.map((guest) => ({ guestId: guest.id })),
   ];
   const assign = (assignee: RoomBoardAssignee | undefined) =>
@@ -1175,6 +1288,47 @@ function BoardCard({
       <div className="flex flex-col gap-2 p-3">{children}</div>
       {link === undefined ? null : <LinkHandle from={cardRef(id)} link={link} />}
     </section>
+  );
+}
+
+/** Someone's branch and whether it is pushed, with how to get it and its pull request. */
+function RoomCode({ code }: { readonly code: RoomCodeState | undefined }) {
+  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "fetch command" });
+  if (code === undefined) return null;
+  const command = code.synced ? roomFetchCommand(code.branch) : null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <p className="flex min-w-0 items-center gap-1.5 text-2xs text-muted-foreground">
+        <GitBranchIcon aria-hidden className="size-3 shrink-0" />
+        <span className="min-w-0 truncate font-mono">{code.branch}</span>
+        <span className="shrink-0">· {roomCodeStatus(code)}</span>
+      </p>
+      {command === null && code.pullRequest === undefined ? null : (
+        <div className="flex flex-wrap gap-1">
+          {command === null ? null : (
+            <Button
+              size="micro"
+              variant="outline"
+              onPointerDown={stopPointer}
+              onClick={() => copyToClipboard(command, undefined)}
+            >
+              {isCopied ? "Copied" : "Copy fetch command"}
+            </Button>
+          )}
+          {code.pullRequest === undefined ? null : (
+            <Button
+              size="micro"
+              variant="outline"
+              onPointerDown={stopPointer}
+              render={<a href={code.pullRequest.url} target="_blank" rel="noreferrer noopener" />}
+            >
+              <ExternalLinkIcon />
+              Pull request #{code.pullRequest.number}
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

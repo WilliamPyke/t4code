@@ -2,6 +2,7 @@ import {
   ROOM_BOARD_MAX_COORDINATE,
   ROOM_BOARD_THREAD_CARD,
   isRoomBoardUrl,
+  isRoomBranchName,
   roomBoardCardRef,
   type RoomAgentActivity,
   type RoomBoard,
@@ -9,6 +10,7 @@ import {
   type RoomBoardEdge,
   type RoomBoardNote,
   type RoomBoardViewport,
+  type RoomCodeState,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
@@ -474,6 +476,12 @@ export function boardPersonName(people: BoardPeople, guestId: string | undefined
   return people.guests.find((guest) => guest.id === guestId)?.name ?? "Guest";
 }
 
+/** Whose agent someone's is, as a sentence names it: "Sam's agent", or "your agent". */
+export function boardAgentName(people: BoardPeople, guestId: string | undefined): string {
+  const name = boardPersonName(people, guestId);
+  return (guestId ?? null) === people.viewer ? "your agent" : `${name}'s agent`;
+}
+
 /**
  * The guests whose agent has a card: once it posted a turn or runs one now, with its turns and
  * what it runs.
@@ -491,6 +499,35 @@ export function boardAgents<
     const now = running.find((agent) => agent.guestId === guest.id);
     return own.length === 0 && now === undefined ? [] : [{ guest, turns: own, running: now }];
   });
+}
+
+/** Where an agent's code is: what it says while it runs, or what its last turn said. */
+export const boardAgentCode = (agent: {
+  readonly turns: ReadonlyArray<{ readonly code?: RoomCodeState | undefined }>;
+  readonly running: RoomAgentActivity | undefined;
+}): RoomCodeState | undefined => agent.running?.code ?? agent.turns.at(-1)?.code;
+
+/** How a card says where someone's code is: "pushed", "2 commits not pushed", and so on. */
+export function roomCodeStatus(code: RoomCodeState): string {
+  const state = code.synced
+    ? "pushed"
+    : code.ahead === undefined
+      ? "not pushed"
+      : code.ahead > 0
+        ? `${code.ahead} commit${code.ahead === 1 ? "" : "s"} not pushed`
+        : "changes not committed";
+  const behind = code.behind ?? 0;
+  return behind > 0 ? `${state}, ${behind} behind` : state;
+}
+
+/**
+ * The command that gets someone's pushed branch, or null for a name git would not take. A name
+ * with anything but plain characters is quoted for the shell.
+ */
+export function roomFetchCommand(branch: string): string | null {
+  if (!isRoomBranchName(branch)) return null;
+  const arg = /^[\w./-]+$/.test(branch) ? branch : `'${branch.replaceAll("'", `'\\''`)}'`;
+  return `git fetch origin ${arg} && git switch ${arg}`;
 }
 
 /** A note added to a composer's draft as a paragraph of its own. */

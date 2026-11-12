@@ -76,6 +76,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.sharedThreadJoin]: AuthOrchestrationOperateScope,
   [WS_METHODS.sharedThreadLeave]: AuthOrchestrationOperateScope,
   [WS_METHODS.sharedThreadCatchUp]: AuthOrchestrationOperateScope,
+  // Marks which turn of a joined thread answers a task; it changes what the room is shown.
+  [WS_METHODS.sharedThreadTakeTask]: AuthOrchestrationOperateScope,
   // A guest link hands thread access to someone outside, like a pairing link.
   [WS_METHODS.guestShareCreate]: AuthAccessWriteScope,
   // Changes what the guests on the link see, as dismissing one of their messages does.

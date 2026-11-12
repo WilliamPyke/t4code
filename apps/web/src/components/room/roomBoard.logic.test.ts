@@ -9,6 +9,7 @@ import {
   NO_BOARD_EDITS,
   type BoardPresence,
   appendNoteToDraft,
+  boardAgentCode,
   boardAgents,
   boardCardBox,
   boardChangeOf,
@@ -28,6 +29,8 @@ import {
   placeBoardNote,
   putBoardEdit,
   resolveBoard,
+  roomCodeStatus,
+  roomFetchCommand,
   screenToBoard,
   settleBoardValue,
   zoomBoardAt,
@@ -378,6 +381,52 @@ describe("boardAgents", () => {
       ["sam", 1, undefined],
       ["eve", 0, { guestId: "eve", prompt: "Fix login" }],
     ]);
+  });
+
+  it("shows where an agent's code is while it runs, and after its last turn", () => {
+    const pushed = { branch: "fix/login", synced: true, ahead: 0, behind: 0 };
+    const local = { branch: "fix/login", synced: false, ahead: 2, behind: 0 };
+    const running = { guestId: GuestId.make("eve"), prompt: "", code: local };
+    expect(boardAgentCode({ turns: [{ code: pushed }], running })).toBe(local);
+    expect(boardAgentCode({ turns: [{}, { code: pushed }], running: undefined })).toBe(pushed);
+    expect(boardAgentCode({ turns: [], running: undefined })).toBeUndefined();
+  });
+});
+
+describe("roomCodeStatus", () => {
+  it("says whether a branch is pushed, and what of it is not", () => {
+    const code = { branch: "x", synced: false };
+    expect(roomCodeStatus({ ...code, synced: true, ahead: 0, behind: 3 })).toBe("pushed, 3 behind");
+    expect(roomCodeStatus({ ...code, ahead: 1, behind: 0 })).toBe("1 commit not pushed");
+    expect(roomCodeStatus({ ...code, ahead: 2, behind: 0 })).toBe("2 commits not pushed");
+    expect(roomCodeStatus({ ...code, ahead: 0, behind: 0 })).toBe("changes not committed");
+    expect(roomCodeStatus(code)).toBe("not pushed");
+  });
+});
+
+describe("roomFetchCommand", () => {
+  it("fetches and switches to a branch, quoting what a shell would read, and refuses the rest", () => {
+    expect(roomFetchCommand("feature/x")).toBe(
+      "git fetch origin feature/x && git switch feature/x",
+    );
+    expect(roomFetchCommand("it's$(rm)")).toBe(
+      "git fetch origin 'it'\\''s$(rm)' && git switch 'it'\\''s$(rm)'",
+    );
+    for (const unsafe of [
+      "-x",
+      "a b",
+      "a..b",
+      "a~1",
+      "a:b",
+      "x.lock",
+      "a//b",
+      "a\nb",
+      `a${String.fromCharCode(0x202e)}b`,
+      "@",
+      "x".repeat(201),
+    ]) {
+      expect(roomFetchCommand(unsafe)).toBeNull();
+    }
   });
 });
 

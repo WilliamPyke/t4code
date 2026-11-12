@@ -15,6 +15,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { CLOUD_MINT_PUBLIC_KEY, RELAY_ISSUER_SECRET } from "../cloud/config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as GuestTeamShares from "./GuestTeamShares.ts";
 
 const environmentId = EnvironmentId.make("env-owner");
@@ -45,6 +46,7 @@ const layerTest = GuestTeamShares.layer.pipe(
         getEnvironmentId: Effect.succeed(environmentId),
       }),
       Layer.mock(Orchestrator.OrchestratorV2)({ streamDomainEvents: Stream.empty }),
+      ServerSettings.ServerSettingsService.layerTest(),
       PlatformNodeCrypto.layerSignature,
     ),
   ),

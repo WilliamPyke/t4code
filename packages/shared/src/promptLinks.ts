@@ -181,25 +181,55 @@ export function buildNewThreadLink(input: {
   return url.toString();
 }
 
+/**
+ * A task card someone took from a room to their own agent: the room's share, the card, and its
+ * text, which lands as a draft in the thread joined from that room.
+ */
+export interface JoinLinkTask {
+  readonly shareId: string;
+  readonly taskId: string;
+  readonly prompt: LinkedPrompt;
+}
+
 /** A shared thread to bring to this machine: its owner's host and a guest's handoff token. */
 export interface JoinLink {
   readonly host: string;
   readonly token: string;
+  readonly task?: JoinLinkTask;
 }
 
 export function parseJoinLink(search: string): PromptLinkResult<JoinLink> {
   const params = new URLSearchParams(search);
   const host = optionalParam(params, "host");
   const token = optionalParam(params, "token");
-  return host === null || token === null
-    ? { ok: false, error: "This link does not say which shared thread to open." }
-    : { ok: true, value: { host, token } };
+  if (host === null || token === null) {
+    return { ok: false, error: "This link does not say which shared thread to open." };
+  }
+  const taskId = optionalParam(params, "task");
+  if (taskId === null) return { ok: true, value: { host, token } };
+  const shareId = optionalParam(params, "share");
+  const prompt = readPrompt(params);
+  if (!prompt.ok) return prompt;
+  if (shareId === null || prompt.value === null || taskId.length > 64) {
+    return { ok: false, error: "This link names a task T Code cannot read." };
+  }
+  return { ok: true, value: { host, token, task: { shareId, taskId, prompt: prompt.value } } };
 }
 
-export function buildJoinLink(input: JoinLink & { readonly origin?: string }): string {
+export function buildJoinLink(input: {
+  readonly host: string;
+  readonly token: string;
+  readonly origin?: string;
+  readonly task?: { readonly shareId: string; readonly taskId: string; readonly text: string };
+}): string {
   const url = new URL("/join", input.origin ?? DEFAULT_HOSTED_APP_URL);
   url.searchParams.set("host", input.host);
   url.searchParams.set("token", input.token);
+  if (input.task) {
+    url.searchParams.set("share", input.task.shareId);
+    url.searchParams.set("task", input.task.taskId);
+    url.searchParams.set("prompt", input.task.text);
+  }
   return url.toString();
 }
 

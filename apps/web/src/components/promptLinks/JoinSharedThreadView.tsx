@@ -1,3 +1,4 @@
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -6,8 +7,11 @@ import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  type EnvironmentId,
+  GuestShareId,
   repositoryGroupingKeyOf,
   type SharedThreadPreview,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import type { JoinLink } from "@t3tools/shared/promptLinks";
@@ -32,6 +36,7 @@ import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import { placeLinkedPrompt } from "./linkedPrompt";
 
 type JoinState =
   // The link alone never makes this machine call the one it names.
@@ -44,9 +49,9 @@ const messageOf = (error: unknown, fallback: string) =>
   error instanceof Error && error.message ? error.message : fallback;
 
 /**
- * Brings a thread someone shared to one of the user's own machines, as a thread of their own.
- * Every turn in it runs here, on the user's own provider login. When the owner's machine offers
- * a room, the thread shows its turns there, which the preview says before anything is created.
+ * Brings a thread someone shared to the user's own machine; every turn in it runs here. The
+ * preview says before anything is created when the thread will show its turns to a room. A task
+ * card's link lands as a draft in the thread joined from that room, joining first if needed.
  */
 export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
   const navigate = useNavigate();
@@ -62,7 +67,45 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
   const joinSharedThread = useAtomCommand(serverEnvironment.joinSharedThread, {
     reportFailure: false,
   });
+  const takeSharedRoomTask = useAtomCommand(serverEnvironment.takeSharedRoomTask, {
+    reportFailure: false,
+  });
   const [state, setState] = useState<JoinState>({ status: "confirm" });
+  const source = { host: link.host, token: link.token };
+  const task = link.task;
+
+  const openThread = (environmentId: EnvironmentId, threadId: ThreadId) => {
+    if (task !== undefined) {
+      placeLinkedPrompt(scopeThreadRef(environmentId, threadId), task.prompt, [
+        "Your agent's reply answers the task in the room.",
+      ]);
+    }
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: { environmentId, threadId },
+      replace: true,
+    });
+  };
+
+  /** Has the thread joined from the task's room on this environment answer it next, if one is. */
+  const takeTaskOn = async (environmentId: EnvironmentId): Promise<ThreadId | null> => {
+    if (task === undefined) return null;
+    const result = await takeSharedRoomTask({
+      environmentId,
+      input: { host: link.host, shareId: GuestShareId.make(task.shareId), taskId: task.taskId },
+    });
+    return result._tag === "Success" ? result.value.threadId : null;
+  };
+
+  /** Asks each of the user's own machines, the ones with projects; joins when none is in the room. */
+  const takeTaskToJoinedThread = async () => {
+    setState({ status: "working", title: "Looking for your thread from this room..." });
+    for (const environmentId of new Set(projects.map((project) => project.environmentId))) {
+      const threadId = await takeTaskOn(environmentId);
+      if (threadId !== null) return openThread(environmentId, threadId);
+    }
+    await loadPreview();
+  };
 
   const lastActiveEnvironmentId = () => {
     let latest: (typeof threads)[number] | undefined;
@@ -79,7 +122,7 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
       return;
     }
     setState({ status: "working", title: "Asking for the thread..." });
-    const result = await previewSharedThread({ environmentId, input: link });
+    const result = await previewSharedThread({ environmentId, input: source });
     if (result._tag === "Success") setState({ status: "ready", preview: result.value });
     else if (isAtomCommandInterrupted(result)) setState({ status: "confirm" });
     else {
@@ -109,7 +152,7 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
       environmentId: project.environmentId,
       input: {
         commandId: CommandId.make(randomUUID()),
-        source: link,
+        source,
         projectId: project.id,
         modelSelection,
         // The user's own defaults: a shared thread never brings its permissions along.
@@ -126,11 +169,9 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
       });
       return;
     }
-    void navigate({
-      to: "/$environmentId/$threadId",
-      params: { environmentId: project.environmentId, threadId: result.value.threadId },
-      replace: true,
-    });
+    // A room on an older server names no share, so its task cannot be taken: it stays a draft.
+    await takeTaskOn(project.environmentId);
+    openThread(project.environmentId, result.value.threadId);
   };
 
   const joinWithCode = (project: EnvironmentProject) => {
@@ -154,12 +195,21 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
 
   switch (state.status) {
     case "confirm":
-      return (
+      return task === undefined ? (
         <JoinPage
           title="Bring this shared thread to your machine?"
           description={`T Code will ask ${link.host} for the conversation. You get your own thread: your turns run here, on your own provider login.`}
         >
           <Button size="sm" onClick={() => void loadPreview()}>
+            Continue
+          </Button>
+        </JoinPage>
+      ) : (
+        <JoinPage
+          title="Take this task to your agent?"
+          description={`"${task.prompt.text}" goes into your thread from this room as a draft, after you join it if you have not. Nothing is sent until you send it, and your agent's reply then answers the task in the room.`}
+        >
+          <Button size="sm" onClick={() => void takeTaskToJoinedThread()}>
             Continue
           </Button>
         </JoinPage>
@@ -199,9 +249,9 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
           title={`Join "${preview.title}"?`}
           description={`${count}${preview.truncated ? " from the end of the thread" : ""} come with it. ${code} ${
             preview.live === true
-              ? "Everyone in the room sees each prompt you send in it as your agent starts on it, and your agent's final reply when it finishes; you can leave the room from the thread."
+              ? "Everyone in the room sees each prompt you send in it as your agent starts on it, your agent's final reply when it finishes, and your thread's branch name and whether it is pushed; you can leave the room from the thread."
               : "Nothing you do in it is sent back."
-          }`}
+          }${task === undefined ? "" : " Once you join, the task goes into the thread as a draft."}`}
         >
           {checkout !== null && project !== undefined ? (
             <Button size="sm" onClick={() => joinWithCode(project)}>

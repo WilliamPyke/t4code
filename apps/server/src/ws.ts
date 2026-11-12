@@ -2405,6 +2405,10 @@ export const layerWsRpc = (
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(sharedRooms.catchUp(input.threadId)),
           ),
+        [WS_METHODS.sharedThreadTakeTask]: (input) =>
+          Effect.map(sharedRooms.takeTask(input.host, input.shareId, input.taskId), (threadId) => ({
+            threadId,
+          })),
         [WS_METHODS.guestShareCreate]: (input) =>
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(guestShares.create(input)),

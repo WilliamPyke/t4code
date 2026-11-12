@@ -5,6 +5,7 @@ import {
   GUEST_SHARE_MAX_GUESTS,
   GUEST_TURN_LIMIT,
   GuestId,
+  GuestTurnRequest,
   GuestMessageId,
   GuestShareId,
   MessageId,
@@ -14,6 +15,7 @@ import {
   type OrchestrationV2AppThread,
   ROOM_BOARD_MAX_EDGES,
   ROOM_BOARD_MAX_NOTES,
+  ROOM_TASK_ANSWER_MAX_LENGTH,
   RoomBoardChange,
   ThreadId,
 } from "@t3tools/contracts";
@@ -60,6 +62,7 @@ const shareId = GuestShareId.make("share:one");
 const guestMessageId = GuestMessageId.make("guest-message:one");
 type NotePut = Extract<RoomBoardChange, { type: "note.put" }>;
 const decodeChange = Schema.decodeUnknownOption(RoomBoardChange);
+const decodeTurn = Schema.decodeUnknownOption(GuestTurnRequest);
 const sam = GuestId.make("guest:sam");
 const alex = GuestId.make("guest:alex");
 
@@ -292,6 +295,106 @@ it.effect("shows a guest's own turns on the share and starts nothing with them",
     const after = yield* orchestrator.getThreadRecords(threadId, []);
     assert.deepEqual(after.thread.guestShare?.turns, []);
     assert.isTrue(Exit.isFailure(yield* Effect.exit(post(sam, "run:late"))));
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("answers a task with the turn of the guest it is for, and no other card", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* setup;
+    for (const [guestId, guestName] of [
+      [sam, "Sam"],
+      [alex, "Alex"],
+    ] as const) {
+      yield* orchestrator.dispatch({
+        type: "thread.guest-share.redeem",
+        commandId: CommandId.make(`redeem:${guestId}`),
+        threadId,
+        shareId,
+        guestId,
+        guestName,
+      });
+    }
+    let commands = 0;
+    const put = (noteId: string, fields: Partial<NotePut> = {}) =>
+      orchestrator.dispatch({
+        type: "thread.guest-board.change",
+        commandId: CommandId.make(`board:${commands++}`),
+        threadId,
+        shareId,
+        author: null,
+        change: { type: "note.put", noteId, text: "Fix login", x: 0, y: 0, ...fields },
+      });
+    const post = (guestId: GuestId, id: string, taskId: string, reply = `Done in ${id}.`) =>
+      orchestrator.dispatch({
+        type: "thread.guest-turn.post",
+        commandId: CommandId.make(`turn:${commands++}`),
+        threadId,
+        shareId,
+        guestId,
+        turn: { id, prompt: "Fix login", reply, taskId },
+      });
+    const notes = Effect.map(
+      orchestrator.getThreadRecords(threadId, ["runs", "messages"]),
+      (records) => ({
+        ...records,
+        notes: new Map(records.thread.guestShare?.board?.notes.map((note) => [note.id, note])),
+      }),
+    );
+    yield* put("task", { kind: "task", assignee: { guestId: sam } });
+    yield* put("open", { kind: "task" });
+    yield* put("note");
+
+    // Alex cannot answer Sam's task, and an id that is no task answers nothing; the turns show.
+    yield* post(alex, "run:alex", "task");
+    yield* post(alex, "run:note", "note");
+    yield* post(alex, "run:gone", "gone");
+    yield* post(sam, "run:sam", "task", `${"a".repeat(ROOM_TASK_ANSWER_MAX_LENGTH)} the rest`);
+    // A task no one has becomes the answering guest's.
+    yield* post(alex, "run:open", "open");
+    const after = yield* notes;
+    assert.lengthOf(after.thread.guestShare?.turns ?? [], 5);
+    assert.isUndefined(after.notes.get("note")?.answer);
+    const task = after.notes.get("task");
+    assert.deepEqual(
+      [task?.done, task?.assignee, task?.answer?.guestId],
+      [true, { guestId: sam }, sam],
+    );
+    assert.equal(task?.answer?.excerpt.length, ROOM_TASK_ANSWER_MAX_LENGTH);
+    assert.isTrue(task?.answer?.excerpt.endsWith("…"));
+    assert.deepEqual(after.notes.get("open")?.answer, {
+      guestId: alex,
+      excerpt: "Done in run:open.",
+      turnId: "run:open",
+    });
+    assert.deepEqual(after.notes.get("open")?.assignee, { guestId: alex });
+    // The turn keeps no task id, and nothing reached the owner's agent.
+    assert.notInclude(JSON.stringify(after.thread.guestShare?.turns), "taskId");
+    assert.lengthOf(after.runs, 0);
+    assert.lengthOf(after.messages, 0);
+
+    // People can untick an answered task, and edit it, and it stays answered.
+    yield* put("task", { text: "Fix login, again", done: false });
+    const reopened = (yield* notes).notes.get("task");
+    assert.deepEqual([reopened?.done, reopened?.answer?.turnId], [undefined, "run:sam"]);
+
+    // A guest's machine names its branch only as git would take it, so the room shows it safely.
+    const withBranch = (branch: string) =>
+      decodeTurn({ id: "run:x", prompt: "", reply: "Done.", code: { branch, synced: true } });
+    assert.isTrue(Option.isSome(withBranch("feature/login-fix")));
+    const unsafe = ["-rf", "a b", "a..b", "x.lock", "$(id)~1", "x".repeat(201)];
+    for (const branch of [...unsafe, `a${String.fromCharCode(0x202e)}b`]) {
+      assert.isTrue(Option.isNone(withBranch(branch)), branch);
+    }
+
+    // A removed guest's answers go with them.
+    yield* orchestrator.dispatch({
+      type: "thread.guest.remove",
+      commandId: CommandId.make("remove-alex"),
+      threadId,
+      guestId: alex,
+    });
+    const removed = (yield* notes).notes.get("open");
+    assert.deepEqual([removed?.answer, removed?.assignee], [undefined, undefined]);
   }).pipe(Effect.provide(layerTest)),
 );
 

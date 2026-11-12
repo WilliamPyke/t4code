@@ -189,6 +189,8 @@ import {
   SharedThreadLeaveInput,
   SharedThreadPreview,
   SharedThreadSource,
+  SharedThreadTakeTaskInput,
+  SharedThreadTakeTaskResult,
 } from "./sharedThread.ts";
 import { PullRequestReviewGuideResult } from "./pullRequestReviewGuide.ts";
 import {
@@ -583,6 +585,7 @@ export const WS_METHODS = {
   sharedThreadJoin: "sharedThread.join",
   sharedThreadLeave: "sharedThread.leave",
   sharedThreadCatchUp: "sharedThread.catchUp",
+  sharedThreadTakeTask: "sharedThread.takeTask",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
 
@@ -2092,6 +2095,12 @@ const WsSharedThreadCatchUpRpc = Rpc.make(WS_METHODS.sharedThreadCatchUp, {
   error: Schema.Union([SharedThreadJoinError, EnvironmentAuthorizationError]),
 });
 
+const WsSharedThreadTakeTaskRpc = Rpc.make(WS_METHODS.sharedThreadTakeTask, {
+  payload: SharedThreadTakeTaskInput,
+  success: SharedThreadTakeTaskResult,
+  error: EnvironmentAuthorizationError,
+});
+
 const WsGuestShareCreateRpc = Rpc.make(WS_METHODS.guestShareCreate, {
   payload: GuestShareCreateInput,
   success: GuestShareCreateResult,
@@ -2156,6 +2165,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSharedThreadJoinRpc,
   WsSharedThreadLeaveRpc,
   WsSharedThreadCatchUpRpc,
+  WsSharedThreadTakeTaskRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

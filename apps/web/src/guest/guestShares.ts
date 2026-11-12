@@ -9,6 +9,7 @@ import {
   type GuestShareView,
   type RoomAgentActivity,
   type RoomAgentsEvent,
+  type RoomCodeState,
   type RoomCursor,
   type RoomCursorsEvent,
   type RoomViewport,
@@ -39,6 +40,10 @@ const JoinedGuestShare = Schema.Struct({
   /** Who shared it, once the owner's server has said. */
   owner: Schema.optional(Schema.String),
   joinedAt: Schema.String,
+  /** Set when joined from a team's page, so the app can join again as the member. */
+  team: Schema.optional(
+    Schema.Struct({ id: Schema.String, environmentId: Schema.String, credential: Schema.String }),
+  ),
 });
 export type JoinedGuestShare = typeof JoinedGuestShare.Type;
 
@@ -97,6 +102,8 @@ interface GuestRoomState {
   readonly online: ReadonlyArray<GuestId>;
   /** The guests' agents running a turn on their own machines now. */
   readonly running: ReadonlyArray<RoomAgentActivity>;
+  /** Where the owner's code is, once their server said. */
+  readonly ownerCode?: RoomCodeState | undefined;
 }
 const EMPTY_ROOM: GuestRoomState = { view: null, online: [], running: [] };
 export const guestRoomAtom = Atom.family((shareId: string) =>
@@ -196,6 +203,7 @@ export const layerGuestShareAccess = Layer.succeed(
           appAtomRegistry.update(guestRoomAtom(shareId), (room) => ({
             ...room,
             running: event.running,
+            ownerCode: event.owner,
           }));
         }
       });

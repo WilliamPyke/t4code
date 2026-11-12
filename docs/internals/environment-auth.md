@@ -112,7 +112,8 @@ stored when it linked ([GuestTeamShares](../../apps/server/src/guest/GuestTeamSh
 no new secret is shared and the relay never holds a guest session. A team share refuses the bare
 invite, keys each guest by user id so a member keeps one guest record, and keeps a removed
 member's id out. The session it issues ends after a day, because only a fresh assertion proves
-the person is still in the team.
+the person is still in the team; the web app asks for one again when a member opens the thread
+after that, and never does for a plain guest link.
 
 A guest's typed name is not an identity. A guest can prove a GitHub account with
 the web redirect flow ([GuestSignIn](../../apps/server/src/guest/GuestSignIn.ts)):

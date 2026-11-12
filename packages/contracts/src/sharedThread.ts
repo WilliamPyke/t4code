@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 
 import {
   CommandId,
+  GuestShareId,
   IsoDateTime,
   NonNegativeInt,
   ProjectId,
@@ -34,6 +35,21 @@ export type SharedThreadPreview = typeof SharedThreadPreview.Type;
 
 export const SharedThreadLeaveInput = Schema.Struct({ threadId: ThreadId });
 export type SharedThreadLeaveInput = typeof SharedThreadLeaveInput.Type;
+
+/**
+ * A task card someone took from a room to their own agent: the room as its link names it, and
+ * the card. The thread joined from that room remembers the card for its next turn.
+ */
+export const SharedThreadTakeTaskInput = Schema.Struct({
+  host: TrimmedNonEmptyString,
+  shareId: GuestShareId,
+  taskId: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+});
+export type SharedThreadTakeTaskInput = typeof SharedThreadTakeTaskInput.Type;
+
+/** The thread joined from that room on this machine, or null when there is none to take it to. */
+export const SharedThreadTakeTaskResult = Schema.Struct({ threadId: Schema.NullOr(ThreadId) });
+export type SharedThreadTakeTaskResult = typeof SharedThreadTakeTaskResult.Type;
 
 export const SharedThreadCatchUpInput = Schema.Struct({ threadId: ThreadId });
 export type SharedThreadCatchUpInput = typeof SharedThreadCatchUpInput.Type;

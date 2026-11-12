@@ -134,6 +134,27 @@ describe("link round trips", () => {
       value: { host: "sam.t3.test", token: "payload.signature" },
     });
     expect(parseJoinLink("?host=sam.t3.test").ok).toBe(false);
+
+    // A task taken to the user's own agent comes along as a draft, without hidden characters.
+    const task = buildJoinLink({
+      host: "sam.t3.test",
+      token: "payload.signature",
+      task: { shareId: "share-1", taskId: "task-1", text: "Fix​ the login" },
+    });
+    const viaApp = promptLinkAppPath(promptLinkDeepLink(promptLinkAppPath(task)!))!;
+    expect(parseJoinLink(new URL(viaApp, "https://app.invalid").search)).toEqual({
+      ok: true,
+      value: {
+        host: "sam.t3.test",
+        token: "payload.signature",
+        task: {
+          shareId: "share-1",
+          taskId: "task-1",
+          prompt: { text: "Fix the login", hiddenCharacters: 1 },
+        },
+      },
+    });
+    expect(parseJoinLink("?host=h&token=t&task=task-1&prompt=Fix").ok).toBe(false);
   });
 
   it("maps app scheme and hosted links to in-app paths, and nothing else", () => {

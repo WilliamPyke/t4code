@@ -1,9 +1,12 @@
 import { useAtomValue } from "@effect/atom-react";
-import type {
-  GuestShareId,
-  RoomBoardChange,
-  ScopedThreadRef,
-  ThreadGuest,
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import {
+  type GuestShareId,
+  type RoomBoardChange,
+  type RoomBoardNote,
+  type ScopedThreadRef,
+  type ThreadGuest,
+  roomCodeStateOf,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactNode } from "react";
@@ -11,6 +14,7 @@ import type { ReactNode } from "react";
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { deriveThreadAgentWorking } from "~/session-logic";
 import {
+  useProject,
   useQuietThreadProjection,
   useThreadShell,
   useThreadVisibleTurnItems,
@@ -18,6 +22,7 @@ import {
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { vcsEnvironment } from "~/state/vcs";
 
 import { SidebarInset } from "../ui/sidebar";
 import { RoomBoard, RoomCursors } from "./RoomBoard";
@@ -118,6 +123,34 @@ export function ThreadRoomBoard({ threadRef }: { readonly threadRef: ScopedThrea
     store.setPrompt(threadRef, appendNoteToDraft(draft, text));
     openThread();
   };
+  const takeTask = (task: RoomBoardNote) => {
+    if (task.assignee !== undefined && task.assignee.guestId === undefined) {
+      return putInDraft(task.text);
+    }
+    void onChange?.({
+      type: "note.put",
+      noteId: task.id,
+      text: task.text,
+      x: task.x,
+      y: task.y,
+      assignee: {},
+    });
+    putInDraft(task.text);
+  };
+  const thread = structure?.thread ?? null;
+  const project = useProject(
+    thread === null ? null : scopeProjectRef(threadRef.environmentId, thread.projectId),
+  );
+  const cwd = thread?.worktreePath ?? project?.workspaceRoot ?? null;
+  const { data: gitStatus } = useEnvironmentQuery(
+    share === null || cwd === null
+      ? null
+      : vcsEnvironment.status({ environmentId: threadRef.environmentId, input: { cwd } }),
+  );
+  const ownerCode =
+    gitStatus === undefined || gitStatus === null || thread === null
+      ? undefined
+      : (roomCodeStateOf(gitStatus, thread.branch) ?? undefined);
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-none">
       <RoomBoard
@@ -157,6 +190,8 @@ export function ThreadRoomBoard({ threadRef }: { readonly threadRef: ScopedThrea
             : undefined
         }
         onUseNote={putInDraft}
+        ownerCode={ownerCode}
+        onTakeTask={takeTask}
       />
     </SidebarInset>
   );

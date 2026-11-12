@@ -30,11 +30,14 @@ import {
   type GuestTurnRequest,
   type GuestAgentActivityRequest,
   GUEST_AGENT_PROMPT_MAX_LENGTH,
+  isBranchSynced,
   MessageId,
   providerAllowsDirectGuestSend,
   repositoryGroupingKeyOf,
   type RoomAgentsEvent,
   type RoomBoardChange,
+  type RoomCodeState,
+  roomCodeStateOf,
   type RoomBoardPoint,
   type RoomBoardViewport,
   type RoomCursorsEvent,
@@ -148,6 +151,8 @@ const CURSOR_TTL_MS = 60_000;
 const VIEW_TTL_MS = 10 * 60_000;
 // How soon an open room stream drops what expired when nothing else changed.
 const ROOM_LIVE_SWEEP_INTERVAL = Duration.seconds(5);
+// How often a guest's stream asks git again where the owner's code is. Git keeps its answer a while.
+const OWNER_CODE_INTERVAL = Duration.seconds(30);
 // The owner's pointer, keyed apart from every guest id.
 const OWNER_CURSOR = "";
 
@@ -161,7 +166,12 @@ interface Expiring {
 interface RoomLive {
   readonly agents: ReadonlyMap<
     GuestId,
-    Expiring & { readonly id: string; readonly prompt: string }
+    Expiring & {
+      readonly id: string;
+      readonly prompt: string;
+      readonly taskId?: string;
+      readonly code?: RoomCodeState;
+    }
   >;
   readonly cursors: ReadonlyMap<string, Expiring & RoomBoardPoint>;
   readonly views: ReadonlyMap<string, Expiring & RoomBoardViewport>;
@@ -1154,7 +1164,12 @@ const make = Effect.gen(function* () {
       type: "agents",
       running: [...room.agents]
         .filter(([, agent]) => agent.until > now)
-        .map(([guestId, agent]) => ({ guestId, prompt: agent.prompt }))
+        .map(([guestId, agent]) => ({
+          guestId,
+          prompt: agent.prompt,
+          ...(agent.taskId === undefined ? {} : { taskId: agent.taskId }),
+          ...(agent.code === undefined ? {} : { code: agent.code }),
+        }))
         .toSorted((left, right) => left.guestId.localeCompare(right.guestId)),
     }));
   /** Everyone's pointers and views but the reader's own. */
@@ -1168,6 +1183,44 @@ const make = Effect.gen(function* () {
             key === OWNER_CURSOR ? entry : { guestId: GuestId.make(key), ...entry },
           );
       return { type: "cursors", cursors: others(room.cursors), views: others(room.views) };
+    });
+
+  /** Where the owner's code is for a shared thread, or null when git cannot say. */
+  const ownerCodeOf = Effect.fn("GuestShareService.ownerCodeOf")(
+    function* (threadId: ThreadId) {
+      const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+      const project = yield* projects.getById(thread.projectId);
+      const cwd = thread.worktreePath ?? Option.getOrUndefined(project)?.workspaceRoot;
+      if (cwd === undefined) return null;
+      return roomCodeStateOf(yield* git.status({ cwd }), thread.branch);
+    },
+    Effect.orElseSucceed(() => null),
+  );
+  /** The room's agents as a guest sees them, with where the owner's code is once git says. */
+  const agentsWithOwnerCode = (shareId: GuestShareId, threadId: ThreadId) =>
+    Stream.suspend(() => {
+      let agents: RoomAgentsEvent | null = null;
+      let owner: RoomCodeState | null = null;
+      const codes = Stream.tick(OWNER_CODE_INTERVAL).pipe(
+        Stream.mapEffect(() => ownerCodeOf(threadId)),
+        Stream.map((code): ReadonlyArray<RoomAgentsEvent> => {
+          if (JSON.stringify(code) === JSON.stringify(owner)) return [];
+          owner = code;
+          return agents === null ? [] : [agents];
+        }),
+      );
+      return Stream.merge(
+        agentsOf(shareId).pipe(
+          Stream.map((event): ReadonlyArray<RoomAgentsEvent> => {
+            agents = event;
+            return [event];
+          }),
+        ),
+        codes,
+      ).pipe(
+        Stream.flattenIterable,
+        Stream.map((event): RoomAgentsEvent => (owner === null ? event : { ...event, owner })),
+      );
     });
 
   /**
@@ -1274,7 +1327,7 @@ const make = Effect.gen(function* () {
           { haltStrategy: "left" },
         ),
         Stream.merge(
-          agentsOf(share.id).pipe(
+          agentsWithOwnerCode(share.id, thread.id).pipe(
             Stream.map((event) => openingRedactor.redact<GuestStreamEvent>(event)),
           ),
           { haltStrategy: "left" },
@@ -1385,7 +1438,7 @@ const make = Effect.gen(function* () {
       return {
         repositoryKey: repositoryGroupingKeyOf(identity),
         branch,
-        synced: status.hasUpstream && status.aheadCount === 0 && !status.hasWorkingTreeChanges,
+        synced: isBranchSynced(status),
       } satisfies SharedThreadCheckout;
     },
     Effect.orElseSucceed(() => null),
@@ -1445,6 +1498,7 @@ const make = Effect.gen(function* () {
                 guestId,
               }),
               expiresAt: share.expiresAt,
+              shareId: share.id,
             },
           }),
     });
@@ -1501,6 +1555,12 @@ const make = Effect.gen(function* () {
   ) {
     const { share, guestId } = yield* authorize(token, "room");
     if (guestId === undefined) return yield* new GuestShareAccessError({ reason: "ended" });
+    // The card shows the agent working only on a task that is the guest's to take.
+    const task = share.board?.notes.find((note) => note.id === request.taskId);
+    const taskId =
+      task?.kind === "task" && (task.assignee === undefined || task.assignee.guestId === guestId)
+        ? task.id
+        : undefined;
     if (!allowActivity(`${share.id}:${guestId}`, DateTime.toEpochMillis(yield* DateTime.now))) {
       return yield* new GuestShareAccessError({ reason: "too_fast" });
     }
@@ -1516,6 +1576,8 @@ const make = Effect.gen(function* () {
       agents: new Map(room.agents).set(guestId, {
         id: request.id,
         prompt,
+        ...(taskId === undefined ? {} : { taskId }),
+        ...(request.code === undefined ? {} : { code: request.code }),
         until: now + AGENT_ACTIVITY_TTL_MS,
       }),
     }));

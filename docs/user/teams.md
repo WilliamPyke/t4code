@@ -26,16 +26,27 @@ linked to T Connect with an account in the team.
 1. Choose **Share with guests** on the thread.
 2. Choose **Share with a team** and pick the team.
 
-The thread is listed on the team's page for 90 days. Members choose **Open** there to join it,
-and see it as [a guest does](./guest-links.md#what-a-guest-sees). Each person's messages still
-wait for your **Send**, and
+The thread is listed on the team's page for 90 days, under its current title. Members choose
+**Open** there to join it, and see it as [a guest does](./guest-links.md#what-a-guest-sees). A
+member's place in a thread lasts a day; opening it after that joins it again for them. Each
+person's messages still wait for your **Send**, and
 [send without asking](./guest-links.md#let-a-guest-send-without-asking) follows the same API key
 rule. The thread header names the team; on web, click it to see who joined, with their pictures.
 
 Sharing with a team replaces a guest link the thread had, and choosing **Make a guest link**
 replaces the team share; T Code asks first if anyone has joined. **Stop sharing**, archiving the
-thread, or unlinking the machine from T Connect ends it for everyone, and stopping or archiving
-also takes it off the team's page.
+thread, or unlinking the machine from T Connect ends it for everyone and takes it off the team's
+page. Turning off **Guest links** on that machine hides its threads from the team until you turn
+them on again.
+
+## The team board
+
+Choose **Board** at the top of the team's page. It has a card for each shared thread, with
+**Open thread**, and one for each member. Add notes, tasks and links, and draw arrows, as on
+[a thread's board](./guest-links.md#see-the-room-as-a-board); a task can be given to any member.
+The board is kept on T Connect, so it is there even while every member's machine is off, and
+changes from others appear within a few seconds. It has no pointers or comments on replies, and
+nothing on it reaches an agent: to use a note, copy it into a message yourself.
 
 ## Remove someone
 

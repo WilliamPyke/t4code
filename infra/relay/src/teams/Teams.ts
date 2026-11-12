@@ -5,13 +5,29 @@ import {
   RELAY_TEAM_MAX_PER_USER,
   RELAY_TEAM_MAX_THREADS,
   RelayTeamRequestErrorReason,
+  teamBoardThreadCard,
   type RelayTeam,
+  type RelayTeamBoardChangeResponse,
+  type RelayTeamBoardResponse,
   type RelayTeamInviteResponse,
   type RelayTeamSummary,
   type RelayTeamThread,
   type RelayTeamThreadRegistrationRequest,
 } from "@t3tools/contracts/relay";
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  GuestId,
+  ThreadId,
+  roomBoardGuestCard,
+  type RoomBoardChange,
+} from "@t3tools/contracts";
+import {
+  EMPTY_ROOM_BOARD,
+  ROOM_BOARD_FULL,
+  applyRoomBoardChange,
+  roomBoardWithCards,
+  type RoomBoardScope,
+} from "@t3tools/shared/roomBoard";
 import { and, asc, desc, eq, gt, inArray, lt, ne, or, sql } from "drizzle-orm";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -19,11 +35,13 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Base64Url from "effect/encoding/Base64Url";
 import * as Layer from "effect/Layer";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import * as RelayDb from "../db.ts";
 import { threeWordName } from "../guestLinks/GuestLinks.ts";
 import {
+  relayTeamBoards,
   relayTeamInvites,
   relayTeamMembers,
   relayTeams,
@@ -32,10 +50,14 @@ import {
 
 /** Per signed-in user: creating teams, making invites, and guessing invite names are counted. */
 export const TEAM_RATE_LIMIT = { limit: 20, periodSeconds: 60 } as const;
+/** Per signed-in user: changes to team boards. A drag or an edit sends one when it ends. */
+export const TEAM_BOARD_RATE_LIMIT = { limit: 120, periodSeconds: 60 } as const;
 
 const NAME_ATTEMPTS = 5;
 const TEAM_ID_BYTES = 16;
 const PROFILE_NAME_MAX_LENGTH = 120;
+// Each attempt reads the newest board, so this many writers can land on it at once.
+const BOARD_WRITE_ATTEMPTS = 8;
 // An invite with less than this left is replaced rather than handed out again.
 const INVITE_REUSE_MIN_REMAINING_MS = 24 * 60 * 60 * 1000;
 
@@ -71,6 +93,12 @@ export class TeamRateLimiter extends Context.Service<
   TeamRateLimiter,
   { readonly allow: (key: string) => Effect.Effect<boolean> }
 >()("t3code-relay/teams/Teams/TeamRateLimiter") {}
+
+/** Per signed-in user. */
+export class TeamBoardRateLimiter extends Context.Service<
+  TeamBoardRateLimiter,
+  { readonly allow: (key: string) => Effect.Effect<boolean> }
+>()("t3code-relay/teams/Teams/TeamBoardRateLimiter") {}
 
 export class Teams extends Context.Service<
   Teams,
@@ -140,6 +168,33 @@ export class Teams extends Context.Service<
       readonly environmentId: string;
       readonly threadId: string;
     }) => Effect.Effect<void, TeamPersistenceError>;
+    readonly renameThread: (input: {
+      readonly environmentId: string;
+      readonly threadId: string;
+      readonly title: string;
+    }) => Effect.Effect<void, TeamPersistenceError>;
+    /** Hides every thread a machine lists while it has guest links off, and shows them again. */
+    readonly setThreadsListed: (input: {
+      readonly environmentId: string;
+      readonly listed: boolean;
+    }) => Effect.Effect<void, TeamPersistenceError>;
+    /** The account unlinked the machine, so the threads it listed as that account are gone. */
+    readonly unlistEnvironment: (input: {
+      readonly userId: string;
+      readonly environmentId: string;
+    }) => Effect.Effect<void, TeamPersistenceError>;
+    /** Members only. The board is null when it has not changed since `since`. */
+    readonly board: (input: {
+      readonly userId: string;
+      readonly teamId: string;
+      readonly since: number | undefined;
+    }) => Effect.Effect<RelayTeamBoardResponse, TeamError>;
+    /** Members only. A change that crosses another member's lands after it. */
+    readonly changeBoard: (input: {
+      readonly userId: string;
+      readonly teamId: string;
+      readonly change: RoomBoardChange;
+    }) => Effect.Effect<RelayTeamBoardChangeResponse, TeamError>;
   }
 >()("t3code-relay/teams/Teams") {}
 
@@ -269,7 +324,11 @@ const make = Effect.gen(function* () {
       })
       .from(relayTeamThreads)
       .where(
-        and(eq(relayTeamThreads.teamId, team.id), gt(relayTeamThreads.expiresAt, yield* nowIso)),
+        and(
+          eq(relayTeamThreads.teamId, team.id),
+          gt(relayTeamThreads.expiresAt, yield* nowIso),
+          eq(relayTeamThreads.hidden, false),
+        ),
       )
       .orderBy(desc(relayTeamThreads.updatedAt));
     return {
@@ -475,6 +534,7 @@ const make = Effect.gen(function* () {
       ownerUserId: owner.userId,
       expiresAt: request.expiresAt,
       updatedAt: now,
+      hidden: false,
     };
     yield* db
       .insert(relayTeamThreads)
@@ -504,6 +564,159 @@ const make = Effect.gen(function* () {
     ),
   );
 
+  const renameThread: Teams["Service"]["renameThread"] = Effect.fn("relay.teams.rename_thread")(
+    function* (input) {
+      yield* db
+        .update(relayTeamThreads)
+        .set({ title: input.title })
+        .where(
+          and(
+            eq(relayTeamThreads.environmentId, input.environmentId),
+            eq(relayTeamThreads.threadId, input.threadId),
+          ),
+        );
+    },
+    Effect.mapError(
+      (cause) => new TeamPersistenceError({ operation: "rename a thread on", cause }),
+    ),
+  );
+
+  const setThreadsListed: Teams["Service"]["setThreadsListed"] = Effect.fn(
+    "relay.teams.set_threads_listed",
+  )(
+    function* (input) {
+      yield* db
+        .update(relayTeamThreads)
+        .set({ hidden: !input.listed })
+        .where(eq(relayTeamThreads.environmentId, input.environmentId));
+    },
+    Effect.mapError((cause) => new TeamPersistenceError({ operation: "list threads on", cause })),
+  );
+
+  const unlistEnvironment: Teams["Service"]["unlistEnvironment"] = Effect.fn(
+    "relay.teams.unlist_environment",
+  )(
+    function* (input) {
+      yield* db
+        .delete(relayTeamThreads)
+        .where(
+          and(
+            eq(relayTeamThreads.environmentId, input.environmentId),
+            eq(relayTeamThreads.ownerUserId, input.userId),
+          ),
+        );
+    },
+    Effect.mapError((cause) => new TeamPersistenceError({ operation: "unlist threads on", cause })),
+  );
+
+  const readBoard = (teamId: string) =>
+    db
+      .select({ board: relayTeamBoards.board, version: relayTeamBoards.version })
+      .from(relayTeamBoards)
+      .where(eq(relayTeamBoards.teamId, teamId))
+      .limit(1)
+      .pipe(Effect.map(([row]) => row ?? null));
+
+  const board: Teams["Service"]["board"] = Effect.fn("relay.teams.board")(function* (input) {
+    // One query: an open board asks every few seconds.
+    const [row] = yield* db
+      .select({ board: relayTeamBoards.board, version: relayTeamBoards.version })
+      .from(relayTeamMembers)
+      .leftJoin(relayTeamBoards, eq(relayTeamBoards.teamId, relayTeamMembers.teamId))
+      .where(
+        and(eq(relayTeamMembers.teamId, input.teamId), eq(relayTeamMembers.userId, input.userId)),
+      )
+      .limit(1);
+    if (row === undefined) return yield* refuse("not_found");
+    const version = row.version ?? 0;
+    if (input.since !== undefined && input.since >= version) return { version, board: null };
+    return { version, board: row.board ?? EMPTY_ROOM_BOARD };
+  }, persistence("read the board of"));
+
+  /** The team's cards: one per member, and one per thread listed on it now. */
+  const boardScope = Effect.fnUntraced(function* (teamId: string) {
+    const members = yield* db
+      .select({ userId: relayTeamMembers.userId })
+      .from(relayTeamMembers)
+      .where(eq(relayTeamMembers.teamId, teamId));
+    const threads = yield* db
+      .select({
+        environmentId: relayTeamThreads.environmentId,
+        threadId: relayTeamThreads.threadId,
+      })
+      .from(relayTeamThreads)
+      .where(
+        and(
+          eq(relayTeamThreads.teamId, teamId),
+          gt(relayTeamThreads.expiresAt, yield* nowIso),
+          eq(relayTeamThreads.hidden, false),
+        ),
+      );
+    const people = new Set(members.map((member) => member.userId));
+    const cards = new Set([
+      ...members.map((member) => roomBoardGuestCard(member.userId)),
+      ...threads.map((thread) => teamBoardThreadCard(thread.environmentId, thread.threadId)),
+    ]);
+    return {
+      hasCard: (cardId) => cards.has(cardId),
+      hasPerson: (guestId) => people.has(guestId),
+    } satisfies RoomBoardScope;
+  });
+
+  const changeBoard: Teams["Service"]["changeBoard"] = Effect.fn("relay.teams.change_board")(
+    function* (input) {
+      const { change } = input;
+      yield* requireMember(input.teamId, input.userId);
+      // Comments pin to one thread's replies, and a task here is always for a named member.
+      if (
+        change.type === "note.put" &&
+        (change.pinnedTo !== undefined ||
+          (change.assignee !== undefined &&
+            change.assignee !== null &&
+            change.assignee.guestId === undefined))
+      ) {
+        return yield* refuse("board_rejected");
+      }
+      const scope = yield* boardScope(input.teamId);
+      const author = GuestId.make(input.userId);
+      for (let attempt = 0; attempt < BOARD_WRITE_ATTEMPTS; attempt++) {
+        const stored = yield* readBoard(input.teamId);
+        const version = stored?.version ?? 0;
+        const current = roomBoardWithCards(stored?.board ?? EMPTY_ROOM_BOARD, scope.hasCard);
+        const applied = applyRoomBoardChange(current, scope, author, change);
+        if (Result.isFailure(applied)) {
+          return yield* refuse(
+            applied.failure === ROOM_BOARD_FULL ? "board_full" : "board_rejected",
+          );
+        }
+        const next = applied.success;
+        if (next === current) return { version, board: current };
+        const updatedAt = yield* nowIso;
+        // Written only over the version it was read at; otherwise read again and apply again.
+        const [written] =
+          stored === null
+            ? yield* db
+                .insert(relayTeamBoards)
+                .values({ teamId: input.teamId, board: next, version: 1, updatedAt })
+                .onConflictDoNothing()
+                .returning({ version: relayTeamBoards.version })
+            : yield* db
+                .update(relayTeamBoards)
+                .set({ board: next, version: version + 1, updatedAt })
+                .where(
+                  and(
+                    eq(relayTeamBoards.teamId, input.teamId),
+                    eq(relayTeamBoards.version, version),
+                  ),
+                )
+                .returning({ version: relayTeamBoards.version });
+        if (written !== undefined) return { version: written.version, board: next };
+      }
+      return yield* refuse("board_busy");
+    },
+    persistence("change the board of"),
+  );
+
   return Teams.of({
     list,
     create,
@@ -517,6 +730,11 @@ const make = Effect.gen(function* () {
     memberForAssertion,
     registerThread,
     unregisterThread,
+    renameThread,
+    setThreadsListed,
+    unlistEnvironment,
+    board,
+    changeBoard,
   });
 });
 
