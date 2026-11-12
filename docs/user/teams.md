@@ -51,9 +51,10 @@ nothing on it reaches an agent: to use a note, copy it into a message yourself.
 ## Remove someone
 
 Removing a member in the thread's guest list keeps that account out of the thread, and everyone
-else stays in. Removing someone from the team stops them opening the team's threads: a member who
-already joined keeps their place for up to a day, until their app has to ask the team again. To
-end their access at once, remove them in the thread as well.
+else stays in. Removing someone from the team, or their leaving it, takes them out of the team's
+threads within about a minute of their next action there; while the thread's machine cannot reach
+T Connect, they stay until it can. If they are added back to the team, they can open the threads
+again. Notes they left on the team board keep their name.
 
 Teams work in the hosted T Code app without a machine of your own: sign in, and your teams and
 their threads are in the sidebar.

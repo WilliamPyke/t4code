@@ -19,6 +19,7 @@ import {
 } from "@t3tools/contracts";
 import {
   ArrowLeftIcon,
+  BotIcon,
   ExternalLinkIcon,
   GitBranchIcon,
   LinkIcon,
@@ -49,6 +50,7 @@ import { useStableCallback } from "~/hooks/useStableCallback";
 
 import { cn, randomUUID } from "~/lib/utils";
 
+import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
@@ -72,6 +74,7 @@ import {
   boardAgents,
   boardCardBox,
   boardChangeOf,
+  boardChangeQueue,
   boardConnector,
   boardConnectorPath,
   boardCursorAt,
@@ -140,6 +143,7 @@ function dragHandlers(
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
 
 const THREAD_DROP = "thread";
+const OWN_AGENT_DROP = "own-agent";
 
 /** The value of a `data-*` attribute on whatever is under a point on the screen. */
 const dataAt = (x: number, y: number, key: "boardDrop" | "boardItem") =>
@@ -194,6 +198,8 @@ interface Linking {
  * with arrows between them. The arrangement and the cards are the room's: the owner and every
  * guest see the same ones.
  */
+const NO_FORMER_PEOPLE: BoardPeople["guests"] = [];
+
 export function RoomBoard({
   title,
   room,
@@ -211,10 +217,14 @@ export function RoomBoard({
   onUseNote,
   ownerCode,
   onTakeTask,
+  onGiveNote,
+  onOpenPullRequest,
+  openingPullRequest,
   cards,
   summary,
   backLabel = "Thread",
   ownerAssignable = true,
+  formerPeople = NO_FORMER_PEOPLE,
 }: {
   readonly title: string;
   /** Null when the thread is not shared, so there is no room to arrange a board for. */
@@ -247,6 +257,14 @@ export function RoomBoard({
    * Absent when they have no agent to take it to.
    */
   readonly onTakeTask?: ((task: RoomBoardNote) => void) | undefined;
+  /**
+   * Opens a note as a draft for this guest's own agent, on their machine. It sends nothing, and
+   * is offered once their agent has a card on the board.
+   */
+  readonly onGiveNote?: ((note: RoomBoardNote) => void) | undefined;
+  /** Opens a pull request for the owner's branch, from their own card. Absent when they cannot. */
+  readonly onOpenPullRequest?: (() => void) | undefined;
+  readonly openingPullRequest?: boolean | undefined;
   /** Replaces the thread's card and the room's people and agents. */
   readonly cards?: ReadonlyArray<BoardCardSpec>;
   /** Said beside the title instead of who joined the room. */
@@ -254,11 +272,14 @@ export function RoomBoard({
   readonly backLabel?: string;
   /** Whether a task can be for the owner, who has no card of their own. */
   readonly ownerAssignable?: boolean;
+  /** People named on a note who can no longer be given one. */
+  readonly formerPeople?: BoardPeople["guests"];
 }) {
   const board = room?.board ?? EMPTY_ROOM_BOARD;
   const [edits, setEdits] = useState(NO_BOARD_EDITS);
   // What each drag or draft has reached, read when it is let go. A render may not have caught up.
   const held = useRef(new Map<string, NonNullable<BoardValue>>());
+  const [queueChange] = useState(boardChangeQueue);
   const [view, setView] = useState(INITIAL_BOARD_VIEW);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const canEdit = room !== null && onChange !== undefined;
@@ -322,9 +343,10 @@ export function RoomBoard({
   }, []);
 
   const guests = room?.guests ?? [];
-  const people: BoardPeople = { guests, viewer, ownerName };
+  const people: BoardPeople = { guests: [...guests, ...formerPeople], viewer, ownerName };
   const guestCards = cards === undefined ? guests : [];
   const agents = cards === undefined ? boardAgents(guests, room?.turns ?? [], running) : [];
+  const canGive = onGiveNote !== undefined && agents.some(({ guest }) => guest.id === viewer);
   const positions = placeBoardCards(
     cards?.map((card) => card.id) ?? [
       ROOM_BOARD_THREAD_CARD,
@@ -341,7 +363,8 @@ export function RoomBoard({
     if (onChange === undefined) return;
     held.current.delete(boardEditKey(target));
     setEdits((current) => putBoardEdit(board, current, target, value, false));
-    void onChange(boardChangeOf(target, value)).then((taken) => {
+    const change = boardChangeOf(target, value);
+    void queueChange(boardEditKey(target), () => onChange(change)).then((taken) => {
       if (!taken) setEdits((current) => dropBoardEdit(current, target, value));
     });
   };
@@ -371,18 +394,47 @@ export function RoomBoard({
     event: PointerEvent<HTMLElement>,
   ) => {
     dragBy({ kind: "note", id: note.id }, note, dx, dy);
-    if (onUseNote !== undefined) setDropTarget(dataAt(event.clientX, event.clientY, "boardDrop"));
+    if (onUseNote !== undefined || canGive) {
+      setDropTarget(dataAt(event.clientX, event.clientY, "boardDrop"));
+    }
   };
-  // Dropped on the thread, a card becomes a draft and goes back where it was.
+  const takeOf = (note: RoomBoardNote) =>
+    onTakeTask === undefined ||
+    note.kind !== "task" ||
+    note.done === true ||
+    note.text.trim() === "" ||
+    (viewer !== null && note.assignee !== undefined && note.assignee.guestId !== viewer)
+      ? undefined
+      : () => onTakeTask(note);
+  const messageOf = (note: RoomBoardNote) =>
+    onUseNote === undefined || boardNoteMessage(note).trim() === ""
+      ? undefined
+      : () => onUseNote(boardNoteMessage(note));
+  const giveOf = (note: RoomBoardNote) =>
+    onGiveNote === undefined ||
+    !canGive ||
+    note.kind === "task" ||
+    boardNoteMessage(note).trim() === ""
+      ? undefined
+      : () => onGiveNote(note);
+  // The owner's own agent works on the thread; a guest's has a card of its own.
+  const handOf = (note: RoomBoardNote, onto: string | null) => {
+    const own = onto === OWN_AGENT_DROP || (onto === THREAD_DROP && viewer === null);
+    const take = own ? takeOf(note) : undefined;
+    if (take !== undefined) return take;
+    if (onto === THREAD_DROP) return messageOf(note);
+    return onto === OWN_AGENT_DROP ? giveOf(note) : undefined;
+  };
+  // Dropped on the thread or on this person's own agent, a card becomes a draft and goes back.
   const dropNote = (note: RoomBoardNote) => {
     const target = { kind: "note", id: note.id } as const;
-    const overThread = dropTarget === THREAD_DROP;
+    const hand = handOf(note, dropTarget);
     setDropTarget(null);
-    if (!overThread || onUseNote === undefined) return letGo(target);
+    if (hand === undefined) return letGo(target);
     const value = held.current.get(boardEditKey(target));
     held.current.delete(boardEditKey(target));
     if (value !== undefined) setEdits((current) => dropBoardEdit(current, target, value));
-    onUseNote(boardNoteMessage(note));
+    hand();
   };
   const writeNote = (note: RoomBoardNote, text: string) =>
     hold({ kind: "note", id: note.id }, { ...noteNow(note), text });
@@ -759,7 +811,11 @@ export function RoomBoard({
               onDrop={letGo}
             >
               <ThreadMessages messages={messages} />
-              <RoomCode code={ownerCode} />
+              <RoomCode
+                code={ownerCode}
+                onOpenPullRequest={onOpenPullRequest}
+                openingPullRequest={openingPullRequest}
+              />
               <div>
                 <Button size="xs" variant="outline" onClick={onOpenThread}>
                   Open thread
@@ -793,17 +849,20 @@ export function RoomBoard({
             const { guest, turns, running: now } = agent;
             const id = agentCardId(guest);
             const latest = turns.at(-1);
+            const own = canGive && guest.id === viewer;
             return (
               <BoardCard
                 key={id}
                 at={positions[id]!}
-                title={`${guest.name}'s agent`}
+                title={guest.id === viewer ? "Your agent" : `${guest.name}'s agent`}
                 kind={
                   now !== undefined
                     ? "working"
                     : `${turns.length} turn${turns.length === 1 ? "" : "s"}`
                 }
                 id={id}
+                dropTarget={own ? OWN_AGENT_DROP : undefined}
+                highlighted={own && dropTarget === OWN_AGENT_DROP}
                 link={link}
                 onMove={dragBy}
                 onDrop={letGo}
@@ -847,19 +906,9 @@ export function RoomBoard({
               onDelete={send}
               onOpenReply={onOpenReply}
               worker={running.find((agent) => agent.taskId === note.id)}
-              onTake={
-                onTakeTask === undefined ||
-                note.kind !== "task" ||
-                note.done === true ||
-                note.text.trim() === ""
-                  ? undefined
-                  : () => onTakeTask(note)
-              }
-              onUse={
-                onUseNote === undefined || boardNoteMessage(note).trim() === ""
-                  ? undefined
-                  : () => onUseNote(boardNoteMessage(note))
-              }
+              onTake={takeOf(note)}
+              onUse={messageOf(note)}
+              onGive={giveOf(note)}
             />
           ))}
           {edges.map((edge) => {
@@ -978,6 +1027,7 @@ function BoardNote({
   worker,
   onTake,
   onUse,
+  onGive,
 }: {
   readonly note: RoomBoardNote;
   readonly people: BoardPeople;
@@ -1003,6 +1053,8 @@ function BoardNote({
   readonly worker: RoomAgentActivity | undefined;
   readonly onTake: (() => void) | undefined;
   readonly onUse: (() => void) | undefined;
+  /** Opens the note as a draft for this guest's own agent. */
+  readonly onGive: (() => void) | undefined;
 }) {
   const target = { kind: "note", id: note.id } as const;
   const author = boardPersonName(people, note.guestId);
@@ -1059,6 +1111,24 @@ function BoardNote({
               <MessageSquareShareIcon className="size-3.5" />
             </TooltipTrigger>
             <TooltipPopup side="top">Use as message</TooltipPopup>
+          </Tooltip>
+        )}
+        {onGive === undefined ? null : (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label="Give to my agent"
+                  className="grid size-6 place-items-center rounded-sm opacity-60 hover:opacity-100"
+                  onPointerDown={stopPointer}
+                  onClick={onGive}
+                />
+              }
+            >
+              <BotIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">Give to my agent, as a draft</TooltipPopup>
           </Tooltip>
         )}
         {canEdit ? (
@@ -1292,10 +1362,20 @@ function BoardCard({
 }
 
 /** Someone's branch and whether it is pushed, with how to get it and its pull request. */
-function RoomCode({ code }: { readonly code: RoomCodeState | undefined }) {
+function RoomCode({
+  code,
+  onOpenPullRequest,
+  openingPullRequest = false,
+}: {
+  readonly code: RoomCodeState | undefined;
+  /** Offered on the viewer's own card, for a branch with no pull request yet. */
+  readonly onOpenPullRequest?: (() => void) | undefined;
+  readonly openingPullRequest?: boolean | undefined;
+}) {
   const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "fetch command" });
   if (code === undefined) return null;
   const command = code.synced ? roomFetchCommand(code.branch) : null;
+  const openPullRequest = code.pullRequest === undefined ? onOpenPullRequest : undefined;
   return (
     <div className="flex flex-col gap-1.5">
       <p className="flex min-w-0 items-center gap-1.5 text-2xs text-muted-foreground">
@@ -1303,8 +1383,22 @@ function RoomCode({ code }: { readonly code: RoomCodeState | undefined }) {
         <span className="min-w-0 truncate font-mono">{code.branch}</span>
         <span className="shrink-0">· {roomCodeStatus(code)}</span>
       </p>
-      {command === null && code.pullRequest === undefined ? null : (
+      {command === null &&
+      code.pullRequest === undefined &&
+      openPullRequest === undefined ? null : (
         <div className="flex flex-wrap gap-1">
+          {openPullRequest === undefined ? null : (
+            <Button
+              size="micro"
+              variant="outline"
+              disabled={openingPullRequest}
+              onPointerDown={stopPointer}
+              onClick={openPullRequest}
+            >
+              <PullRequestGlyph.pullRequest />
+              {openingPullRequest ? "Opening pull request..." : "Open pull request"}
+            </Button>
+          )}
           {command === null ? null : (
             <Button
               size="micro"

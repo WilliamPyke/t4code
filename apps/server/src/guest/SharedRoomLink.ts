@@ -13,7 +13,9 @@ import {
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
+  ROOM_TASK_CONTEXT_KIND,
   ROOM_UPDATES_MAX_CHARS,
+  RoomTaskContextPayload,
   type RoomUpdate,
   RoomUpdates,
   roomCodeStateOf,
@@ -52,6 +54,7 @@ const SETTLED_RUN = new Set(["completed", "interrupted", "failed", "cancelled", 
 // Well over the largest catch-up an honest room sends, so a declared size past it is refused unread.
 const MAX_UPDATES_BYTES = 512 * 1024;
 const decodeUpdates = Schema.decodeUnknownEffect(Schema.toCodecJson(RoomUpdates));
+const decodeRoomTask = Schema.decodeUnknownOption(RoomTaskContextPayload);
 
 /** A room's update as this machine keeps it: no characters nobody can see, a one-line name. */
 const sanitizeUpdate = (update: RoomUpdate): ReadonlyArray<RoomUpdate> => {
@@ -124,6 +127,25 @@ export function guestTurnOf(
   };
 }
 
+/**
+ * The task card of this share that the owner took to their agent with one of a run's messages.
+ * Only the owner's own composer attaches one; a guest's message reaches the agent with none.
+ */
+function roomTaskOfRun(
+  items: ReadonlyArray<OrchestrationV2TurnItem>,
+  shareId: GuestShareId,
+): string | undefined {
+  for (const item of items) {
+    if (item.type !== "user_message") continue;
+    for (const record of item.context?.records ?? []) {
+      if (record.kind !== ROOM_TASK_CONTEXT_KIND || !("payload" in record)) continue;
+      const task = Option.getOrUndefined(decodeRoomTask(record.payload));
+      if (task?.shareId === shareId) return task.taskId;
+    }
+  }
+  return undefined;
+}
+
 /** The start of a run's prompt, as the room shows it while the run goes on. */
 function runPromptOf(items: ReadonlyArray<OrchestrationV2TurnItem>): string {
   const prompt =
@@ -134,10 +156,10 @@ function runPromptOf(items: ReadonlyArray<OrchestrationV2TurnItem>): string {
 }
 
 /**
- * Keeps a thread joined from someone's room connected to it: the room sees each turn here start,
- * with its prompt, and gets it as text once it finishes. The room never runs it or hands it to
- * the owner's agent. What the room said comes back only as text the user attaches to a message
- * of their own: nothing from the room starts a turn here.
+ * Keeps a thread joined from someone's room connected to it: the room sees each turn start and
+ * gets it as text once it finishes, and never runs it. What the room said comes back only as text
+ * the user attaches to a message of their own. On the owner's side, a finished turn of a thread
+ * they share answers the task card they sent it for.
  */
 export class SharedRoomLink extends Context.Service<
   SharedRoomLink,
@@ -465,13 +487,41 @@ const make = Effect.gen(function* () {
     ),
   );
 
+  /** Marks the task the owner sent a finished run for answered on the board of their room. */
+  const answerOwnTask = Effect.fn("SharedRoomLink.answerOwnTask")(
+    function* (threadId: ThreadId, runId: RunId) {
+      const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+      const share = thread.guestShare ?? null;
+      if (share === null || share.board === undefined) return;
+      const { turnItems } = yield* orchestrator.getThreadRecords(threadId, ["turnItems"], {
+        turnItemRunIds: [runId],
+      });
+      const taskId = roomTaskOfRun(turnItems, share.id);
+      const turn = taskId === undefined ? null : guestTurnOf(runId, turnItems);
+      if (taskId === undefined || turn === null) return;
+      yield* orchestrator.dispatch({
+        type: "thread.room-task.answer",
+        commandId: CommandId.make(`server:room-task:${runId}`),
+        threadId,
+        shareId: share.id,
+        taskId,
+        turn: { id: turn.id, reply: turn.reply },
+      });
+    },
+    Effect.catch((cause) => Effect.logWarning("Could not answer a task on the board", { cause })),
+  );
+
   type Job = {
-    readonly kind: "turn" | GuestAgentActivityRequest["state"];
+    readonly kind: "turn" | "answer" | GuestAgentActivityRequest["state"];
     readonly threadId: ThreadId;
     readonly runId: RunId;
   };
   const worker = yield* makeDrainableWorker(({ kind, threadId, runId }: Job) =>
-    kind === "turn" ? publishRun(threadId, runId) : publishActivity(threadId, runId, kind),
+    kind === "turn"
+      ? publishRun(threadId, runId)
+      : kind === "answer"
+        ? answerOwnTask(threadId, runId)
+        : publishActivity(threadId, runId, kind),
   );
   // Untraced: it sees every domain event of every thread, and most do nothing here.
   const onEvent = Effect.fnUntraced(function* (event: OrchestrationV2DomainEvent) {
@@ -480,7 +530,10 @@ const make = Effect.gen(function* () {
     if (event.type === "run.updated") {
       const { id: runId, status } = event.payload;
       if (SETTLED_RUN.has(status)) {
-        if (status === "completed") yield* worker.enqueue({ kind: "turn", threadId, runId });
+        if (status === "completed") {
+          yield* worker.enqueue({ kind: "turn", threadId, runId });
+          yield* worker.enqueue({ kind: "answer", threadId, runId });
+        }
         // After the turn, so a turn the room took has already cleared the run there.
         return yield* worker.enqueue({ kind: "idle", threadId, runId });
       }

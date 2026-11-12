@@ -76,8 +76,9 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
 
   const openThread = (environmentId: EnvironmentId, threadId: ThreadId) => {
     if (task !== undefined) {
+      // A note from the board comes the same way, and answers nothing in the room.
       placeLinkedPrompt(scopeThreadRef(environmentId, threadId), task.prompt, [
-        "Your agent's reply answers the task in the room.",
+        "If this is a task card, your agent's reply answers it in the room.",
       ]);
     }
     void navigate({
@@ -206,8 +207,8 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
         </JoinPage>
       ) : (
         <JoinPage
-          title="Take this task to your agent?"
-          description={`"${task.prompt.text}" goes into your thread from this room as a draft, after you join it if you have not. Nothing is sent until you send it, and your agent's reply then answers the task in the room.`}
+          title="Take this to your agent?"
+          description={`"${task.prompt.text}" goes into your thread from this room as a draft, after you join it if you have not. Nothing is sent until you send it. If it is a task card, your agent's reply then answers it in the room.`}
         >
           <Button size="sm" onClick={() => void takeTaskToJoinedThread()}>
             Continue

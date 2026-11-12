@@ -47,6 +47,7 @@ export type GuestShareCommand = Extract<
       | "thread.guest.remove"
       | "thread.guest-turn.post"
       | "thread.guest-board.change"
+      | "thread.room-task.answer"
       | "thread.room-link.set";
   }
 >;
@@ -167,24 +168,30 @@ function boardWithoutGuest(board: RoomBoard, guestId: GuestId): RoomBoard {
 }
 
 /**
- * The board with a task marked done and answered by this guest's agent. Only a task that is no
- * one's or already this guest's takes it; any other id leaves the board as it was.
+ * The board with a task marked done and answered by this person's agent: a guest's, or the
+ * owner's when `guestId` is undefined. Only a task that is no one's or already this person's
+ * takes it; any other id, or the same turn again, leaves the board as it was.
  */
 function boardWithTaskAnswered(
   board: RoomBoard,
   taskId: string,
-  guestId: GuestId,
+  guestId: GuestId | undefined,
   turn: { readonly id: string; readonly reply: string },
 ): RoomBoard {
   const task = board.notes.find((note) => note.id === taskId);
-  if (task?.kind !== "task" || (task.assignee !== undefined && task.assignee.guestId !== guestId)) {
+  if (
+    task?.kind !== "task" ||
+    (task.assignee !== undefined && task.assignee.guestId !== guestId) ||
+    (task.answer?.turnId === turn.id && task.answer.guestId === guestId)
+  ) {
     return board;
   }
+  const person = guestId === undefined ? {} : { guestId };
   const answered: RoomBoardNote = {
     ...task,
     done: true,
-    assignee: { guestId },
-    answer: { guestId, excerpt: roomTaskAnswerExcerpt(turn.reply), turnId: turn.id },
+    assignee: person,
+    answer: { ...person, excerpt: roomTaskAnswerExcerpt(turn.reply), turnId: turn.id },
   };
   return { ...board, notes: board.notes.map((note) => (note === task ? answered : note)) };
 }
@@ -371,15 +378,18 @@ export function decideGuestShareCommand(input: {
       if (share === null || share.guests?.some((guest) => guest.id === command.guestId) !== true) {
         return Result.fail("This guest is not on the link.");
       }
-      // A member is known by account, so only they are kept out; anyone else could rejoin under
-      // another name, so the link stops letting new people in.
+      // A member is known by account, so only they are kept out, and not when they left the team,
+      // which keeps them out until they are back in it; anyone else could rejoin under another
+      // name, so the link stops letting new people in.
       const removedMember = share.guests.find((guest) => guest.id === command.guestId)?.member;
       // Their waiting messages go with them; the ones the owner sent are the thread's now.
       return withShare({
         ...share,
         ...(removedMember === undefined
           ? { joinsClosed: true }
-          : { removedMembers: [...(share.removedMembers ?? []), removedMember.userId] }),
+          : command.membershipEnded === true
+            ? {}
+            : { removedMembers: [...(share.removedMembers ?? []), removedMember.userId] }),
         guests: share.guests.filter((guest) => guest.id !== command.guestId),
         messages: share.messages.filter(
           (message) => message.guestId !== command.guestId || message.status === "sent",
@@ -440,6 +450,16 @@ export function decideGuestShareCommand(input: {
         ].slice(-GUEST_TURN_LIMIT),
         ...(board === undefined ? {} : { board }),
       });
+    }
+    // The owner's turn already ran; this only shows on the board which task it answered.
+    case "thread.room-task.answer": {
+      if (share === null || share.id !== command.shareId || share.board === undefined) {
+        return Result.succeed(thread);
+      }
+      const board = boardWithTaskAnswered(share.board, command.taskId, undefined, command.turn);
+      return Result.succeed(
+        board === share.board ? thread : { ...thread, guestShare: { ...share, board } },
+      );
     }
     case "thread.room-link.set":
       return (thread.roomLink ?? null) === null && command.roomLink === null

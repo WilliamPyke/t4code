@@ -109,7 +109,10 @@ const layerLinkNames = Layer.mock(GuestLinkNames.GuestLinkNames)({
 // The relay's side of team shares. A fake assertion is `member:<team>:<user>:<name>`; the real
 // signature check is GuestTeamShares' own test.
 const teamListings = Ref.makeUnsafe<ReadonlyMap<string, string>>(new Map());
+// The accounts the relay says have left their team.
+const formerMembers = Ref.makeUnsafe<ReadonlySet<string>>(new Set());
 const layerTeamShares = Layer.mock(GuestTeamShares.GuestTeamShares)({
+  isMember: (_teamId, userId) => Effect.map(Ref.get(formerMembers), (gone) => !gone.has(userId)),
   register: (input) =>
     Ref.update(teamListings, (listed) => new Map(listed).set(input.threadId, input.teamId)).pipe(
       Effect.as(input.teamId === "team-core" ? "Core" : null),
@@ -2276,4 +2279,45 @@ it.effect("refuses a team share the relay would not list", () =>
     const failed = yield* Effect.flip(guestShares.create({ threadId, teamId: "team-elsewhere" }));
     assert.equal(failed.reason, "team_unavailable");
   }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect(
+  "removes a member who left the team at their next request, and lets them back later",
+  () =>
+    Effect.gen(function* () {
+      yield* Ref.set(formerMembers, new Set());
+      const { orchestrator, guestShares } = yield* shareThread;
+      const { url } = yield* guestShares.create({ threadId, teamId: "team-core" });
+      const credential = url.slice(url.indexOf("#") + 1);
+      const join = (userId: string, name: string) =>
+        guestShares.redeem({
+          credential,
+          name,
+          memberAssertion: `member:team-core:${userId}:${name}`,
+        });
+      const share = orchestrator
+        .getThreadRecords(threadId, [])
+        .pipe(Effect.map(({ thread }) => thread.guestShare!));
+      const ann = yield* join("u-ann", "Ann");
+      const bo = yield* join("u-bo", "Bo");
+
+      yield* Ref.set(formerMembers, new Set(["u-ann"]));
+      assert.equal((yield* Effect.flip(guestShares.check(ann.token))).reason, "inactive");
+      const after = yield* share;
+      assert.deepEqual(
+        after.guests?.map((guest) => guest.name),
+        ["Bo"],
+      );
+      // Only the team keeps them out now, so rejoining needs no word from the owner.
+      assert.isUndefined(after.removedMembers);
+      assert.isTrue(Exit.isSuccess(yield* Effect.exit(guestShares.check(bo.token))));
+
+      yield* Ref.set(formerMembers, new Set());
+      const back = yield* join("u-ann", "Ann");
+      assert.isTrue(Exit.isSuccess(yield* Effect.exit(guestShares.check(back.token))));
+      assert.deepEqual(
+        (yield* share).guests?.map((guest) => guest.name),
+        ["Bo", "Ann"],
+      );
+    }).pipe(Effect.provide(layerTest)),
 );

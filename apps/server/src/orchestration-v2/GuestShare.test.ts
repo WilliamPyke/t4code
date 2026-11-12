@@ -340,9 +340,19 @@ it.effect("answers a task with the turn of the guest it is for, and no other car
         notes: new Map(records.thread.guestShare?.board?.notes.map((note) => [note.id, note])),
       }),
     );
+    const answer = (taskId: string, id: string, share = shareId) =>
+      orchestrator.dispatch({
+        type: "thread.room-task.answer",
+        commandId: CommandId.make(`answer:${commands++}`),
+        threadId,
+        shareId: share,
+        taskId,
+        turn: { id, reply: `Owner did ${id}.` },
+      });
     yield* put("task", { kind: "task", assignee: { guestId: sam } });
     yield* put("open", { kind: "task" });
     yield* put("note");
+    yield* put("mine", { kind: "task", assignee: {} });
 
     // Alex cannot answer Sam's task, and an id that is no task answers nothing; the turns show.
     yield* post(alex, "run:alex", "task");
@@ -351,7 +361,23 @@ it.effect("answers a task with the turn of the guest it is for, and no other car
     yield* post(sam, "run:sam", "task", `${"a".repeat(ROOM_TASK_ANSWER_MAX_LENGTH)} the rest`);
     // A task no one has becomes the answering guest's.
     yield* post(alex, "run:open", "open");
+    // The owner's own turn answers only a task that is theirs or no one's, on this share.
+    yield* answer("task", "run:owner-sam");
+    yield* answer("note", "run:owner-note");
+    yield* answer("mine", "run:owner-old", GuestShareId.make("share:old"));
+    yield* answer("mine", "run:owner");
+    yield* answer("mine", "run:owner");
     const after = yield* notes;
+    assert.deepEqual(after.notes.get("mine"), {
+      id: "mine",
+      text: "Fix login",
+      x: 0,
+      y: 0,
+      kind: "task",
+      done: true,
+      assignee: {},
+      answer: { excerpt: "Owner did run:owner.", turnId: "run:owner" },
+    });
     assert.lengthOf(after.thread.guestShare?.turns ?? [], 5);
     assert.isUndefined(after.notes.get("note")?.answer);
     const task = after.notes.get("task");

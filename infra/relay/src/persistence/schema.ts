@@ -291,6 +291,8 @@ export const relayTeamBoards = pgTable("relay_team_boards", {
     .primaryKey()
     .references(() => relayTeams.id, { onDelete: "cascade" }),
   board: jsonb("board").$type<RoomBoard>().notNull(),
+  /** Each person the notes name, by user id, so people who left keep their name on them. */
+  names: jsonb("names").$type<Readonly<Record<string, string>>>().notNull().default({}),
   version: integer("version").notNull(),
   updatedAt: varchar("updated_at", { length: 64 }).notNull(),
 });

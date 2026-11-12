@@ -92,6 +92,7 @@ import {
   EMPTY_ROOM_BOARD,
   appendNoteToDraft,
   boardMessages,
+  boardNoteMessage,
 } from "../room/roomBoard.logic";
 import { Button } from "../ui/button";
 import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
@@ -294,6 +295,11 @@ function GuestThreadSession({
       }
     : undefined;
   const guestId = view.guestId;
+  const reportOpenFailure = (error: string | null) => {
+    if (error !== null) {
+      toastManager.add({ type: "error", title: "Could not open your T Code", description: error });
+    }
+  };
   // The task becomes this guest's, and a draft in their own T Code; neither sends anything.
   const takeTask = (task: RoomBoardNote) => {
     const opened = openOnMyMachine(endpoint, share.host, {
@@ -311,16 +317,15 @@ function GuestThreadSession({
         assignee: { guestId },
       });
     }
-    void opened.then((error) => {
-      if (error !== null) {
-        toastManager.add({
-          type: "error",
-          title: "Could not open your T Code",
-          description: error,
-        });
-      }
-    });
+    void opened.then(reportOpenFailure);
   };
+  // The same draft a task makes. The room answers only a task card, so a note answers nothing.
+  const giveNote = (note: RoomBoardNote) =>
+    void openOnMyMachine(endpoint, share.host, {
+      shareId: share.shareId,
+      taskId: note.id,
+      text: boardNoteMessage(note),
+    }).then(reportOpenFailure);
   return (
     <>
       {/* Hidden, not unmounted, so the board does not cost the guest their draft or place. */}
@@ -356,6 +361,7 @@ function GuestThreadSession({
           running={running}
           ownerCode={ownerCode}
           onTakeTask={takeTask}
+          onGiveNote={giveNote}
           viewer={guestId}
           ownerName={view.ownerName}
           cursorLayer={

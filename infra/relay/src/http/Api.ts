@@ -525,6 +525,7 @@ export const layerTeamsApi = HttpApiBuilder.group(
     const profiles = yield* TeamProfiles.TeamProfiles;
     const rateLimiter = yield* Teams.TeamRateLimiter;
     const boardRateLimiter = yield* Teams.TeamBoardRateLimiter;
+    const boardReadRateLimiter = yield* Teams.TeamBoardReadRateLimiter;
     const mint = yield* CloudMintSigner.CloudMintSigner;
     const config = yield* RelayConfiguration.RelayConfiguration;
     const random = yield* SecureRandom.SecureRandom;
@@ -662,6 +663,9 @@ export const layerTeamsApi = HttpApiBuilder.group(
         "getTeamBoard",
         Effect.fn("relay.api.teams.getBoard")(function* ({ params, query }) {
           const { userId } = yield* RelayClientPrincipal;
+          if (!(yield* boardReadRateLimiter.allow(userId))) {
+            return yield* new RelayRateLimitedError({ code: "rate_limited" });
+          }
           return yield* teams.board({ userId, teamId: params.teamId, since: query.since });
         }, Effect.catchTags(teamErrorCases)),
       )
@@ -1723,6 +1727,27 @@ export const layerServerApi = HttpApiBuilder.group(
             return { ok: true };
           },
           Effect.catchTags({ TeamPersistenceError: teamErrorCases.TeamPersistenceError }),
+          mapRelayCommonApiErrors("not_authorized"),
+        ),
+      )
+      .handle(
+        "getTeamMemberIds",
+        Effect.fn("relay.api.server.getTeamMemberIds")(
+          function* ({ params }) {
+            yield* requireOwnEnvironment(params.environmentId);
+            const principal = yield* RelayEnvironmentPrincipal;
+            const linked = yield* environmentLinks.findActiveManagedForEnvironment({
+              environmentId: params.environmentId,
+              environmentPublicKey: principal.environmentPublicKey,
+            });
+            const userIds = yield* teams.memberIdsForEnvironment({
+              environmentId: params.environmentId,
+              teamId: params.teamId,
+              linkedUserIds: linked.map((link) => link.userId),
+            });
+            return { userIds };
+          },
+          Effect.catchTags(teamErrorCases),
           mapRelayCommonApiErrors("not_authorized"),
         ),
       )

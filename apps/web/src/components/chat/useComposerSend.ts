@@ -121,6 +121,7 @@ import {
   prepareTurnAttachments,
   restoreComposerDraft,
 } from "./chatViewSend";
+import { readRoomTaskDraft, takeRoomTaskToDraft, withRoomTaskContext } from "./roomTaskDraft";
 import type {
   EnvironmentProject,
   EnvironmentThreadShell,
@@ -724,6 +725,9 @@ export function useComposerSend(input: ComposerSendInput) {
       return;
     }
     const threadIdForSend = activeThread.id;
+    const roomTaskAtSend = isServerThread
+      ? readRoomTaskDraft(scopeThreadRef(activeThread.environmentId, threadIdForSend))
+      : undefined;
     const sendSnapshot = snapshotComposerSend({
       prompt: promptForSend,
       images: composerImages,
@@ -1248,8 +1252,11 @@ export function useComposerSend(input: ComposerSendInput) {
             attachments: turnAttachmentsResult.value,
             ...withMessageContext({
               text: outgoingMessageText,
-              context: buildOutgoingMessageContext(
-                boundAttachmentIds(turnAttachmentsResult.value, composerAttachmentsSnapshot),
+              context: withRoomTaskContext(
+                buildOutgoingMessageContext(
+                  boundAttachmentIds(turnAttachmentsResult.value, composerAttachmentsSnapshot),
+                ),
+                roomTaskAtSend,
               ),
             }),
           },
@@ -1358,6 +1365,7 @@ export function useComposerSend(input: ComposerSendInput) {
         // The restored draft clones its images, so the sent copies are no longer used.
         optimisticBlobPreviews.release(optimisticMessage);
         const retryComposerImages = restoreComposerDraft(composerDraftTarget, sendSnapshot);
+        if (roomTaskAtSend !== undefined) takeRoomTaskToDraft(roomTaskAtSend);
         if (currentRouteThreadKeyRef.current === routeThreadKey) {
           promptRef.current = messageTextForSend;
           composerImagesRef.current = retryComposerImages;

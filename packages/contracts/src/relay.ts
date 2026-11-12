@@ -1355,6 +1355,10 @@ export const RelayTeamThreadRegistrationResponse = Schema.Struct({ teamName: Sch
 export const RelayTeamThreadTitleRequest = Schema.Struct({ title: Schema.String });
 /** Hides or shows every thread a machine lists, as it turns guest links off or on. */
 export const RelayTeamThreadsListedRequest = Schema.Struct({ listed: Schema.Boolean });
+/** The accounts in a team now, for a machine that lists a thread on it. */
+export const RelayTeamMemberIdsResponse = Schema.Struct({
+  userIds: Schema.Array(TrimmedNonEmptyString),
+});
 
 /**
  * A team's one board, kept on the relay so it works while every member's machine is off. It has a
@@ -1369,16 +1373,23 @@ const RelayTeamBoardVersion = NonNegativeInt;
 export const RelayTeamBoardQuery = Schema.Struct({
   since: Schema.optionalKey(Schema.FiniteFromString.check(Schema.isInt())),
 });
+/**
+ * The name of each person the board's notes name, by user id, as the team last knew it. It keeps
+ * the names of people who have since left. Absent from an older relay.
+ */
+const RelayTeamBoardNames = Schema.optionalKey(Schema.Record(Schema.String, Schema.String));
 export const RelayTeamBoardResponse = Schema.Struct({
   version: RelayTeamBoardVersion,
   /** Null when the board has not changed since the version the reader asked after. */
   board: Schema.NullOr(RoomBoard),
+  names: RelayTeamBoardNames,
 });
 export type RelayTeamBoardResponse = typeof RelayTeamBoardResponse.Type;
 export const RelayTeamBoardChangeRequest = Schema.Struct({ change: RoomBoardChange });
 export const RelayTeamBoardChangeResponse = Schema.Struct({
   version: RelayTeamBoardVersion,
   board: RoomBoard,
+  names: RelayTeamBoardNames,
 });
 export type RelayTeamBoardChangeResponse = typeof RelayTeamBoardChangeResponse.Type;
 
@@ -1596,6 +1607,15 @@ const RelayServerGroup = HttpApiGroup.make("server")
         error: RelayAuthAndInternalErrors,
       },
     ).annotate(OpenApi.Summary, "Hide or show every thread this machine lists on teams"),
+    HttpApiEndpoint.get(
+      "getTeamMemberIds",
+      "/v1/environments/:environmentId/teams/:teamId/member-ids",
+      {
+        params: Schema.Struct({ environmentId: EnvironmentId, teamId: RelayTeamId }),
+        success: RelayTeamMemberIdsResponse,
+        error: [...RelayAuthAndInternalErrors, RelayTeamRequestError],
+      },
+    ).annotate(OpenApi.Summary, "List who is in a team this machine lists a thread on"),
     HttpApiEndpoint.post("wakeHeldHooks", "/v1/environments/:environmentId/hooks/wake", {
       params: Schema.Struct({ environmentId: EnvironmentId }),
       success: RelayWakeHeldHooksResponse,

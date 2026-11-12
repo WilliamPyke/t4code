@@ -578,6 +578,24 @@ const make = Effect.gen(function* () {
     ) {
       return yield* inactive;
     }
+    // A member who left the team, or was removed from it, goes as if the owner removed them.
+    const guest = share.guests?.find((joined) => joined.id === claims.value.guestId);
+    if (
+      share.team !== undefined &&
+      guest?.member !== undefined &&
+      !(yield* teamShares.isMember(share.team.id, guest.member.userId))
+    ) {
+      yield* orchestrator
+        .dispatch({
+          type: "thread.guest.remove",
+          commandId: yield* commandId("membership-ended"),
+          threadId: thread.id,
+          guestId: guest.id,
+          membershipEnded: true,
+        })
+        .pipe(Effect.ignore);
+      return yield* kind === "room" ? new GuestShareAccessError({ reason: "ended" }) : inactive;
+    }
     return { thread, share, guestId: claims.value.guestId };
   });
 
@@ -707,8 +725,8 @@ const make = Effect.gen(function* () {
 
   /**
    * Joins a team share as the member an assertion names. The same member always gets the same
-   * guest, under their account's name, and the session ends a day later, so a member removed
-   * from the team stops getting in once their app has to ask the team again.
+   * guest, under their account's name. The session ends a day later, or once the relay says they
+   * are no longer in the team.
    */
   const redeemAsMember = Effect.fn("GuestShareService.redeemAsMember")(function* (
     threadId: ThreadId,

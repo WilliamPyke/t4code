@@ -1,6 +1,10 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import {
   type GuestShareId,
   type RoomBoardChange,
   type RoomBoardNote,
@@ -9,10 +13,12 @@ import {
   roomCodeStateOf,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
+import { randomUUID } from "~/lib/utils";
 import { deriveThreadAgentWorking } from "~/session-logic";
+import { useGitStackedAction, useSourceControlActionRunning } from "~/state/sourceControlActions";
 import {
   useProject,
   useQuietThreadProjection,
@@ -24,7 +30,10 @@ import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { vcsEnvironment } from "~/state/vcs";
 
+import { takeRoomTaskToDraft } from "../chat/roomTaskDraft";
+import { resolveQuickAction } from "../GitActionsControl.logic";
 import { SidebarInset } from "../ui/sidebar";
+import { toastManager } from "../ui/toast";
 import { RoomBoard, RoomCursors } from "./RoomBoard";
 import { RoomReplyProvider, revealRoomReply } from "./RoomReplyComments";
 import {
@@ -35,6 +44,7 @@ import {
 } from "./roomBoard.logic";
 
 const NO_GUESTS: ReadonlyArray<ThreadGuest> = [];
+const GIT_ACTIONS = ["runStackedAction", "pull", "publishRepository"] as const;
 
 /** The share of a thread its owner reads, and how they change its board when they may. */
 function useOwnerRoom(threadRef: ScopedThreadRef | null) {
@@ -123,19 +133,21 @@ export function ThreadRoomBoard({ threadRef }: { readonly threadRef: ScopedThrea
     store.setPrompt(threadRef, appendNoteToDraft(draft, text));
     openThread();
   };
+  // The task becomes the owner's, and a draft whose send answers it once the turn finishes.
   const takeTask = (task: RoomBoardNote) => {
-    if (task.assignee !== undefined && task.assignee.guestId === undefined) {
-      return putInDraft(task.text);
+    if (share === null) return;
+    if (task.assignee === undefined || task.assignee.guestId !== undefined) {
+      void onChange?.({
+        type: "note.put",
+        noteId: task.id,
+        text: task.text,
+        x: task.x,
+        y: task.y,
+        assignee: {},
+      });
     }
-    void onChange?.({
-      type: "note.put",
-      noteId: task.id,
-      text: task.text,
-      x: task.x,
-      y: task.y,
-      assignee: {},
-    });
     putInDraft(task.text);
+    takeRoomTaskToDraft({ threadRef, shareId: share.id, taskId: task.id, text: task.text });
   };
   const thread = structure?.thread ?? null;
   const project = useProject(
@@ -151,6 +163,35 @@ export function ThreadRoomBoard({ threadRef }: { readonly threadRef: ScopedThrea
     gitStatus === undefined || gitStatus === null || thread === null
       ? undefined
       : (roomCodeStateOf(gitStatus, thread.branch) ?? undefined);
+  const sourceControlScope = { environmentId: threadRef.environmentId, cwd };
+  const createPullRequest = useGitStackedAction(sourceControlScope);
+  const gitBusy = useSourceControlActionRunning(sourceControlScope, GIT_ACTIONS);
+  const [openingPullRequest, setOpeningPullRequest] = useState(false);
+  // Offered when the thread's own git action would create a pull request right now.
+  const canOpenPullRequest =
+    createPullRequest.isAllowed &&
+    gitStatus !== undefined &&
+    gitStatus !== null &&
+    (openingPullRequest ||
+      resolveQuickAction(gitStatus, gitBusy, gitStatus.isDefaultRef, gitStatus.hasPrimaryRemote)
+        .action === "create_pr");
+  const openPullRequest = async () => {
+    setOpeningPullRequest(true);
+    const result = await createPullRequest.run({
+      actionId: randomUUID(),
+      action: "create_pr",
+      threadId: threadRef.threadId,
+    });
+    setOpeningPullRequest(false);
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: "Could not open the pull request",
+        description: error instanceof Error ? error.message : "An error occurred.",
+      });
+    }
+  };
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-none">
       <RoomBoard
@@ -192,6 +233,8 @@ export function ThreadRoomBoard({ threadRef }: { readonly threadRef: ScopedThrea
         onUseNote={putInDraft}
         ownerCode={ownerCode}
         onTakeTask={takeTask}
+        onOpenPullRequest={canOpenPullRequest ? () => void openPullRequest() : undefined}
+        openingPullRequest={openingPullRequest}
       />
     </SidebarInset>
   );

@@ -70,6 +70,7 @@ vi.mock("../../state/session", async () => {
             environmentId,
             httpBaseUrl: `https://${environmentId}.test`,
             httpAuthorization: { _tag: "Bearer", token: "fixture" },
+            target: { _tag: "BearerConnectionTarget" },
           }),
         ),
       ),

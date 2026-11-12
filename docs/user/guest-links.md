@@ -56,17 +56,21 @@ edge onto another card; click an arrow to delete it.
 
 To turn a note into a message, drag it onto the thread's card or choose **Use as message** on it.
 Its text lands in your message box, after anything you had written, and the note stays on the
-board. Nothing is sent until you send it, and a guest's message still waits for the owner.
+board. Nothing is sent until you send it, and a guest's message still waits for the owner. A guest
+whose agent has a card on the board can instead drag a note onto **Your agent** or choose **Give
+to my agent**: it opens as a draft in their own T Code, as a task does below.
 
 ### Take a task to your agent
 
-Choose **Take it to my agent** on a task to make it yours and put its text in your own message
-box. For the owner, that is the shared thread. A guest's own T Code opens on the thread they
+Choose **Take it to my agent** on a task, or drag it onto your own agent's card (the owner's is
+the thread's card), to make it yours and put its text in your own message box. For the owner, that is the shared thread, where the
+message box says sending it answers the task; dismiss that notice, or clear the draft, and the
+message answers nothing. A guest's own T Code opens on the thread they
 [continued on their machine](#continue-on-your-own-machine) from this room, joining first if they
 have not. Nothing runs until you send it. While a guest's agent works on the task, its card says
-so; when that turn finishes, the card shows **Answered by** their agent with the start of its
-reply, and the task is ticked off. Untick it if the work is not done. An interrupted or failed
-turn leaves the task theirs and unanswered. The owner's own turns do not mark a task answered.
+so; when that turn finishes, the card shows **Answered by** their agent, or the owner's, with the
+start of its reply, and the task is ticked off. Untick it if the work is not done. An interrupted
+or failed turn leaves the task unanswered, and nobody's turn answers a task someone else has.
 
 ### See where everyone's code is
 
@@ -74,7 +78,9 @@ The thread's card shows the branch the owner's thread works on and whether it is
 guest's agent card shows the same for the thread on their machine, for example
 `fix/login · 2 commits not pushed`. On a pushed branch, **Copy fetch command** copies the git
 commands that fetch it and switch to it. When that machine knows of an open pull request for the
-branch, the card links to it.
+branch, the card links to it. On the owner's board, when the thread's branch has commits and no
+pull request, **Open pull request** on the thread's card pushes it and opens one, as the thread's
+git action does.
 
 To comment on a message, choose **Comment for the room** beside it in the shared thread. The
 comment shows under that message for everyone, and on the board as a note with **Go to reply**;

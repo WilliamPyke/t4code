@@ -126,6 +126,14 @@ export function roomCodeStateOf(
 /** A task card's id, as a turn that answers it names it. */
 const RoomTaskId = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
 
+/**
+ * The kind of the context record on the owner's own message that takes a task card from the
+ * board to their agent. Its text never references it, so the agent never reads it.
+ */
+export const ROOM_TASK_CONTEXT_KIND = "room-task";
+export const RoomTaskContextPayload = Schema.Struct({ shareId: GuestShareId, taskId: RoomTaskId });
+export type RoomTaskContextPayload = typeof RoomTaskContextPayload.Type;
+
 /** One catch-up from a room: how many messages, how long each, and how much in all. */
 export const ROOM_UPDATES_MAX_MESSAGES = 50;
 export const ROOM_UPDATE_MAX_LENGTH = 8_000;
@@ -204,7 +212,11 @@ export const ROOM_TASK_ANSWER_MAX_LENGTH = 280;
 
 /** The start of an agent's reply, as a task card shows it: one paragraph of plain text. */
 export const roomTaskAnswerExcerpt = (reply: string): string => {
-  const text = reply.replace(/\s+/g, " ").trim();
+  const text = reply
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/```\w*|`|\*\*/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
   return text.length <= ROOM_TASK_ANSWER_MAX_LENGTH
     ? text
     : `${text.slice(0, ROOM_TASK_ANSWER_MAX_LENGTH - 1).replace(/[\uD800-\uDBFF]$/, "")}…`;
@@ -212,13 +224,14 @@ export const roomTaskAnswerExcerpt = (reply: string): string => {
 
 /**
  * Whose agent answered a task, and the start of its reply. Only the owner's server writes it,
- * from a turn the guest's machine posted. Display only, like the rest of the board.
+ * from a turn the guest's machine posted or one of the owner's own. Display only, like the rest
+ * of the board.
  */
 export const RoomTaskAnswer = Schema.Struct({
-  /** The guest whose agent answered. */
-  guestId: GuestId,
+  /** The guest whose agent answered. Absent when it was the owner's. */
+  guestId: Schema.optional(GuestId),
   excerpt: Schema.String.check(Schema.isMaxLength(ROOM_TASK_ANSWER_MAX_LENGTH)),
-  /** The turn that answered, as the guest's machine named it. */
+  /** The turn that answered, as the machine that ran it named it. */
   turnId: ThreadGuestTurn.fields.id,
 });
 export type RoomTaskAnswer = typeof RoomTaskAnswer.Type;
@@ -242,7 +255,7 @@ export const RoomBoardNote = Schema.Struct({
   url: Schema.optional(RoomBoardUrl),
   /** The id of the thread's message this comment is pinned to. */
   pinnedTo: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
-  /** A task a guest's agent answered. No board change sets it; it stays when the task changes. */
+  /** A task someone's agent answered. No board change sets it; it stays when the task changes. */
   answer: Schema.optional(RoomTaskAnswer),
 });
 export type RoomBoardNote = typeof RoomBoardNote.Type;

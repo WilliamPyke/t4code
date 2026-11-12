@@ -5,12 +5,15 @@ import {
   GUEST_TURN_REPLY_MAX_LENGTH,
   GuestShareId,
   type OrchestrationV2AppThread,
+  type OrchestrationV2DomainEvent,
   type OrchestrationV2ServerCommand,
   type OrchestrationV2TurnItem,
+  ROOM_TASK_CONTEXT_KIND,
   RunId,
   EnvironmentId,
   ProviderInstanceId,
   ThreadId,
+  type ThreadGuestShare,
   type ThreadRoomLink,
   type VcsStatusResult,
 } from "@t3tools/contracts";
@@ -18,6 +21,7 @@ import { ROOM_UPDATES_NOTICE } from "@t3tools/shared/composerContextReferences";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -44,26 +48,38 @@ const items = [
   item(2, { type: "assistant_message", text: "Looking." }),
 ];
 
+/** A thread its owner shares: the events its runs send, and each run's items. */
+interface OwnerThread {
+  readonly share: Pick<ThreadGuestShare, "id" | "board">;
+  readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
+  readonly itemsOf: (runId: string) => ReadonlyArray<OrchestrationV2TurnItem>;
+}
+
 /**
  * This machine's joined thread, the room's replies, and what the room was sent. Every run was
- * asked at `requestedAt`, and git says `status` about the thread's checkout.
+ * asked at `requestedAt`, and git says `status` about the thread's checkout. With `owner`, the
+ * thread is one this machine shares instead, and the tasks its turns answer are kept.
  */
 const world = Effect.fn(function* (
   statuses: ReadonlyArray<number | { readonly status: number; readonly body: unknown }>,
+  owner?: OwnerThread,
 ) {
   const link = yield* Ref.make<ThreadRoomLink | null>(null);
   const replies = yield* Ref.make(statuses);
   const posts = yield* Ref.make<ReadonlyArray<unknown>>([]);
   const requestedAt = yield* Ref.make(0);
   const status = yield* Ref.make({ isRepo: false, refName: null } as unknown as VcsStatusResult);
+  const answers = yield* Queue.unbounded<OrchestrationV2ServerCommand>();
   const layer = SharedRoomLink.layer.pipe(
     Layer.provide(
       Layer.mock(Orchestrator.OrchestratorV2)({
-        streamDomainEvents: Stream.never,
+        streamDomainEvents: owner === undefined ? Stream.never : Stream.fromIterable(owner.events),
         dispatch: (command: OrchestrationV2ServerCommand) =>
           command.type === "thread.room-link.set"
             ? Ref.set(link, command.roomLink).pipe(Effect.as({} as never))
-            : Effect.die("Only the room link changes here"),
+            : command.type === "thread.room-task.answer" && owner !== undefined
+              ? Queue.offer(answers, command).pipe(Effect.as({} as never))
+              : Effect.die("Only the room link changes here"),
         getThreadRecords: (_threadId, _fields, filter) =>
           Effect.all([Ref.get(link), Ref.get(requestedAt)]).pipe(
             Effect.map(
@@ -71,12 +87,14 @@ const world = Effect.fn(function* (
                 ({
                   thread: {
                     roomLink,
+                    guestShare: owner?.share ?? null,
                     projectId: "project:joined",
                     worktreePath: null,
                     branch: null,
                     deletedAt: null,
                   } as unknown as OrchestrationV2AppThread,
-                  turnItems: items,
+                  turnItems:
+                    owner === undefined ? items : owner.itemsOf(filter?.turnItemRunIds?.[0] ?? ""),
                   runs: (filter?.runIds ?? []).map((id) => ({
                     id,
                     requestedAt: DateTime.makeUnsafe(at),
@@ -127,7 +145,7 @@ const world = Effect.fn(function* (
     Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-shared-room-" })),
     Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
-  return { link, posts, layer, requestedAt, status };
+  return { link, posts, layer, requestedAt, status, answers };
 });
 
 it("shows the room a run's prompt and its last reply, cut to what the room keeps", () => {
@@ -451,4 +469,59 @@ it.effect(
         assert.isNull(yield* rooms.takeTask("sam.t3.test", shareId, "task:2"));
       }).pipe(Effect.provide(layer));
     }),
+);
+
+it.effect("answers the owner's task only with a finished turn of theirs that was sent for it", () =>
+  Effect.gen(function* () {
+    const shareId = GuestShareId.make("share:mine");
+    const takes = (share: string) => ({
+      version: 1,
+      records: [
+        {
+          version: 1,
+          contextId: "room-task-1",
+          kind: ROOM_TASK_CONTEXT_KIND,
+          label: "Fix login",
+          payload: { shareId: share, taskId: "task:1" },
+        },
+      ],
+    });
+    const turn = (context: object | undefined, reply: string) => [
+      item(1, { type: "user_message", text: "Fix login", ...(context ? { context } : {}) }),
+      item(2, { type: "assistant_message", text: reply }),
+    ];
+    const runs: Record<string, ReadonlyArray<OrchestrationV2TurnItem>> = {
+      "run:cancelled": turn(takes(shareId), "Stopped."),
+      "run:failed": turn(takes(shareId), "Broke."),
+      "run:plain": turn(undefined, "Unrelated."),
+      "run:old-share": turn(takes("share:old"), "Old room."),
+      "run:task": turn(takes(shareId), "Fixed the expiry check."),
+    };
+    const settled = (id: string, status: string) =>
+      ({ type: "run.updated", threadId, payload: { id, status } }) as never;
+    const { answers, layer } = yield* world([], {
+      share: { id: shareId, board: { positions: {}, notes: [] } },
+      events: [
+        settled("run:cancelled", "cancelled"),
+        settled("run:failed", "failed"),
+        settled("run:plain", "completed"),
+        settled("run:old-share", "completed"),
+        settled("run:task", "completed"),
+      ],
+      itemsOf: (runId) => runs[runId] ?? [],
+    });
+    yield* Effect.gen(function* () {
+      yield* SharedRoomLink.SharedRoomLink;
+      // Runs are taken in order, so the first answer shows none came before it.
+      const answered = yield* Queue.take(answers);
+      assert.deepInclude(answered, {
+        type: "thread.room-task.answer",
+        threadId,
+        shareId,
+        taskId: "task:1",
+        turn: { id: "run:task", reply: "Fixed the expiry check." },
+      });
+      assert.equal(yield* Queue.size(answers), 0);
+    }).pipe(Effect.provide(layer));
+  }),
 );

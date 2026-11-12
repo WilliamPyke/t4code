@@ -224,12 +224,13 @@ import {
 } from "./composerSubmission";
 import { ComposerPromptLengthValidation } from "./ComposerPromptLengthValidation";
 import { pendingDraftWork } from "./pendingDraftWork";
+import { dropRoomTaskDraft, useRoomTaskDraft } from "./roomTaskDraft";
 import { importComposerThreadAttachment } from "./composerThreadImport";
 import { observeResize } from "~/lib/observeResize";
 
 const isEnvironmentRequestInvalidError = Schema.is(EnvironmentRequestInvalidError);
 import { toastManager } from "../ui/toast";
-import { BuildingIcon, PlayIcon } from "lucide-react";
+import { BuildingIcon, ListTodoIcon, PlayIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { useManagedPolicy } from "../../state/managedPolicy";
 import { hasProviderSetup } from "./ProviderStatusBanner";
@@ -2466,13 +2467,29 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       getModelDisabledReason={getModelDisabledReason}
     />
   );
+  const roomTask = useRoomTaskDraft(routeThreadRef);
+  const ownBannerItems: readonly ComposerBannerStackItem[] =
+    roomTask === undefined
+      ? props.bannerItems
+      : [
+          ...props.bannerItems,
+          {
+            id: "room-task",
+            variant: "info",
+            icon: <ListTodoIcon />,
+            title: "Sending this answers a task on the board",
+            description: <span className="line-clamp-2">{roomTask.text}</span>,
+            dismissLabel: "Do not answer the task",
+            onDismiss: () => dropRoomTaskDraft(routeThreadRef),
+          },
+        ];
   // An open question owns the space above the composer. Only a machine problem,
   // which is why an answer could not go through, stays beside it.
   const bannerItems: readonly ComposerBannerStackItem[] =
     runtimeModeCeilingDenial === undefined || activePendingProgress
-      ? props.bannerItems
+      ? ownBannerItems
       : [
-          ...props.bannerItems,
+          ...ownBannerItems,
           {
             id: "managed-runtime-mode",
             variant: "warning",

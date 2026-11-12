@@ -13,6 +13,7 @@ import {
   boardAgents,
   boardCardBox,
   boardChangeOf,
+  boardChangeQueue,
   boardConnector,
   boardCursorAt,
   boardCursorColor,
@@ -174,6 +175,33 @@ describe("resolveBoard", () => {
     // Unassigning differs from the room's copy, so it shows until the server answers.
     const cleared = putBoardEdit(assigned, NO_BOARD_EDITS, target, task, false);
     expect(resolveBoard(assigned, cleared).notes[0]?.assignee).toBeUndefined();
+  });
+});
+
+describe("boardChangeQueue", () => {
+  it("sends a new note's text only once the room has the empty note it fills", async () => {
+    const queue = boardChangeQueue();
+    const started: Array<string> = [];
+    let roomTakesNote: (taken: boolean) => void = () => {};
+    const added = queue("note:n", () => {
+      started.push("add note");
+      return new Promise<boolean>((resolve) => {
+        roomTakesNote = resolve;
+      });
+    });
+    const written = queue("note:n", async () => {
+      started.push("write text");
+      return true;
+    });
+    // Another card does not wait on this note.
+    await queue("card:thread", async () => {
+      started.push("move card");
+      return true;
+    });
+    expect(started).toEqual(["add note", "move card"]);
+    roomTakesNote(true);
+    expect([await added, await written]).toEqual([true, true]);
+    expect(started).toEqual(["add note", "move card", "write text"]);
   });
 });
 

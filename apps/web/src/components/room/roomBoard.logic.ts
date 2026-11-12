@@ -256,6 +256,23 @@ export function putBoardEdit(
   };
 }
 
+/**
+ * Sends one card's, note's or arrow's changes one after another, so the room takes them in the
+ * order they were made: text typed into a new note cannot land before the empty note it fills.
+ */
+export function boardChangeQueue() {
+  const last = new Map<string, Promise<unknown>>();
+  return <A>(key: string, send: () => Promise<A>): Promise<A> => {
+    const next = (last.get(key) ?? Promise.resolve()).then(send, send);
+    last.set(key, next);
+    const forget = () => {
+      if (last.get(key) === next) last.delete(key);
+    };
+    next.then(forget, forget);
+    return next;
+  };
+}
+
 /** Takes back an edit the server refused, unless a newer one replaced it. */
 export function dropBoardEdit(
   edits: BoardEdits,

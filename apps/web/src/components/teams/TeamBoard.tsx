@@ -30,16 +30,22 @@ const pollDelay = (failures: number) => Math.min(POLL_MS * 2 ** failures, MAX_PO
  */
 function useTeamBoard(teamId: string) {
   const [board, setBoard] = useState<RoomBoardValue | null>(null);
+  const [names, setNames] = useState<Readonly<Record<string, string>>>({});
   const [reachable, setReachable] = useState(true);
   const version = useRef<number | null>(null);
   // A slower answer can arrive after a newer one; only a newer version replaces the board.
   const take = useStableCallback(
-    (next: { readonly version: number; readonly board: RoomBoardValue | null }) => {
+    (next: {
+      readonly version: number;
+      readonly board: RoomBoardValue | null;
+      readonly names?: Readonly<Record<string, string>>;
+    }) => {
       if (next.board === null || (version.current !== null && next.version <= version.current)) {
         return;
       }
       version.current = next.version;
       setBoard(next.board);
+      setNames(next.names ?? {});
     },
   );
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- polls the relay for the board while it is open and the tab is visible
@@ -84,7 +90,7 @@ function useTeamBoard(teamId: string) {
     take(changed.value);
     return true;
   };
-  return { board, reachable, change };
+  return { board, names, reachable, change };
 }
 
 /**
@@ -101,7 +107,7 @@ export function TeamBoard({
   readonly accountId: string;
   readonly onShowThreads: () => void;
 }) {
-  const { board, reachable, change } = useTeamBoard(team.id);
+  const { board, names, reachable, change } = useTeamBoard(team.id);
   if (board === null) {
     return (
       <p className="p-6 text-center text-muted-foreground text-sm">
@@ -109,11 +115,16 @@ export function TeamBoard({
       </p>
     );
   }
+  const memberIds = new Set(team.members.map((member) => member.userId));
+  // People who left keep their name on the notes they wrote or were given.
   const guests: ReadonlyArray<ThreadGuest> = team.members.map((member) => ({
     id: GuestId.make(member.userId),
     name: member.name,
     joinedAt: "",
   }));
+  const formerPeople = Object.entries(names)
+    .filter(([userId]) => !memberIds.has(userId))
+    .map(([id, name]) => ({ id, name }));
   const cards: ReadonlyArray<BoardCardSpec> = [
     ...team.threads.map((thread) => ({
       id: teamBoardThreadCard(thread.environmentId, thread.threadId),
@@ -161,6 +172,7 @@ export function TeamBoard({
       summary={reachable ? summary : "Cannot reach T Connect. Trying again."}
       backLabel="Threads"
       ownerAssignable={false}
+      formerPeople={formerPeople}
     />
   );
 }

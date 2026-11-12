@@ -50,6 +50,7 @@ import {
   GuestTeamMember,
   GuestTurnRequest,
   RoomBoardChange,
+  RoomTaskContextPayload,
   SharedThreadMessage,
   ThreadGuestShare,
   ThreadRoomLink,
@@ -3016,6 +3017,8 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     guestId: GuestId,
+    /** A team member who is no longer in the team: joining again already needs the team. */
+    membershipEnded: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.unarchive"),
@@ -3507,6 +3510,15 @@ const OrchestrationV2InternalCommand = Schema.Union([
     /** The guest who made the change, or null for the owner. */
     author: Schema.NullOr(GuestId),
     change: RoomBoardChange,
+  }),
+  /** Answers a task card with the owner's own turn. It changes the share and nothing else. */
+  Schema.Struct({
+    type: Schema.Literal("thread.room-task.answer"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    taskId: RoomTaskContextPayload.fields.taskId,
+    turn: Schema.Struct({ id: GuestTurnRequest.fields.id, reply: GuestTurnRequest.fields.reply }),
   }),
   /** Connects a thread joined from a room to it, or with null ends that. */
   Schema.Struct({

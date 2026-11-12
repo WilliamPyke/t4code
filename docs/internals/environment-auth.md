@@ -111,9 +111,13 @@ that machine's environment. The owner's server checks it offline with the mint p
 stored when it linked ([GuestTeamShares](../../apps/server/src/guest/GuestTeamShares.ts)), so
 no new secret is shared and the relay never holds a guest session. A team share refuses the bare
 invite, keys each guest by user id so a member keeps one guest record, and keeps a removed
-member's id out. The session it issues ends after a day, because only a fresh assertion proves
-the person is still in the team; the web app asks for one again when a member opens the thread
-after that, and never does for a plain guest link.
+member's id out. The session it issues ends after a day; the web app asks for a fresh assertion
+when a member opens the thread after that, and never does for a plain guest link. Within that day
+the owner's server asks the relay who is in the team, at most once a minute per team, through a
+server-authenticated route that answers only a machine listing a live thread on that team as a
+linked member. A session whose member is gone is removed as the owner removing them would, except
+that the id is not kept out: the assertion already gates rejoining, so someone added back can
+join again. When the relay cannot answer, sessions stay, so a flaky link never ejects a team.
 
 A guest's typed name is not an identity. A guest can prove a GitHub account with
 the web redirect flow ([GuestSignIn](../../apps/server/src/guest/GuestSignIn.ts)):

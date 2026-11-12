@@ -26,7 +26,11 @@ import * as TestClock from "effect/testing/TestClock";
 import * as RelayDb from "../db.ts";
 import * as Teams from "./Teams.ts";
 
-const MIGRATIONS = ["20261112120000_teams", "20261112180000_team_boards"];
+const MIGRATIONS = [
+  "20261112120000_teams",
+  "20261112180000_team_boards",
+  "20261112200000_team_board_names",
+];
 
 // Just enough of @effect/sql-pg's client for drizzle to run its queries on PGlite.
 const pgliteClient = (pg: PGlite) => {
@@ -335,6 +339,7 @@ describe("Teams", () => {
       expect(yield* teams.board({ userId: "ann", teamId: team.id, since: undefined })).toEqual({
         version: 0,
         board: { positions: {}, notes: [] },
+        names: {},
       });
       expect(
         yield* Effect.flip(teams.board({ userId: "eve", teamId: team.id, since: undefined })),
@@ -370,6 +375,74 @@ describe("Teams", () => {
         })).version,
       ).toBe(2);
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps a note's author's name on the board after they leave the team", () =>
+    Effect.gen(function* () {
+      const { teams, team, invite } = yield* withTeam;
+      yield* teams.acceptInvite({ userId: "cat", name: invite.name, profile: profile("Cat") });
+      yield* teams.changeBoard({ userId: "ben", teamId: team.id, change: note("from-ben") });
+      yield* teams.changeBoard({
+        userId: "ann",
+        teamId: team.id,
+        change: note("for-cat", { kind: "task", assignee: { guestId: GuestId.make("cat") } }),
+      });
+      yield* teams.leave({ userId: "ben", teamId: team.id });
+      yield* teams.removeMember({ userId: "ann", teamId: team.id, memberUserId: "cat" });
+      const changed = yield* teams.changeBoard({
+        userId: "ann",
+        teamId: team.id,
+        change: note("from-ann"),
+      });
+      const expected = { ann: "Ann", ben: "Ben", cat: "Cat" };
+      expect(changed.names).toEqual(expected);
+      expect((yield* teams.board({ userId: "ann", teamId: team.id, since: 0 })).names).toEqual(
+        expected,
+      );
+      // A name goes once no note names that person.
+      yield* teams.changeBoard({
+        userId: "ann",
+        teamId: team.id,
+        change: { type: "note.remove", noteId: "from-ben" },
+      });
+      expect((yield* teams.board({ userId: "ann", teamId: team.id, since: 0 })).names).toEqual({
+        ann: "Ann",
+        cat: "Cat",
+      });
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "tells a machine who is in a team only while it lists a live thread there as a member",
+    () =>
+      Effect.gen(function* () {
+        const { teams, team } = yield* withTeam;
+        const memberIds = (environmentId: string, linkedUserIds: ReadonlyArray<string>) =>
+          teams.memberIdsForEnvironment({ environmentId, teamId: team.id, linkedUserIds });
+        expect(yield* Effect.flip(memberIds("env-ben", ["ben"]))).toMatchObject(
+          refusal("not_found"),
+        );
+        yield* teams.registerThread({
+          environmentId: "env-ben",
+          linkedUserIds: ["ben"],
+          request: share(team.id),
+        });
+        expect((yield* memberIds("env-ben", ["eve", "ben"])).toSorted()).toEqual(["ann", "ben"]);
+        // Another machine, or this one as an account that did not list the thread.
+        for (const [environmentId, linked] of [
+          ["env-eve", ["ben"]],
+          ["env-ben", ["ann"]],
+          ["env-ben", []],
+        ] as const) {
+          expect(yield* Effect.flip(memberIds(environmentId, linked))).toMatchObject(
+            refusal("not_found"),
+          );
+        }
+        yield* TestClock.adjust("2 hours");
+        expect(yield* Effect.flip(memberIds("env-ben", ["ben"]))).toMatchObject(
+          refusal("not_found"),
+        );
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("takes only the team's cards and members on its board, and caps its notes", () =>
