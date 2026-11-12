@@ -157,7 +157,7 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
       return (
         <JoinPage
           title="Bring this shared thread to your machine?"
-          description={`T3 Code will ask ${link.host} for the conversation. You get your own thread: your turns run here, on your own provider login.`}
+          description={`T Code will ask ${link.host} for the conversation. You get your own thread: your turns run here, on your own provider login.`}
         >
           <Button size="sm" onClick={() => void loadPreview()}>
             Continue

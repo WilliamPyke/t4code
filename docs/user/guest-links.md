@@ -8,8 +8,8 @@ send waits until you send or dismiss it, unless you let a guest
 ## Share a thread
 
 Guest links are a beta. Turn on **Settings → Labs → Guest links** for the machine that runs the
-thread. They also need [T3 Connect](./remote-access.md): sign in and link that machine, because the
-link points at its T3 Connect address. The machine must stay online while the guest uses it.
+thread. They also need [T Connect](./remote-access.md): sign in and link that machine, because the
+link points at its T Connect address. The machine must stay online while the guest uses it.
 While the setting is off, every guest link on that machine stops working; links that have not
 expired work again when you turn it back on.
 
@@ -18,8 +18,8 @@ expired work again when you turn it back on.
 2. Copy the link and send it to the people you want in the thread. Anyone who has the link can join
    until 8 people have, so send it only to them. It expires after 24 hours. Each person picks a
    name no one else on the link uses, and opening the link again in the same browser takes them
-   back to the thread. The link opens in the hosted T3 Code app when your server is
-   [set up for one](#where-the-link-opens), and on your machine's T3 Connect address otherwise.
+   back to the thread. The link opens in the hosted T Code app when your server is
+   [set up for one](#where-the-link-opens), and on your machine's T Connect address otherwise.
 3. When a guest sends a message, it appears at the end of the thread under their name and the
    sidebar shows **Request**. Choose **Send** to run it as a normal turn, or **Dismiss**. Files they
    attached show with the message, and **Send** includes them. The agent is told which guest wrote
@@ -31,7 +31,7 @@ right now.
 To invite someone later, choose **Share with guests** again and **Show link**: it is the same link.
 
 Choose **Stop sharing** to end the link for everyone at once. Archiving the thread, choosing
-**Replace link**, or unlinking the machine from T3 Connect also ends it. If anyone has joined, T3 Code asks
+**Replace link**, or unlinking the machine from T Connect also ends it. If anyone has joined, T Code asks
 you to confirm before it stops sharing or replaces the link. You can send or dismiss guest
 messages from the mobile app.
 
@@ -58,7 +58,7 @@ for anything an agent should act on.
 
 The board lasts as long as the link: stopping sharing or creating a new link starts an empty
 one, and removing a guest removes their notes. Someone who continued the thread on their own
-machine does not get the board in their T3 Code; they still see it in the shared thread.
+machine does not get the board in their T Code; they still see it in the shared thread.
 
 ## Remove a guest
 
@@ -98,18 +98,18 @@ is not approved. Removing a username applies to links that person joins afterwar
 The shared thread offers the sign-in only when the server that runs the thread was started with a
 GitHub app's client ID in `T3CODE_GITHUB_APP_CLIENT_ID` and its client secret in
 `T3CODE_GITHUB_APP_CLIENT_SECRET`. The app must list
-`https://<your T3 Connect host>/api/guest/sign-in/callback` as a callback URL. T3 Code asks GitHub
+`https://<your T Connect host>/api/guest/sign-in/callback` as a callback URL. T Code asks GitHub
 for no permissions, reads the guest's username and account number, then discards the token.
 
 ## Continue on your own machine
 
-A guest who has T3 Code can take the thread to their own machine. On the shared thread's page,
-choose **Continue on my machine**. It opens T3 Code, which asks before it contacts the owner's
+A guest who has T Code can take the thread to their own machine. On the shared thread's page,
+choose **Continue on my machine**. It opens T Code, which asks before it contacts the owner's
 machine, then shows what comes over and offers:
 
 - **Join with the code**, when you have the same repository on a connected machine. Your thread
   starts in a new worktree from the owner's branch, as its remote has it, and your setup script
-  runs on it. T3 Code tells you when the owner has work that is not pushed yet, because you will
+  runs on it. T Code tells you when the owner has work that is not pushed yet, because you will
   not get that work.
 - **Conversation only**, which starts a thread without a project.
 
@@ -120,10 +120,10 @@ branch or a pull request.
 
 ### Your turns show in the room
 
-The thread stays connected to the room it came from. When a turn starts in it, T3 Code tells the
+The thread stays connected to the room it came from. When a turn starts in it, T Code tells the
 owner's machine your agent is working and on what prompt; when the turn finishes, it sends the
 prompt and your agent's final reply. The owner and every guest see them as your agent's, for
-example **Sam's agent**. T3 Code tells you this before you
+example **Sam's agent**. T Code tells you this before you
 join, and the thread header says **Your turns show in the room** while it is on. Choose **Leave
 room** there to stop; your thread keeps working as a plain copy, and what the room already shows
 stays until the owner stops sharing.
@@ -159,17 +159,17 @@ chip says when something was cut. If the room has ended or the owner removed you
 saying you are in it.
 
 The copy holds the messages you could see when you chose it, up to the most recent 400. Images and
-other files in them stay behind. The link T3 Code opens is good for 10 minutes; choose **Continue
+other files in them stay behind. The link T Code opens is good for 10 minutes; choose **Continue
 on my machine** again if it runs out. Joining works on desktop and web, not yet in the mobile app.
 A thread you already joined shows **Catch up** and **Leave room** above the composer there; the
 mobile app does not show guests' own turns.
 
 ## What a guest sees
 
-A guest gets T3 Code in their browser with the thread in the sidebar, under **Shared with me**. To
+A guest gets T Code in their browser with the thread in the sidebar, under **Shared with me**. To
 put your name over your threads there, set **Settings → Labs → Guest links → Name shown to
 guests**; a guest sees a new name the next time they open the thread. Threads from other links they joined in that browser
-are listed there too, and someone who uses T3 Code with their own machines sees shared threads
+are listed there too, and someone who uses T Code with their own machines sees shared threads
 beside their own. A shared thread is listed for as long as its link lasts.
 
 A guest sees the thread's recent history and everything after, in the same timeline you see, as
@@ -189,17 +189,17 @@ sharing. Share only threads you are comfortable showing.
 
 ### Where the link opens
 
-A guest link normally opens on your machine's T3 Connect address. If you run a hosted copy of the
-T3 Code web app, start the server with its address in `T3CODE_HOSTED_APP_URL` (for example
+A guest link normally opens on your machine's T Connect address. If you run a hosted copy of the
+T Code web app, start the server with its address in `T3CODE_HOSTED_APP_URL` (for example
 `https://app.example.org`) and new links open there instead, naming your machine:
-`https://app.example.org/guest?host=<your T3 Connect host>#<invite>`.
+`https://app.example.org/guest?host=<your T Connect host>#<invite>`.
 
 With a hosted app, the link you copy is a short readable one, such as
-`https://app.example.org/r/tulip-otter-harbor`. T3 Connect keeps what the name stands for until the
+`https://app.example.org/r/tulip-otter-harbor`. T Connect keeps what the name stands for until the
 link expires, and the hosted app looks it up. The name is the key to the thread, so treat it like
 the full link.
 
-The hosted app follows a link only to a machine in its own T3 Connect domain: with the app at
+The hosted app follows a link only to a machine in its own T Connect domain: with the app at
 `app.example.org`, that is `<name>.example.org`. Build the hosted app with `VITE_GUEST_HOST_ZONE`
 set to the domain if your machines' addresses are somewhere else. A link that names any other
 host is refused before anything is sent to it.

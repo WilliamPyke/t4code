@@ -14,7 +14,7 @@ import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
 
 // Joining a shared thread on your own machine. The owner's side of it is in guestShare.ts.
 
-/** Where a shared thread comes from: its owner's T3 Connect host and a guest's handoff token. */
+/** Where a shared thread comes from: its owner's T Connect host and a guest's handoff token. */
 export const SharedThreadSource = Schema.Struct({
   host: TrimmedNonEmptyString,
   token: TrimmedNonEmptyString,
@@ -78,12 +78,12 @@ export const SharedThreadJoinResult = Schema.Struct({ threadId: ThreadId });
 export type SharedThreadJoinResult = typeof SharedThreadJoinResult.Type;
 
 const SHARED_THREAD_JOIN_MESSAGES = {
-  invalid_host: "This link does not name a machine T3 Code can reach.",
+  invalid_host: "This link does not name a machine T Code can reach.",
   unreachable: "Could not reach the machine that shared this thread. It may be offline.",
   expired:
     "This link has expired, or the thread is no longer shared with you. Open the shared thread and choose Continue on my machine again.",
   invalid_response:
-    "The other machine sent something T3 Code could not read. It may run a different version.",
+    "The other machine sent something T Code could not read. It may run a different version.",
   launch_failed: "Could not create the thread on this machine.",
   leave_failed: "Could not leave the room. Try again.",
   not_in_room: "This thread is not connected to a room.",

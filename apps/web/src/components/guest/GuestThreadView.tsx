@@ -679,7 +679,7 @@ function GuestGitHubSignIn({
 }
 
 /**
- * Takes the guest to their own T3 Code with a short-lived token, where they get their own copy
+ * Takes the guest to their own T Code with a short-lived token, where they get their own copy
  * of this thread. From then on their turns run on their machine, not the owner's.
  */
 function ContinueOnMyMachine({

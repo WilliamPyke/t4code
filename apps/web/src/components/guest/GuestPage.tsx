@@ -144,7 +144,7 @@ async function redeemInvite(input: {
     const result = Option.getOrNull(decodeRedeemResult(json));
     // A server from before guests could join from the app answers with a cookie only.
     if (result === null || result.threadId === undefined) {
-      return "The owner's T3 Code is too old for this link. Ask them to update it and send a new one.";
+      return "The owner's T Code is too old for this link. Ask them to update it and send a new one.";
     }
     return {
       host: input.host,

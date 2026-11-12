@@ -9,7 +9,7 @@ import { cn } from "~/lib/utils";
 import { guestBubbleClassName } from "./guestMessageStyle";
 
 /**
- * Turns guests ran in their own T3 Code after joining from the room. They sit on the agent's
+ * Turns guests ran in their own T Code after joining from the room. They sit on the agent's
  * side with a guest's dashed edge, so no one reads them as the thread's own agent. Shown as plain
  * text: it comes from another machine.
  */

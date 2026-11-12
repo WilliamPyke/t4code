@@ -12,7 +12,7 @@ import {
 } from "./baseSchemas.ts";
 
 /**
- * A guest share lets a few unauthenticated browsers watch a thread over T3 Connect and propose
+ * A guest share lets a few unauthenticated browsers watch a thread over T Connect and propose
  * messages the owner must send or dismiss. The thread projection holds this public state; the
  * credentials are derived from the share id with a server key and never stored.
  */
@@ -60,7 +60,7 @@ export const ThreadGuestMessage = Schema.Struct({
 export type ThreadGuestMessage = typeof ThreadGuestMessage.Type;
 
 /**
- * One turn a guest ran in their own T3 Code after joining from the room: their prompt and their
+ * One turn a guest ran in their own T Code after joining from the room: their prompt and their
  * agent's final reply. The room only shows it. It never starts a turn here and never reaches the
  * owner's agent.
  */
@@ -234,7 +234,7 @@ export const providerAllowsDirectGuestSend = (
 
 export const ThreadGuestShare = Schema.Struct({
   id: GuestShareId,
-  /** The T3 Connect tunnel hostname the link points at. Guest routes require it to still serve. */
+  /** The T Connect tunnel hostname the link points at. Guest routes require it to still serve. */
   host: TrimmedNonEmptyString,
   createdAt: IsoDateTime,
   expiresAt: IsoDateTime,
@@ -310,7 +310,7 @@ export type GuestShareCreateResult = typeof GuestShareCreateResult.Type;
 
 const GUEST_SHARE_CREATE_MESSAGES = {
   disabled: "Guest links are off. Turn them on in Settings > Labs.",
-  connect_unavailable: "Guest links need a running T3 Connect tunnel.",
+  connect_unavailable: "Guest links need a running T Connect tunnel.",
   thread_unavailable: "This thread cannot be shared.",
   read_failed: "Failed to read the shared thread.",
   changed: "The guest link changed while it was being created.",
@@ -421,7 +421,7 @@ export const SharedThreadCheckout = Schema.Struct({
 export type SharedThreadCheckout = typeof SharedThreadCheckout.Type;
 
 /**
- * Lets the guest's own T3 Code post the turns it runs back to the room and read what the room
+ * Lets the guest's own T Code post the turns it runs back to the room and read what the room
  * said since, until the share ends or the guest is removed. The token opens nothing else.
  */
 export const SharedThreadRoom = Schema.Struct({
@@ -459,7 +459,7 @@ export const ThreadRoomLink = Schema.Struct({
 });
 export type ThreadRoomLink = typeof ThreadRoomLink.Type;
 
-/** A turn the guest's own T3 Code posts to the room. */
+/** A turn the guest's own T Code posts to the room. */
 export const GuestTurnRequest = Schema.Struct({
   id: ThreadGuestTurn.fields.id,
   prompt: ThreadGuestTurn.fields.prompt,
@@ -469,7 +469,7 @@ export const GuestTurnRequest = Schema.Struct({
 export type GuestTurnRequest = typeof GuestTurnRequest.Type;
 
 /**
- * The guest's own T3 Code saying a turn started (`running`, with the prompt) or stopped without
+ * The guest's own T Code saying a turn started (`running`, with the prompt) or stopped without
  * a turn to post (`idle`). Posting the finished turn also clears it.
  */
 export const GuestAgentActivityRequest = Schema.Struct({
@@ -531,13 +531,13 @@ export const GUEST_SIGN_IN_ROUTE = `${GUEST_ROUTE_PREFIX}/sign-in`;
 export const GUEST_SIGN_IN_BEGIN_ROUTE = `${GUEST_ROUTE_PREFIX}/sign-in/begin`;
 /** GitHub sends the guest's browser back here (GET) with `code` and `state`. */
 export const GUEST_SIGN_IN_CALLBACK_ROUTE = `${GUEST_ROUTE_PREFIX}/sign-in/callback`;
-/** Mints a short-lived token the guest's own T3 Code uses to read the export: `?share=<id>`. */
+/** Mints a short-lived token the guest's own T Code uses to read the export: `?share=<id>`. */
 export const GUEST_HANDOFF_ROUTE = `${GUEST_ROUTE_PREFIX}/handoff`;
-/** The thread's export, for a bearer handoff token. Called by another T3 Code server. */
+/** The thread's export, for a bearer handoff token. Called by another T Code server. */
 export const GUEST_EXPORT_ROUTE = `${GUEST_ROUTE_PREFIX}/export`;
-/** A guest's own T3 Code posts a turn it ran here, with a bearer room token. */
+/** A guest's own T Code posts a turn it ran here, with a bearer room token. */
 export const GUEST_ROOM_TURN_ROUTE = `${GUEST_ROUTE_PREFIX}/room/turns`;
-/** A guest's own T3 Code says a turn started or stopped here, with a bearer room token. */
+/** A guest's own T Code says a turn started or stopped here, with a bearer room token. */
 export const GUEST_ROOM_ACTIVITY_ROUTE = `${GUEST_ROUTE_PREFIX}/room/activity`;
 /** What happened in the room since `?after=<ISO time>`, for a bearer room token. */
 export const GUEST_ROOM_UPDATES_ROUTE = `${GUEST_ROUTE_PREFIX}/room/updates`;
