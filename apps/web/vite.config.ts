@@ -53,7 +53,10 @@ const configuredDesktopUpdateRepository =
   "";
 const configuredFeatureSecrets = process.env.T3CODE_FEATURE_SECRETS?.trim() || "";
 const configuredHostedAppUrl = (() => {
-  const explicitHostedAppUrl = process.env.VITE_HOSTED_APP_URL?.trim();
+  // A server run from source names its hosted app in T3CODE_HOSTED_APP_URL; its own web app
+  // follows it, so guest links to that deployment's machines open here too.
+  const explicitHostedAppUrl =
+    process.env.VITE_HOSTED_APP_URL?.trim() || process.env.T3CODE_HOSTED_APP_URL?.trim();
   if (explicitHostedAppUrl) {
     return explicitHostedAppUrl;
   }
