@@ -1059,6 +1059,10 @@ describe("box progress", () => {
     expect(boardProgressPhase({ phase: "thinking" })).toBe("Thinking");
     expect(boardProgressPhase({ phase: "tool", detail: " pnpm test " })).toBe("Running pnpm test");
     expect(boardProgressPhase({ phase: "tool" })).toBe("Running a tool");
+    expect(boardProgressPhase({ phase: "tool", detail: "Running a command" })).toBe(
+      "Running a command",
+    );
+    expect(boardProgressPhase({ phase: "tool", detail: "Editing files" })).toBe("Editing files");
     expect(boardProgressPhase({ phase: "writing" })).toBe("Writing");
     expect(boardProgressPhase({ phase: "approval" })).toBe("Waiting for approval");
     expect(

@@ -1340,10 +1340,15 @@ const PROGRESS_PHASES: Readonly<Record<RoomBoxProgress["phase"], string>> = {
   approval: "Waiting for approval",
 };
 
-/** What a box's agent is doing, in words: "Thinking", "Running pnpm test", "Writing". */
+/**
+ * What a box's agent is doing, in words: "Thinking", "Running pnpm test", "Writing". The server
+ * names most tools as a phrase already ("Editing files"), which shows as it is.
+ */
 export const boardProgressPhase = (progress: Pick<RoomBoxProgress, "phase" | "detail">): string =>
   progress.phase === "tool" && progress.detail !== undefined && progress.detail.trim() !== ""
-    ? `Running ${progress.detail.trim()}`
+    ? /^[A-Z][a-z]+ing\b/.test(progress.detail.trim())
+      ? progress.detail.trim()
+      : `Running ${progress.detail.trim()}`
     : PROGRESS_PHASES[progress.phase];
 
 /** How long something has run: "8s", "2m 05s", "1h 04m". */

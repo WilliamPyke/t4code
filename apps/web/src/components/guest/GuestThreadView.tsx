@@ -335,7 +335,19 @@ function GuestThreadSession({
     reportFailure: false,
   });
   // Where this guest's boxes ran when last prompted: on their own agent, or through the owner.
-  const [boxesRunHere, setBoxesRunHere] = useState<boolean | null>(null);
+  const [lastBoxRanHere, setBoxesRunHere] = useState<boolean | null>(null);
+  // Before a prompt from this page, the board says it: a box of theirs whose last turn was theirs.
+  const boxesRunHere =
+    lastBoxRanHere ??
+    (view?.guestId !== undefined &&
+    view.board?.notes.some(
+      (note) =>
+        note.kind === "thread" &&
+        note.guestId === view.guestId &&
+        note.thread?.turns.at(-1)?.guestId === view.guestId,
+    ) === true
+      ? true
+      : null);
   // The thread on the guest's machine behind each of their boxes prompted from this page.
   const [ownBoxThreads, setOwnBoxThreads] = useState<
     ReadonlyMap<string, { readonly environmentId: EnvironmentId; readonly threadId: ThreadId }>

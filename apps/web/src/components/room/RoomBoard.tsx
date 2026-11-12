@@ -959,8 +959,13 @@ export function RoomBoard({
     // A box rewrites one artifact; a second would draw a line that does nothing.
     const canAddArtifact = canEdit && !full && !artifactsFull && context?.artifact === null;
     // Always offered to the owner: a box with no conversation yet says so in the panel.
+    // A box whose last turn ran on a guest's machine has its conversation there, not here.
+    const ranElsewhere =
+      conversationBoxIds === undefined &&
+      shown.notes.find((note) => note.id === box.id)?.thread?.turns.at(-1)?.guestId !== undefined;
     const conversation =
       onOpenConversation === undefined ||
+      ranElsewhere ||
       (conversationBoxIds !== undefined && !conversationBoxIds.includes(box.id))
         ? undefined
         : () => onOpenConversation(box.id);
