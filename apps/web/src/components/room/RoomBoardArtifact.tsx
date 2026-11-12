@@ -5,7 +5,12 @@ import { formatDayAwareTimestamp } from "~/timestampFormat";
 
 import ChatMarkdown from "../ChatMarkdown";
 import { Button } from "../ui/button";
-import { boardDraftIsPage, boardProgressLine, isBoardHtmlArtifact } from "./roomBoard.logic";
+import {
+  boardDraftIsPage,
+  boardProgressLine,
+  boardRestoreLabel,
+  isBoardHtmlArtifact,
+} from "./roomBoard.logic";
 import { useArtifactProgress, useBoardNow } from "./roomBoardLive";
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
@@ -133,7 +138,7 @@ export function RoomArtifactLive({
 
 /**
  * Who wrote an artifact's current version and when, what they asked and with which cards and
- * model, and the way back to the version before.
+ * model, and the way to the version it replaced: back to it, or forward again.
  */
 function RoomArtifactMeta({
   author,
@@ -143,7 +148,7 @@ function RoomArtifactMeta({
   /** Absent before anything was written. */
   readonly author: string | undefined;
   readonly artifact: RoomArtifactContent | undefined;
-  /** Swaps in the version before. Absent when there is none, or the viewer may not. */
+  /** Swaps in the version it replaced. Absent when there is none, or the viewer may not. */
   readonly onRestore: (() => Promise<boolean>) | undefined;
 }) {
   const [restoring, setRestoring] = useState(false);
@@ -171,7 +176,11 @@ function RoomArtifactMeta({
             onPointerDown={stopPointer}
             onClick={() => void restore()}
           >
-            {restoring ? "Restoring..." : "Restore previous"}
+            {restoring
+              ? "Restoring..."
+              : artifact.previous === undefined
+                ? "Restore previous"
+                : boardRestoreLabel({ ...artifact, previous: artifact.previous })}
           </Button>
         )}
       </div>

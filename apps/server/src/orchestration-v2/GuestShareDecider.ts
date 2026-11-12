@@ -8,6 +8,8 @@ import {
   ROOM_BOARD_ROOM_BOX,
   ROOM_BOARD_THREAD_CARD,
   ROOM_BOX_CONTEXT_KIND,
+  ROOM_BOX_PROMPT_MAX_LENGTH,
+  ROOM_BOX_REPLY_MAX_LENGTH,
   ROOM_BOX_TURN_LIMIT,
   guestMessageAuthorName,
   roomBoardAgentCard,
@@ -43,6 +45,7 @@ import {
   roomBoardNoteOfRef,
   roomBoardWithEdges,
   roomBoardWithoutCards,
+  roomBoxExcerpt,
   type RoomBoardScope,
 } from "@t3tools/shared/roomBoard";
 import * as DateTime from "effect/DateTime";
@@ -623,13 +626,24 @@ export function decideGuestShareCommand(input: {
       if (turns.some((turn) => turn.guestId === command.guestId && turn.id === command.turn.id)) {
         return Result.succeed(thread);
       }
-      const { truncated, taskId, artifact, ...turn } = command.turn;
+      const { truncated, taskId, artifact, boxId, cards, model, ...turn } = command.turn;
+      // Only the guest's own thread box shows their turn; any other box is ignored.
+      const namedBox = roomBoxOn(share, boxId);
+      const box = namedBox?.guestId === command.guestId ? namedBox : undefined;
+      const about =
+        box === undefined
+          ? {}
+          : {
+              prompt: roomBoxExcerpt(turn.prompt, ROOM_BOX_PROMPT_MAX_LENGTH),
+              ...(cards === undefined || cards.length === 0 ? {} : { cards }),
+              ...(model === undefined ? {} : { model }),
+            };
       const answered =
         taskId === undefined || share.board === undefined
           ? share.board
           : boardWithTaskAnswered(share.board, taskId, command.guestId, turn);
       // The guest's own agent wrote it, on their machine; the owner's agent never sees the post.
-      const board =
+      const filled =
         artifact === undefined || answered === undefined
           ? answered
           : boardWithArtifactFilled(answered, artifact.noteId, {
@@ -638,7 +652,22 @@ export function decideGuestShareCommand(input: {
               guestId: command.guestId,
               turnId: turn.id,
               updatedAt: DateTime.formatIso(now),
+              ...about,
+              ...(box === undefined ? {} : { boxId: box.id }),
             });
+      // A box's turn is the box's conversation, so it stays out of the room's own turns.
+      if (box !== undefined && filled !== undefined) {
+        const board = boardWithBoxTurn(filled, box.id, {
+          id: turn.id,
+          ...about,
+          prompt: roomBoxExcerpt(turn.prompt, ROOM_BOX_PROMPT_MAX_LENGTH),
+          reply: roomBoxExcerpt(turn.reply, ROOM_BOX_REPLY_MAX_LENGTH),
+          at: DateTime.formatIso(now),
+          guestId: command.guestId,
+        });
+        return board === share.board ? Result.succeed(thread) : withShare({ ...share, board });
+      }
+      const board = filled;
       return withShare({
         ...share,
         turns: [

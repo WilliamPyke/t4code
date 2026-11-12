@@ -161,6 +161,20 @@ const sameNote = (left: RoomBoardNote, right: RoomBoardNote) =>
   sameSize(left.size, right.size);
 
 /**
+ * Whether `person` (null for the room's owner) may swap an artifact with the version it replaced:
+ * the owner, whoever added the card, and whoever asked for or whose agent wrote either version.
+ */
+export function canRestoreRoomArtifact(
+  note: Pick<RoomBoardNote, "guestId" | "artifact">,
+  person: GuestId | null,
+): boolean {
+  if (person === null || note.guestId === person) return true;
+  return [note.artifact, note.artifact?.previous].some(
+    (version) => version?.guestId === person || version?.askedBy === person,
+  );
+}
+
+/**
  * The board after one change by `author` (null for the room's owner), the same board when the
  * change does nothing, or why the board does not take it. The owner's server applies it to a
  * room's board and the relay to a team's, so both take and refuse the same changes.
@@ -254,6 +268,11 @@ export function applyRoomBoardChange(
       const note = board.notes.find((candidate) => candidate.id === change.noteId);
       const current = note?.kind === "artifact" ? note.artifact : undefined;
       if (note === undefined || current?.previous === undefined) return Result.succeed(board);
+      if (!canRestoreRoomArtifact(note, author)) {
+        return Result.fail(
+          "Only the owner, whoever added this artifact, and the people behind its versions can restore it.",
+        );
+      }
       const { previous, ...shown } = current;
       const restored: RoomBoardNote = { ...note, artifact: { ...previous, previous: shown } };
       return Result.succeed({

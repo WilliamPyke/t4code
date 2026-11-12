@@ -1,5 +1,6 @@
 import {
   CommandId,
+  type ComposerContextRecord,
   GUEST_AGENT_PROMPT_MAX_LENGTH,
   GUEST_ROOM_ACTIVITY_ROUTE,
   GUEST_ROOM_ARTIFACT_ROUTE,
@@ -10,12 +11,15 @@ import {
   type GuestAgentActivityRequest,
   type GuestShareId,
   type GuestTurnRequest,
+  MessageId,
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
   RoomArtifactRead,
   ROOM_BOARD_ROOM_BOX,
+  ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH,
+  type RoomBoxProgress,
   ROOM_BOX_PROMPT_MAX_LENGTH,
   ROOM_BOX_REPLY_MAX_LENGTH,
   ROOM_TASK_CONTEXT_KIND,
@@ -26,6 +30,8 @@ import {
   roomCodeStateOf,
   type RunId,
   type SharedThreadCatchUpResult,
+  type SharedThreadPromptBoxInput,
+  type SharedThreadPromptBoxResult,
   type SharedThreadRoom,
   type SharedThreadTakeArtifactResult,
   type ThreadGuestMessage,
@@ -33,6 +39,11 @@ import {
   ThreadId,
   type ThreadRoomLink,
 } from "@t3tools/contracts";
+import {
+  formatComposerContextReference,
+  roomArtifactContextRecord,
+  roomCardsContextRecord,
+} from "@t3tools/shared/composerContextReferences";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
 import {
   roomArtifactBody,
@@ -51,6 +62,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
@@ -58,15 +70,39 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { base64UrlEncode } from "../auth/utils.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { forkParked } from "../serverActivation.ts";
-import { isBoxThread, roomBoxModelName } from "./RoomBoxes.ts";
+import { isBoxThread, roomBoxModelName, toolActivity } from "./RoomBoxes.ts";
 import { clip } from "./roomUpdates.ts";
 
 const REQUEST_TIMEOUT = Duration.seconds(20);
 // A turn still running is told again this often, well inside the room's 10 minute expiry.
 const ACTIVITY_REFRESH_MS = 3 * 60_000;
+// A box's run tells its room what its agent is doing at most this often, however fast it streams.
+const BOX_PROGRESS_INTERVAL_MS = 2_000;
+const BOX_TITLE_MAX_LENGTH = 80;
+
+interface BoxMessage {
+  readonly text: string;
+  readonly records: ReadonlyArray<ComposerContextRecord>;
+}
+
+/** What the agent of a box's run does now, as its room is told. */
+interface BoxRun {
+  work: Exclude<RoomBoxProgress["phase"], "approval">;
+  detail: string | undefined;
+  /** The reply so far. */
+  text: string;
+  /** The run's requests waiting on this machine's user. */
+  readonly waitingOn: Set<string>;
+  toldAt: number;
+  /** A post is queued or on its way, so another is not queued behind it. */
+  telling: boolean;
+  /** What the room was told the run is, which stays the same while it runs. */
+  readonly told: GuestAgentActivityRequest;
+}
 const SETTLED_RUN = new Set(["completed", "interrupted", "failed", "cancelled", "rolled_back"]);
 // Well over the largest catch-up an honest room sends, so a declared size past it is refused unread.
 const MAX_UPDATES_BYTES = 512 * 1024;
@@ -230,6 +266,13 @@ export class SharedRoomLink extends Context.Service<
       shareId: GuestShareId,
       artifactId: string,
     ) => Effect.Effect<SharedThreadTakeArtifactResult, SharedThreadJoinError>;
+    /**
+     * Runs a prompt to one of the user's own thread boxes of a room here: in the box's thread,
+     * made beside the thread joined from that room the first time. Its turns show on the box.
+     */
+    readonly promptBox: (
+      input: SharedThreadPromptBoxInput,
+    ) => Effect.Effect<SharedThreadPromptBoxResult, SharedThreadJoinError>;
     /** Posts one finished run if its thread is connected. Never fails: the turn is local first. */
     readonly publishRun: (threadId: ThreadId, runId: RunId) => Effect.Effect<void>;
     /**
@@ -253,10 +296,15 @@ const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const git = yield* GitWorkflow.GitWorkflowService;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+  const launches = yield* ThreadLaunch.ThreadLaunchService;
+  // One box gets one thread, however many prompts reach it at once.
+  const boxThreads = yield* Semaphore.make(1);
   // The last run posted per thread: a finished run is updated again when its checkpoint lands.
   const posted = new Map<ThreadId, RunId>();
   // The run each connected thread told its room is running, and when it last said so.
   const running = new Map<ThreadId, { readonly runId: RunId; at: number }>();
+  // What the agent of each box thread's run does now, for its box in the room.
+  const boxRuns = new Map<RunId, BoxRun>();
 
   const setLink = Effect.fn("SharedRoomLink.setLink")(function* (
     threadId: ThreadId,
@@ -274,6 +322,8 @@ const make = Effect.gen(function* () {
   const forget = (threadId: ThreadId) =>
     Effect.sync(() => {
       posted.delete(threadId);
+      const told = running.get(threadId);
+      if (told !== undefined) boxRuns.delete(told.runId);
       running.delete(threadId);
     }).pipe(Effect.andThen(secrets.remove(tokenSecretName(threadId))), Effect.ignore);
 
@@ -409,18 +459,12 @@ const make = Effect.gen(function* () {
     ),
   );
 
-  const takeArtifact = Effect.fn("SharedRoomLink.takeArtifact")(function* (
-    host: string,
-    shareId: GuestShareId,
+  /** An artifact card as the room has it now, or null once the room no longer has it. */
+  const readArtifact = Effect.fn("SharedRoomLink.readArtifact")(function* (
+    threadId: ThreadId,
+    link: ThreadRoomLink,
     artifactId: string,
   ) {
-    const joined = yield* joinedThread(host, shareId).pipe(
-      Effect.catch((cause) =>
-        Effect.logWarning("Could not find a joined thread", { cause }).pipe(Effect.as(null)),
-      ),
-    );
-    if (joined === null) return { threadId: null, artifact: null };
-    const { threadId, link } = joined;
     const url = sharedThreadRouteUrl(link.host, GUEST_ROOM_ARTIFACT_ROUTE);
     const token = yield* secrets
       .get(tokenSecretName(threadId))
@@ -444,7 +488,7 @@ const make = Effect.gen(function* () {
       yield* disconnect(threadId);
       return yield* fail("room_ended");
     }
-    if (response.status === 404) return { threadId, artifact: null };
+    if (response.status === 404) return null;
     if (response.status === 429) return yield* fail("too_fast");
     if (response.status !== 200) return yield* fail("unreachable");
     if (Number(response.headers["content-length"] ?? "0") > MAX_UPDATES_BYTES) {
@@ -461,8 +505,149 @@ const make = Effect.gen(function* () {
       title: sanitizeLinkedPrompt(read.title).text.replace(/\s+/g, " "),
       ...(body === "" ? {} : { body }),
     };
-    return { threadId, artifact };
+    return artifact;
   }, Effect.scoped);
+
+  const findJoined = (host: string, shareId: GuestShareId) =>
+    joinedThread(host, shareId).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not find a joined thread", { cause }).pipe(Effect.as(null)),
+      ),
+    );
+
+  const takeArtifact = Effect.fn("SharedRoomLink.takeArtifact")(function* (
+    host: string,
+    shareId: GuestShareId,
+    artifactId: string,
+  ) {
+    const joined = yield* findJoined(host, shareId);
+    if (joined === null) return { threadId: null, artifact: null };
+    const artifact = yield* readArtifact(joined.threadId, joined.link, artifactId);
+    return { threadId: joined.threadId, artifact };
+  });
+
+  const boxMessage = (threadId: ThreadId, commandId: CommandId, message: BoxMessage) =>
+    orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId,
+      threadId,
+      messageId: MessageId.make(commandId),
+      text: message.text,
+      ...(message.records.length === 0
+        ? {}
+        : { context: { version: 1, records: [...message.records] } }),
+      attachments: [],
+      dispatchMode: { type: "queue_after_active" },
+      createdBy: "user",
+      creationSource: "web",
+    });
+
+  const promptBox = Effect.fn("SharedRoomLink.promptBox")(function* (
+    input: SharedThreadPromptBoxInput,
+  ) {
+    const joined = yield* findJoined(input.host, input.shareId);
+    if (joined === null) return { threadId: null };
+    const asked = sanitizeLinkedPrompt(input.text).text.trim();
+    const artifact =
+      input.artifactId === undefined
+        ? null
+        : yield* readArtifact(joined.threadId, joined.link, input.artifactId);
+    const batch = yield* random.uuidV4().pipe(Effect.orDie);
+    const cards = (input.cards ?? []).flatMap((card) => {
+      const text = sanitizeLinkedPrompt(card.text).text;
+      return text.trim() === "" ? [] : [{ ...card, text }];
+    });
+    const records: ReadonlyArray<ComposerContextRecord> = [
+      ...(cards.length === 0 ? [] : [roomCardsContextRecord({ batch, cards })]),
+      ...(artifact === null || input.artifactId === undefined
+        ? []
+        : [
+            roomArtifactContextRecord({
+              batch,
+              shareId: input.shareId,
+              noteId: input.artifactId,
+              title: artifact.title,
+              current: artifact.body,
+              boxId: input.boxId,
+            }),
+          ]),
+    ];
+    const chips = records.map(formatComposerContextReference).join(" ");
+    const text = [asked, chips].filter((part) => part !== "").join("\n\n");
+    if (text === "") return yield* fail("launch_failed");
+    const commandId = CommandId.make(`server:room-box:${batch}`);
+    const message: BoxMessage = { text, records };
+    // Null: the thread left the room since it was found.
+    const delivered = yield* boxThreads
+      .withPermits(1)(
+        Effect.gen(function* () {
+          const { thread: room } = yield* orchestrator.getThreadRecords(joined.threadId, []);
+          const link = room.roomLink ?? null;
+          const token = yield* secrets.get(tokenSecretName(joined.threadId));
+          if (link === null || Option.isNone(token)) return null;
+          const mapped = link.boxes?.[input.boxId];
+          const usable =
+            mapped !== undefined &&
+            (yield* orchestrator.getThreadRecords(mapped, []).pipe(
+              Effect.map(
+                ({ thread }) =>
+                  thread.deletedAt === null &&
+                  thread.archivedAt === null &&
+                  thread.roomLink?.boxId === input.boxId,
+              ),
+              Effect.orElseSucceed(() => false),
+            ));
+          if (mapped !== undefined && usable) {
+            yield* boxMessage(mapped, commandId, message);
+            return { threadId: mapped };
+          }
+          const branch = room.branch ?? undefined;
+          const launched = yield* launches.launch({
+            commandId: CommandId.make(`server:room-box:launch:${batch}`),
+            projectId: room.projectId,
+            title:
+              input.title.trim() ||
+              clip(asked.replace(/\s+/g, " "), BOX_TITLE_MAX_LENGTH) ||
+              "Board thread",
+            modelSelection: room.modelSelection,
+            runtimeMode: room.runtimeMode,
+            interactionMode: room.interactionMode,
+            workspaceStrategy:
+              room.worktreePath === null
+                ? { type: "root", ...(branch === undefined ? {} : { branch }) }
+                : {
+                    type: "existing_worktree",
+                    worktreePath: room.worktreePath,
+                    ...(branch === undefined ? {} : { branch }),
+                  },
+            createdBy: "user",
+            creationSource: "web",
+          });
+          // Linked before its first message, so the room hears of that turn from its start.
+          yield* secrets.set(tokenSecretName(launched.threadId), token.value);
+          yield* setLink(launched.threadId, {
+            host: link.host,
+            expiresAt: link.expiresAt,
+            ...(link.shareId === undefined ? {} : { shareId: link.shareId }),
+            boxId: input.boxId,
+          });
+          yield* setLink(joined.threadId, {
+            ...link,
+            boxes: { ...link.boxes, [input.boxId]: launched.threadId },
+          });
+          yield* boxMessage(launched.threadId, commandId, message);
+          return { threadId: launched.threadId };
+        }),
+      )
+      .pipe(
+        Effect.tapError((cause) =>
+          Effect.logWarning("Could not run a box's prompt here", { cause }),
+        ),
+        Effect.mapError(() => fail("launch_failed")),
+      );
+    if (delivered === null) return yield* fail("room_ended");
+    return delivered;
+  });
 
   /** Clears the task a posted turn answered, unless the user took another since. */
   const finishTask = (threadId: ThreadId, taskId: string) =>
@@ -512,6 +697,12 @@ const make = Effect.gen(function* () {
       link.shareId === undefined
         ? undefined
         : roomArtifactRequestOf(turnItems, link.shareId)?.noteId;
+    const run = runs.find((candidate) => candidate.id === runId);
+    const cards = roomCardLabelsOf(turnItems);
+    const model =
+      link.boxId === undefined || run === undefined
+        ? ""
+        : roomBoxModelName(run.modelSelection, yield* providerRegistry.getProviders);
     return {
       turnItems,
       artifactId,
@@ -519,8 +710,36 @@ const make = Effect.gen(function* () {
         ...(taskId === undefined ? {} : { taskId }),
         ...(code === null ? {} : { code }),
       },
+      // A box thread's run shows on its box: what was asked without its chips, and with what.
+      box:
+        link.boxId === undefined
+          ? undefined
+          : {
+              boxId: link.boxId,
+              prompt: roomRunPromptText(turnItems).trim(),
+              ...(cards.length === 0 ? {} : { cards: [...cards] }),
+              ...(model === "" ? {} : { model }),
+            },
     };
   });
+
+  /** What a box's run tells its room now: its phase, and what its agent wrote so far. */
+  const boxProgressOf = (live: BoxRun, artifactId: string | undefined) => {
+    const phase: RoomBoxProgress["phase"] = live.waitingOn.size > 0 ? "approval" : live.work;
+    const preview = live.text
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(-ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH)
+      .replace(/^[\uDC00-\uDFFF]/, "");
+    return {
+      phase,
+      ...(phase === "tool" && live.detail !== undefined ? { detail: live.detail } : {}),
+      ...(phase === "writing" && preview !== "" ? { preview } : {}),
+      ...(artifactId === undefined || live.text.trim() === ""
+        ? {}
+        : { draft: roomArtifactBody(live.text).body }),
+    };
+  };
 
   const publishRun = Effect.fn("SharedRoomLink.publishRun")(
     function* (threadId: ThreadId, runId: RunId) {
@@ -534,14 +753,17 @@ const make = Effect.gen(function* () {
       if (url === null || Option.isNone(token) || now >= Date.parse(link.expiresAt)) {
         return yield* disconnect(threadId);
       }
-      const { turnItems, about, artifactId } = yield* runFacts(threadId, thread, link, runId);
+      const { turnItems, about, artifactId, box } = yield* runFacts(threadId, thread, link, runId);
       const turn = guestTurnOf(runId, turnItems);
       if (turn === null) return;
       const artifact = artifactOfRun(artifactId, turnItems);
+      const { prompt: asked, ...shown } = box ?? { prompt: turn.prompt };
       const request: GuestTurnRequest = {
         ...turn,
+        prompt: clip(asked, GUEST_TURN_PROMPT_MAX_LENGTH),
         ...about,
         ...(artifact === undefined ? {} : { artifact }),
+        ...shown,
       };
       const response = yield* http
         .execute(
@@ -558,6 +780,7 @@ const make = Effect.gen(function* () {
         if (about.taskId !== undefined) yield* finishTask(threadId, about.taskId);
         // The room stops showing the run as running once it has the turn.
         if (running.get(threadId)?.runId === runId) running.delete(threadId);
+        boxRuns.delete(runId);
       } else yield* Effect.logWarning("The room refused a turn", { status: response.status });
     },
     Effect.scoped,
@@ -577,35 +800,74 @@ const make = Effect.gen(function* () {
       if (url === null || Option.isNone(token) || now >= Date.parse(link.expiresAt)) {
         return yield* disconnect(threadId);
       }
+      const live = boxRuns.get(runId);
       const request: GuestAgentActivityRequest =
         state === "idle"
           ? { id: runId, state }
-          : yield* Effect.map(
+          : // A box's run says again every few seconds; what it was asked does not change.
+            (live?.told ??
+            (yield* Effect.map(
               runFacts(threadId, thread, link, runId),
-              ({ turnItems, about, artifactId }) => ({
+              ({ turnItems, about, artifactId, box }): GuestAgentActivityRequest => ({
                 id: runId,
                 state,
-                prompt: runPromptOf(turnItems),
+                prompt:
+                  box === undefined
+                    ? runPromptOf(turnItems)
+                    : clip(box.prompt.replace(/\s+/g, " "), GUEST_AGENT_PROMPT_MAX_LENGTH),
                 ...about,
                 ...(artifactId === undefined ? {} : { artifactId }),
+                ...(box === undefined
+                  ? {}
+                  : { boxId: box.boxId, ...(box.model === undefined ? {} : { model: box.model }) }),
               }),
-            );
+            )));
+      const tracked =
+        request.boxId === undefined
+          ? undefined
+          : (live ??
+            ({
+              work: "thinking",
+              detail: undefined,
+              text: "",
+              waitingOn: new Set(),
+              toldAt: now,
+              telling: false,
+              told: request,
+            } satisfies BoxRun));
+      if (tracked !== undefined) {
+        boxRuns.set(runId, tracked);
+        tracked.toldAt = now;
+      }
+      const body: GuestAgentActivityRequest =
+        tracked === undefined
+          ? request
+          : { ...request, ...boxProgressOf(tracked, request.artifactId) };
       const response = yield* http
         .execute(
           HttpClientRequest.post(url).pipe(
             HttpClientRequest.bearerToken(new TextDecoder().decode(token.value)),
-            HttpClientRequest.bodyJsonUnsafe(request),
+            HttpClientRequest.bodyJsonUnsafe(body),
           ),
         )
-        .pipe(Effect.timeout(REQUEST_TIMEOUT));
+        .pipe(
+          Effect.timeout(REQUEST_TIMEOUT),
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (tracked !== undefined) tracked.telling = false;
+            }),
+          ),
+        );
       if (response.status === 410) return yield* disconnect(threadId);
       if (response.status < 200 || response.status >= 300) {
         return yield* Effect.logWarning("The room refused a turn's activity", {
           status: response.status,
         });
       }
-      if (state === "idle") running.delete(threadId);
-      else running.set(threadId, { runId, at: now });
+      if (state === "idle") {
+        running.delete(threadId);
+        boxRuns.delete(runId);
+      } else running.set(threadId, { runId, at: now });
     },
     Effect.scoped,
     Effect.catch((cause) =>
@@ -747,6 +1009,41 @@ const make = Effect.gen(function* () {
         ? answerOnOwnBoard(threadId, runId)
         : publishActivity(threadId, runId, kind),
   );
+  /** Notes what a box thread's event says its agent does. Returns whether that changed. */
+  const noteBoxProgress = (live: BoxRun, event: OrchestrationV2DomainEvent): boolean => {
+    const write = (text: string) => {
+      // A turn item whose text is its message's carries none of its own.
+      if (text.trim() === "" || (live.work === "writing" && live.text === text)) return false;
+      live.work = "writing";
+      live.text = text;
+      return true;
+    };
+    if (event.type === "runtime-request.updated") {
+      const request = event.payload;
+      if (request.kind === "dynamic_tool_call" || request.kind === "auth_refresh") return false;
+      const waiting = live.waitingOn.size > 0;
+      if (request.status === "pending") live.waitingOn.add(request.id);
+      else live.waitingOn.delete(request.id);
+      return waiting !== live.waitingOn.size > 0;
+    }
+    if (event.type === "message.updated") {
+      return event.payload.role === "assistant" && write(event.payload.text);
+    }
+    if (event.type !== "turn-item.updated") return false;
+    const item = event.payload;
+    if (item.type === "assistant_message") return write(item.text);
+    if (item.type === "reasoning") {
+      if (live.work === "thinking") return false;
+      live.work = "thinking";
+      return true;
+    }
+    const tool = toolActivity(item);
+    if (tool === null || (live.work === "tool" && live.detail === tool.shared)) return false;
+    live.work = "tool";
+    live.detail = tool.shared;
+    return true;
+  };
+
   // Untraced: it sees every domain event of every thread, and most do nothing here.
   const onEvent = Effect.fnUntraced(function* (event: OrchestrationV2DomainEvent) {
     const { threadId } = event;
@@ -771,6 +1068,13 @@ const make = Effect.gen(function* () {
     const told = running.get(threadId);
     if (told === undefined) return;
     const now = DateTime.toEpochMillis(yield* DateTime.now);
+    const live = boxRuns.get(told.runId);
+    if (live !== undefined && noteBoxProgress(live, event)) {
+      if (live.telling || now - live.toldAt < BOX_PROGRESS_INTERVAL_MS) return;
+      live.telling = true;
+      told.at = now;
+      return yield* worker.enqueue({ kind: "running", threadId, runId: told.runId });
+    }
     if (now - told.at < ACTIVITY_REFRESH_MS) return;
     // Marked now, so the events until the post lands do not each ask again.
     told.at = now;
@@ -784,6 +1088,7 @@ const make = Effect.gen(function* () {
     catchUp,
     takeTask,
     takeArtifact,
+    promptBox,
     publishRun,
     publishActivity,
     drain: worker.drain,

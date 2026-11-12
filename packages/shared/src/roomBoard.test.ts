@@ -16,6 +16,7 @@ import {
   EMPTY_ROOM_BOARD,
   type RoomBoardScope,
   applyRoomBoardChange,
+  canRestoreRoomArtifact,
   roomArtifactAfterFill,
   roomArtifactBody,
   roomArtifactRequestOf,
@@ -136,7 +137,7 @@ describe("applyRoomBoardChange", () => {
     expect(removed.edges).toEqual([]);
   });
 
-  it("swaps an artifact with the version it replaced, and back, for anyone", () => {
+  it("swaps an artifact with the version it replaced, and back, for the people behind it", () => {
     const first = { body: "# One", turnId: "run:1", updatedAt: "2026-11-12T00:00:00.000Z" };
     const second = roomArtifactAfterFill(roomArtifactAfterFill(undefined, first), {
       body: "# Two",
@@ -164,6 +165,30 @@ describe("applyRoomBoardChange", () => {
     // No earlier version, not an artifact, or no such card: nothing happens.
     for (const noteId of ["empty", "note", "gone"]) {
       expect(applied(board, restore(noteId))).toBe(board);
+    }
+    // The owner, whoever added the card, and whoever asked for or wrote either version.
+    const eve = GuestId.make("guest:eve");
+    const ada = GuestId.make("guest:ada");
+    const cardOf = (fields: Partial<RoomBoardNote>): RoomBoard => ({
+      positions: {},
+      notes: [{ id: "a", text: "Plan", x: 0, y: 0, kind: "artifact", ...fields }],
+    });
+    const byOwner = roomArtifactAfterFill(first, { ...first, body: "# Two", turnId: "run:2" });
+    const rows: ReadonlyArray<readonly [RoomBoard, typeof sam | null, boolean]> = [
+      [cardOf({ artifact: byOwner }), null, true],
+      [cardOf({ artifact: byOwner }), eve, false],
+      [cardOf({ artifact: byOwner, guestId: eve }), eve, true],
+      [cardOf({ artifact: { ...byOwner, askedBy: eve } }), eve, true],
+      [cardOf({ artifact: second }), sam, true],
+      [cardOf({ artifact: second }), eve, false],
+      [cardOf({ artifact: { ...byOwner, previous: { ...first, askedBy: ada } } }), ada, true],
+      [cardOf({ artifact: { ...byOwner, previous: { ...first, guestId: ada } } }), ada, true],
+    ];
+    for (const [shared, person, allowed] of rows) {
+      expect(canRestoreRoomArtifact(shared.notes[0]!, person)).toBe(allowed);
+      expect(Result.isSuccess(applyRoomBoardChange(shared, scope, person, restore("a")))).toBe(
+        allowed,
+      );
     }
   });
 });

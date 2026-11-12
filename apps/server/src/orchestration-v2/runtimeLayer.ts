@@ -375,7 +375,9 @@ export const layer = Layer.mergeAll(
 );
 
 const layerSharedRoomLinkProvided = SharedRoomLink.layer.pipe(
-  Layer.provide(Layer.merge(layerOrchestratorProvided, layerProjectService)),
+  Layer.provide(
+    Layer.mergeAll(layerOrchestratorProvided, layerProjectService, layerThreadLaunchProvided),
+  ),
 );
 const layerRoomBoxesProvided = RoomBoxes.layer.pipe(
   Layer.provide(Layer.merge(layerOrchestratorProvided, layerThreadLaunchProvided)),

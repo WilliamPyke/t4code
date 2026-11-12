@@ -81,7 +81,7 @@ export const roomBoxModelName = (
 ) => clip(guestThreadModel(selection, providers).name, MODEL_NAME_MAX_LENGTH);
 
 /** What a tool use shows on a box: its name for the owner, and words that reveal no more. */
-function toolActivity(
+export function toolActivity(
   item: OrchestrationV2TurnItem,
 ): { readonly owner: string; readonly shared: string } | null {
   switch (item.type) {

@@ -1,7 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
-import { guestEnvironmentId } from "@t3tools/client-runtime/environment";
+import { guestEnvironmentId, isGuestEnvironment } from "@t3tools/client-runtime/environment";
 import { type GuestShareEndpoint, guestShareRequest } from "@t3tools/client-runtime/rpc";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import {
   deriveRunlessWorkStartedAt,
   deriveThreadActivityRun,
@@ -20,9 +24,11 @@ import {
   GUEST_SHARE_PARAM,
   GUEST_SIGN_IN_BEGIN_ROUTE,
   GUEST_SIGN_IN_ROUTE,
+  type EnvironmentId,
   type GuestAccount,
   GuestHandoff,
   GuestMessageId,
+  GuestShareId,
   type GuestShareView,
   type GuestSignInFailure,
   GuestSignInStart,
@@ -33,11 +39,14 @@ import {
   type RoomBoardChange,
   type RoomBoardNote,
   type ScopedThreadRef,
+  SharedThreadJoinError,
   type ThreadGuest,
   type ThreadGuestMessage,
   type ThreadGuestMessageStatus,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { buildJoinLink } from "@t3tools/shared/promptLinks";
+import { useNavigate } from "@tanstack/react-router";
 import type { LegendListRef } from "@legendapp/list/react";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -71,6 +80,8 @@ import { configuredHostedAppUrl } from "~/hostedPairing";
 import { useTheme } from "~/hooks/useTheme";
 import { cn } from "~/lib/utils";
 import { deriveActiveWorkStartedAt, derivePhase, deriveThreadAgentWorking } from "~/session-logic";
+import { useProjects } from "~/state/entities";
+import { serverEnvironment } from "~/state/server";
 import { environmentThreadDetails, threadEnvironment, useEnvironmentThread } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { ComposerControl, ComposerControlIcon } from "../chat/ComposerControl";
@@ -148,6 +159,7 @@ export function noteGuestSignInFailure(shareId: string, failure: GuestSignInFail
 }
 
 const decodeErrorBody = Schema.decodeUnknownOption(Schema.Struct({ message: Schema.String }));
+const isSharedThreadJoinError = Schema.is(SharedThreadJoinError);
 const decodeHandoff = Schema.decodeUnknownOption(GuestHandoff);
 const decodeSignInStart = Schema.decodeUnknownOption(GuestSignInStart);
 const UNREACHABLE = "Could not reach the server.";
@@ -314,6 +326,20 @@ function GuestThreadSession({
   // Here, not in the composer, so a note from the board can land in it.
   const [draft, setDraft] = useState("");
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const navigate = useNavigate();
+  // The guest's own machines: the ones with projects, which a shared thread's page has none of.
+  const ownEnvironmentIds = [
+    ...new Set(useProjects().map((project) => project.environmentId)),
+  ].filter((environmentId) => !isGuestEnvironment(environmentId));
+  const promptOwnBox = useAtomCommand(serverEnvironment.promptSharedRoomBox, {
+    reportFailure: false,
+  });
+  // Where this guest's boxes ran when last prompted: on their own agent, or through the owner.
+  const [boxesRunHere, setBoxesRunHere] = useState<boolean | null>(null);
+  // The thread on the guest's machine behind each of their boxes prompted from this page.
+  const [ownBoxThreads, setOwnBoxThreads] = useState<
+    ReadonlyMap<string, { readonly environmentId: EnvironmentId; readonly threadId: ThreadId }>
+  >(new Map());
   const [awaitingRowIds, setAwaitingRowIds] = useState(readAwaitingRowIds);
   const awaiting = nextAwaitingRowIds(awaitingRowIds, view, projection?.visibleTurnItems ?? []);
   if (awaiting !== awaitingRowIds) setAwaitingRowIds(awaiting);
@@ -365,9 +391,57 @@ function GuestThreadSession({
     }
     void opened.then(reportOpenFailure);
   };
-  // A request from this guest's own thread box, which waits for the owner like any message. The
-  // cards are written into it, so the owner reads exactly what would reach their agent.
+  /**
+   * Runs a prompt to this guest's own thread box on their own agent: on the machine of theirs
+   * that joined this room. Resolves to whether it ran, failed (`false`), or no machine of theirs
+   * is in the room (`null`).
+   */
+  const promptBoxHere = async (boxId: string, prompt: BoardPrompt): Promise<boolean | null> => {
+    const cards = boardContextCards(view.board, view.guests, prompt.cards);
+    for (const environmentId of ownEnvironmentIds) {
+      const result = await promptOwnBox({
+        environmentId,
+        input: {
+          host: share.host,
+          shareId: GuestShareId.make(share.shareId),
+          boxId,
+          title: view.board?.notes.find((note) => note.id === boxId)?.text ?? "",
+          text: prompt.text.trim(),
+          cards,
+          ...(prompt.artifactId === null ? {} : { artifactId: prompt.artifactId }),
+        },
+      });
+      if (result._tag === "Success") {
+        const { threadId } = result.value;
+        if (threadId === null) continue;
+        setOwnBoxThreads((current) => new Map(current).set(boxId, { environmentId, threadId }));
+        return true;
+      }
+      if (isAtomCommandInterrupted(result)) return false;
+      const error = squashAtomCommandFailure(result);
+      // A machine that cannot be asked now is passed over; one that is in the room and failed is not.
+      if (!isSharedThreadJoinError(error)) continue;
+      toastManager.add({
+        type: "error",
+        title: "Could not run it on your agent",
+        description: error.message,
+      });
+      return false;
+    }
+    return null;
+  };
+  // A prompt from this guest's own thread box. Their own agent runs it when a machine of theirs
+  // joined this room. Otherwise it is a request that waits for the owner like any message, with
+  // the cards written into it, so the owner reads exactly what would reach their agent.
   const promptBox = async (boxId: string, prompt: BoardPrompt) => {
+    if (prompt.text.trim() !== "" && prompt.text.length <= GUEST_MESSAGE_MAX_LENGTH) {
+      const ranHere = await promptBoxHere(boxId, prompt);
+      if (ranHere !== null) {
+        if (ranHere) setBoxesRunHere(true);
+        return ranHere;
+      }
+    }
+    setBoxesRunHere(false);
     const text = guestBoardPromptText(
       prompt.text,
       boardContextCards(view.board, view.guests, prompt.cards),
@@ -454,8 +528,28 @@ function GuestThreadSession({
             onCursor={(presence) => postBoardCursor(endpoint, presence)}
             onPromptBox={promptBox}
             renderBoxModel={() => (
-              <span className="truncate text-2xs text-muted-foreground">Goes to the owner</span>
+              <span className="truncate text-2xs text-muted-foreground">
+                {boxesRunHere === true
+                  ? "Runs on your agent"
+                  : boxesRunHere === false || ownEnvironmentIds.length === 0
+                    ? "Goes to the owner"
+                    : "Your agent, if your machine joined"}
+              </span>
             )}
+            guestBoxPlaceholder={
+              boxesRunHere === true
+                ? "Ask your agent"
+                : boxesRunHere === false || ownEnvironmentIds.length === 0
+                  ? "Ask the owner's agent"
+                  : "Ask an agent"
+            }
+            conversationBoxIds={[...ownBoxThreads.keys()]}
+            onOpenConversation={(boxId) => {
+              const box = ownBoxThreads.get(boxId);
+              if (box !== undefined) {
+                void navigate({ to: "/$environmentId/$threadId", params: box });
+              }
+            }}
             ownerWritingArtifactId={ownerWritingArtifactId(
               projection.visibleTurnItems.map((row) => row.item),
               deriveThreadStructureRuntime(projection)?.activeRunId,

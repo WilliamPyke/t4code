@@ -35,6 +35,7 @@ import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as McpToolAccessTestkit from "../mcp/McpToolAccess.testkit.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as SharedRoomLink from "./SharedRoomLink.ts";
@@ -81,36 +82,61 @@ const world = Effect.fn(function* (
   const requestedAt = yield* Ref.make(0);
   const status = yield* Ref.make({ isRepo: false, refName: null } as unknown as VcsStatusResult);
   const answers = yield* Queue.unbounded<OrchestrationV2ServerCommand>();
+  // The links of the threads this machine made for thread boxes, and what it launched and sent.
+  const boxLinks = yield* Ref.make<ReadonlyMap<string, ThreadRoomLink | null>>(new Map());
+  const launched = yield* Ref.make<ReadonlyArray<ThreadLaunch.ThreadLaunchInput>>([]);
+  const sent = yield* Ref.make<
+    ReadonlyArray<Extract<OrchestrationV2ServerCommand, { type: "message.dispatch" }>>
+  >([]);
   const layer = SharedRoomLink.layer.pipe(
+    Layer.provide(
+      Layer.mock(ThreadLaunch.ThreadLaunchService)({
+        launch: (input) =>
+          Ref.updateAndGet(launched, (seen) => [...seen, input]).pipe(
+            Effect.map(
+              (seen) => ({ threadId: ThreadId.make(`thread:box:${seen.length}`) }) as never,
+            ),
+          ),
+      }),
+    ),
     Layer.provide(
       Layer.mock(Orchestrator.OrchestratorV2)({
         streamDomainEvents: owner === undefined ? Stream.never : Stream.fromIterable(owner.events),
         dispatch: (command: OrchestrationV2ServerCommand) =>
           command.type === "thread.room-link.set"
-            ? Ref.set(link, command.roomLink).pipe(Effect.as({} as never))
-            : (command.type === "thread.room-task.answer" ||
-                  command.type === "thread.room-artifact.fill" ||
-                  command.type === "thread.room-box.turn") &&
-                owner !== undefined
-              ? Queue.offer(answers, command).pipe(Effect.as({} as never))
-              : Effect.die("Only the room link changes here"),
+            ? (command.threadId === threadId
+                ? Ref.set(link, command.roomLink)
+                : Ref.update(boxLinks, (links) =>
+                    new Map(links).set(command.threadId, command.roomLink),
+                  )
+              ).pipe(Effect.as({} as never))
+            : command.type === "message.dispatch" && owner === undefined
+              ? Ref.update(sent, (seen) => [...seen, command]).pipe(Effect.as({} as never))
+              : (command.type === "thread.room-task.answer" ||
+                    command.type === "thread.room-artifact.fill" ||
+                    command.type === "thread.room-box.turn") &&
+                  owner !== undefined
+                ? Queue.offer(answers, command).pipe(Effect.as({} as never))
+                : Effect.die("Only the room link changes here"),
         findGuestShareThreadId: (shareId) =>
           Effect.succeed(
             ([...(owner?.rooms ?? [])].find(([, share]) => share.id === shareId)?.[0] ??
               null) as never,
           ),
         getThreadRecords: (readThreadId, _fields, filter) =>
-          Effect.all([Ref.get(link), Ref.get(requestedAt)]).pipe(
+          Effect.all([Ref.get(link), Ref.get(requestedAt), Ref.get(boxLinks)]).pipe(
             Effect.map(
-              ([roomLink, at]) =>
+              ([joinedLink, at, links]) =>
                 ({
                   thread: {
-                    roomLink,
+                    roomLink: links.has(readThreadId) ? links.get(readThreadId) : joinedLink,
                     guestShare: owner?.rooms?.get(readThreadId) ?? owner?.share ?? null,
                     projectId: "project:joined",
                     worktreePath: null,
                     branch: null,
                     deletedAt: null,
+                    archivedAt: null,
+                    modelSelection: { instanceId: "codex", model: "gpt-5.1-codex" },
                   } as unknown as OrchestrationV2AppThread,
                   turnItems: (owner?.itemsOf ?? joinedItemsOf ?? (() => items))(
                     filter?.turnItemRunIds?.[0] ?? "",
@@ -178,7 +204,7 @@ const world = Effect.fn(function* (
     Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-shared-room-" })),
     Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
-  return { link, posts, layer, requestedAt, status, answers };
+  return { link, posts, layer, requestedAt, status, answers, boxLinks, launched, sent };
 });
 
 it("shows the room a run's prompt and its last reply, cut to what the room keeps", () => {
@@ -834,6 +860,99 @@ it.effect("fills the room's artifact card with the user's own turn, from its who
       assert.isUndefined(other?.artifact);
     }).pipe(Effect.provide(layer));
   }),
+);
+
+it.effect(
+  "runs a prompt to the user's own thread box here, and tells the room it is that box's",
+  () =>
+    Effect.gen(function* () {
+      const shareId = GuestShareId.make("share:room");
+      const boxThread = ThreadId.make("thread:box:1");
+      let boxItems: ReadonlyArray<OrchestrationV2TurnItem> = [];
+      const { link, posts, layer, boxLinks, launched, sent } = yield* world(
+        [{ status: 200, body: { title: "Plan", body: "# Light" } }, 204, 204, 404],
+        undefined,
+        () => boxItems,
+      );
+      yield* Effect.gen(function* () {
+        const rooms = yield* SharedRoomLink.SharedRoomLink;
+        const prompt = (text: string, artifactId?: string) =>
+          rooms.promptBox({
+            host: "sam.t3.test",
+            shareId,
+            boxId: "box:1",
+            title: "Design",
+            text,
+            cards: [{ label: "Note from Eve", author: "guest", name: "Eve", text: "Dark​ mode" }],
+            ...(artifactId === undefined ? {} : { artifactId }),
+          });
+        // No thread here joined the room, so nothing runs.
+        assert.deepEqual(yield* prompt("Make it dark"), { threadId: null });
+        yield* rooms.connect(threadId, "sam.t3.test", { ...room, shareId });
+
+        assert.deepEqual(yield* prompt("Make it dark", "note:plan"), { threadId: boxThread });
+        // The box gets a thread of its own beside the joined one, connected to the room as the box.
+        assert.deepInclude((yield* Ref.get(launched))[0], { title: "Design" });
+        assert.deepEqual((yield* Ref.get(boxLinks)).get(boxThread), {
+          host: "sam.t3.test",
+          expiresAt: room.expiresAt,
+          shareId,
+          boxId: "box:1",
+        });
+        assert.deepEqual((yield* Ref.get(link))?.boxes, { "box:1": boxThread });
+        // The prompt goes there with the cards and the artifact as the room has it now.
+        const [first] = yield* Ref.get(sent);
+        assert.equal(first?.threadId, boxThread);
+        assert.match(first?.text ?? "", /^Make it dark\n\n/);
+        const records = first?.context?.records ?? [];
+        assert.deepEqual(
+          records.map((record) => record.kind),
+          ["room-cards", "room-artifact"],
+        );
+        assert.deepInclude(records[0], {
+          cards: [{ label: "Note from Eve", author: "guest", name: "Eve", text: "Dark mode" }],
+        });
+        assert.deepInclude(records[1], { noteId: "note:plan", current: "# Light", boxId: "box:1" });
+
+        // The room hears the run is the box's, and gets its turn for the box and the artifact.
+        boxItems = [
+          item(1, { type: "user_message", text: first?.text, context: first?.context }),
+          item(2, { type: "assistant_message", text: "# Dark" }),
+        ];
+        const run = RunId.make("run:box");
+        yield* rooms.publishActivity(boxThread, run, "running");
+        yield* rooms.publishRun(boxThread, run);
+        const [, started, finished] = (yield* Ref.get(posts)) as ReadonlyArray<{ turn: unknown }>;
+        assert.deepEqual(started?.turn, {
+          id: "run:box",
+          state: "running",
+          prompt: "Make it dark",
+          artifactId: "note:plan",
+          boxId: "box:1",
+          model: "GPT-5.1 Codex",
+          phase: "thinking",
+        });
+        assert.deepEqual(finished?.turn, {
+          id: "run:box",
+          prompt: "Make it dark",
+          reply: "# Dark",
+          artifact: { noteId: "note:plan", body: "# Dark" },
+          boxId: "box:1",
+          cards: ["Note from Eve"],
+          model: "GPT-5.1 Codex",
+        });
+
+        // A second prompt goes to the same thread; an artifact the room no longer has is left out.
+        assert.deepEqual(yield* prompt("Darker", "note:gone"), { threadId: boxThread });
+        assert.lengthOf(yield* Ref.get(launched), 1);
+        const second = (yield* Ref.get(sent))[1];
+        assert.equal(second?.threadId, boxThread);
+        assert.deepEqual(
+          second?.context?.records.map((record) => record.kind),
+          ["room-cards"],
+        );
+      }).pipe(Effect.provide(layer));
+    }),
 );
 
 it.effect("reads an artifact card for the user to send to their agent, and sends nothing", () =>

@@ -49,9 +49,12 @@ import {
   use,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
+
+import { canRestoreRoomArtifact } from "@t3tools/shared/roomBoard";
 
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { observeResize } from "~/lib/observeResize";
@@ -93,6 +96,7 @@ import {
   boardBoxName,
   boardBoxRef,
   boardBoxRequests,
+  boardGuestWaiting,
   boardCardBox,
   boardChangeOf,
   boardChangeQueue,
@@ -122,6 +126,7 @@ import {
   followBoardView,
   panBoardBy,
   panToShow,
+  panToShowAdded,
   parseBoardLink,
   placeBoardCards,
   placeBoardItem,
@@ -363,6 +368,7 @@ interface Linking {
  */
 const NO_FORMER_PEOPLE: BoardPeople["guests"] = [];
 const NO_BOXES: ReadonlySet<string> = new Set();
+const NO_GUEST_MESSAGES: ReadonlyArray<ThreadGuestMessage> = [];
 
 export function RoomBoard({
   title,
@@ -392,6 +398,8 @@ export function RoomBoard({
   onPromptBox,
   renderBoxModel,
   onOpenConversation,
+  conversationBoxIds,
+  guestBoxPlaceholder = "Ask the owner's agent",
   renderRequestModel,
   onResolveRequest,
   resolvingRequests = NO_BOXES,
@@ -454,8 +462,12 @@ export function RoomBoard({
   readonly onPromptBox?: ((boxId: string, prompt: BoardPrompt) => Promise<boolean>) | undefined;
   /** Which model the viewer's own box runs, and the way to change it. */
   readonly renderBoxModel?: ((boxId: string) => ReactNode) | undefined;
-  /** Shows a box's conversation beside the board; the owner's. */
+  /** Opens a box's conversation: beside the board for the owner, their own thread for a guest. */
   readonly onOpenConversation?: ((boxId: string) => void) | undefined;
+  /** The boxes whose conversation the viewer can open. Absent: every box's, as for the owner. */
+  readonly conversationBoxIds?: ReadonlyArray<string> | undefined;
+  /** What the prompt box of a guest's own thread box says before they type. */
+  readonly guestBoxPlaceholder?: string | undefined;
   /** Which model a guest's waiting request on a box would run on, shown to the owner. */
   readonly renderRequestModel?: ((boxId: string) => ReactNode) | undefined;
   /** Sends or dismisses a guest's request waiting on a box; the owner's. */
@@ -477,6 +489,7 @@ export function RoomBoard({
   const [queueChange] = useState(boardChangeQueue);
   const [view, setView] = useState(INITIAL_BOARD_VIEW);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const fitted = useRef(false);
   const canEdit = room !== null && onChange !== undefined;
   const shown = resolveBoard(board, edits);
   const edges = shown.edges ?? [];
@@ -538,12 +551,26 @@ export function RoomBoard({
     surface.addEventListener("wheel", onWheel, { passive: false });
     return () => surface.removeEventListener("wheel", onWheel);
   }, []);
+  // The board opens showing every card, once: after that the view is the viewer's to move.
+  const fittable = cards === undefined ? room !== null : cards.length + shown.notes.length > 0;
+  const fitFirst = useStableCallback(() => {
+    const area = boardAreaOf(surfaceRef.current);
+    if (fitted.current || !fittable || area === null || area.width === 0 || area.height === 0) {
+      return;
+    }
+    fitted.current = true;
+    const rects = drawnRectsIn(surfaceRef.current);
+    setView((current) => (current === INITIAL_BOARD_VIEW ? fitBoardView(rects, area) : current));
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the first view is measured from the cards and the surface as the browser laid them out
+  useLayoutEffect(fitFirst, [fitFirst, fittable]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- follows the board's on-screen size, which a conversation opening beside it shrinks
   useEffect(() => {
     const surface = surfaceRef.current;
     if (surface === null) return;
     let last = boardAreaOf(surface) ?? { width: 0, height: 0 };
     return observeResize(surface, () => {
+      fitFirst();
       const size = boardAreaOf(surface);
       if (size === null) return;
       const shrank = size.width < last.width || size.height < last.height;
@@ -558,7 +585,7 @@ export function RoomBoard({
           : current,
       );
     });
-  }, []);
+  }, [fitFirst]);
 
   const guests = room?.guests ?? [];
   const people: BoardPeople = { guests: [...guests, ...formerPeople], viewer, ownerName };
@@ -600,7 +627,10 @@ export function RoomBoard({
       people,
     );
   const restoreOf = (note: RoomBoardNote) =>
-    onChange === undefined || !canEdit || note.artifact?.previous === undefined
+    onChange === undefined ||
+    !canEdit ||
+    note.artifact?.previous === undefined ||
+    !canRestoreRoomArtifact(note, viewer)
       ? undefined
       : () =>
           queueChange(noteRef(note.id), () =>
@@ -738,11 +768,12 @@ export function RoomBoard({
   const drawnItem = (ref: string) =>
     surfaceRef.current?.querySelector<HTMLElement>(`[data-board-item="${CSS.escape(ref)}"]`) ??
     null;
-  // Pans once, as little as it takes, and only when the rect is not already in view whole.
-  const reveal = (rect: BoardRect) => {
+  // Pans once, as little as it takes, and only when the rect is not already in view whole. A
+  // card just added moves the view only when most of it is out of sight.
+  const reveal = (rect: BoardRect, added = false) => {
     const area = boardAreaOf(surfaceRef.current);
     if (area === null) return;
-    const next = panToShow(view, rect, area);
+    const next = added ? panToShowAdded(view, rect, area) : panToShow(view, rect, area);
     if (next === view) return;
     setFollowing(null);
     setView(next);
@@ -773,7 +804,7 @@ export function RoomBoard({
     });
     send({ kind: "note", id }, value);
     const size = boardNewNoteSize(fields.kind);
-    reveal({ x: value.x, y: value.y, width: size.w, height: size.h });
+    reveal({ x: value.x, y: value.y, width: size.w, height: size.h }, true);
     return id;
   };
   const addCard = (fields: Pick<RoomBoardNote, "kind" | "url">, wanted?: BoardPoint) => {
@@ -784,9 +815,15 @@ export function RoomBoard({
   const addBeside = (ref: string, kind: "artifact" | "thread", direction: "from" | "to") => {
     const element = drawnItem(ref);
     if (!canEdit || full || element === null) return;
+    const area = boardAreaOf(surfaceRef.current);
     const id = newNote(
       { kind },
-      besideBoardItem(drawnRect(element), boardNewNoteSize(kind), drawnRects()),
+      besideBoardItem(
+        drawnRect(element),
+        boardNewNoteSize(kind),
+        drawnRects(),
+        area === null ? undefined : visibleBoardRect(view, area),
+      ),
     );
     const line = randomUUID();
     const added = noteRef(id);
@@ -923,7 +960,10 @@ export function RoomBoard({
     const canAddArtifact = canEdit && !full && !artifactsFull && context?.artifact === null;
     // Always offered to the owner: a box with no conversation yet says so in the panel.
     const conversation =
-      onOpenConversation === undefined ? undefined : () => onOpenConversation(box.id);
+      onOpenConversation === undefined ||
+      (conversationBoxIds !== undefined && !conversationBoxIds.includes(box.id))
+        ? undefined
+        : () => onOpenConversation(box.id);
     const prompt =
       onPromptBox === undefined || context === undefined || !own ? undefined : (
         <BoardPromptBox
@@ -934,7 +974,7 @@ export function RoomBoard({
               : { id: context.artifact.id, title: context.artifact.text }
           }
           label={box.title === "" ? "Prompt this thread" : `Prompt ${box.title}`}
-          placeholder={box.guestId === undefined ? "Ask your agent" : "Ask the owner's agent"}
+          placeholder={box.guestId === undefined ? "Ask your agent" : guestBoxPlaceholder}
           model={renderBoxModel?.(box.id)}
           onPrompt={(prompt) => onPromptBox(box.id, prompt)}
         />
@@ -1351,7 +1391,12 @@ export function RoomBoard({
                 onMove={dragBy}
                 onDrop={letGo}
               >
-                <GuestDetails guest={guest} room={room} viewer={viewer} />
+                <GuestDetails
+                  guest={guest}
+                  messages={room?.messages ?? NO_GUEST_MESSAGES}
+                  boxes={threadBoxes}
+                  viewer={viewer}
+                />
               </BoardCard>
             );
           })}
@@ -1453,7 +1498,7 @@ export function RoomBoard({
                   box === undefined
                     ? undefined
                     : {
-                        label: boardBoxAgentLabel(note, people),
+                        label: boardBoxAgentLabel(note, people, note.thread?.turns.at(-1)),
                         body: box.body,
                         footer: box.prompt,
                       }
@@ -2265,17 +2310,18 @@ function ThreadMessages({ messages }: { readonly messages: ReadonlyArray<BoardMe
 
 function GuestDetails({
   guest,
-  room,
+  messages,
+  boxes,
   viewer,
 }: {
   readonly guest: ThreadGuest;
-  readonly room: BoardRoom | null;
+  readonly messages: ReadonlyArray<ThreadGuestMessage>;
+  /** The thread boxes on the board: a request waiting on one shows there, not here. */
+  readonly boxes: ReadonlyArray<BoardThreadBox>;
   readonly viewer: GuestId | null;
 }) {
-  const waiting =
-    room?.messages.filter(
-      (message) => message.guestId === guest.id && message.status === "pending",
-    ) ?? [];
+  const waiting = boardGuestWaiting(messages, guest.id, boxes);
+  const onBoxes = boardGuestWaiting(messages, guest.id, []).length - waiting.length;
   return (
     <>
       <p className="text-xs text-muted-foreground">
@@ -2284,7 +2330,11 @@ function GuestDetails({
       </p>
       {waiting.length === 0 ? (
         <p className="text-xs text-muted-foreground">
-          {viewer === null ? "Nothing waiting for you." : "Nothing waiting for the owner."}
+          {onBoxes > 0
+            ? `${onBoxes} waiting on ${onBoxes === 1 ? "a thread box" : "thread boxes"}.`
+            : viewer === null
+              ? "Nothing waiting for you."
+              : "Nothing waiting for the owner."}
         </p>
       ) : (
         <ol className="flex flex-col gap-1.5">

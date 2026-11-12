@@ -34,6 +34,10 @@ import {
   providerAllowsDirectGuestSend,
   repositoryGroupingKeyOf,
   type RoomAgentsEvent,
+  ROOM_BOX_PROGRESS_DETAIL_MAX_LENGTH,
+  ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH,
+  ROOM_BOX_PROMPT_MAX_LENGTH,
+  type RoomBoxProgress,
   type RoomArtifactRead,
   type RoomBoardChange,
   type RoomCodeState,
@@ -92,7 +96,12 @@ import { CloudManagedEndpointRuntime } from "../cloud/ManagedEndpointRuntime.ts"
 import { configuredHostedAppUrlConfig } from "../cloud/publicConfig.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as CommandOutputHub from "../orchestration-v2/CommandOutputHub.ts";
-import { GUEST_FAILURE, hasGuest, roomCardLabels } from "../orchestration-v2/GuestShareDecider.ts";
+import {
+  GUEST_FAILURE,
+  hasGuest,
+  roomBoxOn,
+  roomCardLabels,
+} from "../orchestration-v2/GuestShareDecider.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { coalesceThreadLiveStream } from "../orchestration-v2/ThreadLiveEventCoalescer.ts";
 import { buildBoundedThreadStreamSnapshot } from "../orchestration-v2/ThreadStream.ts";
@@ -140,8 +149,9 @@ const GUEST_TURN_RATE_WINDOW_MS = 60_000;
 const BOARD_CHANGE_RATE_LIMIT = 120;
 // Catch-ups one guest's machine can ask for in a minute. Each is a person pressing a button.
 const ROOM_UPDATES_RATE_LIMIT = 20;
-// Turn starts and stops one guest's machine can report in a minute.
-const AGENT_ACTIVITY_RATE_LIMIT = 30;
+// What one guest's machine can report of its turns in a minute: each start and stop, and what a
+// thread box's agent is doing, which it says every two seconds while that changes.
+const AGENT_ACTIVITY_RATE_LIMIT = 90;
 // Pointer moves one guest can send in a second. Their page sends about 12.
 const CURSOR_RATE_LIMIT = 20;
 const CURSOR_RATE_WINDOW_MS = 1_000;
@@ -178,12 +188,23 @@ interface RoomLive {
   >;
   readonly cursors: ReadonlyMap<string, Expiring & RoomBoardPoint>;
   readonly views: ReadonlyMap<string, Expiring & RoomBoardViewport>;
+  /** What the agent of each guest's own thread box does on their machine, by guest and run. */
+  readonly boxes: ReadonlyMap<string, Expiring & RoomBoxProgress>;
 }
-const EMPTY_ROOM_LIVE: RoomLive = { agents: new Map(), cursors: new Map(), views: new Map() };
+const EMPTY_ROOM_LIVE: RoomLive = {
+  agents: new Map(),
+  cursors: new Map(),
+  views: new Map(),
+  boxes: new Map(),
+};
+const guestBoxRunKey = (guestId: GuestId, runId: string) => `${guestId}\n${runId}`;
 const unexpired = <K, V extends Expiring>(entries: ReadonlyMap<K, V>, now: number) =>
   new Map([...entries].filter(([, entry]) => entry.until > now));
 const roomIsEmpty = (room: RoomLive) =>
-  room.agents.size === 0 && room.cursors.size === 0 && room.views.size === 0;
+  room.agents.size === 0 &&
+  room.cursors.size === 0 &&
+  room.views.size === 0 &&
+  room.boxes.size === 0;
 
 const GUEST_ACCESS_MESSAGES = {
   ...GUEST_FAILURE,
@@ -1148,6 +1169,7 @@ const make = Effect.gen(function* () {
             agents: unexpired(room.agents, now),
             cursors: unexpired(room.cursors, now),
             views: unexpired(room.views, now),
+            boxes: unexpired(room.boxes, now),
           };
           if (!roomIsEmpty(kept)) next.set(id, kept);
         }
@@ -1176,6 +1198,12 @@ const make = Effect.gen(function* () {
     });
   const clearAgent = (shareId: GuestShareId, guestId: GuestId, id: string) =>
     changeRoom(shareId, (room) => {
+      const boxKey = guestBoxRunKey(guestId, id);
+      if (room.boxes.has(boxKey)) {
+        const boxes = new Map(room.boxes);
+        boxes.delete(boxKey);
+        return { ...room, boxes };
+      }
       if (room.agents.get(guestId)?.id !== id) return room;
       const agents = new Map(room.agents);
       agents.delete(guestId);
@@ -1210,6 +1238,13 @@ const make = Effect.gen(function* () {
           ...(agent.code === undefined ? {} : { code: agent.code }),
         }))
         .toSorted((left, right) => left.guestId.localeCompare(right.guestId)),
+      boxes: [...room.boxes.values()]
+        .filter((box) => box.until > now)
+        .map(({ until: _until, ...box }) => box)
+        .toSorted(
+          (left, right) =>
+            left.startedAt.localeCompare(right.startedAt) || left.boxId.localeCompare(right.boxId),
+        ),
     }));
   /** The room's agents and what each thread box's agent is doing, for the owner or a guest. */
   const agentsOf = (shareId: GuestShareId, reader: "owner" | "guest") =>
@@ -1218,7 +1253,8 @@ const make = Effect.gen(function* () {
       roomBoxes.progress(shareId),
       (agents, boxes): RoomAgentsEvent => ({
         ...agents,
-        boxes: reader === "owner" ? boxes.owner : boxes.guests,
+        // The owner's boxes as this server follows them, then guests' as their machines say.
+        boxes: [...(reader === "owner" ? boxes.owner : boxes.guests), ...(agents.boxes ?? [])],
       }),
     );
   /** Everyone's pointers and views but the reader's own. */
@@ -1573,6 +1609,10 @@ const make = Effect.gen(function* () {
   const allowActivity = rateLimit(AGENT_ACTIVITY_RATE_LIMIT);
   const allowCursorMove = rateLimit(CURSOR_RATE_LIMIT, CURSOR_RATE_WINDOW_MS);
 
+  /** Text another machine sent, as one line the whole room can read, cut to `max`. */
+  const oneLine = (text: string, max: number) =>
+    clip(sanitizeLinkedPrompt(text).text.replace(/\s+/g, " ").trim(), max);
+
   const postTurn = Effect.fn("GuestShareService.postTurn")(function* (
     token: string,
     request: GuestTurnRequest,
@@ -1586,7 +1626,21 @@ const make = Effect.gen(function* () {
     if (!allowTurnPost(`${share.id}:${guestId}`, DateTime.toEpochMillis(yield* DateTime.now))) {
       return yield* new GuestShareAccessError({ reason: "too_fast" });
     }
-    const { artifact: posted, ...turn } = request;
+    const {
+      artifact: posted,
+      boxId: askedBox,
+      cards: sentCards,
+      model: sentModel,
+      ...turn
+    } = request;
+    // Only the guest's own box shows it; anything else is one of the room's turns as before.
+    const box = roomBoxOn(share, askedBox);
+    const boxId = box !== undefined && box.guestId === guestId ? box.id : undefined;
+    const cards = (sentCards ?? []).flatMap((label) => {
+      const text = oneLine(label, 200);
+      return text === "" ? [] : [text];
+    });
+    const model = oneLine(sentModel ?? "", 120);
     // What fills the card is taken from the body again, as from any reply, so a guest's machine
     // can put no more in it than an agent's reply would.
     const filled =
@@ -1605,7 +1659,19 @@ const make = Effect.gen(function* () {
       threadId: thread.id,
       shareId: share.id,
       guestId,
-      turn: { ...turn, prompt, reply, ...(artifact === undefined ? {} : { artifact }) },
+      turn: {
+        ...turn,
+        prompt,
+        reply,
+        ...(artifact === undefined ? {} : { artifact }),
+        ...(boxId === undefined
+          ? {}
+          : {
+              boxId,
+              ...(cards.length === 0 ? {} : { cards }),
+              ...(model === "" ? {} : { model }),
+            }),
+      },
     });
     yield* clearAgent(share.id, guestId, request.id);
     yield* analytics.record("feature.used", { feature: "guest_share.turn" });
@@ -1630,12 +1696,40 @@ const make = Effect.gen(function* () {
       return yield* new GuestShareAccessError({ reason: "too_fast" });
     }
     if (request.state === "idle") return yield* clearAgent(share.id, guestId, request.id);
-    const prompt = clip(
-      sanitizeLinkedPrompt(request.prompt ?? "")
-        .text.replace(/\s+/g, " ")
-        .trim(),
-      GUEST_AGENT_PROMPT_MAX_LENGTH,
-    );
+    const prompt = oneLine(request.prompt ?? "", GUEST_AGENT_PROMPT_MAX_LENGTH);
+    // A run in the guest's own thread box shows on the box, with what its agent is doing.
+    const box = roomBoxOn(share, request.boxId);
+    if (box !== undefined && box.guestId === guestId) {
+      const phase = request.phase ?? "thinking";
+      const detail = oneLine(request.detail ?? "", ROOM_BOX_PROGRESS_DETAIL_MAX_LENGTH);
+      const preview = oneLine(request.preview ?? "", ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH).slice(
+        -ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH,
+      );
+      // Taken from the draft again, as a finished turn's is, so it holds no more than a reply would.
+      const draft =
+        artifactId === undefined || request.draft === undefined
+          ? ""
+          : roomArtifactBody(sanitizeLinkedPrompt(request.draft).text).body;
+      const model = oneLine(request.model ?? "", 120);
+      const boxPrompt = oneLine(request.prompt ?? "", ROOM_BOX_PROMPT_MAX_LENGTH);
+      const key = guestBoxRunKey(guestId, request.id);
+      return yield* changeRoom(share.id, (room, now) => ({
+        ...room,
+        boxes: new Map(room.boxes).set(key, {
+          boxId: box.id,
+          guestId,
+          ...(artifactId === undefined ? {} : { artifactId }),
+          phase,
+          ...(phase === "tool" && detail !== "" ? { detail } : {}),
+          ...(phase === "writing" && preview !== "" ? { preview } : {}),
+          ...(draft === "" ? {} : { draft }),
+          startedAt: room.boxes.get(key)?.startedAt ?? DateTime.formatIso(DateTime.makeUnsafe(now)),
+          ...(model === "" ? {} : { model }),
+          ...(boxPrompt === "" ? {} : { prompt: boxPrompt }),
+          until: now + AGENT_ACTIVITY_TTL_MS,
+        }),
+      }));
+    }
     yield* changeRoom(share.id, (room, now) => ({
       ...room,
       agents: new Map(room.agents).set(guestId, {

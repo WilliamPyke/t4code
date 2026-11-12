@@ -2421,6 +2421,7 @@ export const layerWsRpc = (
           })),
         [WS_METHODS.sharedThreadTakeArtifact]: (input) =>
           sharedRooms.takeArtifact(input.host, input.shareId, input.artifactId),
+        [WS_METHODS.sharedThreadPromptBox]: (input) => sharedRooms.promptBox(input),
         [WS_METHODS.guestShareCreate]: (input) =>
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(guestShares.create(input)),

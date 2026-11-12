@@ -9,7 +9,14 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import { RoomArtifactRead, RoomBoardNote, RoomUpdate, SharedThreadCheckout } from "./guestShare.ts";
+import { RoomBoardContextCard } from "./composerContext.ts";
+import {
+  GUEST_MESSAGE_MAX_LENGTH,
+  RoomArtifactRead,
+  RoomBoardNote,
+  RoomUpdate,
+  SharedThreadCheckout,
+} from "./guestShare.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
 
@@ -68,6 +75,29 @@ export const SharedThreadTakeArtifactResult = Schema.Struct({
   artifact: Schema.NullOr(RoomArtifactRead),
 });
 export type SharedThreadTakeArtifactResult = typeof SharedThreadTakeArtifactResult.Type;
+
+/**
+ * A prompt to one of the user's own thread boxes on a room's board, run by their own agent here:
+ * in the box's thread on this machine, made beside the thread joined from that room the first
+ * time. The room sees the turn; the owner's agent never runs it.
+ */
+export const SharedThreadPromptBoxInput = Schema.Struct({
+  host: TrimmedNonEmptyString,
+  shareId: GuestShareId,
+  boxId: RoomBoardNote.fields.id,
+  /** The box's title, which names its thread. */
+  title: RoomBoardNote.fields.text,
+  text: Schema.String.check(Schema.isMaxLength(GUEST_MESSAGE_MAX_LENGTH)),
+  /** The cards with an arrow into the box, as the user's board shows them. */
+  cards: Schema.optional(Schema.Array(RoomBoardContextCard)),
+  /** The artifact card the reply fills, read from the room as it is now. */
+  artifactId: Schema.optional(RoomBoardNote.fields.id),
+});
+export type SharedThreadPromptBoxInput = typeof SharedThreadPromptBoxInput.Type;
+
+/** The box's thread on this machine, or null when no thread here is in that room. */
+export const SharedThreadPromptBoxResult = Schema.Struct({ threadId: Schema.NullOr(ThreadId) });
+export type SharedThreadPromptBoxResult = typeof SharedThreadPromptBoxResult.Type;
 
 export const SharedThreadCatchUpInput = Schema.Struct({ threadId: ThreadId });
 export type SharedThreadCatchUpInput = typeof SharedThreadCatchUpInput.Type;

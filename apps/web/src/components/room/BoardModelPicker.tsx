@@ -21,11 +21,17 @@ import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { getDisplayModelName } from "../chat/providerIconUtils";
 import { useApplyThreadModelPick } from "../chat/useApplyThreadModelPick";
 
-/** The model a thread's composer has picked and not sent with yet, if any. */
+/**
+ * The model someone picked in a thread's composer and has not sent with yet, if any. A draft also
+ * keeps the machine's default from before the thread started, which is no pick: the thread runs
+ * on its own model until someone chooses another.
+ */
 export const composerDraftPick = (
   draft: ComposerThreadDraftState | null | undefined,
 ): ModelSelection | undefined =>
-  draft?.activeProvider === null || draft?.activeProvider === undefined
+  draft?.modelSelectionExplicit !== true ||
+  draft.activeProvider === null ||
+  draft.activeProvider === undefined
     ? undefined
     : draft.modelSelectionByProvider[draft.activeProvider];
 

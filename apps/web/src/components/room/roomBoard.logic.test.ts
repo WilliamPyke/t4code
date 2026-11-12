@@ -22,6 +22,7 @@ import {
   type BoardPresence,
   type BoardRect,
   appendNoteToDraft,
+  BOARD_SPLIT_DIVIDER,
   besideBoardItem,
   boardAgentCode,
   boardAgents,
@@ -30,6 +31,7 @@ import {
   boardBoxAgentLabel,
   boardBoxName,
   boardBoxRequests,
+  boardGuestWaiting,
   boardCardBox,
   boardChangeOf,
   boardChangeQueue,
@@ -47,6 +49,7 @@ import {
   boardProgressPhase,
   boardPromptContext,
   boardReplyQuote,
+  boardRestoreLabel,
   boardThreadBoxes,
   boardUrlIn,
   boardViewportOf,
@@ -60,6 +63,7 @@ import {
   formatBoardElapsed,
   isBoardHtmlArtifact,
   panToShow,
+  panToShowAdded,
   parseBoardLink,
   pinnedCommentSpot,
   placeBoardCards,
@@ -172,6 +176,16 @@ describe("placeBoardItem", () => {
     const at = besideBoardItem(box, artifact, [box, neighbour]);
     expect(covers(at, artifact, neighbour)).toBe(false);
     expect(covers(at, artifact, box)).toBe(false);
+    // Beside would reach past what the board shows: a clear spot in view comes first.
+    const view = { x: 0, y: 0, width: 780, height: 1_000 };
+    const shown = besideBoardItem(box, artifact, [box], view);
+    expect(inside(shown, artifact, view)).toBe(true);
+    expect(covers(shown, artifact, box)).toBe(false);
+    // With no clear spot in view it still goes beside.
+    expect(besideBoardItem(box, artifact, [box], { ...view, height: 600 })).toEqual({
+      x: 480,
+      y: 100,
+    });
   });
 });
 
@@ -873,6 +887,20 @@ describe("boardArtifactAuthor", () => {
     expect(boardArtifactAuthor({ guestId: sam, askedBy: sam }, asSam)).toBe("Your agent");
   });
 
+  it("says which way a restore goes, by which version is older", () => {
+    const older = "2026-11-12T00:00:00.000Z";
+    const newer = "2026-11-12T00:05:00.000Z";
+    expect(boardRestoreLabel({ updatedAt: newer, previous: { updatedAt: older } })).toBe(
+      "Restore previous",
+    );
+    expect(boardRestoreLabel({ updatedAt: older, previous: { updatedAt: newer } })).toBe(
+      "Back to latest",
+    );
+    expect(boardRestoreLabel({ updatedAt: older, previous: { updatedAt: older } })).toBe(
+      "Restore previous",
+    );
+  });
+
   it("says whose agents are writing an artifact now, the owner's first", () => {
     const owner = { guests, viewer: null, ownerName: "Alex" };
     const running = [
@@ -947,16 +975,25 @@ describe("thread boxes", () => {
     expect(canPromptBoardBox(sams!, eve)).toBe(false);
   });
 
-  it("says whose agent runs a box, a guest's through the owner's this round", () => {
+  it("says whose agent runs a box, a guest's by who ran its last turn", () => {
+    const sent: { readonly guestId?: string } = {};
+    expect(boardBoxAgentLabel({ guestId: sam }, { guests, viewer: eve })).toBe("Sam's thread");
+    expect(boardBoxAgentLabel({ guestId: sam }, { guests, viewer: sam })).toBe("Your thread");
+    expect(boardBoxAgentLabel({ guestId: sam }, { guests, viewer: eve }, { guestId: sam })).toBe(
+      "Sam's agent",
+    );
+    expect(boardBoxAgentLabel({ guestId: sam }, { guests, viewer: sam }, { guestId: sam })).toBe(
+      "Your agent",
+    );
     expect(boardBoxAgentLabel({}, { guests, viewer: null })).toBe("Your agent");
     expect(boardBoxAgentLabel({}, { guests, viewer: sam, ownerName: "Alex" })).toBe("Alex's agent");
-    expect(boardBoxAgentLabel({ guestId: sam }, { guests, viewer: null })).toBe(
+    expect(boardBoxAgentLabel({ guestId: sam }, { guests, viewer: null }, sent)).toBe(
       "Sam, through your agent",
     );
-    expect(boardBoxAgentLabel({ guestId: sam }, { guests, viewer: sam })).toBe(
+    expect(boardBoxAgentLabel({ guestId: sam }, { guests, viewer: sam }, sent)).toBe(
       "You, through the owner's agent",
     );
-    expect(boardBoxAgentLabel({ guestId: sam }, { guests, viewer: eve })).toBe(
+    expect(boardBoxAgentLabel({ guestId: sam }, { guests, viewer: eve }, sent)).toBe(
       "Sam, through the owner's agent",
     );
     expect(boardBoxName({ id: "b1", title: "Pricing" }, { guests, viewer: null })).toBe(
@@ -986,6 +1023,16 @@ describe("thread boxes", () => {
     expect(boardBoxRequests(messages, "b2").map((each) => each.id)).toEqual(["first", "second"]);
     expect(boardBoxRequests(messages, "thread").map((each) => each.id)).toEqual(["room"]);
     expect(boardBoxRequests(messages, "b1")).toEqual([]);
+    // A guest's card lists only what no box on the board shows.
+    const boxes = boardThreadBoxes(shared, "Launch");
+    expect(boardGuestWaiting(messages, sam, boxes).map((each) => each.id)).toEqual(["plain"]);
+    expect(boardGuestWaiting(messages, eve, boxes)).toEqual([]);
+    // Its box was removed: the request shows on the guest's card again.
+    expect(
+      boardGuestWaiting(messages, sam, boardThreadBoxes(EMPTY_ROOM_BOARD, "Launch")).map(
+        (each) => each.id,
+      ),
+    ).toEqual(["plain", "first", "second"]);
   });
 
   it("reuses the viewer's own box that already rewrites an artifact for Attach my agent", () => {
@@ -1050,6 +1097,16 @@ describe("panToShow", () => {
     });
     // Too wide to show whole: its start shows.
     expect(panToShow(view, { x: 0, y: 100, width: 2_000, height: 100 }, size).x).toBe(24);
+  });
+
+  it("leaves the view alone for a new card that mostly shows, and pans for one that does not", () => {
+    const view = { x: 0, y: 0, zoom: 1 };
+    // An artifact beside the thread's card, 60px past the right edge.
+    expect(panToShowAdded(view, { x: 480, y: 72, width: 380, height: 400 }, size)).toBe(view);
+    expect(panToShowAdded(view, { x: 16, y: 16, width: 380, height: 400 }, size)).toBe(view);
+    // Mostly past the edge, or past it whole: it comes into view.
+    expect(panToShowAdded(view, { x: 700, y: 72, width: 380, height: 400 }, size).x).toBe(-304);
+    expect(panToShowAdded(view, { x: 100, y: 900, width: 192, height: 144 }, size).y).toBe(-468);
   });
 
   it("fits every card in the board's area at no more than full size", () => {
@@ -1135,8 +1192,9 @@ describe("the visible board area", () => {
   });
 
   it("keeps the board the larger side of the row, whatever width the conversation kept", () => {
-    expect(boardPanelMaxWidth(1_018)).toBe(509);
-    expect(boardPanelMaxWidth(1_600)).toBe(800);
+    // The board's half is its own: the divider comes out of the conversation's.
+    expect(boardPanelMaxWidth(1_018)).toBe(509 - BOARD_SPLIT_DIVIDER);
+    expect(boardPanelMaxWidth(1_600)).toBe(800 - BOARD_SPLIT_DIVIDER);
     expect(boardPanelMaxWidth(700)).toBe(320);
   });
 });

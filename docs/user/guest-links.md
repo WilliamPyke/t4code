@@ -73,15 +73,26 @@ another there.
   owner's machine, in the same project, worktree and branch as the shared thread, named after the
   box; it is in the owner's thread list like any other. Later prompts go to that thread, and wait
   behind a turn it is running. The box shows its last few turns.
-- **A guest's box** runs on the owner's agent too, for now. The guest's prompt waits for the
-  owner, saying which box (and which artifact) it is for, and runs in that box's thread once the
-  owner chooses **Send**, unless the guest may
-  [send without asking](#let-a-guest-send-without-asking). Only the guest who added a box can
-  prompt it.
+- **A guest's box** runs on the guest's own agent once they
+  [continued on their machine](#continue-on-your-own-machine) and have that machine connected in
+  the app they read the board in. Its first prompt starts a thread on their machine beside the
+  one they joined with, named after the box, on their own provider login and model; nothing waits
+  for the owner and nothing is billed to them. The room sees what
+  [any turn of theirs shows](#your-turns-show-in-the-room): the prompt, the cards that went with
+  it, the model, what the agent is doing, and its reply, on the box and in the artifact it fills.
+  **Open conversation** on the box opens that thread.
+- **A guest with no machine in the room** still has their box run on the owner's agent. The
+  prompt waits for the owner, saying which box (and which artifact) it is for, and runs in that
+  box's thread once the owner chooses **Send**, unless the guest may
+  [send without asking](#let-a-guest-send-without-asking).
+
+Only the person who added a box can prompt it. The box's message box says where the prompt goes
+before you send it.
 
 While a box's agent works, everyone sees what it is doing: waiting its turn, thinking, using a
-tool, writing its reply, or waiting for the owner to approve something. Removing a box leaves its
-thread where it is. A board holds up to 12 thread boxes.
+tool, writing its reply, or waiting for whoever runs it to approve something. An artifact a box
+fills shows the reply as it is written, a few seconds behind for a box on a guest's machine.
+Removing a box leaves its thread where it is. A board holds up to 12 thread boxes.
 
 ### Lines between cards
 
@@ -106,8 +117,9 @@ turn leaves the artifact as it was.
 
 Several boxes can point at one artifact, and the last turn to finish wins. The artifact says which
 box wrote it, from which prompt and cards, on which model, and for whom. Each artifact keeps the
-version it replaced: anyone can go back to it, and back again. A board holds up to 6 artifacts,
-each up to 16,000 characters, and a longer reply is cut.
+version it replaced. The owner, whoever added the artifact, and whoever asked for or whose agent
+wrote either version can go back to it with **Restore previous**, and forward again with **Back to
+latest**. A board holds up to 6 artifacts, each up to 16,000 characters, and a longer reply is cut.
 
 A guest who [continued on their machine](#continue-on-your-own-machine) can also take an artifact
 to their own agent. It opens as a draft in their thread from this room, with the artifact's
@@ -150,8 +162,8 @@ message.
 
 The board lasts as long as the link: stopping sharing or creating a new link starts an empty
 one, and removing a guest removes what they added and leaves their tasks unassigned. Someone who
-continued the thread on their own machine does not get the board in their T Code; they still see
-it in the shared thread.
+continued the thread on their own machine reads the board in the shared thread, where their own
+boxes run on that machine.
 
 ## Remove a guest
 
@@ -224,6 +236,10 @@ tells you this before you
 join, and the thread header says **Your turns show in the room** while it is on. Choose **Leave
 room** there to stop; your thread keeps working as a plain copy, and what the room already shows
 stays until the owner stops sharing.
+
+A turn in the thread behind one of your [thread boxes](#thread-boxes) also says, while it runs,
+what your agent is doing in a few words ("Thinking", "Running a command", "Waiting for
+approval") and its reply as far as it is written, so the room can watch the box and its artifact.
 
 Only that goes back: no files, command output, reasoning, or diffs. A long prompt or reply is
 shortened, and the room keeps the 10 most recent turns from all guests. A turn you interrupt, or

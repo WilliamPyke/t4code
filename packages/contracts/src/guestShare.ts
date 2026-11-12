@@ -926,6 +926,10 @@ export const ThreadRoomLink = Schema.Struct({
    * that answers it.
    */
   task: Schema.optional(Schema.Struct({ id: RoomTaskId, takenAt: IsoDateTime })),
+  /** Set on the thread behind one of the user's own thread boxes: its turns show on that box. */
+  boxId: Schema.optional(RoomBoardNoteId),
+  /** On the thread joined from the room: the thread here behind each of the user's boxes. */
+  boxes: Schema.optional(Schema.Record(Schema.String, ThreadId)),
 });
 export type ThreadRoomLink = typeof ThreadRoomLink.Type;
 
@@ -950,6 +954,15 @@ export const GuestTurnRequest = Schema.Struct({
       truncated: RoomArtifactContent.fields.truncated,
     }),
   ),
+  /**
+   * The guest's own thread box the turn ran in. It shows on that box instead of among the room's
+   * turns; another person's box, or one no longer on the board, is ignored.
+   */
+  boxId: Schema.optional(RoomBoardNoteId),
+  /** With `boxId`: the labels of the board cards that went with the prompt. */
+  cards: Schema.optional(RoomBoxCardLabels),
+  /** With `boxId`: the model's display name. */
+  model: Schema.optional(RoomBoxModelName),
 });
 export type GuestTurnRequest = typeof GuestTurnRequest.Type;
 
@@ -964,6 +977,14 @@ export const GuestAgentActivityRequest = Schema.Struct({
   taskId: RoomAgentActivity.fields.taskId,
   artifactId: RoomAgentActivity.fields.artifactId,
   code: RoomAgentActivity.fields.code,
+  /** The guest's own thread box the turn runs in, which then shows what its agent is doing. */
+  boxId: Schema.optional(RoomBoardNoteId),
+  /** With `boxId`: what the agent is doing now, and what it has written so far. */
+  phase: Schema.optional(RoomBoxProgress.fields.phase),
+  detail: RoomBoxProgress.fields.detail,
+  preview: RoomBoxProgress.fields.preview,
+  draft: RoomBoxProgress.fields.draft,
+  model: RoomBoxProgress.fields.model,
 });
 export type GuestAgentActivityRequest = typeof GuestAgentActivityRequest.Type;
 

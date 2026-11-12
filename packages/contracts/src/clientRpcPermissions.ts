@@ -80,6 +80,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.sharedThreadTakeTask]: AuthOrchestrationOperateScope,
   // Makes this server call the room's machine for a card the user then sends to their agent.
   [WS_METHODS.sharedThreadTakeArtifact]: AuthOrchestrationOperateScope,
+  [WS_METHODS.sharedThreadPromptBox]: AuthOrchestrationOperateScope,
   // A guest link hands thread access to someone outside, like a pairing link.
   [WS_METHODS.guestShareCreate]: AuthAccessWriteScope,
   // Changes what the guests on the link see, as dismissing one of their messages does.

@@ -275,6 +275,19 @@ export function panToShow(
 }
 
 /**
+ * The view after a card is added at `rect`: as it is while at least half the card shows each way,
+ * so adding beside a card at the edge moves nothing, else moved as little as it takes to show it.
+ */
+export function panToShowAdded(view: BoardView, rect: BoardRect, area: BoardSize): BoardView {
+  const shows = (start: number, length: number, room: number) =>
+    Math.min(start + length, room) - Math.max(start, 0) >= length / 2;
+  return shows(view.x + rect.x * view.zoom, rect.width * view.zoom, area.width) &&
+    shows(view.y + rect.y * view.zoom, rect.height * view.zoom, area.height)
+    ? view
+    : panToShow(view, rect, area);
+}
+
+/**
  * The view that shows every rect in the surface, centred, at no more than full size. Cards too
  * spread out to fit even at the smallest zoom show from their top-left.
  */
@@ -301,12 +314,19 @@ export function fitBoardView(
   };
 }
 
+/** How wide the line between the board and the conversation is. */
+export const BOARD_SPLIT_DIVIDER = 6;
+
 /**
  * How wide the conversation beside the board may be in a row this wide: the board keeps at least
- * half the row, and 480px where the row allows that and the panel's own 320px.
+ * half the row, and 480px where the row allows that and the panel's own 320px. The divider comes
+ * out of the conversation's side.
  */
 export const boardPanelMaxWidth = (row: number): number =>
-  Math.max(0, row - Math.max(row / 2, Math.min(480, row - 320)));
+  Math.max(
+    0,
+    row - Math.max(row / 2, Math.min(480, row - 320 - BOARD_SPLIT_DIVIDER)) - BOARD_SPLIT_DIVIDER,
+  );
 
 /** The smallest rect that holds all of these, or null for none. */
 export function boardBounds(rects: ReadonlyArray<BoardRect>): BoardRect | null {
@@ -321,16 +341,21 @@ export function boardBounds(rects: ReadonlyArray<BoardRect>): BoardRect | null {
   };
 }
 
-/** Where a new item goes beside `rect`: to its right and level with its top, or the nearest clear spot. */
+/**
+ * Where a new item goes beside `rect`: to its right and level with its top, or the nearest clear
+ * spot, inside `within` when that has one.
+ */
 export const besideBoardItem = (
   rect: BoardRect,
   size: RoomBoardSize,
   taken: ReadonlyArray<BoardRect>,
+  within?: BoardRect,
 ): BoardPoint =>
   placeBoardItem(
     size,
     { x: rect.x + rect.width + CARD_GAP + size.w / 2, y: rect.y + size.h / 2 },
     taken,
+    within,
   );
 
 /**
@@ -1230,12 +1255,14 @@ export const canPromptBoardBox = (
 ): boolean => (box.guestId ?? null) === viewer;
 
 /**
- * Whose agent a box runs on, as its card says it. This round a guest's box runs on the owner's
- * agent: "Sam, through the owner's agent".
+ * Whose agent a box runs on, as its card says it. A guest's box says whose agent ran its last
+ * turn: their own ("Sam's agent"), or the owner's for a request the owner sent ("Sam, through
+ * the owner's agent"). Before any turn it only says whose box it is.
  */
 export function boardBoxAgentLabel(
   box: Pick<BoardThreadBox, "guestId">,
   people: BoardPeople,
+  lastTurn?: { readonly guestId?: string | undefined } | undefined,
 ): string {
   const ownerAgent =
     people.viewer === null
@@ -1244,7 +1271,12 @@ export function boardBoxAgentLabel(
         ? "the owner's agent"
         : `${people.ownerName}'s agent`;
   if (box.guestId === undefined) return sentenceStart(ownerAgent);
-  return `${boardPersonName(people, box.guestId)}, through ${ownerAgent}`;
+  const person = boardPersonName(people, box.guestId);
+  const possessive = person === "You" ? "Your" : `${person}'s`;
+  if (lastTurn === undefined) return `${possessive} thread`;
+  return lastTurn.guestId === undefined
+    ? `${person}, through ${ownerAgent}`
+    : `${possessive} agent`;
 }
 
 /** A box as other cards name it: `Your thread "Pricing"`, or `Sam's thread`. */
@@ -1260,6 +1292,22 @@ export const boardBoxRequests = (
   boxId: string,
 ): ReadonlyArray<ThreadGuestMessage> =>
   messages.filter((message) => message.status === "pending" && message.boxId === boxId);
+
+/**
+ * A guest's messages still waiting that no thread box shows, for their own card: a request made
+ * from a box still on the board shows on that box only.
+ */
+export const boardGuestWaiting = (
+  messages: ReadonlyArray<ThreadGuestMessage>,
+  guestId: string,
+  boxes: ReadonlyArray<Pick<BoardThreadBox, "id">>,
+): ReadonlyArray<ThreadGuestMessage> =>
+  messages.filter(
+    (message) =>
+      message.guestId === guestId &&
+      message.status === "pending" &&
+      !boxes.some((box) => box.id === message.boxId),
+  );
 
 /**
  * The viewer's own box that already rewrites this artifact, so "Attach my agent" reuses it
@@ -1342,6 +1390,18 @@ export function boardArtifactAuthor(
   const asker = askedBy === people.viewer ? "you" : boardPersonName(people, askedBy);
   return sentenceStart(`${agent}, asked by ${asker}`);
 }
+
+/**
+ * What restoring an artifact does, as its button says it: the version kept is the older one until
+ * someone goes back to it, and then it is the newer.
+ */
+export const boardRestoreLabel = (artifact: {
+  readonly updatedAt: string;
+  readonly previous: { readonly updatedAt: string };
+}): "Restore previous" | "Back to latest" =>
+  Date.parse(artifact.previous.updatedAt) > Date.parse(artifact.updatedAt)
+    ? "Back to latest"
+    : "Restore previous";
 
 /**
  * Whose agents are writing an artifact now, as its card says it: "Sam's agent is writing…", or

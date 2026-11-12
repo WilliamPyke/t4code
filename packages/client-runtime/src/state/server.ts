@@ -1631,6 +1631,11 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:shared-thread:take-artifact",
       tag: WS_METHODS.sharedThreadTakeArtifact,
     }),
+    // Runs a prompt to the user's own thread box of a room in that box's thread on this machine.
+    promptSharedRoomBox: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:shared-thread:prompt-box",
+      tag: WS_METHODS.sharedThreadPromptBox,
+    }),
     // Which guests have a shared thread open. Mounted only while the owner's guest list is open.
     guestPresence: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:guest-share:presence",

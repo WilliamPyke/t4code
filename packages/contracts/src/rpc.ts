@@ -189,6 +189,8 @@ import {
   SharedThreadLeaveInput,
   SharedThreadPreview,
   SharedThreadSource,
+  SharedThreadPromptBoxInput,
+  SharedThreadPromptBoxResult,
   SharedThreadTakeArtifactInput,
   SharedThreadTakeArtifactResult,
   SharedThreadTakeTaskInput,
@@ -597,6 +599,7 @@ export const WS_METHODS = {
   sharedThreadCatchUp: "sharedThread.catchUp",
   sharedThreadTakeTask: "sharedThread.takeTask",
   sharedThreadTakeArtifact: "sharedThread.takeArtifact",
+  sharedThreadPromptBox: "sharedThread.promptBox",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
 
@@ -2118,6 +2121,12 @@ const WsSharedThreadTakeArtifactRpc = Rpc.make(WS_METHODS.sharedThreadTakeArtifa
   error: Schema.Union([SharedThreadJoinError, EnvironmentAuthorizationError]),
 });
 
+const WsSharedThreadPromptBoxRpc = Rpc.make(WS_METHODS.sharedThreadPromptBox, {
+  payload: SharedThreadPromptBoxInput,
+  success: SharedThreadPromptBoxResult,
+  error: Schema.Union([SharedThreadJoinError, EnvironmentAuthorizationError]),
+});
+
 const WsGuestShareCreateRpc = Rpc.make(WS_METHODS.guestShareCreate, {
   payload: GuestShareCreateInput,
   success: GuestShareCreateResult,
@@ -2197,6 +2206,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSharedThreadCatchUpRpc,
   WsSharedThreadTakeTaskRpc,
   WsSharedThreadTakeArtifactRpc,
+  WsSharedThreadPromptBoxRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

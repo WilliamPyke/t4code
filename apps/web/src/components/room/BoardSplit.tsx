@@ -2,14 +2,14 @@ import { type CSSProperties, type PointerEvent, type ReactNode, useRef, useState
 
 import { cn } from "~/lib/utils";
 
-import { boardPanelMaxWidth } from "./roomBoard.logic";
+import { BOARD_SPLIT_DIVIDER, boardPanelMaxWidth } from "./roomBoard.logic";
 
 const PANEL_WIDTH_KEY = "t3:room-board-panel-width";
 // Until someone drags the split, the board keeps the larger side.
 const DEFAULT_PANEL_WIDTH = "clamp(320px, 38%, 520px)";
 const MIN_PANEL_WIDTH = 320;
 // The CSS twin of `boardPanelMaxWidth`, applied on every render and window size.
-const PANEL_MAX_WIDTH = "calc(100% - max(50%, min(480px, 100% - 320px)))";
+const PANEL_MAX_WIDTH = `calc(100% - max(50%, min(480px, 100% - ${MIN_PANEL_WIDTH + BOARD_SPLIT_DIVIDER}px)) - ${BOARD_SPLIT_DIVIDER}px)`;
 const KEY_STEP = 32;
 
 function readPanelWidth(): number | null {
@@ -67,9 +67,10 @@ export function BoardSplit({
             aria-valuenow={width ?? undefined}
             tabIndex={0}
             className={cn(
-              "w-1.5 shrink-0 cursor-col-resize touch-none border-s border-border bg-background outline-none hover:bg-primary/20 focus-visible:bg-primary/30",
+              "shrink-0 cursor-col-resize touch-none border-s border-border bg-background outline-none hover:bg-primary/20 focus-visible:bg-primary/30",
               open ? "max-md:hidden" : "hidden",
             )}
+            style={{ width: BOARD_SPLIT_DIVIDER }}
             onPointerDown={(event) => {
               if (event.button !== 0) return;
               event.preventDefault();
