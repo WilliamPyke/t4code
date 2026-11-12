@@ -2397,9 +2397,9 @@ export const layerWsRpc = (
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(roomBoxes.prompt(input)),
           ),
-        [WS_METHODS.guestShareSendMessage]: (input) =>
+        [WS_METHODS.guestShareResolveMessage]: (input) =>
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
-            Effect.andThen(roomBoxes.sendGuestMessage(input, input.creationSource ?? "web")),
+            Effect.andThen(roomBoxes.resolveGuestMessage(input)),
           ),
         [WS_METHODS.sharedThreadPreview]: (input) => sharedThreads.preview(input),
         [WS_METHODS.sharedThreadJoin]: (input) =>

@@ -23,7 +23,6 @@ import {
   archiveThread,
   closeGuestShare,
   removeGuest,
-  resolveGuestMessage,
   setGuestTrust,
   cancelQueuedRun,
   createThread,
@@ -152,9 +151,11 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
-    resolveGuestMessage: createEnvironmentCommand(runtime, {
+    // Send runs the guest's text as a turn, in their thread box when the message names one; the
+    // server supplies the text, never the client.
+    resolveGuestMessage: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:commands:thread:resolve-guest-message",
-      execute: resolveGuestMessage,
+      tag: WS_METHODS.guestShareResolveMessage,
       scheduler,
       concurrency,
     }),

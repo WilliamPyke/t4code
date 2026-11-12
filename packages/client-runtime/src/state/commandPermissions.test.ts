@@ -1,6 +1,7 @@
 import { requestGuarded, runStreamGuarded } from "../rpc/client.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import type { RpcSession } from "../rpc/session.ts";
@@ -18,6 +19,7 @@ import {
   AuthSourceControlWriteScope,
   ThreadId,
   EnvironmentId,
+  GuestMessageId,
   ORCHESTRATION_V2_WS_METHODS,
   ScheduledTaskId,
   WS_METHODS,
@@ -35,6 +37,7 @@ import { createCommandPermissions } from "./commandPermissions.ts";
 import { createEnvironmentRpcCommand } from "./runtime.ts";
 import { AVAILABLE_CONNECTION_STATE, BearerConnectionTarget } from "../connection/model.ts";
 import { createPeerLinkEnvironmentAtoms } from "./peerLinks.ts";
+import { createThreadEnvironmentAtoms } from "./threadCommands.ts";
 
 vi.mock("./session.ts", () => ({
   createEnvironmentSessionAtoms: () => ({ sessionStateAtom: sessions }),
@@ -210,7 +213,7 @@ describe("command permissions", () => {
     WS_METHODS.guestShareChangeBoard,
     WS_METHODS.guestShareMoveCursor,
     WS_METHODS.guestSharePromptBox,
-    WS_METHODS.guestShareSendMessage,
+    WS_METHODS.guestShareResolveMessage,
     WS_METHODS.sharedThreadTakeArtifact,
   ])("uses the target grant for both availability and execution of %s", (method) =>
     Effect.scoped(
@@ -517,6 +520,61 @@ it.effect(
         expect(yield* readLinks).toEqual({ links: [] });
       }),
     ),
+);
+
+it.effect("sends or dismisses a guest's message only with the destination's operate grant", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const registry = yield* setup;
+      const client = { [WS_METHODS.guestShareResolveMessage]: vi.fn(() => Effect.void) };
+      const supervisor = {
+        target: new BearerConnectionTarget({
+          environmentId: env,
+          label: "Test",
+          connectionId: "test",
+        }),
+        session: yield* SubscriptionRef.make(Option.some({ client } as unknown as RpcSession)),
+      } as EnvironmentSupervisor["Service"];
+      const threads = createThreadEnvironmentAtoms(
+        Atom.runtime(
+          Layer.mergeAll(
+            Layer.succeed(EnvironmentRegistry, {
+              run: (_id, effect) =>
+                Effect.provideService(effect, EnvironmentSupervisor, supervisor),
+            } as EnvironmentRegistry["Service"]),
+            Layer.succeed(
+              SecureRandom.SecureRandom,
+              SecureRandom.make((size) => new Uint8Array(size)),
+            ),
+          ),
+        ),
+        Atom.family((_id: EnvironmentId) => Atom.make(null)),
+      );
+      const input = {
+        threadId: ThreadId.make("thread:room"),
+        guestMessageId: GuestMessageId.make("guest-message:1"),
+        decision: "send" as const,
+      };
+      const send = Effect.promise(() =>
+        threads.resolveGuestMessage.run(registry, { environmentId: env, input }),
+      );
+      registry.set(sessions(env), AsyncResult.success(grant(false)));
+      expect(registry.get(threads.resolveGuestMessage.permissionAtom(env))).toBe(false);
+      const denied = yield* send;
+      expect(denied._tag).toBe("Failure");
+      if (denied._tag === "Failure") {
+        expect(Cause.squash(denied.cause)).toMatchObject({
+          _tag: "EnvironmentAuthorizationError",
+          requiredPermission: AuthOrchestrationOperateScope,
+        });
+      }
+      expect(client[WS_METHODS.guestShareResolveMessage]).not.toHaveBeenCalled();
+      registry.set(sessions(env), AsyncResult.success(grant(true)));
+      expect(registry.get(threads.resolveGuestMessage.permissionAtom(env))).toBe(true);
+      expect((yield* send)._tag).toBe("Success");
+      expect(client[WS_METHODS.guestShareResolveMessage]).toHaveBeenCalledExactlyOnceWith(input);
+    }),
+  ),
 );
 
 it.effect("requires access management to answer a link request", () =>

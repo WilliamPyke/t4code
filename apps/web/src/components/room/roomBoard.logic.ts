@@ -36,7 +36,7 @@ export interface BoardPoint {
   readonly y: number;
 }
 
-export const BOARD_MIN_ZOOM = 0.4;
+export const BOARD_MIN_ZOOM = 0.2;
 export const BOARD_MAX_ZOOM = 2;
 export const INITIAL_BOARD_VIEW: BoardView = { x: 0, y: 0, zoom: 1 };
 
@@ -219,49 +219,94 @@ export function placeBoardItem(
   return best?.at ?? { x: Math.round(around.x - size.w / 2), y: Math.round(around.y - size.h / 2) };
 }
 
-/** The view moved as little as it takes to show `rect` whole, or as it is when it already does. */
+/**
+ * The board's surface as it is on screen: where it starts in the window and how big it is. It is
+ * the area beside any conversation, so it is the only area cards are seen, placed and dropped in.
+ * A view's `x`/`y` are measured from its top-left corner.
+ */
+export interface BoardArea extends BoardSize {
+  readonly left: number;
+  readonly top: number;
+}
+
+/** Where a point in the window is on the board. */
+export const clientToBoard = (view: BoardView, area: BoardArea, client: BoardPoint): BoardPoint =>
+  screenToBoard(view, { x: client.x - area.left, y: client.y - area.top });
+
+/** The part of the board the surface shows, in board pixels. */
+export const visibleBoardRect = (view: BoardView, area: BoardSize): BoardRect => ({
+  ...screenToBoard(view, { x: 0, y: 0 }),
+  width: area.width / view.zoom,
+  height: area.height / view.zoom,
+});
+
+/** A rect in the window, such as a button inside a card, in board pixels. */
+export const clientRectToBoard = (
+  view: BoardView,
+  area: BoardArea,
+  client: BoardRect,
+): BoardRect => ({
+  ...clientToBoard(view, area, client),
+  width: client.width / view.zoom,
+  height: client.height / view.zoom,
+});
+
+/**
+ * The view moved as little as it takes to show `rect` whole, or as it is when it already does.
+ * A rect too big to show whole needs only its top-left in the first half of the surface.
+ */
 export function panToShow(
   view: BoardView,
   rect: BoardRect,
-  size: BoardSize,
+  area: BoardSize,
   margin = 24,
 ): BoardView {
-  // Too big to show whole, it shows from its start.
-  const shift = (start: number, length: number, room: number) =>
-    length > room - margin * 2 || start < margin
-      ? margin - start
-      : start + length > room - margin
-        ? room - margin - (start + length)
-        : 0;
-  const dx = shift(view.x + rect.x * view.zoom, rect.width * view.zoom, size.width);
-  const dy = shift(view.y + rect.y * view.zoom, rect.height * view.zoom, size.height);
+  const shift = (start: number, length: number, room: number) => {
+    if (length > room - margin * 2) {
+      if (start < margin) return margin - start;
+      return start > room / 2 ? room / 2 - start : 0;
+    }
+    if (start < margin) return margin - start;
+    return start + length > room - margin ? room - margin - (start + length) : 0;
+  };
+  const dx = shift(view.x + rect.x * view.zoom, rect.width * view.zoom, area.width);
+  const dy = shift(view.y + rect.y * view.zoom, rect.height * view.zoom, area.height);
   return dx === 0 && dy === 0 ? view : { ...view, x: view.x + dx, y: view.y + dy };
 }
 
-/** The view that shows every rect, centred, at no more than full size. */
+/**
+ * The view that shows every rect in the surface, centred, at no more than full size. Cards too
+ * spread out to fit even at the smallest zoom show from their top-left.
+ */
 export function fitBoardView(
   rects: ReadonlyArray<BoardRect>,
-  size: BoardSize,
+  area: BoardSize,
   margin = 40,
 ): BoardView {
   const bounds = boardBounds(rects);
   if (bounds === null) return INITIAL_BOARD_VIEW;
+  const room = { width: area.width - margin * 2, height: area.height - margin * 2 };
   const zoom = Math.min(
     1,
-    Math.max(
-      BOARD_MIN_ZOOM,
-      Math.min(
-        (size.width - margin * 2) / bounds.width,
-        (size.height - margin * 2) / bounds.height,
-      ),
-    ),
+    Math.max(BOARD_MIN_ZOOM, Math.min(room.width / bounds.width, room.height / bounds.height)),
   );
+  const place = (start: number, length: number, space: number) =>
+    length * zoom > space
+      ? Math.round(margin - start * zoom)
+      : Math.round(margin + (space - length * zoom) / 2 - start * zoom);
   return {
     zoom,
-    x: Math.round((size.width - bounds.width * zoom) / 2 - bounds.x * zoom),
-    y: Math.round((size.height - bounds.height * zoom) / 2 - bounds.y * zoom),
+    x: place(bounds.x, bounds.width, room.width),
+    y: place(bounds.y, bounds.height, room.height),
   };
 }
+
+/**
+ * How wide the conversation beside the board may be in a row this wide: the board keeps at least
+ * half the row, and 480px where the row allows that and the panel's own 320px.
+ */
+export const boardPanelMaxWidth = (row: number): number =>
+  Math.max(0, row - Math.max(row / 2, Math.min(480, row - 320)));
 
 /** The smallest rect that holds all of these, or null for none. */
 export function boardBounds(rects: ReadonlyArray<BoardRect>): BoardRect | null {

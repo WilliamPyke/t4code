@@ -2,11 +2,14 @@ import { type CSSProperties, type PointerEvent, type ReactNode, useRef, useState
 
 import { cn } from "~/lib/utils";
 
+import { boardPanelMaxWidth } from "./roomBoard.logic";
+
 const PANEL_WIDTH_KEY = "t3:room-board-panel-width";
 // Until someone drags the split, the board keeps the larger side.
 const DEFAULT_PANEL_WIDTH = "clamp(320px, 38%, 520px)";
 const MIN_PANEL_WIDTH = 320;
-const MIN_BOARD_WIDTH = 360;
+// The CSS twin of `boardPanelMaxWidth`, applied on every render and window size.
+const PANEL_MAX_WIDTH = "calc(100% - max(50%, min(480px, 100% - 320px)))";
 const KEY_STEP = 32;
 
 function readPanelWidth(): number | null {
@@ -43,8 +46,8 @@ export function BoardSplit({
   const panelRef = useRef<HTMLElement | null>(null);
   const drag = useRef<{ readonly x: number; readonly width: number } | null>(null);
   const clamp = (next: number) => {
-    const room = (rowRef.current?.clientWidth ?? Number.POSITIVE_INFINITY) - MIN_BOARD_WIDTH;
-    return Math.round(Math.max(MIN_PANEL_WIDTH, Math.min(next, room)));
+    const row = rowRef.current?.clientWidth ?? Number.POSITIVE_INFINITY;
+    return Math.round(Math.min(Math.max(MIN_PANEL_WIDTH, next), boardPanelMaxWidth(row)));
   };
   const release = (event: PointerEvent<HTMLElement>) => {
     if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
@@ -98,11 +101,8 @@ export function BoardSplit({
             )}
             style={
               {
-                // A width kept from a wider window still leaves the board its minimum.
-                "--board-panel-width":
-                  width === null
-                    ? DEFAULT_PANEL_WIDTH
-                    : `min(${width}px, calc(100% - ${MIN_BOARD_WIDTH}px))`,
+                // Whatever was stored, the board keeps the larger side of this row.
+                "--board-panel-width": `min(${width === null ? DEFAULT_PANEL_WIDTH : `${width}px`}, ${PANEL_MAX_WIDTH})`,
               } as CSSProperties
             }
           >

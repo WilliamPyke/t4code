@@ -2635,5 +2635,17 @@ it.effect(
       const [inRoom] = (yield* room).messages;
       assert.isTrue(inRoom?.text.startsWith("Message from guest Sam, sent by the owner:"));
       assert.equal(inRoom?.context?.guest?.guestMessageId, later.id);
+
+      // The owner's Dismiss goes the same way as Send, and only once.
+      yield* ask(sam, "Never mind", "thread");
+      const unwanted = (yield* room).thread.guestShare!.messages.at(-1)!;
+      const dismiss = boxes.resolveGuestMessage({
+        threadId: roomThreadId,
+        guestMessageId: unwanted.id,
+        decision: "dismiss",
+      });
+      yield* dismiss;
+      assert.equal((yield* room).thread.guestShare!.messages.at(-1)?.status, "dismissed");
+      assert.equal((yield* Effect.flip(dismiss)).reason, "not_pending");
     }).pipe(Effect.provide(layerTest)),
 );

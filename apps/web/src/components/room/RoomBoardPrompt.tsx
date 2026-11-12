@@ -53,7 +53,7 @@ export function BoardPromptBox({
     }
   };
   return (
-    <div className="flex flex-col gap-1.5" onPointerDown={stopPointer}>
+    <div className="flex flex-col gap-1.5" data-board-prompt onPointerDown={stopPointer}>
       {attached.length === 0 && hidden === 0 ? null : (
         <div className="flex flex-col gap-1">
           <p className="text-2xs text-muted-foreground">

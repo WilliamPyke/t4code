@@ -2,7 +2,7 @@ import {
   type ChatAttachment,
   CommandId,
   type ComposerContextRecord,
-  type GuestMessageSendInput,
+  type GuestMessageResolveInput,
   type GuestId,
   type GuestShareId,
   MessageId,
@@ -172,6 +172,12 @@ const EMPTY_VIEWS: RoomBoxProgressViews = { owner: [], guests: [] };
 /** A box's progress with the words a guest may see of its tool, kept apart until it is sent. */
 type PublishedProgress = RoomBoxProgress & { readonly sharedDetail?: string };
 
+/** A guest's waiting message the owner sends, and the model they picked for it. */
+type GuestMessageSend = Pick<
+  GuestMessageResolveInput,
+  "threadId" | "guestMessageId" | "modelSelection"
+>;
+
 interface BoxMessage {
   readonly text: string;
   readonly records: ReadonlyArray<ComposerContextRecord>;
@@ -200,8 +206,12 @@ export class RoomBoxes extends Context.Service<
      * on the board, else in the room thread, with text this server builds.
      */
     readonly sendGuestMessage: (
-      input: GuestMessageSendInput,
+      input: GuestMessageSend,
       creationSource: OrchestrationV2CreationSource,
+    ) => Effect.Effect<void, RoomBoxError>;
+    /** The owner's Send or Dismiss on a guest's waiting message. */
+    readonly resolveGuestMessage: (
+      input: GuestMessageResolveInput,
     ) => Effect.Effect<void, RoomBoxError>;
     /** What each box's agent of a share is doing now, as that changes. */
     readonly progress: (shareId: GuestShareId) => Stream.Stream<RoomBoxProgressViews>;
@@ -424,7 +434,7 @@ const make = Effect.gen(function* () {
   /** The send a guest's message always had: the owner's Send on the room thread. */
   const sendInRoom = (
     roomThreadId: ThreadId,
-    input: GuestMessageSendInput,
+    input: GuestMessageSend,
     attachments: ReadonlyArray<ChatAttachment>,
     creationSource: OrchestrationV2CreationSource,
   ) =>
@@ -445,7 +455,7 @@ const make = Effect.gen(function* () {
     ).pipe(Effect.mapError(() => fail("failed")));
 
   const sendGuestMessage = Effect.fn("RoomBoxes.sendGuestMessage")(function* (
-    input: GuestMessageSendInput,
+    input: GuestMessageSend,
     creationSource: OrchestrationV2CreationSource,
   ) {
     const { thread: room, share } = yield* readRoom(input.threadId);
@@ -736,7 +746,23 @@ const make = Effect.gen(function* () {
       Stream.changesWith((left, right) => JSON.stringify(left) === JSON.stringify(right)),
     );
 
-  return RoomBoxes.of({ prompt, sendGuestMessage, progress });
+  const resolveGuestMessage = Effect.fn("RoomBoxes.resolveGuestMessage")(function* (
+    input: GuestMessageResolveInput,
+  ) {
+    if (input.decision === "send") {
+      return yield* sendGuestMessage(input, input.creationSource ?? "web");
+    }
+    yield* orchestrator
+      .dispatch({
+        type: "thread.guest-message.dismiss",
+        commandId: yield* commandIdOf("dismiss"),
+        threadId: input.threadId,
+        guestMessageId: input.guestMessageId,
+      })
+      .pipe(Effect.mapError(() => fail("not_pending")));
+  });
+
+  return RoomBoxes.of({ prompt, sendGuestMessage, resolveGuestMessage, progress });
 });
 
 /** Whether a thread is the one the share recorded for this box: only its runs write to the box. */

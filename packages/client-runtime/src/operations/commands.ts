@@ -27,14 +27,13 @@ import {
   type ThreadEnvMode,
   type UploadChatAttachment,
   type GuestId,
-  type GuestMessageId,
 } from "@t3tools/contracts";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 
-import { getInitialServerConfig, request, requestGuarded } from "../rpc/client.ts";
+import { getInitialServerConfig, request } from "../rpc/client.ts";
 
 interface CommandMetadata {
   readonly commandId?: CommandId;
@@ -478,38 +477,6 @@ export const removeGuest = Effect.fn("EnvironmentCommands.removeGuest")(function
     threadId: input.threadId,
     guestId: input.guestId,
   });
-});
-
-export interface ResolveGuestMessageInput extends ThreadCommandInput {
-  readonly guestMessageId: GuestMessageId;
-  readonly decision: "send" | "dismiss";
-  /** The model the owner has picked for their next message, so a guest's turn runs on it too. */
-  readonly modelSelection?: ModelSelection;
-  readonly creationSource?: "web" | "mobile";
-}
-/**
- * Send runs the guest's text as a normal turn, in the guest's thread box when the message names
- * one; the server supplies the text, not the client.
- */
-export const resolveGuestMessage = Effect.fn("EnvironmentCommands.resolveGuestMessage")(function* (
-  input: ResolveGuestMessageInput,
-) {
-  if (input.decision === "dismiss") {
-    return yield* dispatch({
-      type: "thread.guest-message.dismiss",
-      commandId: yield* allocateCommandId(input),
-      threadId: input.threadId,
-      guestMessageId: input.guestMessageId,
-    });
-  }
-  // Its permission is the dispatch the Send button already needs; the server checks it again.
-  yield* requestGuarded(WS_METHODS.guestShareSendMessage, {
-    threadId: input.threadId,
-    guestMessageId: input.guestMessageId,
-    ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
-    ...(input.creationSource === undefined ? {} : { creationSource: input.creationSource }),
-  });
-  return { sequence: 0 };
 });
 
 export const archiveThread = Effect.fn("EnvironmentCommands.archiveThread")(function* (

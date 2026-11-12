@@ -67,6 +67,7 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   BOARD_CARD_WIDTH,
+  type BoardArea,
   type BoardBox,
   type BoardMessage,
   type BoardPeople,
@@ -74,7 +75,6 @@ import {
   type BoardPresence,
   type BoardPrompt,
   type BoardRect,
-  type BoardSize,
   type BoardTarget,
   type BoardThreadBox,
   type BoardValue,
@@ -98,6 +98,8 @@ import {
   boardChangeQueue,
   boardConnector,
   boardCursorAt,
+  clientRectToBoard,
+  clientToBoard,
   boardCursorColor,
   boardEditKey,
   boardNoteBox,
@@ -128,8 +130,8 @@ import {
   resolveBoard,
   roomCodeStatus,
   roomFetchCommand,
-  screenToBoard,
   settleBoardValue,
+  visibleBoardRect,
   zoomBoardAt,
 } from "./roomBoard.logic";
 import { RoomArtifactLive } from "./RoomBoardArtifact";
@@ -278,6 +280,21 @@ function ResizeHandle({
 
 const THREAD_DROP = "thread";
 const OWN_AGENT_DROP = "own-agent";
+
+/**
+ * The board surface's place and size on screen: the one measure every conversion between the
+ * window, the surface and the board goes through.
+ */
+const boardAreaOf = (surface: HTMLElement | null): BoardArea | null => {
+  if (surface === null) return null;
+  const bounds = surface.getBoundingClientRect();
+  return {
+    left: bounds.left + surface.clientLeft,
+    top: bounds.top + surface.clientTop,
+    width: surface.clientWidth,
+    height: surface.clientHeight,
+  };
+};
 
 /** Where an item is drawn on the board and how big, in board pixels. */
 const drawnRect = (element: HTMLElement): BoardRect => ({
@@ -476,9 +493,9 @@ export function RoomBoard({
   useEffect(() => () => cursor.close(), [cursor]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- tells the room what this board shows, so others can follow it
   useEffect(() => {
-    const bounds = surfaceRef.current?.getBoundingClientRect();
-    if (!pointing || bounds === undefined) return;
-    cursor.look(boardViewportOf(view, bounds));
+    const area = boardAreaOf(surfaceRef.current);
+    if (!pointing || area === null) return;
+    cursor.look(boardViewportOf(view, area));
   }, [cursor, pointing, view]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a follow notice is brief: a timer takes it away
   useEffect(() => {
@@ -486,15 +503,15 @@ export function RoomBoard({
     const timer = setTimeout(() => setNotice(null), FOLLOW_NOTICE_MS);
     return () => clearTimeout(timer);
   }, [notice]);
+  // Where a pointer is on the board, measured against the surface's own place on screen.
   const pointerOnBoard = (event: PointerEvent<HTMLElement>) => {
-    const bounds = surfaceRef.current?.getBoundingClientRect();
-    return bounds === undefined
-      ? null
-      : { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
+    const area = boardAreaOf(surfaceRef.current);
+    return area === null ? null : clientToBoard(view, area, { x: event.clientX, y: event.clientY });
   };
   const trackCursor = (event: PointerEvent<HTMLElement>) => {
-    const at = pointerOnBoard(event);
-    if (pointing && at !== null) cursor.move(boardCursorAt(view, at));
+    const area = boardAreaOf(surfaceRef.current);
+    if (!pointing || area === null) return;
+    cursor.move(boardCursorAt(view, { x: event.clientX - area.left, y: event.clientY - area.top }));
   };
   const pan = dragHandlers((dx, dy) => {
     setFollowing(null);
@@ -508,8 +525,9 @@ export function RoomBoard({
     const onWheel = (event: WheelEvent) => {
       if (!event.ctrlKey && !event.metaKey && scrollsInside(event)) return;
       event.preventDefault();
-      const bounds = surface.getBoundingClientRect();
-      const anchor = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
+      const area = boardAreaOf(surface);
+      if (area === null) return;
+      const anchor = { x: event.clientX - area.left, y: event.clientY - area.top };
       setFollowing(null);
       setView((current) =>
         event.ctrlKey || event.metaKey
@@ -524,9 +542,10 @@ export function RoomBoard({
   useEffect(() => {
     const surface = surfaceRef.current;
     if (surface === null) return;
-    let last = { width: surface.clientWidth, height: surface.clientHeight };
+    let last = boardAreaOf(surface) ?? { width: 0, height: 0 };
     return observeResize(surface, () => {
-      const size = { width: surface.clientWidth, height: surface.clientHeight };
+      const size = boardAreaOf(surface);
+      if (size === null) return;
       const shrank = size.width < last.width || size.height < last.height;
       last = size;
       const bounds = boardBounds(drawnRectsIn(surface));
@@ -705,8 +724,8 @@ export function RoomBoard({
   const changeNote: ChangeNote = (note, update) =>
     send({ kind: "note", id: note.id }, settleBoardValue(update(noteNow(note))));
   const zoomBy = (factor: number) => {
-    const bounds = surfaceRef.current?.getBoundingClientRect();
-    const center = { x: (bounds?.width ?? 0) / 2, y: (bounds?.height ?? 0) / 2 };
+    const area = boardAreaOf(surfaceRef.current);
+    const center = { x: (area?.width ?? 0) / 2, y: (area?.height ?? 0) / 2 };
     setFollowing(null);
     setView((current) => zoomBoardAt(current, center, factor));
   };
@@ -719,16 +738,11 @@ export function RoomBoard({
   const drawnItem = (ref: string) =>
     surfaceRef.current?.querySelector<HTMLElement>(`[data-board-item="${CSS.escape(ref)}"]`) ??
     null;
-  /** The part of the board that is on screen: the area beside any conversation, never under it. */
-  const surfaceSize = (): BoardSize | null => {
-    const surface = surfaceRef.current;
-    return surface === null ? null : { width: surface.clientWidth, height: surface.clientHeight };
-  };
   // Pans once, as little as it takes, and only when the rect is not already in view whole.
   const reveal = (rect: BoardRect) => {
-    const size = surfaceSize();
-    if (size === null) return;
-    const next = panToShow(view, rect, size);
+    const area = boardAreaOf(surfaceRef.current);
+    if (area === null) return;
+    const next = panToShow(view, rect, area);
     if (next === view) return;
     setFollowing(null);
     setView(next);
@@ -736,12 +750,10 @@ export function RoomBoard({
   // A new card lands in view when there is room, clear of everything there at drawn sizes.
   const freeSpot = (kind: RoomBoardNote["kind"]): BoardPoint => {
     const size = boardNewNoteSize(kind);
-    const area = surfaceSize() ?? { width: 600, height: 400 };
-    const within = {
-      ...screenToBoard(view, { x: 0, y: 0 }),
-      width: area.width / view.zoom,
-      height: area.height / view.zoom,
-    };
+    const within = visibleBoardRect(
+      view,
+      boardAreaOf(surfaceRef.current) ?? { width: 600, height: 400 },
+    );
     return placeBoardItem(
       size,
       { x: within.x + within.width / 2, y: within.y + within.height / 2 },
@@ -794,10 +806,10 @@ export function RoomBoard({
     element.querySelector<HTMLElement>("[data-box-prompt]")?.focus({ preventScroll: true });
   };
   const fitAll = () => {
-    const size = surfaceSize();
-    if (size === null) return;
+    const area = boardAreaOf(surfaceRef.current);
+    if (area === null) return;
     setFollowing(null);
-    setView(fitBoardView(drawnRects(), size));
+    setView(fitBoardView(drawnRects(), area));
   };
   const attachAgentOf = (note: RoomBoardNote) => {
     if (note.kind !== "artifact" || cards !== undefined || room === null) return undefined;
@@ -837,14 +849,12 @@ export function RoomBoard({
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
     setSelectedEdge(null);
-    setLinking({ from, box, to: screenToBoard(view, at) });
+    setLinking({ from, box, to: at });
   };
   const moveLink = (event: PointerEvent<HTMLElement>) => {
     const at = pointerOnBoard(event);
     if (at === null || !event.currentTarget.hasPointerCapture(event.pointerId)) return;
-    setLinking((current) =>
-      current === null ? null : { ...current, to: screenToBoard(view, at) },
-    );
+    setLinking((current) => (current === null ? null : { ...current, to: at }));
   };
   const endLink = (event: PointerEvent<HTMLElement>) => {
     if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
@@ -871,9 +881,9 @@ export function RoomBoard({
   const personName = (person: string) =>
     boardPersonName(people, person === boardPersonKey(undefined) ? undefined : person);
   const followView = useStableCallback((viewport: RoomBoardViewport) => {
-    const bounds = surfaceRef.current?.getBoundingClientRect();
-    if (bounds === undefined) return;
-    setView(followBoardView(viewport, bounds));
+    const area = boardAreaOf(surfaceRef.current);
+    if (area === null) return;
+    setView(followBoardView(viewport, area));
     setFollowing((current) =>
       current === null || current.seen ? current : { ...current, seen: true },
     );
@@ -932,7 +942,7 @@ export function RoomBoard({
     const body = (
       <>
         {tail}
-        <BoxProgress boxId={box.id} onOpenConversation={conversation} fallback={fallback} />
+        <BoxProgress boxId={box.id} fallback={fallback} />
         <BoxRequests
           requests={boardBoxRequests(room?.messages ?? [], box.id)}
           board={shown}
@@ -1157,6 +1167,24 @@ export function RoomBoard({
         }}
         onPointerLeave={cursor.leave}
         onPaste={pasteOnBoard}
+        // A prompt box taking focus brings its Send button into the board's visible area.
+        onFocusCapture={(event) => {
+          const prompt =
+            event.target instanceof Element
+              ? event.target.closest<HTMLElement>("[data-board-prompt]")
+              : null;
+          const area = boardAreaOf(surfaceRef.current);
+          if (prompt === null || area === null) return;
+          const drawn = prompt.getBoundingClientRect();
+          reveal(
+            clientRectToBoard(view, area, {
+              x: drawn.left,
+              y: drawn.top,
+              width: drawn.width,
+              height: drawn.height,
+            }),
+          );
+        }}
       >
         <div
           className={cn(
@@ -1706,9 +1734,11 @@ function BoardNote({
   const artifact = note.kind === "artifact";
   const thread = note.kind === "thread";
   const titled = artifact || thread;
-  // Anyone may move or connect a thread box; only its person, or the owner, renames or removes it.
-  const canChange =
-    canEdit && (!thread || people.viewer === null || (note.guestId ?? null) === people.viewer);
+  // Anyone who may edit the board moves, resizes and connects any card. Only its person, or the
+  // owner, removes a card, and the same goes for renaming a thread box.
+  const mine = people.viewer === null || (note.guestId ?? null) === people.viewer;
+  const canChange = canEdit && (!thread || mine);
+  const canDelete = canEdit && mine;
   const size = boardNoteSize(note);
   const [quoteOpen, setQuoteOpen] = useState(false);
   return (
@@ -1795,7 +1825,7 @@ function BoardNote({
             <TooltipPopup side="top">Give to my agent, as a draft</TooltipPopup>
           </Tooltip>
         )}
-        {canChange ? (
+        {canDelete ? (
           <button
             type="button"
             aria-label={plain ? "Delete note" : "Delete card"}

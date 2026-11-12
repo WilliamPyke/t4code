@@ -64,15 +64,13 @@ export function BoxTurns({
 /**
  * What a box's agent is doing now: its phase, model and how long it has run, and the start of
  * what it is writing. Reads only its own box's run, so another box's tick does not render it.
+ * The way to an approval is the box's own Open conversation, so it is not offered twice.
  */
 export function BoxProgress({
   boxId,
-  onOpenConversation,
   fallback,
 }: {
   readonly boxId: string;
-  /** Offered to the owner, whose machine runs it, while the run waits for an approval. */
-  readonly onOpenConversation: (() => void) | undefined;
   /** What shows when the server reports no runs for boxes, or none for this one. */
   readonly fallback?: ReactNode;
 }) {
@@ -93,13 +91,6 @@ export function BoxProgress({
         <p className="line-clamp-4 rounded-md bg-muted/50 px-2 py-1 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
           {progress.preview}
         </p>
-      ) : null}
-      {progress.phase === "approval" && onOpenConversation !== undefined ? (
-        <div>
-          <Button size="micro" onPointerDown={stopPointer} onClick={onOpenConversation}>
-            Open conversation
-          </Button>
-        </div>
       ) : null}
     </div>
   );

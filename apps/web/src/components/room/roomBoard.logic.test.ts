@@ -42,6 +42,7 @@ import {
   boardNewNoteSize,
   boardNoteBox,
   boardOwnBoxFor,
+  boardPanelMaxWidth,
   boardProgressLine,
   boardProgressPhase,
   boardPromptContext,
@@ -50,6 +51,8 @@ import {
   boardUrlIn,
   boardViewportOf,
   canPromptBoardBox,
+  clientRectToBoard,
+  clientToBoard,
   cursorSender,
   dropBoardEdit,
   fitBoardView,
@@ -68,6 +71,7 @@ import {
   roomFetchCommand,
   screenToBoard,
   settleBoardValue,
+  visibleBoardRect,
   zoomBoardAt,
 } from "./roomBoard.logic";
 
@@ -1061,5 +1065,78 @@ describe("panToShow", () => {
     expect(800 - right).toBeGreaterThanOrEqual(39);
     expect(fitBoardView([{ x: 10, y: 10, width: 100, height: 100 }], size).zoom).toBe(1);
     expect(fitBoardView([], size)).toEqual(INITIAL_BOARD_VIEW);
+  });
+});
+
+describe("the visible board area", () => {
+  // The test window: the sidebar ends at 262, and the conversation beside the board starts at 771.
+  const area = { left: 262, top: 48, width: 509, height: 700 };
+
+  it("measures from the surface's own place on screen, not the window's", () => {
+    const view = { x: -40, y: 20, zoom: 0.5 };
+    expect(clientToBoard(view, area, { x: 262, y: 48 })).toEqual({ x: 80, y: -40 });
+    expect(clientToBoard(view, area, { x: 362, y: 148 })).toEqual({ x: 280, y: 160 });
+    expect(visibleBoardRect(view, area)).toEqual({ x: 80, y: -40, width: 1018, height: 1400 });
+    expect(clientRectToBoard(view, area, { x: 312, y: 848, width: 100, height: 40 })).toEqual({
+      x: 180,
+      y: 1560,
+      width: 200,
+      height: 80,
+    });
+  });
+
+  it("places a new card inside the area beside the conversation, and needs no pan for it", () => {
+    const view = { x: 0, y: 0, zoom: 1 };
+    const tall = { ...area, height: 800 };
+    const visible = visibleBoardRect(view, tall);
+    const room = { x: 80, y: 72, width: 320, height: 200 };
+    for (const kind of ["artifact", "thread"] as const) {
+      const size = boardNewNoteSize(kind);
+      const at = placeBoardItem(
+        size,
+        { x: visible.x + visible.width / 2, y: visible.y + visible.height / 2 },
+        [room],
+        visible,
+      );
+      // Its right edge stays left of the conversation's divider.
+      expect(at.x + size.w).toBeLessThanOrEqual(visible.x + visible.width);
+      expect(at.x).toBeGreaterThanOrEqual(visible.x);
+      expect(panToShow(view, { ...at, width: size.w, height: size.h }, tall)).toBe(view);
+    }
+  });
+
+  it("shows only the top-left of a card too big for the area, panning once if it must", () => {
+    const narrow = { width: 348, height: 700 };
+    const view = { x: 0, y: 0, zoom: 1 };
+    const wide = { x: 100, y: 100, width: 380, height: 400 };
+    // Its top-left is already in the first half: nothing moves.
+    expect(panToShow(view, wide, narrow)).toBe(view);
+    // Further right, it comes back just to the middle.
+    expect(panToShow(view, { ...wide, x: 300 }, narrow).x).toBe(-126);
+  });
+
+  it("fits cards into the area beside the conversation, from their top-left when too spread", () => {
+    const rects = [
+      { x: 0, y: 0, width: 300, height: 200 },
+      { x: 900, y: 0, width: 300, height: 200 },
+    ];
+    const fit = fitBoardView(rects, area);
+    expect(fit.x).toBeGreaterThanOrEqual(40);
+    expect(fit.x + 1_200 * fit.zoom).toBeLessThanOrEqual(area.width - 39);
+    const spread = fitBoardView(
+      [
+        { x: -500, y: 0, width: 100, height: 100 },
+        { x: 5_000, y: 0, width: 100, height: 100 },
+      ],
+      area,
+    );
+    expect(spread.zoom).toBe(BOARD_MIN_ZOOM);
+    expect(spread.x + -500 * spread.zoom).toBe(40);
+  });
+
+  it("keeps the board the larger side of the row, whatever width the conversation kept", () => {
+    expect(boardPanelMaxWidth(1_018)).toBe(509);
+    expect(boardPanelMaxWidth(1_600)).toBe(800);
+    expect(boardPanelMaxWidth(700)).toBe(320);
   });
 });

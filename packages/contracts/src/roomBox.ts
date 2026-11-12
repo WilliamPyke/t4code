@@ -28,17 +28,19 @@ export const RoomBoxPromptResult = Schema.Struct({ boxThreadId: ThreadId });
 export type RoomBoxPromptResult = typeof RoomBoxPromptResult.Type;
 
 /**
- * The owner sends a guest's waiting message: in the guest's thread box when it names one that is
- * still on the board, else in the room thread. The server supplies the text, never the client.
+ * The owner sends or dismisses a guest's waiting message. Send runs it in the guest's thread box
+ * when it names one that is still on the board, else in the room thread. The server supplies the
+ * text, never the client.
  */
-export const GuestMessageSendInput = Schema.Struct({
+export const GuestMessageResolveInput = Schema.Struct({
   threadId: ThreadId,
   guestMessageId: GuestMessageId,
+  decision: Schema.Literals(["send", "dismiss"]),
   /** The model the owner picked for their next message, so the guest's turn runs on it too. */
   modelSelection: Schema.optional(ModelSelection),
   creationSource: Schema.optional(Schema.Literals(["web", "mobile"])),
 });
-export type GuestMessageSendInput = typeof GuestMessageSendInput.Type;
+export type GuestMessageResolveInput = typeof GuestMessageResolveInput.Type;
 
 const ROOM_BOX_ERROR_MESSAGES = {
   inactive: "This thread is not shared.",
