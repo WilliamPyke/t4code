@@ -472,6 +472,8 @@ export function RoomBoard({
       ...agents.map(({ guest }) => agentCardId(guest)),
     ],
     shown.positions,
+    undefined,
+    shown.sizes,
   );
   const sizes = shown.sizes ?? {};
   const boxes = new Map<string, BoardBox>([

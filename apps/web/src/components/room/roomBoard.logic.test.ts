@@ -72,6 +72,8 @@ describe("zoomBoardAt", () => {
 
 describe("placeBoardCards", () => {
   it("keeps saved positions and gives a new card a free slot, not one under a saved card", () => {
+    const wide = placeBoardCards(["thread", "guest:a"], {}, 3, { thread: { w: 440, h: 484 } });
+    expect(wide["guest:a"]!.x).toBeGreaterThanOrEqual(wide.thread!.x + 440);
     const first = placeBoardCards(["thread", "guest:a"], {});
     expect(first.thread).not.toEqual(first["guest:a"]);
 

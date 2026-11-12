@@ -72,15 +72,32 @@ export function placeBoardCards(
   cardIds: ReadonlyArray<string>,
   saved: RoomBoard["positions"],
   columns = 3,
+  sizes: RoomBoard["sizes"] = undefined,
 ): Record<string, BoardPoint> {
   const stepX = BOARD_CARD_WIDTH + CARD_GAP;
   const stepY = CARD_ROW_HEIGHT + CARD_GAP;
   const slotOf = (point: BoardPoint) =>
     `${Math.round((point.x - BOARD_ORIGIN.x) / stepX)}:${Math.round((point.y - BOARD_ORIGIN.y) / stepY)}`;
+  // A card someone made bigger also takes the slots it now reaches into.
+  const slotsUnder = (at: BoardPoint, size: RoomBoardSize) => {
+    const slots: Array<string> = [];
+    const firstColumn = Math.floor((at.x - BOARD_ORIGIN.x - BOARD_CARD_WIDTH) / stepX) + 1;
+    const firstRow = Math.floor((at.y - BOARD_ORIGIN.y - CARD_ROW_HEIGHT) / stepY) + 1;
+    for (let column = firstColumn; BOARD_ORIGIN.x + column * stepX < at.x + size.w; column += 1) {
+      for (let row = firstRow; BOARD_ORIGIN.y + row * stepY < at.y + size.h; row += 1) {
+        slots.push(`${column}:${row}`);
+      }
+    }
+    return slots;
+  };
   const taken = new Set(
     cardIds.flatMap((id) => {
       const position = saved[id];
-      return position === undefined ? [] : [slotOf(position)];
+      if (position === undefined) return [];
+      const size = sizes?.[id];
+      return size === undefined
+        ? [slotOf(position)]
+        : [slotOf(position), ...slotsUnder(position, size)];
     }),
   );
   const placed: Record<string, BoardPoint> = {};
@@ -100,6 +117,8 @@ export function placeBoardCards(
       slot += 1;
     } while (taken.has(slotOf(point)));
     placed[id] = point;
+    const size = sizes?.[id];
+    if (size !== undefined) for (const under of slotsUnder(point, size)) taken.add(under);
   }
   return placed;
 }
@@ -194,7 +213,10 @@ export function boardItemRects(
   board: RoomBoard,
   cardIds: ReadonlyArray<string>,
 ): ReadonlyArray<BoardRect> {
-  const placed = { ...board.positions, ...placeBoardCards(cardIds, board.positions) };
+  const placed = {
+    ...board.positions,
+    ...placeBoardCards(cardIds, board.positions, undefined, board.sizes),
+  };
   const cards = Object.entries(placed).map(([id, at]) => ({
     x: at.x,
     y: at.y,
@@ -224,7 +246,9 @@ export function pinnedCommentSpot(
   guestIds: ReadonlyArray<string> = [],
 ): BoardPoint {
   const cardIds = [ROOM_BOARD_THREAD_CARD, ...guestIds.map(roomBoardGuestCard)];
-  const thread = placeBoardCards(cardIds, board.positions)[ROOM_BOARD_THREAD_CARD]!;
+  const thread = placeBoardCards(cardIds, board.positions, undefined, board.sizes)[
+    ROOM_BOARD_THREAD_CARD
+  ]!;
   const width = board.sizes?.[ROOM_BOARD_THREAD_CARD]?.w ?? BOARD_CARD_WIDTH;
   const size = { w: NOTE_WIDTH, h: COMMENT_HEIGHT };
   return placeBoardItem(
