@@ -1,3 +1,4 @@
+import * as NodeURL from "node:url";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -756,6 +757,9 @@ it.effect("lets a guest's own machine post its turns to the room, and nothing el
     const room = (yield* guestShares.exportThread(handoff)).room;
     assert.isDefined(room);
     const token = room!.token;
+    // The guest's own app gets their session for the same thread, to read the room with.
+    assert.equal(room!.threadId, threadId);
+    yield* guestShares.check(room!.session!);
     const turn = (id: string) => ({ id, prompt: " Why? ", reply: "The token\u200B expires." });
     const share = Effect.map(
       orchestrator.getThreadRecords(threadId, ["runs", "messages"]),
@@ -2181,7 +2185,7 @@ it.effect("serves an image on the host only when an agent reply the guest sees s
     const { orchestrator, guestShares } = yield* shareThread;
     const runId = yield* ownerRun;
     const fileSystem = yield* FileSystem.FileSystem;
-    const directory = yield* fileSystem.makeTempDirectoryScoped();
+    const directory = (yield* fileSystem.makeTempDirectoryScoped()).replaceAll("\\", "/");
     const shot = `${directory}/my shot.png`;
     const fileUrl = `${directory}/file-url.png`;
     const page = `${directory}/page.png`;
@@ -2240,7 +2244,7 @@ it.effect("serves an image on the host only when an agent reply the guest sees s
       events: [
         item("item:agent-images", 1, {
           type: "assistant_message",
-          text: `Done: ![Shot](<${shot}>) ![Other](file://${encodeURI(fileUrl)}) ![Page](${page})`,
+          text: `Done: ![Shot](<${shot}>) ![Other](${NodeURL.pathToFileURL(fileUrl).href}) ![Page](${page})`,
         }),
         // A guest's sent message is a user message; it must not open files on the host.
         item("item:guest-image", 2, { type: "user_message", text: `![Mine](${fromUser})` }),

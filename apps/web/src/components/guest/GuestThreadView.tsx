@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { guestEnvironmentId, isGuestEnvironment } from "@t3tools/client-runtime/environment";
+import { guestEnvironmentId, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { type GuestShareEndpoint, guestShareRequest } from "@t3tools/client-runtime/rpc";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import {
@@ -24,7 +24,6 @@ import {
   GUEST_SHARE_PARAM,
   GUEST_SIGN_IN_BEGIN_ROUTE,
   GUEST_SIGN_IN_ROUTE,
-  type EnvironmentId,
   type GuestAccount,
   GuestHandoff,
   GuestMessageId,
@@ -38,12 +37,11 @@ import {
   type RoomAgentActivity,
   type RoomBoardChange,
   type RoomBoardNote,
+  type ModelSelection,
   type ScopedThreadRef,
-  SharedThreadJoinError,
   type ThreadGuest,
   type ThreadGuestMessage,
   type ThreadGuestMessageStatus,
-  type ThreadId,
 } from "@t3tools/contracts";
 import { buildJoinLink } from "@t3tools/shared/promptLinks";
 import { useNavigate } from "@tanstack/react-router";
@@ -80,7 +78,8 @@ import { configuredHostedAppUrl } from "~/hostedPairing";
 import { useTheme } from "~/hooks/useTheme";
 import { cn } from "~/lib/utils";
 import { deriveActiveWorkStartedAt, derivePhase, deriveThreadAgentWorking } from "~/session-logic";
-import { useProjects } from "~/state/entities";
+import { useComposerDraftStore } from "~/composerDraftStore";
+import { useEnvironmentProviders } from "~/state/environments";
 import { serverEnvironment } from "~/state/server";
 import { environmentThreadDetails, threadEnvironment, useEnvironmentThread } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -91,6 +90,7 @@ import { HostImageUrlContext } from "../chat/hostImageUrl";
 import { PierreEntryIcon } from "../chat/PierreEntryIcon";
 import {
   boardContextCards,
+  boardTurnSelection,
   guestBoardPromptText,
   guestMessageArtifactTitle,
   ownerWritingArtifactId,
@@ -103,6 +103,7 @@ import { getDisplayModelName, getTriggerDisplayModelName } from "../chat/provide
 import { ScrollToEndButton } from "../chat/TimelineOverlays";
 import type { TimelineRow } from "../chat/timelineRowContext";
 import { useTimelineFollow } from "../chat/useTimelineFollow";
+import { composerDraftPick } from "../room/BoardModelPicker";
 import { BoardSplit } from "../room/BoardSplit";
 import { RoomBoard, RoomCursors } from "../room/RoomBoard";
 import { RoomReplyProvider, revealRoomReply } from "../room/RoomReplyComments";
@@ -128,6 +129,7 @@ import {
   unplacedGuestMessages,
 } from "./guestStream.logic";
 import { guestTurnItemSource } from "./guestTurnItemSource";
+import { type OwnRoomMachine, OwnBoxModelPicker, useOwnRoomMachine } from "./ownRoomMachine";
 
 // A reload keeps the tab's session, so it keeps which messages still wait for a row too.
 const AWAITING_ROWS_KEY = "t3:guest-awaiting-rows";
@@ -159,7 +161,8 @@ export function noteGuestSignInFailure(shareId: string, failure: GuestSignInFail
 }
 
 const decodeErrorBody = Schema.decodeUnknownOption(Schema.Struct({ message: Schema.String }));
-const isSharedThreadJoinError = Schema.is(SharedThreadJoinError);
+const messageOfFailure = (error: unknown) =>
+  error instanceof Error && error.message ? error.message : "Try again.";
 const decodeHandoff = Schema.decodeUnknownOption(GuestHandoff);
 const decodeSignInStart = Schema.decodeUnknownOption(GuestSignInStart);
 const UNREACHABLE = "Could not reach the server.";
@@ -327,31 +330,14 @@ function GuestThreadSession({
   const [draft, setDraft] = useState("");
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const navigate = useNavigate();
-  // The guest's own machines: the ones with projects, which a shared thread's page has none of.
-  const ownEnvironmentIds = [
-    ...new Set(useProjects().map((project) => project.environmentId)),
-  ].filter((environmentId) => !isGuestEnvironment(environmentId));
+  // The guest's own machine in this room, whose agent runs their thread boxes.
+  const { machine, setBoxThread } = useOwnRoomMachine(share);
+  const ownProviders = useEnvironmentProviders();
   const promptOwnBox = useAtomCommand(serverEnvironment.promptSharedRoomBox, {
     reportFailure: false,
   });
-  // Where this guest's boxes ran when last prompted: on their own agent, or through the owner.
-  const [lastBoxRanHere, setBoxesRunHere] = useState<boolean | null>(null);
-  // Before a prompt from this page, the board says it: a box of theirs whose last turn was theirs.
-  const boxesRunHere =
-    lastBoxRanHere ??
-    (view?.guestId !== undefined &&
-    view.board?.notes.some(
-      (note) =>
-        note.kind === "thread" &&
-        note.guestId === view.guestId &&
-        note.thread?.turns.at(-1)?.guestId === view.guestId,
-    ) === true
-      ? true
-      : null);
-  // The thread on the guest's machine behind each of their boxes prompted from this page.
-  const [ownBoxThreads, setOwnBoxThreads] = useState<
-    ReadonlyMap<string, { readonly environmentId: EnvironmentId; readonly threadId: ThreadId }>
-  >(new Map());
+  // A box with no thread yet has no composer to keep its model pick, so the board keeps it.
+  const [boxPicks, setBoxPicks] = useState<Readonly<Record<string, ModelSelection>>>({});
   const [awaitingRowIds, setAwaitingRowIds] = useState(readAwaitingRowIds);
   const awaiting = nextAwaitingRowIds(awaitingRowIds, view, projection?.visibleTurnItems ?? []);
   if (awaiting !== awaitingRowIds) setAwaitingRowIds(awaiting);
@@ -404,56 +390,72 @@ function GuestThreadSession({
     void opened.then(reportOpenFailure);
   };
   /**
-   * Runs a prompt to this guest's own thread box on their own agent: on the machine of theirs
-   * that joined this room. Resolves to whether it ran, failed (`false`), or no machine of theirs
-   * is in the room (`null`).
+   * Runs a prompt to this guest's own thread box on their own agent, on their machine in this
+   * room, with the model picked for the box. Resolves to whether it ran.
    */
-  const promptBoxHere = async (boxId: string, prompt: BoardPrompt): Promise<boolean | null> => {
-    const cards = boardContextCards(view.board, view.guests, prompt.cards);
-    for (const environmentId of ownEnvironmentIds) {
-      const result = await promptOwnBox({
-        environmentId,
-        input: {
-          host: share.host,
-          shareId: GuestShareId.make(share.shareId),
-          boxId,
-          title: view.board?.notes.find((note) => note.id === boxId)?.text ?? "",
-          text: prompt.text.trim(),
-          cards,
-          ...(prompt.artifactId === null ? {} : { artifactId: prompt.artifactId }),
-        },
-      });
-      if (result._tag === "Success") {
-        const { threadId } = result.value;
-        if (threadId === null) continue;
-        setOwnBoxThreads((current) => new Map(current).set(boxId, { environmentId, threadId }));
-        return true;
-      }
-      if (isAtomCommandInterrupted(result)) return false;
-      const error = squashAtomCommandFailure(result);
-      // A machine that cannot be asked now is passed over; one that is in the room and failed is not.
-      if (!isSharedThreadJoinError(error)) continue;
-      toastManager.add({
-        type: "error",
-        title: "Could not run it on your agent",
-        description: error.message,
-      });
-      return false;
+  const promptBoxHere = async (own: OwnRoomMachine, boxId: string, prompt: BoardPrompt) => {
+    const boxThreadId = own.boxes[boxId];
+    // The pick a box's prompt runs with; none leaves its own thread's model, or the joined one's.
+    const selection =
+      boxThreadId === undefined
+        ? boxPicks[boxId]
+        : (composerDraftPick(
+            useComposerDraftStore
+              .getState()
+              .getComposerDraft(scopeThreadRef(own.environmentId, boxThreadId)),
+          ) ?? undefined);
+    const turn =
+      selection === undefined
+        ? { modelSelection: undefined, text: prompt.text.trim() }
+        : boardTurnSelection({
+            selection,
+            providers: ownProviders.get(own.environmentId) ?? [],
+            text: prompt.text.trim(),
+          });
+    const result = await promptOwnBox({
+      environmentId: own.environmentId,
+      input: {
+        host: share.host,
+        shareId: GuestShareId.make(share.shareId),
+        boxId,
+        title: view.board?.notes.find((note) => note.id === boxId)?.text ?? "",
+        text: turn.text,
+        cards: boardContextCards(view.board, view.guests, prompt.cards),
+        ...(prompt.artifactId === null ? {} : { artifactId: prompt.artifactId }),
+        ...(turn.modelSelection === undefined ? {} : { modelSelection: turn.modelSelection }),
+      },
+    });
+    if (result._tag === "Success" && result.value.threadId !== null) {
+      setBoxThread(own.environmentId, boxId, result.value.threadId);
+      return true;
     }
-    return null;
+    if (result._tag === "Failure" && isAtomCommandInterrupted(result)) return false;
+    toastManager.add({
+      type: "error",
+      title: "Could not run it on your agent",
+      description:
+        result._tag === "Success"
+          ? "Your machine is no longer in this room. Choose Continue on my machine again."
+          : messageOfFailure(squashAtomCommandFailure(result)),
+    });
+    return false;
   };
   // A prompt from this guest's own thread box. Their own agent runs it when a machine of theirs
   // joined this room. Otherwise it is a request that waits for the owner like any message, with
   // the cards written into it, so the owner reads exactly what would reach their agent.
   const promptBox = async (boxId: string, prompt: BoardPrompt) => {
-    if (prompt.text.trim() !== "" && prompt.text.length <= GUEST_MESSAGE_MAX_LENGTH) {
-      const ranHere = await promptBoxHere(boxId, prompt);
-      if (ranHere !== null) {
-        if (ranHere) setBoxesRunHere(true);
-        return ranHere;
+    if (machine != null) {
+      if (prompt.text.trim() === "" || prompt.text.length > GUEST_MESSAGE_MAX_LENGTH) {
+        toastManager.add({
+          type: "error",
+          title: "Could not send the prompt",
+          description:
+            prompt.text.trim() === "" ? "Write a prompt first." : "This prompt is too long.",
+        });
+        return false;
       }
+      return promptBoxHere(machine, boxId, prompt);
     }
-    setBoxesRunHere(false);
     const text = guestBoardPromptText(
       prompt.text,
       boardContextCards(view.board, view.guests, prompt.cards),
@@ -539,27 +541,37 @@ function GuestThreadSession({
             onChange={(change) => postBoardChange(endpoint, change)}
             onCursor={(presence) => postBoardCursor(endpoint, presence)}
             onPromptBox={promptBox}
-            renderBoxModel={() => (
-              <span className="truncate text-2xs text-muted-foreground">
-                {boxesRunHere === true
-                  ? "Runs on your agent"
-                  : boxesRunHere === false || ownEnvironmentIds.length === 0
-                    ? "Goes to the owner"
-                    : "Your agent, if your machine joined"}
-              </span>
-            )}
-            guestBoxPlaceholder={
-              boxesRunHere === true
-                ? "Ask your agent"
-                : boxesRunHere === false || ownEnvironmentIds.length === 0
-                  ? "Ask the owner's agent"
-                  : "Ask an agent"
+            renderBoxModel={(boxId) =>
+              machine == null ? (
+                <span className="truncate text-2xs text-muted-foreground">
+                  {machine === null ? "Goes to the owner" : ""}
+                </span>
+              ) : (
+                <OwnBoxModelPicker
+                  machine={machine}
+                  boxId={boxId}
+                  pick={boxPicks[boxId]}
+                  onPick={(selection) =>
+                    setBoxPicks((current) => ({ ...current, [boxId]: selection }))
+                  }
+                />
+              )
             }
-            conversationBoxIds={[...ownBoxThreads.keys()]}
+            guestBoxPlaceholder={
+              machine === undefined
+                ? "Ask an agent"
+                : machine === null
+                  ? "Ask the owner's agent"
+                  : "Ask your agent"
+            }
+            conversationBoxIds={Object.keys(machine?.boxes ?? {})}
             onOpenConversation={(boxId) => {
-              const box = ownBoxThreads.get(boxId);
-              if (box !== undefined) {
-                void navigate({ to: "/$environmentId/$threadId", params: box });
+              const threadId = machine?.boxes[boxId];
+              if (machine != null && threadId !== undefined) {
+                void navigate({
+                  to: "/$environmentId/$threadId",
+                  params: { environmentId: machine.environmentId, threadId },
+                });
               }
             }}
             ownerWritingArtifactId={ownerWritingArtifactId(

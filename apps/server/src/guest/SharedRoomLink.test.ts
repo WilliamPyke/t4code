@@ -888,6 +888,10 @@ it.effect(
           });
         // No thread here joined the room, so nothing runs.
         assert.deepEqual(yield* prompt("Make it dark"), { threadId: null });
+        assert.deepEqual(yield* rooms.findRoom("sam.t3.test", shareId), {
+          threadId: null,
+          boxes: {},
+        });
         yield* rooms.connect(threadId, "sam.t3.test", { ...room, shareId });
 
         assert.deepEqual(yield* prompt("Make it dark", "note:plan"), { threadId: boxThread });
@@ -900,6 +904,24 @@ it.effect(
           boxId: "box:1",
         });
         assert.deepEqual((yield* Ref.get(link))?.boxes, { "box:1": boxThread });
+        assert.deepEqual(yield* rooms.findRoom("sam.t3.test", shareId), {
+          threadId,
+          boxes: { "box:1": boxThread },
+        });
+        // With no model picked, the new thread starts on the joined thread's.
+        assert.deepEqual((yield* Ref.get(launched))[0]?.modelSelection, {
+          instanceId: "codex",
+          model: "gpt-5.1-codex",
+        } as never);
+        assert.deepEqual(yield* rooms.findRoom("sam.t3.test", shareId), {
+          threadId,
+          boxes: { "box:1": boxThread },
+        });
+        // With no model picked, the new thread starts on the joined thread's.
+        assert.deepEqual((yield* Ref.get(launched))[0]?.modelSelection, {
+          instanceId: "codex",
+          model: "gpt-5.1-codex",
+        } as never);
         // The prompt goes there with the cards and the artifact as the room has it now.
         const [first] = yield* Ref.get(sent);
         assert.equal(first?.threadId, boxThread);
@@ -942,11 +964,27 @@ it.effect(
           model: "GPT-5.1 Codex",
         });
 
-        // A second prompt goes to the same thread; an artifact the room no longer has is left out.
-        assert.deepEqual(yield* prompt("Darker", "note:gone"), { threadId: boxThread });
+        // A second prompt goes to the same thread, on the model picked for it; an artifact the
+        // room no longer has is left out.
+        const picked = { instanceId: "codex", model: "gpt-5.1-codex-mini" } as never;
+        assert.deepEqual(
+          yield* rooms.promptBox({
+            host: "sam.t3.test",
+            shareId,
+            boxId: "box:1",
+            title: "Design",
+            text: "Darker",
+            cards: [{ label: "Note from Eve", author: "guest", name: "Eve", text: "Dark mode" }],
+            artifactId: "note:gone",
+            modelSelection: picked,
+          }),
+          { threadId: boxThread },
+        );
         assert.lengthOf(yield* Ref.get(launched), 1);
         const second = (yield* Ref.get(sent))[1];
         assert.equal(second?.threadId, boxThread);
+        assert.deepEqual(second?.modelSelection, picked);
+        assert.isUndefined(first?.modelSelection);
         assert.deepEqual(
           second?.context?.records.map((record) => record.kind),
           ["room-cards"],

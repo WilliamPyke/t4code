@@ -4,6 +4,7 @@ import {
   type RoomBoard,
   type RoomBoardChange,
 } from "@t3tools/contracts";
+import { isRoomCardOwnedBy } from "@t3tools/shared/roomBoard";
 import { MessageSquarePlusIcon, MessageSquareTextIcon, XIcon } from "lucide-react";
 import { createContext, type ReactNode, use, useState } from "react";
 import { create } from "zustand";
@@ -117,7 +118,7 @@ export function RoomReplyComments({
             <span className="font-medium">{boardPersonName(room.people, note.guestId)}</span>{" "}
             {note.text}
           </p>
-          {onChange === undefined ? null : (
+          {onChange === undefined || !isRoomCardOwnedBy(note, room.people.viewer) ? null : (
             <button
               type="button"
               aria-label="Delete comment"

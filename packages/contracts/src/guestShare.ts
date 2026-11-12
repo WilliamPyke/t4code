@@ -891,6 +891,13 @@ export const SharedThreadRoom = Schema.Struct({
   expiresAt: IsoDateTime,
   /** The share, so the guest's machine can find this thread again from a link to the room. */
   shareId: Schema.optional(GuestShareId),
+  /**
+   * A session for the same guest, and the shared thread it reads, so the app the guest joined
+   * from on their own machine shows the room and its board too. Absent from an older server and
+   * for a team's share, whose members join as their account.
+   */
+  session: Schema.optional(TrimmedNonEmptyString),
+  threadId: Schema.optional(ThreadId),
 });
 export type SharedThreadRoom = typeof SharedThreadRoom.Type;
 

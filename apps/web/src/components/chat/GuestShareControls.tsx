@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { guestEnvironmentId } from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -30,6 +31,7 @@ import { CheckIcon, CopyIcon, RadioIcon, UserIcon } from "lucide-react";
 import { useState } from "react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
+import { guestSharesAtom } from "~/guest/guestShares";
 import { useComposerHandleContext } from "~/composerHandleContext";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { ensureLocalApi } from "~/localApi";
@@ -550,6 +552,10 @@ export function RoomLinkIndicator({ threadRef }: { readonly threadRef: ScopedThr
   const nowMinute = useNowMinute();
   const [leaving, setLeaving] = useState(false);
   const [catchUp, setCatchUp] = useState<"idle" | "working" | string>("idle");
+  const navigate = useNavigate();
+  // The room as this app keeps it, when it joined from here: its thread opens on the board.
+  const room =
+    useAtomValue(guestSharesAtom).find((share) => share.shareId === roomLink?.shareId) ?? null;
   // The server clears an ended link when it next posts a turn or catches up.
   if (roomLink === null || roomLink.expiresAt.slice(0, 16) <= nowMinute) return null;
   // Both buttons catch up and share one status line; `use` returns what it says.
@@ -574,6 +580,23 @@ export function RoomLinkIndicator({ threadRef }: { readonly threadRef: ScopedThr
       <RadioIcon aria-hidden className="size-3.5" />
       <span>Your turns show in the room</span>
       {catchUp === "idle" || catchUp === "working" ? null : <span role="status">· {catchUp}</span>}
+      {room === null ? null : (
+        <Button
+          size="xs"
+          variant="ghost-muted"
+          onClick={() =>
+            void navigate({
+              to: "/$environmentId/$threadId",
+              params: {
+                environmentId: guestEnvironmentId(room.shareId),
+                threadId: room.threadId,
+              },
+            })
+          }
+        >
+          Board
+        </Button>
+      )}
       <Button
         size="xs"
         variant="ghost-muted"

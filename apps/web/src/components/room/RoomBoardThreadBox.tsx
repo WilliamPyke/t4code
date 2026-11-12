@@ -1,4 +1,10 @@
-import type { RoomBoard, RoomBoxTurn, ThreadGuestMessage } from "@t3tools/contracts";
+import {
+  ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH,
+  type RoomBoard,
+  type RoomBoxTurn,
+  type ThreadGuestMessage,
+} from "@t3tools/contracts";
+import { roomBoxExcerpt } from "@t3tools/shared/roomBoard";
 import type { PointerEvent, ReactNode } from "react";
 
 import { Button } from "../ui/button";
@@ -76,6 +82,10 @@ export function BoxProgress({
 }) {
   const progress = useBoxProgress(boxId);
   if (progress === undefined) return fallback ?? null;
+  const preview =
+    progress.phase === "writing" && progress.preview !== undefined
+      ? roomBoxExcerpt(progress.preview, ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH)
+      : "";
   return (
     <div role="status" className="flex flex-col gap-1">
       <p
@@ -87,11 +97,11 @@ export function BoxProgress({
       >
         <BoardProgressLine progress={progress} />
       </p>
-      {progress.phase === "writing" && progress.preview !== undefined && progress.preview !== "" ? (
+      {preview === "" ? null : (
         <p className="line-clamp-4 rounded-md bg-muted/50 px-2 py-1 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
-          {progress.preview}
+          {preview}
         </p>
-      ) : null}
+      )}
     </div>
   );
 }

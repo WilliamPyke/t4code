@@ -144,7 +144,20 @@ const make = Effect.gen(function* () {
         shared.messages.at(-1)?.createdAt,
       );
     }
-    return { threadId: launched.threadId };
+    const { room } = shared;
+    return {
+      threadId: launched.threadId,
+      ...(room?.session === undefined || room.threadId === undefined || room.shareId === undefined
+        ? {}
+        : {
+            shared: {
+              shareId: room.shareId,
+              threadId: room.threadId,
+              token: room.session,
+              title,
+            },
+          }),
+    };
   });
 
   return SharedThreadJoin.of({ preview, join });

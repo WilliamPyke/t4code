@@ -22,6 +22,7 @@ import {
   roomArtifactRequestOf,
   roomBoardWithCards,
   roomBoardCardIdentity,
+  roomBoxExcerpt,
   roomBoxRequestOf,
 } from "./roomBoard.ts";
 
@@ -135,6 +136,37 @@ describe("applyRoomBoardChange", () => {
     expect(Result.isFailure(apply(ran, put("t0", { done: true })))).toBe(true);
     const removed = applied(ran, { type: "note.remove", noteId: "t0" });
     expect(removed.edges).toEqual([]);
+  });
+
+  it("lets only a card's person, or the owner, remove it or rename a thread box", () => {
+    const eve = GuestId.make("guest:eve");
+    const board: RoomBoard = {
+      positions: {},
+      notes: [
+        { id: "sams", text: "Sam's", x: 0, y: 0, guestId: sam },
+        { id: "owners", text: "Owner's", x: 0, y: 0, kind: "task" },
+        { id: "box", text: "Box", x: 0, y: 0, kind: "thread", guestId: sam },
+      ],
+    };
+    const remove = (noteId: string): RoomBoardChange => ({ type: "note.remove", noteId });
+    const rows: ReadonlyArray<readonly [RoomBoardChange, typeof sam | null, boolean]> = [
+      [remove("sams"), sam, true],
+      [remove("sams"), null, true],
+      [remove("sams"), eve, false],
+      [remove("owners"), eve, false],
+      [remove("box"), eve, false],
+      [put("box", { text: "Renamed" }), sam, true],
+      [put("box", { text: "Renamed" }), null, true],
+      [put("box", { text: "Renamed" }), eve, false],
+      // Anyone moves or sizes any card, edits a note or a task, and ticks or assigns a task.
+      [put("box", { text: "Box", x: 40, y: 40, size: { w: 400, h: 300 } }), eve, true],
+      [put("sams", { text: "Edited" }), eve, true],
+      [put("owners", { text: "Owner's", done: true, assignee: { guestId: sam } }), eve, true],
+      [{ type: "edge.put", edgeId: "e", from: "note:sams", to: "note:box" }, eve, true],
+    ];
+    for (const [change, person, allowed] of rows) {
+      expect(Result.isSuccess(applyRoomBoardChange(board, scope, person, change))).toBe(allowed);
+    }
   });
 
   it("swaps an artifact with the version it replaced, and back, for the people behind it", () => {
@@ -284,6 +316,30 @@ describe("roomBoardCardIdentity", () => {
       author: "guest_agent",
       name: "Sam",
     });
+  });
+});
+
+describe("roomBoxExcerpt", () => {
+  it("reads a markdown reply, or the one line it was cut to, as plain prose", () => {
+    const table = "| File | Change |\n| --- | :---: |\n| a.ts | fixed |\n| b.ts | added |";
+    const rows: ReadonlyArray<readonly [string, string]> = [
+      ["## Done\n\nAll **three** fixed in `a.ts`.", "Done All three fixed in a.ts."],
+      ["  ### Plan\n> Quoted\n---\nSee [the docs](https://x.dev/a).", "Plan Quoted See the docs."],
+      [
+        `Summary:\n\n${table}\n\nThat's it.`,
+        "Summary: File · Change · a.ts · fixed · b.ts · added · That's it.",
+      ],
+      // The live preview arrives already on one line.
+      [
+        `## Done ${table.replace(/\n/g, " ")}`,
+        "Done · File · Change · a.ts · fixed · b.ts · added",
+      ],
+      ["```ts\nconst a = 1;\n```", "const a = 1;"],
+      // Prose that only looks like markdown is left alone.
+      ["Issue #12 in C# - a 1-2 fix", "Issue #12 in C# - a 1-2 fix"],
+    ];
+    for (const [text, plain] of rows) expect(roomBoxExcerpt(text, 600)).toBe(plain);
+    expect(roomBoxExcerpt("## Done\nAll fixed", 8)).toBe("Done Al…");
   });
 });
 

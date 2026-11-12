@@ -275,12 +275,13 @@ export function panToShow(
 }
 
 /**
- * The view after a card is added at `rect`: as it is while at least half the card shows each way,
- * so adding beside a card at the edge moves nothing, else moved as little as it takes to show it.
+ * The view after a card is added at `rect`: as it is when the whole card shows, even nearer the
+ * edge than `panToShow` keeps a card it reveals, else moved as little as it takes to show it whole.
+ * Placement looks for a spot in view first, so this moves only for a card that found none.
  */
 export function panToShowAdded(view: BoardView, rect: BoardRect, area: BoardSize): BoardView {
   const shows = (start: number, length: number, room: number) =>
-    Math.min(start + length, room) - Math.max(start, 0) >= length / 2;
+    start >= 0 && start + length <= room;
   return shows(view.x + rect.x * view.zoom, rect.width * view.zoom, area.width) &&
     shows(view.y + rect.y * view.zoom, rect.height * view.zoom, area.height)
     ? view

@@ -1103,12 +1103,16 @@ describe("panToShow", () => {
     expect(panToShow(view, { x: 0, y: 100, width: 2_000, height: 100 }, size).x).toBe(24);
   });
 
-  it("leaves the view alone for a new card that mostly shows, and pans for one that does not", () => {
+  it("leaves the view alone for a new card that shows whole, and shows the rest of one that does not", () => {
     const view = { x: 0, y: 0, zoom: 1 };
-    // An artifact beside the thread's card, 60px past the right edge.
-    expect(panToShowAdded(view, { x: 480, y: 72, width: 380, height: 400 }, size)).toBe(view);
+    // Placed in view, even a gap from the edge: nothing moves.
     expect(panToShowAdded(view, { x: 16, y: 16, width: 380, height: 400 }, size)).toBe(view);
-    // Mostly past the edge, or past it whole: it comes into view.
+    expect(panToShowAdded(view, { x: 404, y: 184, width: 380, height: 400 }, size)).toBe(view);
+    // A thread box whose prompt box is below the view comes up just enough to show it.
+    const tall = { width: 1_200, height: 950 };
+    expect(panToShowAdded(view, { x: 400, y: 570, width: 340, height: 460 }, tall).y).toBe(-104);
+    // Partly past the edge, mostly past it, or past it whole: it comes into view.
+    expect(panToShowAdded(view, { x: 480, y: 72, width: 380, height: 400 }, size).x).toBe(-84);
     expect(panToShowAdded(view, { x: 700, y: 72, width: 380, height: 400 }, size).x).toBe(-304);
     expect(panToShowAdded(view, { x: 100, y: 900, width: 192, height: 144 }, size).y).toBe(-468);
   });

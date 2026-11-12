@@ -54,7 +54,7 @@ import {
   useState,
 } from "react";
 
-import { canRestoreRoomArtifact } from "@t3tools/shared/roomBoard";
+import { canRestoreRoomArtifact, isRoomCardOwnedBy } from "@t3tools/shared/roomBoard";
 
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { observeResize } from "~/lib/observeResize";
@@ -1784,9 +1784,7 @@ function BoardNote({
   const artifact = note.kind === "artifact";
   const thread = note.kind === "thread";
   const titled = artifact || thread;
-  // Anyone who may edit the board moves, resizes and connects any card. Only its person, or the
-  // owner, removes a card, and the same goes for renaming a thread box.
-  const mine = people.viewer === null || (note.guestId ?? null) === people.viewer;
+  const mine = isRoomCardOwnedBy(note, people.viewer);
   const canChange = canEdit && (!thread || mine);
   const canDelete = canEdit && mine;
   const size = boardNoteSize(note);

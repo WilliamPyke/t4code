@@ -1636,6 +1636,11 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:shared-thread:prompt-box",
       tag: WS_METHODS.sharedThreadPromptBox,
     }),
+    // What this machine has of a room: the thread joined from it and its thread boxes' threads.
+    findSharedRoom: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:shared-thread:find-room",
+      tag: WS_METHODS.sharedThreadFindRoom,
+    }),
     // Which guests have a shared thread open. Mounted only while the owner's guest list is open.
     guestPresence: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:guest-share:presence",

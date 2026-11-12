@@ -21,6 +21,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 
 import { isElectron } from "~/env";
+import { findGuestShare, rememberGuestShare } from "~/guest/guestShares";
 import { useScratchProject } from "~/hooks/useScratchProject";
 import { randomUUID } from "~/lib/utils";
 import { resolveProjectDefaultProviderModelSelection } from "~/providerInstances";
@@ -238,6 +239,18 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
         message: messageOf(squashAtomCommandFailure(result), "Could not join the thread."),
       });
       return;
+    }
+    // The room itself comes too, so its board is in this app beside the joined thread.
+    const { shared } = result.value;
+    if (shared !== undefined && findGuestShare(shared.shareId) === null) {
+      rememberGuestShare({
+        host: link.host,
+        shareId: shared.shareId,
+        threadId: shared.threadId,
+        token: shared.token,
+        title: shared.title,
+        joinedAt: new Date().toISOString(),
+      });
     }
     // An artifact is read from the room the new thread just joined; it opens the thread itself.
     if (artifact !== undefined) {

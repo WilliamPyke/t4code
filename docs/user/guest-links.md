@@ -76,8 +76,9 @@ another there.
 - **A guest's box** runs on the guest's own agent once they
   [continued on their machine](#continue-on-your-own-machine) and have that machine connected in
   the app they read the board in. Its first prompt starts a thread on their machine beside the
-  one they joined with, named after the box, on their own provider login and model; nothing waits
-  for the owner and nothing is billed to them. The room sees what
+  one they joined with, named after the box, on their own provider login; nothing waits for the
+  owner and nothing is billed to them. The model shows beside the box's message box, where they
+  can pick another: a new box starts on the model of the thread they joined with. The room sees what
   [any turn of theirs shows](#your-turns-show-in-the-room): the prompt, the cards that went with
   it, the model, what the agent is doing, and its reply, on the box and in the artifact it fills.
   **Open conversation** on the box opens that thread.
@@ -150,20 +151,21 @@ git action does.
 
 To comment on a message, choose **Comment for the room** beside it in the shared thread. The
 comment shows under that message for everyone, and on the board as a note with **Go to reply**
-and the start of the reply it is about; delete it from either place.
+and the start of the reply it is about; its author or the owner deletes it from either place.
 
 The board belongs to the room. Guests open the same one with **Board** in the thread's header, and
 everyone sees a card land where it was dropped and a note once its author clicks away from it.
-Anyone in the room can move, edit or delete any card; each names who added it. A board holds up
-to 50 notes, tasks, links, comments, artifacts and thread boxes of 280 characters, and 100
-lines. An agent sees a card only when it is [on a line into a box](#lines-between-cards) someone
+Anyone in the room can move, resize, connect and edit any card, and tick or assign any task; each
+card names who added it. Only that person and the owner can delete a card, a comment included, or
+rename a thread box. A board holds up to 50 notes, tasks, links, comments, artifacts and thread
+boxes of 280 characters, and 100 lines. An agent sees a card only when it is [on a line into a box](#lines-between-cards) someone
 prompts, and then only that person's own agent, or the owner's once the owner sends a guest's
 message.
 
 The board lasts as long as the link: stopping sharing or creating a new link starts an empty
 one, and removing a guest removes what they added and leaves their tasks unassigned. Someone who
-continued the thread on their own machine reads the board in the shared thread, where their own
-boxes run on that machine.
+continued the thread on their own machine has the board in their own T Code: **Board** in the
+joined thread's header opens it, and their own boxes run on that machine.
 
 ## Remove a guest
 
@@ -221,7 +223,14 @@ machine, then shows what comes over and offers:
 You get your own thread with the conversation as its history, and the agent is handed that history
 on your first message. Your turns run on your machine, with your own provider login, model, and
 permission mode, so this works on a Claude or ChatGPT plan. Share code back the usual way, with a
-branch or a pull request. A task someone took to their agent from the board joins the same way,
+branch or a pull request.
+
+The shared thread comes along too: the T Code you joined in lists it under **Shared with me**,
+signed in as the same guest, so you read the room and use its [board](#see-the-room-as-a-board)
+beside your own thread. **Board** in your joined thread's header opens it. A thread you joined
+before this existed has no **Board** button; its board stays where you opened the guest link.
+
+A task someone took to their agent from the board joins the same way,
 then lands as a draft in the joined thread; see [Take a task to your agent](#take-a-task-to-your-agent).
 
 ### Your turns show in the room

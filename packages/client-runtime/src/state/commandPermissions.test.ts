@@ -216,6 +216,7 @@ describe("command permissions", () => {
     WS_METHODS.guestShareResolveMessage,
     WS_METHODS.sharedThreadTakeArtifact,
     WS_METHODS.sharedThreadPromptBox,
+    WS_METHODS.sharedThreadFindRoom,
   ])("uses the target grant for both availability and execution of %s", (method) =>
     Effect.scoped(
       Effect.gen(function* () {

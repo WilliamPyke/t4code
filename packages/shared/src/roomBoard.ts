@@ -161,6 +161,13 @@ const sameNote = (left: RoomBoardNote, right: RoomBoardNote) =>
   sameSize(left.size, right.size);
 
 /**
+ * Whether `person` (null for the room's owner) may remove a card or rename a thread box: the owner
+ * and whoever added it. Anyone in the room moves, sizes, connects and edits the rest.
+ */
+export const isRoomCardOwnedBy = (note: Pick<RoomBoardNote, "guestId">, person: string | null) =>
+  person === null || (note.guestId ?? null) === person;
+
+/**
  * Whether `person` (null for the room's owner) may swap an artifact with the version it replaced:
  * the owner, whoever added the card, and whoever asked for or whose agent wrote either version.
  */
@@ -168,7 +175,7 @@ export function canRestoreRoomArtifact(
   note: Pick<RoomBoardNote, "guestId" | "artifact">,
   person: GuestId | null,
 ): boolean {
-  if (person === null || note.guestId === person) return true;
+  if (isRoomCardOwnedBy(note, person)) return true;
   return [note.artifact, note.artifact?.previous].some(
     (version) => version?.guestId === person || version?.askedBy === person,
   );
@@ -220,6 +227,13 @@ export function applyRoomBoardChange(
       ) {
         return Result.fail("This board has as many thread boxes as it holds. Remove one first.");
       }
+      if (
+        existing?.kind === "thread" &&
+        change.text !== existing.text &&
+        !isRoomCardOwnedBy(existing, author)
+      ) {
+        return Result.fail("Only the owner and whoever added this thread box can rename it.");
+      }
       return Result.map(putNote(scope, author, existing, change), (note) => {
         if (existing === undefined) return { ...board, notes: [...board.notes, note] };
         // A note stays its author's whoever edits it.
@@ -229,7 +243,11 @@ export function applyRoomBoardChange(
       });
     }
     case "note.remove": {
-      if (!board.notes.some((note) => note.id === change.noteId)) return Result.succeed(board);
+      const note = board.notes.find((candidate) => candidate.id === change.noteId);
+      if (note === undefined) return Result.succeed(board);
+      if (!isRoomCardOwnedBy(note, author)) {
+        return Result.fail("Only the owner and whoever added this card can remove it.");
+      }
       const ref = roomBoardNoteRef(change.noteId);
       return Result.succeed(
         roomBoardWithEdges(
@@ -421,12 +439,20 @@ export function roomBoardCardIdentity(
   };
 }
 
-/** Text as a thread box or an artifact shows it: one paragraph of plain text, cut to `max`. */
+/**
+ * Text as a thread box or an artifact shows it: one paragraph of plain text, cut to `max`. Also
+ * reads text already put on one line, as a live preview is, so table cells become "a · b".
+ */
 export function roomBoxExcerpt(text: string, max: number): string {
   const plain = text
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/```\w*|`|\*\*/g, "")
+    .replace(/(^|\s)(?:#{1,6}|-{3,}|\*{3,}|_{3,})(?=\s|$)/g, "$1")
+    .replace(/^\s*>\s?/gm, "")
+    .replace(/!?\[([^\]\n]*)\]\([^)\s]*\)/g, "$1")
+    .replace(/```\w*|~~~\w*|`|\*\*|~~/g, "")
+    .replace(/\s*\|[\s|:-]*/g, " · ")
     .replace(/\s+/g, " ")
+    .replace(/([:.!?]) · /g, "$1 ")
+    .replace(/^(?: ?· ?)+|(?: ?· ?)+$/g, "")
     .trim();
   return plain.length <= max
     ? plain

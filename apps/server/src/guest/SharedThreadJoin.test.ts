@@ -171,8 +171,33 @@ it.effect("connects the joined thread to the room the export offers", () =>
         live: true,
       });
       assert.lengthOf(yield* Ref.get(rooms), 0);
-      yield* sharedThreads.join(input);
+      // A room that offers no session of its own gives the app nothing to keep.
+      assert.deepEqual(yield* sharedThreads.join(input), {
+        threadId: ThreadId.make("thread:joined"),
+      });
     }).pipe(Effect.provide(layer));
+    // With a session, the app gets the room to show beside the joined thread.
+    const offered = {
+      ...room,
+      shareId: "share:room",
+      session: "session-token",
+      threadId: "thread:owner",
+    };
+    const withSession = yield* world({ status: 200, body: { ...shared, room: offered } });
+    assert.deepEqual(
+      yield* Effect.flatMap(SharedThreadJoin.SharedThreadJoin, (sharedThreads) =>
+        sharedThreads.join(input),
+      ).pipe(Effect.provide(withSession.layer)),
+      {
+        threadId: ThreadId.make("thread:joined"),
+        shared: {
+          shareId: "share:room",
+          threadId: "thread:owner",
+          token: "session-token",
+          title: "Fix login",
+        },
+      } as never,
+    );
     // Catching up starts after the newest message the thread was created with.
     assert.deepEqual(yield* Ref.get(rooms), [
       ["thread:joined", "sam.t3.test", room, shared.messages.at(-1)?.createdAt],

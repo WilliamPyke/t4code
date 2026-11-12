@@ -92,12 +92,31 @@ export const SharedThreadPromptBoxInput = Schema.Struct({
   cards: Schema.optional(Schema.Array(RoomBoardContextCard)),
   /** The artifact card the reply fills, read from the room as it is now. */
   artifactId: Schema.optional(RoomBoardNote.fields.id),
+  /** Absent: the box thread's own model, or the joined thread's for a box prompted first. */
+  modelSelection: Schema.optional(ModelSelection),
 });
 export type SharedThreadPromptBoxInput = typeof SharedThreadPromptBoxInput.Type;
 
 /** The box's thread on this machine, or null when no thread here is in that room. */
 export const SharedThreadPromptBoxResult = Schema.Struct({ threadId: Schema.NullOr(ThreadId) });
 export type SharedThreadPromptBoxResult = typeof SharedThreadPromptBoxResult.Type;
+
+/** A room as its link names it, to find what this machine has of it. */
+export const SharedThreadFindRoomInput = Schema.Struct({
+  host: TrimmedNonEmptyString,
+  shareId: GuestShareId,
+});
+export type SharedThreadFindRoomInput = typeof SharedThreadFindRoomInput.Type;
+
+/**
+ * The thread joined from that room on this machine, or null when there is none, and the thread
+ * here behind each of the user's own thread boxes, by box id.
+ */
+export const SharedThreadFindRoomResult = Schema.Struct({
+  threadId: Schema.NullOr(ThreadId),
+  boxes: Schema.Record(Schema.String, ThreadId),
+});
+export type SharedThreadFindRoomResult = typeof SharedThreadFindRoomResult.Type;
 
 export const SharedThreadCatchUpInput = Schema.Struct({ threadId: ThreadId });
 export type SharedThreadCatchUpInput = typeof SharedThreadCatchUpInput.Type;
@@ -138,7 +157,21 @@ export const SharedThreadJoinInput = Schema.Struct({
 });
 export type SharedThreadJoinInput = typeof SharedThreadJoinInput.Type;
 
-export const SharedThreadJoinResult = Schema.Struct({ threadId: ThreadId });
+export const SharedThreadJoinResult = Schema.Struct({
+  threadId: ThreadId,
+  /**
+   * The room as the guest's app keeps it, to show the shared thread and its board beside the
+   * joined one. Absent when the owner's server gave no session.
+   */
+  shared: Schema.optional(
+    Schema.Struct({
+      shareId: GuestShareId,
+      threadId: ThreadId,
+      token: TrimmedNonEmptyString,
+      title: Schema.String,
+    }),
+  ),
+});
 export type SharedThreadJoinResult = typeof SharedThreadJoinResult.Type;
 
 const SHARED_THREAD_JOIN_MESSAGES = {

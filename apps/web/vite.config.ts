@@ -23,7 +23,8 @@ import { thirdPartyLicensesPlugin } from "../../scripts/lib/third-party-licenses
 import { tailwindPlugins } from "./vite/tailwind";
 import { warmBundledDevPlugin } from "./vite/warmBundledDev";
 
-const repoEnv = loadRepoEnv();
+// Tests render without the sign-in provider, so a developer's own .env must not switch it on.
+const repoEnv: ReturnType<typeof loadRepoEnv> = process.env.VITEST ? {} : loadRepoEnv();
 Object.assign(process.env, repoEnv);
 
 // Signal single-origin dev explicitly; loadRepoEnv can restore deleted URL keys from .env.

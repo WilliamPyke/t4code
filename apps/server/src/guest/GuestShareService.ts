@@ -1584,6 +1584,18 @@ const make = Effect.gen(function* () {
               }),
               expiresAt: share.expiresAt,
               shareId: share.id,
+              // The guest's own app reads the room with it; a team member's joins as their account.
+              ...(share.team !== undefined
+                ? {}
+                : {
+                    session: yield* signSession({
+                      kind: "session",
+                      threadId: thread.id,
+                      shareId: share.id,
+                      guestId,
+                    }),
+                    threadId: thread.id,
+                  }),
             },
           }),
     });

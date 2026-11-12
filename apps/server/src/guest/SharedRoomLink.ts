@@ -12,6 +12,7 @@ import {
   type GuestShareId,
   type GuestTurnRequest,
   MessageId,
+  type ModelSelection,
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
@@ -30,6 +31,7 @@ import {
   roomCodeStateOf,
   type RunId,
   type SharedThreadCatchUpResult,
+  type SharedThreadFindRoomResult,
   type SharedThreadPromptBoxInput,
   type SharedThreadPromptBoxResult,
   type SharedThreadRoom,
@@ -87,6 +89,7 @@ const BOX_TITLE_MAX_LENGTH = 80;
 interface BoxMessage {
   readonly text: string;
   readonly records: ReadonlyArray<ComposerContextRecord>;
+  readonly modelSelection: ModelSelection | undefined;
 }
 
 /** What the agent of a box's run does now, as its room is told. */
@@ -273,6 +276,11 @@ export class SharedRoomLink extends Context.Service<
     readonly promptBox: (
       input: SharedThreadPromptBoxInput,
     ) => Effect.Effect<SharedThreadPromptBoxResult, SharedThreadJoinError>;
+    /** The thread joined from a room here, and the threads behind the user's boxes there. */
+    readonly findRoom: (
+      host: string,
+      shareId: GuestShareId,
+    ) => Effect.Effect<SharedThreadFindRoomResult>;
     /** Posts one finished run if its thread is connected. Never fails: the turn is local first. */
     readonly publishRun: (threadId: ThreadId, runId: RunId) => Effect.Effect<void>;
     /**
@@ -526,6 +534,16 @@ const make = Effect.gen(function* () {
     return { threadId: joined.threadId, artifact };
   });
 
+  const findRoom = Effect.fn("SharedRoomLink.findRoom")(function* (
+    host: string,
+    shareId: GuestShareId,
+  ) {
+    const joined = yield* findJoined(host, shareId);
+    return joined === null
+      ? { threadId: null, boxes: {} }
+      : { threadId: joined.threadId, boxes: joined.link.boxes ?? {} };
+  });
+
   const boxMessage = (threadId: ThreadId, commandId: CommandId, message: BoxMessage) =>
     orchestrator.dispatch({
       type: "message.dispatch",
@@ -537,6 +555,7 @@ const make = Effect.gen(function* () {
         ? {}
         : { context: { version: 1, records: [...message.records] } }),
       attachments: [],
+      ...(message.modelSelection === undefined ? {} : { modelSelection: message.modelSelection }),
       dispatchMode: { type: "queue_after_active" },
       createdBy: "user",
       creationSource: "web",
@@ -576,7 +595,7 @@ const make = Effect.gen(function* () {
     const text = [asked, chips].filter((part) => part !== "").join("\n\n");
     if (text === "") return yield* fail("launch_failed");
     const commandId = CommandId.make(`server:room-box:${batch}`);
-    const message: BoxMessage = { text, records };
+    const message: BoxMessage = { text, records, modelSelection: input.modelSelection };
     // Null: the thread left the room since it was found.
     const delivered = yield* boxThreads
       .withPermits(1)(
@@ -609,7 +628,7 @@ const make = Effect.gen(function* () {
               input.title.trim() ||
               clip(asked.replace(/\s+/g, " "), BOX_TITLE_MAX_LENGTH) ||
               "Board thread",
-            modelSelection: room.modelSelection,
+            modelSelection: input.modelSelection ?? room.modelSelection,
             runtimeMode: room.runtimeMode,
             interactionMode: room.interactionMode,
             workspaceStrategy:
@@ -1088,6 +1107,7 @@ const make = Effect.gen(function* () {
     catchUp,
     takeTask,
     takeArtifact,
+    findRoom,
     promptBox,
     publishRun,
     publishActivity,
