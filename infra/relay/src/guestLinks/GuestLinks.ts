@@ -60,15 +60,22 @@ const pick = (random: SecureRandom.SecureRandom["Service"], size: number): Effec
     ),
   );
 
-const make = Effect.gen(function* () {
-  const db = yield* RelayDb.RelayDb;
-  const random = yield* SecureRandom.SecureRandom;
-
+/** Three words from the list, as `tulip-otter-harbor`. Team invites use it too. */
+export const threeWordName = (
+  random: SecureRandom.SecureRandom["Service"],
+): Effect.Effect<string> => {
   const word = Effect.map(
     pick(random, GUEST_LINK_WORDS.length),
     (index) => GUEST_LINK_WORDS[index],
   );
-  const makeName = Effect.map(Effect.all([word, word, word]), (words) => words.join("-"));
+  return Effect.map(Effect.all([word, word, word]), (words) => words.join("-"));
+};
+
+const make = Effect.gen(function* () {
+  const db = yield* RelayDb.RelayDb;
+  const random = yield* SecureRandom.SecureRandom;
+
+  const makeName = threeWordName(random);
 
   const register: GuestLinks["Service"]["register"] = Effect.fn("relay.guest_links.register")(
     function* (input) {

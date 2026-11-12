@@ -2,10 +2,8 @@ import { guestEnvironmentId } from "@t3tools/client-runtime/environment";
 import {
   GUEST_HOST_PARAM,
   GUEST_NAME_MAX_LENGTH,
-  GUEST_ROUTE_PREFIX,
   GUEST_SHARE_PARAM,
   GUEST_SIGN_IN_PARAM,
-  GuestRedeemResult,
   GuestSignInFailure,
 } from "@t3tools/contracts";
 import { Navigate } from "@tanstack/react-router";
@@ -16,10 +14,10 @@ import { useEffect, useState, type FormEvent } from "react";
 import {
   findGuestShare,
   guestLinkHost,
-  guestShareOrigin,
   type JoinedGuestShare,
   rememberGuestShare,
 } from "~/guest/guestShares";
+import { redeemInvite } from "~/guest/redeemInvite";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { GuestNotice, noteGuestSignInFailure } from "./GuestThreadView";
@@ -38,8 +36,6 @@ interface GuestEntry {
 let captured: { readonly href: string; readonly entry: GuestEntry } | null = null;
 
 const decodeSignInFailure = Schema.decodeUnknownOption(GuestSignInFailure);
-const decodeErrorBody = Schema.decodeUnknownOption(Schema.Struct({ message: Schema.String }));
-const decodeRedeemResult = Schema.decodeUnknownOption(GuestRedeemResult);
 
 /**
  * The invite credential travels in the URL hash so it never reaches a server log. It is read
@@ -117,46 +113,6 @@ export function GuestPage() {
       )}
     </div>
   );
-}
-
-/** Joins the share. Resolves to what the browser keeps of it, or to a message for the guest. */
-async function redeemInvite(input: {
-  readonly credential: string;
-  readonly host: string;
-  readonly name: string;
-}): Promise<JoinedGuestShare | string> {
-  const origin = guestShareOrigin(input.host);
-  try {
-    const response = await fetch(`${origin}${GUEST_ROUTE_PREFIX}/redeem`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ credential: input.credential, name: input.name, returnToken: true }),
-      // The host's own page also gets the share's cookie; any other origin keeps only the token.
-      credentials: origin === window.location.origin ? "same-origin" : "omit",
-    });
-    const json: unknown = await response.json().catch(() => null);
-    if (!response.ok) {
-      return Option.match(decodeErrorBody(json), {
-        onNone: () => "Something went wrong. Try again.",
-        onSome: ({ message }) => message,
-      });
-    }
-    const result = Option.getOrNull(decodeRedeemResult(json));
-    // A server from before guests could join from the app answers with a cookie only.
-    if (result === null || result.threadId === undefined) {
-      return "The owner's T Code is too old for this link. Ask them to update it and send a new one.";
-    }
-    return {
-      host: input.host,
-      shareId: result.shareId,
-      threadId: result.threadId,
-      token: result.token,
-      title: "Shared thread",
-      joinedAt: new Date().toISOString(),
-    };
-  } catch {
-    return "Could not reach the server.";
-  }
 }
 
 function NameForm({

@@ -11,6 +11,7 @@ import {
   type RoomAgentsEvent,
   type RoomCursor,
   type RoomCursorsEvent,
+  type RoomViewport,
   ThreadId,
 } from "@t3tools/contracts";
 import { guestHostZoneOf, isGuestHostAllowed } from "@t3tools/shared/guestLinks";
@@ -116,6 +117,14 @@ export const guestRoomCursorsAtom = Atom.family((shareId: string) =>
   ),
 );
 
+/** Everyone else's view of the board, so this guest can follow one. Apart, like the pointers. */
+export const guestRoomViewsAtom = Atom.family((shareId: string) =>
+  Atom.make<ReadonlyArray<RoomViewport> | undefined>(undefined).pipe(
+    Atom.keepAlive,
+    Atom.withLabel(`guest-room-views:${shareId}`),
+  ),
+);
+
 /** The origin a share's guest routes are on. Tunnels are https; this page's own host is itself. */
 export const guestShareOrigin = (host: string) =>
   host === window.location.host ? window.location.origin : `https://${host}`;
@@ -182,6 +191,7 @@ export const layerGuestShareAccess = Layer.succeed(
       yield* Effect.sync(() => {
         if (event.type === "cursors") {
           appAtomRegistry.set(guestRoomCursorsAtom(shareId), event.cursors);
+          appAtomRegistry.set(guestRoomViewsAtom(shareId), event.views);
         } else {
           appAtomRegistry.update(guestRoomAtom(shareId), (room) => ({
             ...room,

@@ -42,6 +42,7 @@ import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
 import { useClientSettings } from "../../hooks/useSettings";
 import { GuestShareIndicator, RoomLinkIndicator } from "./GuestShareControls";
+import { RoomSummaryButton } from "./RoomSummaryButton";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -433,6 +434,12 @@ export const ChatHeader = memo(function ChatHeader({
       {isServerThread ? (
         // Keyed so the catch-up status belongs to the thread it was fetched for.
         <RoomLinkIndicator
+          key={`${activeThreadRef.environmentId}:${activeThreadRef.threadId}`}
+          threadRef={activeThreadRef}
+        />
+      ) : null}
+      {isServerThread ? (
+        <RoomSummaryButton
           key={`${activeThreadRef.environmentId}:${activeThreadRef.threadId}`}
           threadRef={activeThreadRef}
         />

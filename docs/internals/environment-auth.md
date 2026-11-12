@@ -104,6 +104,16 @@ itself, but only while the thread's provider is signed in with an API key
 security: a plan sign-in covers only the account holder's own prompts. Add a
 driver to it only after reading that provider's terms.
 
+A thread shared to a team is joined as an account, not a name. The relay lists the share for
+the team's members only when the sharing machine's linked account is in the team, and it signs
+a five-minute member assertion (`RELAY_TEAM_MEMBER_TYP`) with the cloud mint key, addressed to
+that machine's environment. The owner's server checks it offline with the mint public key it
+stored when it linked ([GuestTeamShares](../../apps/server/src/guest/GuestTeamShares.ts)), so
+no new secret is shared and the relay never holds a guest session. A team share refuses the bare
+invite, keys each guest by user id so a member keeps one guest record, and keeps a removed
+member's id out. The session it issues ends after a day, because only a fresh assertion proves
+the person is still in the team.
+
 A guest's typed name is not an identity. A guest can prove a GitHub account with
 the web redirect flow ([GuestSignIn](../../apps/server/src/guest/GuestSignIn.ts)):
 the server reads the login and id, then drops the token. It is not the device

@@ -48,6 +48,8 @@ import {
   RelayEnvironmentLinkLimitExceededError,
   RelayEnvironmentPrincipal,
   RelayRateLimitedError,
+  RelayTeamRequestError,
+  type RelayTeamMemberAssertionPayload,
   type RelayEnvironmentConnectRequest,
   type RelayManagedEndpointOrigin,
   RelayManagedEndpointRecoveryProofPayload,
@@ -57,12 +59,14 @@ import {
 import {
   normalizeRelayIssuer,
   RELAY_MANAGED_TUNNEL_RECOVERY_TYP,
+  RELAY_TEAM_MEMBER_TYP,
   verifyRelayJwt,
 } from "@t3tools/shared/relayJwt";
 
 import * as DeliveryAttempts from "../agentActivity/DeliveryAttempts.ts";
 import * as AgentActivityRows from "../agentActivity/AgentActivityRows.ts";
 import * as Devices from "../agentActivity/Devices.ts";
+import * as CloudMintSigner from "../auth/CloudMintSigner.ts";
 import * as DpopProofs from "../auth/DpopProofs.ts";
 import * as RelayTokens from "../auth/RelayTokens.ts";
 import * as EnvironmentCredentials from "../environments/EnvironmentCredentials.ts";
@@ -81,6 +85,8 @@ import * as ManagedEndpointAllocations from "../environments/ManagedEndpointAllo
 import * as EnvironmentPublishSignatures from "../environments/EnvironmentPublishSignatures.ts";
 import * as MobileRegistrations from "../agentActivity/MobileRegistrations.ts";
 import * as T3ChatAccounts from "../t3chat/T3ChatAccounts.ts";
+import * as TeamProfiles from "../teams/TeamProfiles.ts";
+import * as Teams from "../teams/Teams.ts";
 import { withSpanAttributes } from "../observability.ts";
 import { isRelayHookPath, redactRelayHookUrl } from "../hooks/HookForwarder.ts";
 import * as RelayDb from "../db.ts";
@@ -498,6 +504,159 @@ export const layerGuestLinksApi = HttpApiBuilder.group(
         }),
       ),
     );
+  }),
+);
+
+/** How long a member assertion opens a team share; joining uses it at once. */
+const TEAM_ASSERTION_LIFETIME_SECONDS = 5 * 60;
+const FALLBACK_TEAM_PROFILE = { name: "T Code user", avatarUrl: null };
+
+const teamErrorCases = {
+  TeamRequestError: (error: Teams.TeamRequestError) =>
+    Effect.fail(new RelayTeamRequestError({ code: "team_request_failed", reason: error.reason })),
+  TeamPersistenceError: () => relayInternalErrorResponse("persistence_failed"),
+};
+
+export const layerTeamsApi = HttpApiBuilder.group(
+  RelayApi,
+  "teams",
+  Effect.fnUntraced(function* (handlers) {
+    const teams = yield* Teams.Teams;
+    const profiles = yield* TeamProfiles.TeamProfiles;
+    const rateLimiter = yield* Teams.TeamRateLimiter;
+    const mint = yield* CloudMintSigner.CloudMintSigner;
+    const config = yield* RelayConfiguration.RelayConfiguration;
+    const random = yield* SecureRandom.SecureRandom;
+    // Request instrumentation already owns the span; keep this helper in that context.
+    const limited = Effect.fnUntraced(function* (userId: string) {
+      if (!(yield* rateLimiter.allow(userId))) {
+        return yield* new RelayRateLimitedError({ code: "rate_limited" });
+      }
+    });
+    const profileOf = (userId: string) =>
+      Effect.map(
+        profiles.lookup(userId),
+        Option.getOrElse(() => FALLBACK_TEAM_PROFILE),
+      );
+    return handlers
+      .handle(
+        "listTeams",
+        Effect.fn("relay.api.teams.list")(
+          function* () {
+            const { userId } = yield* RelayClientPrincipal;
+            return { teams: yield* teams.list(userId) };
+          },
+          Effect.catchTags({ TeamPersistenceError: teamErrorCases.TeamPersistenceError }),
+        ),
+      )
+      .handle(
+        "createTeam",
+        Effect.fn("relay.api.teams.create")(function* ({ payload }) {
+          const { userId } = yield* RelayClientPrincipal;
+          yield* limited(userId);
+          return yield* teams.create({
+            userId,
+            name: payload.name,
+            profile: yield* profileOf(userId),
+          });
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "getTeam",
+        Effect.fn("relay.api.teams.get")(function* ({ params }) {
+          const { userId } = yield* RelayClientPrincipal;
+          return yield* teams.get({ userId, teamId: params.teamId });
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "renameTeam",
+        Effect.fn("relay.api.teams.rename")(function* ({ params, payload }) {
+          const { userId } = yield* RelayClientPrincipal;
+          yield* teams.rename({ userId, teamId: params.teamId, name: payload.name });
+          return { ok: true };
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "deleteTeam",
+        Effect.fn("relay.api.teams.delete")(function* ({ params }) {
+          const { userId } = yield* RelayClientPrincipal;
+          yield* teams.remove({ userId, teamId: params.teamId });
+          return { ok: true };
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "leaveTeam",
+        Effect.fn("relay.api.teams.leave")(function* ({ params }) {
+          const { userId } = yield* RelayClientPrincipal;
+          yield* teams.leave({ userId, teamId: params.teamId });
+          return { ok: true };
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "removeTeamMember",
+        Effect.fn("relay.api.teams.removeMember")(function* ({ params }) {
+          const { userId } = yield* RelayClientPrincipal;
+          yield* teams.removeMember({
+            userId,
+            teamId: params.teamId,
+            memberUserId: params.userId,
+          });
+          return { ok: true };
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "createTeamInvite",
+        Effect.fn("relay.api.teams.createInvite")(function* ({ params }) {
+          const { userId } = yield* RelayClientPrincipal;
+          yield* limited(userId);
+          return yield* teams.createInvite({ userId, teamId: params.teamId });
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "acceptTeamInvite",
+        Effect.fn("relay.api.teams.acceptInvite")(function* ({ params }) {
+          const { userId } = yield* RelayClientPrincipal;
+          yield* limited(userId);
+          const teamId = yield* teams.acceptInvite({
+            userId,
+            name: params.name,
+            profile: yield* profileOf(userId),
+          });
+          return { teamId };
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "createTeamAssertion",
+        Effect.fn("relay.api.teams.createAssertion")(function* ({ params, payload }) {
+          yield* appendRelayCredentialResponseHeaders;
+          const { userId } = yield* RelayClientPrincipal;
+          const member = yield* teams.memberForAssertion({
+            userId,
+            teamId: params.teamId,
+            environmentId: payload.environmentId,
+            profile: Option.getOrNull(yield* profiles.lookup(userId)),
+          });
+          const now = Math.floor((yield* DateTime.now).epochMilliseconds / 1_000);
+          const token = yield* mint
+            .sign({
+              typ: RELAY_TEAM_MEMBER_TYP,
+              payload: {
+                iss: normalizeRelayIssuer(config.relayIssuer),
+                aud: `t3-env:${payload.environmentId}`,
+                sub: userId,
+                jti: yield* random.uuidV4(),
+                iat: now,
+                exp: now + TEAM_ASSERTION_LIFETIME_SECONDS,
+                teamId: params.teamId,
+                userId,
+                name: member.name,
+                avatarUrl: member.avatarUrl,
+              } satisfies RelayTeamMemberAssertionPayload,
+            })
+            .pipe(Effect.catch(() => relayInternalErrorResponse("internal_error")));
+          return { token };
+        }, Effect.catchTags(teamErrorCases)),
+      );
   }),
 );
 
@@ -1225,6 +1384,8 @@ export const layerServerApi = HttpApiBuilder.group(
     const publishSignatures = yield* EnvironmentPublishSignatures.EnvironmentPublishSignatures;
     const heldHooks = yield* HeldHooks.HeldHooks;
     const guestLinks = yield* GuestLinks.GuestLinks;
+    const teams = yield* Teams.Teams;
+    const environmentLinks = yield* EnvironmentLinks.EnvironmentLinks;
     const requireOwnEnvironment =
       /* Request instrumentation already owns the span; keep this helper in that context. */
       Effect.fnUntraced(function* (environmentId: string) {
@@ -1466,6 +1627,39 @@ export const layerServerApi = HttpApiBuilder.group(
           Effect.catchTags({
             GuestLinkPersistenceError: () => relayInternalErrorResponse("persistence_failed"),
           }),
+          mapRelayCommonApiErrors("not_authorized"),
+        ),
+      )
+      .handle(
+        "registerTeamThread",
+        Effect.fn("relay.api.server.registerTeamThread")(
+          function* ({ params, payload }) {
+            yield* requireOwnEnvironment(params.environmentId);
+            const principal = yield* RelayEnvironmentPrincipal;
+            // The machine shares as the accounts it is linked to, never as one it names.
+            const linked = yield* environmentLinks.findActiveManagedForEnvironment({
+              environmentId: params.environmentId,
+              environmentPublicKey: principal.environmentPublicKey,
+            });
+            return yield* teams.registerThread({
+              environmentId: params.environmentId,
+              linkedUserIds: linked.map((link) => link.userId),
+              request: payload,
+            });
+          },
+          Effect.catchTags(teamErrorCases),
+          mapRelayCommonApiErrors("not_authorized"),
+        ),
+      )
+      .handle(
+        "unregisterTeamThread",
+        Effect.fn("relay.api.server.unregisterTeamThread")(
+          function* ({ params }) {
+            yield* requireOwnEnvironment(params.environmentId);
+            yield* teams.unregisterThread(params);
+            return { ok: true };
+          },
+          Effect.catchTags({ TeamPersistenceError: teamErrorCases.TeamPersistenceError }),
           mapRelayCommonApiErrors("not_authorized"),
         ),
       )

@@ -4,13 +4,20 @@ import {
   GUEST_RESOLVED_MESSAGE_LIMIT,
   GUEST_SHARE_MAX_GUESTS,
   GUEST_TURN_LIMIT,
+  TEAM_SHARE_MAX_GUESTS,
+  ROOM_BOARD_MAX_EDGES,
   ROOM_BOARD_MAX_NOTES,
   ROOM_BOARD_THREAD_CARD,
   guestMessageAuthorName,
+  isRoomBoardUrl,
   roomBoardAgentCard,
+  roomBoardCardRef,
   roomBoardGuestCard,
+  roomBoardNoteRef,
   type RoomBoard,
   type RoomBoardChange,
+  type RoomBoardEdge,
+  type RoomBoardNote,
   type GuestId,
   type GuestMessageAttribution,
   type GuestMessageId,
@@ -51,6 +58,8 @@ export const GUEST_FAILURE = {
   busy: "Wait for the owner to answer your earlier messages.",
   filesBusy: "Wait for the owner to answer your earlier messages before you attach more files.",
   boardFull: "This board has as many notes as it holds. Remove one first.",
+  removed: "The owner removed you from this thread.",
+  memberJoined: "This member already joined.",
 } as const;
 
 const isExpired = (share: ThreadGuestShare, now: DateTime.Utc) =>
@@ -108,6 +117,78 @@ function trimResolved(messages: ReadonlyArray<ThreadGuestMessage>): Array<Thread
 
 const EMPTY_BOARD: RoomBoard = { positions: {}, notes: [] };
 
+/** Only cards the room has, so the positions and arrows cannot grow without bound. */
+const isRoomCard = (share: ThreadGuestShare, cardId: string) =>
+  cardId === ROOM_BOARD_THREAD_CARD ||
+  share.guests?.some(
+    (guest) => cardId === roomBoardGuestCard(guest.id) || cardId === roomBoardAgentCard(guest.id),
+  ) === true;
+
+const CARD_REF = roomBoardCardRef("");
+const isOnBoard = (share: ThreadGuestShare, board: RoomBoard, ref: string) =>
+  board.notes.some((note) => ref === roomBoardNoteRef(note.id)) ||
+  (ref.startsWith(CARD_REF) && isRoomCard(share, ref.slice(CARD_REF.length)));
+
+/** The board with its arrows kept only where `keep` says. */
+const withEdges = (board: RoomBoard, keep: (edge: RoomBoardEdge) => boolean): RoomBoard =>
+  board.edges === undefined ? board : { ...board, edges: board.edges.filter(keep) };
+
+type NotePut = Extract<RoomBoardChange, { type: "note.put" }>;
+
+/** The note a `note.put` makes or leaves, or why the room does not take it. */
+function putNote(
+  share: ThreadGuestShare,
+  author: GuestId | null,
+  existing: RoomBoardNote | undefined,
+  change: NotePut,
+): Result.Result<RoomBoardNote, string> {
+  const kind = existing === undefined ? change.kind : existing.kind;
+  // The server never fetches the address; clients open it only in a new tab.
+  const linkOk =
+    change.url === undefined ? kind !== "link" : kind === "link" && isRoomBoardUrl(change.url);
+  if (existing === undefined && !linkOk) {
+    return Result.fail("A link card needs an http or https address, and only a link card has one.");
+  }
+  const assigns = change.assignee !== undefined && change.assignee !== null;
+  if (kind !== "task" && (change.done !== undefined || assigns)) {
+    return Result.fail("Only a task can be done or assigned.");
+  }
+  if (change.assignee?.guestId !== undefined && !hasGuest(share, change.assignee.guestId)) {
+    return Result.fail("A task can only be assigned to someone in the room.");
+  }
+  const base: RoomBoardNote =
+    existing ??
+    ({
+      id: change.noteId,
+      text: "",
+      x: 0,
+      y: 0,
+      ...(author === null ? {} : { guestId: author }),
+      ...(kind === undefined ? {} : { kind }),
+      ...(change.url === undefined ? {} : { url: change.url }),
+      ...(change.pinnedTo === undefined ? {} : { pinnedTo: change.pinnedTo }),
+    } satisfies RoomBoardNote);
+  const { done: _done, assignee: _assignee, ...rest } = base;
+  const done = change.done ?? base.done === true;
+  const assignee = change.assignee === undefined ? base.assignee : change.assignee;
+  return Result.succeed({
+    ...rest,
+    text: change.text,
+    x: change.x,
+    y: change.y,
+    ...(done ? { done } : {}),
+    ...(assignee === undefined || assignee === null ? {} : { assignee }),
+  });
+}
+
+const sameNote = (left: RoomBoardNote, right: RoomBoardNote) =>
+  left.text === right.text &&
+  left.x === right.x &&
+  left.y === right.y &&
+  left.done === right.done &&
+  left.assignee?.guestId === right.assignee?.guestId &&
+  (left.assignee === undefined) === (right.assignee === undefined);
+
 /** The board after one change, the same board when the change does nothing, or why not. */
 function changeBoard(
   share: ThreadGuestShare,
@@ -117,15 +198,7 @@ function changeBoard(
   const board = share.board ?? EMPTY_BOARD;
   switch (change.type) {
     case "card.move": {
-      // Only cards the room has, so the positions cannot grow without bound.
-      const onBoard =
-        change.cardId === ROOM_BOARD_THREAD_CARD ||
-        share.guests?.some(
-          (guest) =>
-            change.cardId === roomBoardGuestCard(guest.id) ||
-            change.cardId === roomBoardAgentCard(guest.id),
-        ) === true;
-      if (!onBoard) return Result.fail("This card is not on the board.");
+      if (!isRoomCard(share, change.cardId)) return Result.fail("This card is not on the board.");
       const at = board.positions[change.cardId];
       if (at?.x === change.x && at.y === change.y) return Result.succeed(board);
       return Result.succeed({
@@ -135,41 +208,84 @@ function changeBoard(
     }
     case "note.put": {
       const existing = board.notes.find((note) => note.id === change.noteId);
-      const placed = { id: change.noteId, text: change.text, x: change.x, y: change.y };
-      if (existing === undefined) {
-        if (board.notes.length >= ROOM_BOARD_MAX_NOTES) return Result.fail(GUEST_FAILURE.boardFull);
-        return Result.succeed({
-          ...board,
-          notes: [...board.notes, author === null ? placed : { ...placed, guestId: author }],
-        });
+      if (existing === undefined && board.notes.length >= ROOM_BOARD_MAX_NOTES) {
+        return Result.fail(GUEST_FAILURE.boardFull);
       }
-      if (existing.text === placed.text && existing.x === placed.x && existing.y === placed.y) {
-        return Result.succeed(board);
-      }
-      // A note stays its author's whoever edits it.
-      return Result.succeed({
-        ...board,
-        notes: board.notes.map((note) => (note === existing ? { ...existing, ...placed } : note)),
+      return Result.map(putNote(share, author, existing, change), (note) => {
+        if (existing === undefined) return { ...board, notes: [...board.notes, note] };
+        // A note stays its author's whoever edits it.
+        return sameNote(existing, note)
+          ? board
+          : { ...board, notes: board.notes.map((other) => (other === existing ? note : other)) };
       });
     }
-    case "note.remove":
-      return board.notes.some((note) => note.id === change.noteId)
-        ? Result.succeed({
-            ...board,
-            notes: board.notes.filter((note) => note.id !== change.noteId),
-          })
+    case "note.remove": {
+      if (!board.notes.some((note) => note.id === change.noteId)) return Result.succeed(board);
+      const ref = roomBoardNoteRef(change.noteId);
+      return Result.succeed(
+        withEdges(
+          { ...board, notes: board.notes.filter((note) => note.id !== change.noteId) },
+          (edge) => edge.from !== ref && edge.to !== ref,
+        ),
+      );
+    }
+    case "edge.put": {
+      const edges = board.edges ?? [];
+      if (
+        edges.some(
+          (edge) =>
+            edge.id === change.edgeId || (edge.from === change.from && edge.to === change.to),
+        )
+      ) {
+        return Result.succeed(board);
+      }
+      if (change.from === change.to) return Result.fail("An arrow joins two different cards.");
+      if (!isOnBoard(share, board, change.from) || !isOnBoard(share, board, change.to)) {
+        return Result.fail("An arrow joins cards that are on the board.");
+      }
+      if (edges.length >= ROOM_BOARD_MAX_EDGES) {
+        return Result.fail("This board has as many arrows as it holds. Remove one first.");
+      }
+      return Result.succeed({
+        ...board,
+        edges: [...edges, { id: change.edgeId, from: change.from, to: change.to }],
+      });
+    }
+    case "edge.remove":
+      return board.edges?.some((edge) => edge.id === change.edgeId) === true
+        ? Result.succeed(withEdges(board, (edge) => edge.id !== change.edgeId))
         : Result.succeed(board);
   }
 }
 
-/** The board without a removed guest's notes and cards. */
+/**
+ * The board without a removed guest's notes, cards and the arrows that touched them. Tasks they
+ * were given are left with no one.
+ */
 function boardWithoutGuest(board: RoomBoard, guestId: GuestId): RoomBoard {
   const {
     [roomBoardGuestCard(guestId)]: _guest,
     [roomBoardAgentCard(guestId)]: _agent,
     ...positions
   } = board.positions;
-  return { positions, notes: board.notes.filter((note) => note.guestId !== guestId) };
+  const gone = new Set([
+    roomBoardCardRef(roomBoardGuestCard(guestId)),
+    roomBoardCardRef(roomBoardAgentCard(guestId)),
+    ...board.notes.flatMap((note) => (note.guestId === guestId ? [roomBoardNoteRef(note.id)] : [])),
+  ]);
+  return withEdges(
+    {
+      ...board,
+      positions,
+      notes: board.notes.flatMap((note) => {
+        if (note.guestId === guestId) return [];
+        if (note.assignee?.guestId !== guestId) return [note];
+        const { assignee: _assignee, ...rest } = note;
+        return [rest];
+      }),
+    },
+    (edge) => !gone.has(edge.from) && !gone.has(edge.to),
+  );
 }
 
 const resolveMessage = (
@@ -216,6 +332,7 @@ export function decideGuestShareCommand(input: {
         guestName: null,
         guests: [],
         messages: [],
+        ...(command.team === undefined ? {} : { team: command.team }),
       });
     }
     case "thread.guest-share.close":
@@ -230,7 +347,21 @@ export function decideGuestShareCommand(input: {
       }
       if (share.joinsClosed === true) return Result.fail(GUEST_FAILURE.closed);
       const guests = share.guests ?? [];
-      if (guests.length >= GUEST_SHARE_MAX_GUESTS) return Result.fail(GUEST_FAILURE.full);
+      // A team share takes only members, each once.
+      const member = command.member;
+      if ((share.team === undefined) !== (member === undefined)) {
+        return Result.fail(GUEST_FAILURE.inactive);
+      }
+      if (member !== undefined) {
+        if (share.removedMembers?.includes(member.userId) === true) {
+          return Result.fail(GUEST_FAILURE.removed);
+        }
+        if (guests.some((guest) => guest.member?.userId === member.userId)) {
+          return Result.fail(GUEST_FAILURE.memberJoined);
+        }
+      }
+      const maxGuests = share.team === undefined ? GUEST_SHARE_MAX_GUESTS : TEAM_SHARE_MAX_GUESTS;
+      if (guests.length >= maxGuests) return Result.fail(GUEST_FAILURE.full);
       // The agent and the owner tell guests apart by name alone.
       const name = command.guestName.toLowerCase();
       if (guests.some((guest) => guest.name.toLowerCase() === name)) {
@@ -240,7 +371,12 @@ export function decideGuestShareCommand(input: {
         ...share,
         guests: [
           ...guests,
-          { id: command.guestId, name: command.guestName, joinedAt: DateTime.formatIso(now) },
+          {
+            id: command.guestId,
+            name: command.guestName,
+            joinedAt: DateTime.formatIso(now),
+            ...(member === undefined ? {} : { member }),
+          },
         ],
       });
     }
@@ -334,10 +470,15 @@ export function decideGuestShareCommand(input: {
       if (share === null || share.guests?.some((guest) => guest.id === command.guestId) !== true) {
         return Result.fail("This guest is not on the link.");
       }
+      // A member is known by account, so only they are kept out; anyone else could rejoin under
+      // another name, so the link stops letting new people in.
+      const removedMember = share.guests.find((guest) => guest.id === command.guestId)?.member;
       // Their waiting messages go with them; the ones the owner sent are the thread's now.
       return withShare({
         ...share,
-        joinsClosed: true,
+        ...(removedMember === undefined
+          ? { joinsClosed: true }
+          : { removedMembers: [...(share.removedMembers ?? []), removedMember.userId] }),
         guests: share.guests.filter((guest) => guest.id !== command.guestId),
         messages: share.messages.filter(
           (message) => message.guestId !== command.guestId || message.status === "sent",

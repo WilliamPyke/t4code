@@ -1260,6 +1260,205 @@ const RelayGuestLinksGroup = HttpApiGroup.make("guestLinks")
     "Readable names for guest links. No sign-in: the name is the key.",
   );
 
+/** A team: signed-in people who see the threads its members share to it. */
+export const RELAY_TEAM_MAX_MEMBERS = 50;
+export const RELAY_TEAM_MAX_PER_USER = 20;
+export const RELAY_TEAM_MAX_THREADS = 200;
+export const RELAY_TEAM_NAME_MAX_LENGTH = 60;
+export const RELAY_TEAM_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+export const RelayTeamId = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
+
+export const RelayTeamName = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(RELAY_TEAM_NAME_MAX_LENGTH),
+);
+
+export const RelayTeamRole = Schema.Literals(["owner", "member"]);
+export type RelayTeamRole = typeof RelayTeamRole.Type;
+
+export const RelayTeamSummary = Schema.Struct({
+  id: RelayTeamId,
+  name: Schema.String,
+  role: RelayTeamRole,
+  memberCount: Schema.Number,
+});
+export type RelayTeamSummary = typeof RelayTeamSummary.Type;
+
+/** A member as their account names them. */
+export const RelayTeamMember = Schema.Struct({
+  userId: TrimmedNonEmptyString,
+  name: Schema.String,
+  avatarUrl: Schema.NullOr(Schema.String),
+  role: RelayTeamRole,
+});
+export type RelayTeamMember = typeof RelayTeamMember.Type;
+
+/** A thread a member's machine shares to the team, and what a member needs to join it. */
+export const RelayTeamThread = Schema.Struct({
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  shareId: TrimmedNonEmptyString,
+  title: Schema.String,
+  host: TrimmedNonEmptyString,
+  credential: TrimmedNonEmptyString,
+  ownerUserId: TrimmedNonEmptyString,
+  expiresAt: Schema.String,
+});
+export type RelayTeamThread = typeof RelayTeamThread.Type;
+
+export const RelayTeam = Schema.Struct({
+  ...RelayTeamSummary.fields,
+  members: Schema.Array(RelayTeamMember),
+  threads: Schema.Array(RelayTeamThread),
+});
+export type RelayTeam = typeof RelayTeam.Type;
+
+export const RelayTeamNameRequest = Schema.Struct({ name: RelayTeamName });
+export const RelayListTeamsResponse = Schema.Struct({ teams: Schema.Array(RelayTeamSummary) });
+export const RelayTeamInviteResponse = Schema.Struct({
+  name: Schema.String,
+  expiresAt: Schema.String,
+});
+export type RelayTeamInviteResponse = typeof RelayTeamInviteResponse.Type;
+export const RelayTeamInviteAcceptResponse = Schema.Struct({ teamId: RelayTeamId });
+
+/** Asks for a member assertion for one machine that shares a thread to the team. */
+export const RelayTeamAssertionRequest = Schema.Struct({ environmentId: EnvironmentId });
+export const RelayTeamAssertionResponse = Schema.Struct({ token: TrimmedNonEmptyString });
+
+/**
+ * What the relay signs for a member joining a team share, with the key it signs every relay
+ * claim with, so the owner's machine checks it offline. `aud` names that machine.
+ */
+export const RelayTeamMemberAssertionPayload = Schema.Struct({
+  ...RelaySignedJwtRegisteredClaims,
+  teamId: RelayTeamId,
+  userId: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  avatarUrl: Schema.NullOr(Schema.String),
+});
+export type RelayTeamMemberAssertionPayload = typeof RelayTeamMemberAssertionPayload.Type;
+
+export const RelayTeamThreadRegistrationRequest = Schema.Struct({
+  teamId: RelayTeamId,
+  threadId: ThreadId,
+  shareId: TrimmedNonEmptyString,
+  title: Schema.String,
+  host: TrimmedNonEmptyString,
+  credential: TrimmedNonEmptyString,
+  expiresAt: Schema.String,
+});
+export type RelayTeamThreadRegistrationRequest = typeof RelayTeamThreadRegistrationRequest.Type;
+export const RelayTeamThreadRegistrationResponse = Schema.Struct({ teamName: Schema.String });
+
+export const RelayTeamRequestErrorReason = Schema.Literals([
+  "not_found",
+  "not_owner",
+  "owner_cannot_leave",
+  "team_full",
+  "too_many_teams",
+  "too_many_threads",
+  "invite_invalid",
+  "not_shared",
+]);
+export type RelayTeamRequestErrorReason = typeof RelayTeamRequestErrorReason.Type;
+
+const RELAY_TEAM_REQUEST_MESSAGES: Record<RelayTeamRequestErrorReason, string> = {
+  not_found: "This team does not exist, or you are not in it.",
+  not_owner: "Only the team's owner can do that.",
+  owner_cannot_leave: "The owner cannot leave a team. Delete it instead.",
+  team_full: `A team holds up to ${RELAY_TEAM_MAX_MEMBERS} people.`,
+  too_many_teams: `You can be in up to ${RELAY_TEAM_MAX_PER_USER} teams.`,
+  too_many_threads: `A team holds up to ${RELAY_TEAM_MAX_THREADS} shared threads.`,
+  invite_invalid: "This invite has expired or is not valid. Ask for a new one.",
+  not_shared: "This thread is no longer shared with the team.",
+};
+
+export class RelayTeamRequestError extends Schema.TaggedError<RelayTeamRequestError>()(
+  "RelayTeamRequestError",
+  { code: Schema.Literal("team_request_failed"), reason: RelayTeamRequestErrorReason },
+  { httpApiStatus: 409 },
+) {
+  override get message(): string {
+    return RELAY_TEAM_REQUEST_MESSAGES[this.reason];
+  }
+}
+
+const RelayTeamErrors = [
+  RelayAuthInvalidError,
+  RelayInternalError,
+  RelayTeamRequestError,
+  RelayRateLimitedError,
+] as const;
+const RelayTeamParams = Schema.Struct({ teamId: RelayTeamId });
+
+const RelayTeamsGroup = HttpApiGroup.make("teams")
+  .add(
+    HttpApiEndpoint.get("listTeams", "/v1/teams", {
+      headers: RelayBearerRequestHeaders,
+      success: RelayListTeamsResponse,
+      error: RelayTeamErrors,
+    }).annotate(OpenApi.Summary, "List my teams"),
+    HttpApiEndpoint.post("createTeam", "/v1/teams", {
+      headers: RelayBearerRequestHeaders,
+      payload: RelayTeamNameRequest,
+      success: RelayTeamSummary,
+      error: RelayTeamErrors,
+    }).annotate(OpenApi.Summary, "Create a team"),
+    HttpApiEndpoint.get("getTeam", "/v1/teams/:teamId", {
+      headers: RelayBearerRequestHeaders,
+      params: RelayTeamParams,
+      success: RelayTeam,
+      error: RelayTeamErrors,
+    }).annotate(OpenApi.Summary, "Read a team's members and shared threads"),
+    HttpApiEndpoint.post("renameTeam", "/v1/teams/:teamId/name", {
+      headers: RelayBearerRequestHeaders,
+      params: RelayTeamParams,
+      payload: RelayTeamNameRequest,
+      success: RelayOkResponse,
+      error: RelayTeamErrors,
+    }).annotate(OpenApi.Summary, "Rename a team (owner)"),
+    HttpApiEndpoint.delete("deleteTeam", "/v1/teams/:teamId", {
+      headers: RelayBearerRequestHeaders,
+      params: RelayTeamParams,
+      success: RelayOkResponse,
+      error: RelayTeamErrors,
+    }).annotate(OpenApi.Summary, "Delete a team (owner)"),
+    HttpApiEndpoint.post("leaveTeam", "/v1/teams/:teamId/leave", {
+      headers: RelayBearerRequestHeaders,
+      params: RelayTeamParams,
+      success: RelayOkResponse,
+      error: RelayTeamErrors,
+    }).annotate(OpenApi.Summary, "Leave a team"),
+    HttpApiEndpoint.delete("removeTeamMember", "/v1/teams/:teamId/members/:userId", {
+      headers: RelayBearerRequestHeaders,
+      params: Schema.Struct({ teamId: RelayTeamId, userId: TrimmedNonEmptyString }),
+      success: RelayOkResponse,
+      error: RelayTeamErrors,
+    }).annotate(OpenApi.Summary, "Remove a member (owner)"),
+    HttpApiEndpoint.post("createTeamInvite", "/v1/teams/:teamId/invites", {
+      headers: RelayBearerRequestHeaders,
+      params: RelayTeamParams,
+      success: RelayTeamInviteResponse,
+      error: RelayTeamErrors,
+    }).annotate(OpenApi.Summary, "Make a three-word invite to a team"),
+    HttpApiEndpoint.post("acceptTeamInvite", "/v1/team-invites/:name/accept", {
+      headers: RelayBearerRequestHeaders,
+      params: Schema.Struct({ name: Schema.String }),
+      success: RelayTeamInviteAcceptResponse,
+      error: RelayTeamErrors,
+    }).annotate(OpenApi.Summary, "Join a team with an invite"),
+    HttpApiEndpoint.post("createTeamAssertion", "/v1/teams/:teamId/assertions", {
+      headers: RelayBearerRequestHeaders,
+      params: RelayTeamParams,
+      payload: RelayTeamAssertionRequest,
+      success: RelayTeamAssertionResponse,
+      error: RelayTeamErrors,
+    }).annotate(OpenApi.Summary, "Sign a short-lived member assertion for a team thread's machine"),
+  )
+  .middleware(RelayClientAuth)
+  .annotate(OpenApi.Description, "Teams of signed-in people and the threads shared with them.");
+
 const RelayServerGroup = HttpApiGroup.make("server")
   .add(
     HttpApiEndpoint.post(
@@ -1311,6 +1510,21 @@ const RelayServerGroup = HttpApiGroup.make("server")
       success: RelayGuestLinkRegistrationResponse,
       error: RelayAuthAndInternalErrors,
     }).annotate(OpenApi.Summary, "Give a guest link a readable name"),
+    HttpApiEndpoint.post("registerTeamThread", "/v1/environments/:environmentId/team-threads", {
+      params: Schema.Struct({ environmentId: EnvironmentId }),
+      payload: RelayTeamThreadRegistrationRequest,
+      success: RelayTeamThreadRegistrationResponse,
+      error: [...RelayAuthAndInternalErrors, RelayTeamRequestError],
+    }).annotate(OpenApi.Summary, "List a thread this machine shares to a team"),
+    HttpApiEndpoint.delete(
+      "unregisterTeamThread",
+      "/v1/environments/:environmentId/team-threads/:threadId",
+      {
+        params: Schema.Struct({ environmentId: EnvironmentId, threadId: ThreadId }),
+        success: RelayOkResponse,
+        error: RelayAuthAndInternalErrors,
+      },
+    ).annotate(OpenApi.Summary, "Stop listing a thread this machine shared to a team"),
     HttpApiEndpoint.post("wakeHeldHooks", "/v1/environments/:environmentId/hooks/wake", {
       params: Schema.Struct({ environmentId: EnvironmentId }),
       success: RelayWakeHeldHooksResponse,
@@ -1367,6 +1581,7 @@ export const RelayApi = HttpApi.make("RelayApi")
     RelayDpopClientGroup,
     RelayServerGroup,
     RelayGuestLinksGroup,
+    RelayTeamsGroup,
     RelayHooksGroup,
     RelayMobileTelemetryGroup,
   )

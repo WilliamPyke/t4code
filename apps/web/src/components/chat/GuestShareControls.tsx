@@ -41,6 +41,8 @@ import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { cn } from "~/lib/utils";
 import { useOrchestrationCommand } from "~/state/use-orchestration-command";
+import { useTeams } from "~/teams/teams";
+import { MemberAvatar } from "../teams/MemberAvatar";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -97,6 +99,7 @@ type CreateState =
   | { readonly status: "idle" }
   | { readonly status: "creating" }
   | { readonly status: "created"; readonly url: string }
+  | { readonly status: "shared"; readonly teamName: string }
   | { readonly status: "failed"; readonly message: string };
 
 function GuestShareDialog({
@@ -117,20 +120,30 @@ function GuestShareDialog({
   const [state, setState] = useState<CreateState>({ status: "idle" });
 
   const nowMinute = useNowMinute();
-  const joinable =
-    activeShare !== null &&
-    activeShare.joinsClosed !== true &&
-    activeShare.expiresAt.slice(0, 16) > nowMinute;
+  const live = activeShare !== null && activeShare.expiresAt.slice(0, 16) > nowMinute;
+  const sharedTeam = live ? (activeShare.team ?? null) : null;
+  const joinable = live && sharedTeam === null && activeShare.joinsClosed !== true;
+  const { teams } = useTeams();
 
-  const create = async (replace: boolean) => {
+  const create = async (
+    replace: boolean,
+    team?: { readonly id: string; readonly name: string },
+  ) => {
+    // Moving between a guest link and a team ends what the thread had.
+    const ending = replace || (team === undefined ? sharedTeam !== null : live);
     if (
-      replace &&
+      ending &&
       !(await confirmEndingLink(
         activeShare,
-        [
-          "Replace the guest link?",
-          "Everyone on the current link loses access at once. A new link is made, and you need to send it again to everyone you want in the thread.",
-        ].join("\n"),
+        team !== undefined
+          ? [
+              `Share with ${team.name} instead?`,
+              "Everyone in the thread now loses access at once. Members of the team join from its page.",
+            ].join("\n")
+          : [
+              sharedTeam !== null ? "Make a guest link instead?" : "Replace the guest link?",
+              "Everyone on the current link loses access at once. A new link is made, and you need to send it again to everyone you want in the thread.",
+            ].join("\n"),
       ))
     ) {
       return;
@@ -138,10 +151,19 @@ function GuestShareDialog({
     setState({ status: "creating" });
     const result = await createGuestShare({
       environmentId: threadRef.environmentId,
-      input: { threadId: threadRef.threadId, replace },
+      input: {
+        threadId: threadRef.threadId,
+        replace: replace || ending,
+        ...(team === undefined ? {} : { teamId: team.id }),
+      },
     });
     if (result._tag === "Success") {
-      setState({ status: "created", url: result.value.shortUrl ?? result.value.url });
+      const shared = result.value.share.team;
+      setState(
+        shared !== undefined
+          ? { status: "shared", teamName: shared.name }
+          : { status: "created", url: result.value.shortUrl ?? result.value.url },
+      );
       return;
     }
     if (isAtomCommandInterrupted(result)) {
@@ -185,6 +207,12 @@ function GuestShareDialog({
                 {isCopied ? "Copied" : "Copy"}
               </Button>
             </div>
+          ) : state.status === "shared" || sharedTeam !== null ? (
+            <p className="text-muted-foreground text-sm">
+              Shared with{" "}
+              {state.status === "shared" ? state.teamName : (sharedTeam?.name ?? "the team")}. Its
+              members open it from the team&apos;s page as their own accounts, for 90 days.
+            </p>
           ) : (
             <p className="text-muted-foreground text-sm">
               {joinable
@@ -201,7 +229,7 @@ function GuestShareDialog({
           ) : null}
         </DialogPanel>
         <DialogFooter>
-          {state.status === "created" ? (
+          {state.status === "created" || state.status === "shared" ? (
             <Button size="sm" onClick={onClose}>
               Done
             </Button>
@@ -215,6 +243,30 @@ function GuestShareDialog({
               >
                 Cancel
               </Button>
+              {teams !== null && teams.length > 0 ? (
+                <Menu>
+                  <MenuTrigger
+                    render={
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!canCreate || state.status === "creating"}
+                      />
+                    }
+                  >
+                    {sharedTeam === null ? "Share with a team" : "Share with another team"}
+                  </MenuTrigger>
+                  <MenuPopup align="end">
+                    {teams
+                      .filter((team) => team.id !== sharedTeam?.id)
+                      .map((team) => (
+                        <MenuItem key={team.id} onClick={() => void create(false, team)}>
+                          {team.name}
+                        </MenuItem>
+                      ))}
+                  </MenuPopup>
+                </Menu>
+              ) : null}
               {joinable ? (
                 <Button
                   variant="outline"
@@ -234,7 +286,9 @@ function GuestShareDialog({
                   ? "Working..."
                   : joinable
                     ? "Show link"
-                    : "Create link"}
+                    : sharedTeam !== null
+                      ? "Make a guest link"
+                      : "Create link"}
               </Button>
             </>
           )}
@@ -281,7 +335,9 @@ export function GuestShareIndicator({ threadRef }: { readonly threadRef: ScopedT
             share,
             [
               "Stop sharing this thread?",
-              "Everyone on the guest link loses access at once, and the link stops working.",
+              share.team === undefined
+                ? "Everyone on the guest link loses access at once, and the link stops working."
+                : `Everyone in it loses access at once, and ${share.team.name} no longer lists it.`,
             ].join("\n"),
           );
           if (!confirmed) return;
@@ -309,7 +365,12 @@ function GuestShareStatus({
   const nowMinute = useNowMinute();
   // The share stays on the thread after it expires, until the owner clears it.
   if (share.expiresAt.slice(0, 16) <= nowMinute) return <span>Guest link expired</span>;
-  const label = guestShareStatusLabel(share);
+  const label =
+    share.team === undefined
+      ? guestShareStatusLabel(share)
+      : (share.guests ?? []).length === 0
+        ? `Shared with ${share.team.name}`
+        : `${share.team.name}: ${guestShareStatusLabel(share)}`;
   // Only a server that lists guests can remove one or say who is viewing.
   const guests = share.guests ?? [];
   if (guests.length === 0) return <span>{label}</span>;
@@ -317,7 +378,12 @@ function GuestShareStatus({
     <Menu>
       <MenuTrigger render={<Button size="xs" variant="ghost-muted" />}>{label}</MenuTrigger>
       <MenuPopup align="end" width="content">
-        <GuestList guests={guests} joinsClosed={share.joinsClosed === true} threadRef={threadRef} />
+        <GuestList
+          guests={guests}
+          joinsClosed={share.joinsClosed === true}
+          team={share.team !== undefined}
+          threadRef={threadRef}
+        />
       </MenuPopup>
     </Menu>
   );
@@ -330,10 +396,12 @@ function GuestShareStatus({
 function GuestList({
   guests,
   joinsClosed,
+  team,
   threadRef,
 }: {
   readonly guests: ReadonlyArray<ThreadGuest>;
   readonly joinsClosed: boolean;
+  readonly team: boolean;
   readonly threadRef: ScopedThreadRef;
 }) {
   // Subscribed only while the list is open, so an idle shared thread streams nothing extra.
@@ -386,8 +454,13 @@ function GuestList({
       {guests.map((guest) => (
         <MenuGroup key={guest.id}>
           <MenuGroupLabel>
-            {guest.account === undefined ? guest.name : `${guest.name} (@${guest.account.login})`}
-            {presence?.online.includes(guest.id) ? " · viewing now" : ""}
+            <span className="flex items-center gap-1.5">
+              {guest.member === undefined ? null : (
+                <MemberAvatar name={guest.name} avatarUrl={guest.member.avatarUrl} />
+              )}
+              {guest.account === undefined ? guest.name : `${guest.name} (@${guest.account.login})`}
+              {presence?.online.includes(guest.id) ? " · viewing now" : ""}
+            </span>
           </MenuGroupLabel>
           <MenuCheckboxItem
             checked={guest.trusted === true}
@@ -435,9 +508,11 @@ function GuestList({
         {directAllowed
           ? "Send without asking runs a guest's messages with this thread's permissions before you read them."
           : "Send without asking needs Claude or Codex signed in with an API key. A plan covers only your own prompts."}{" "}
-        {joinsClosed
-          ? "No one new can join with this link."
-          : "Removing a guest also stops new people joining."}{" "}
+        {team
+          ? "A removed member cannot open this thread again."
+          : joinsClosed
+            ? "No one new can join with this link."
+            : "Removing a guest also stops new people joining."}{" "}
         A guest who signs in with GitHub can be approved for every link.
       </p>
     </>

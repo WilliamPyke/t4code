@@ -11,15 +11,19 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  type OrchestrationV2AppThread,
+  ROOM_BOARD_MAX_EDGES,
   ROOM_BOARD_MAX_NOTES,
-  type RoomBoardChange,
+  RoomBoardChange,
   ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -54,6 +58,8 @@ const layerTest = Layer.mergeAll(
 const threadId = ThreadId.make("thread:guest-share");
 const shareId = GuestShareId.make("share:one");
 const guestMessageId = GuestMessageId.make("guest-message:one");
+type NotePut = Extract<RoomBoardChange, { type: "note.put" }>;
+const decodeChange = Schema.decodeUnknownOption(RoomBoardChange);
 const sam = GuestId.make("guest:sam");
 const alex = GuestId.make("guest:alex");
 
@@ -403,6 +409,189 @@ it.effect("keeps one board for the room, changed a card or a note at a time", ()
     assert.isTrue(yield* refused(change(sam, { type: "note.remove", noteId: "note:owner" })));
   }).pipe(Effect.provide(layerTest)),
 );
+
+it.effect("keeps tasks, links, comments and arrows on the board, checked by the room", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* setup;
+    for (const [guestId, guestName] of [
+      [sam, "Sam"],
+      [alex, "Alex"],
+    ] as const) {
+      yield* orchestrator.dispatch({
+        type: "thread.guest-share.redeem",
+        commandId: CommandId.make(`redeem:${guestId}`),
+        threadId,
+        shareId,
+        guestId,
+        guestName,
+      });
+    }
+    let changes = 0;
+    const change = (author: GuestId | null, change: RoomBoardChange) =>
+      orchestrator.dispatch({
+        type: "thread.guest-board.change",
+        commandId: CommandId.make(`board:${changes++}`),
+        threadId,
+        shareId,
+        author,
+        change,
+      });
+    const refused = (command: ReturnType<typeof change>) =>
+      Effect.map(Effect.exit(command), Exit.isFailure);
+    const board = Effect.map(
+      orchestrator.getThreadRecords(threadId, ["runs", "messages"]),
+      (records) => ({ ...records, board: records.thread.guestShare?.board }),
+    );
+    const put = (noteId: string, fields: Partial<NotePut> = {}): NotePut => ({
+      type: "note.put",
+      noteId,
+      text: "",
+      x: 0,
+      y: 0,
+      ...fields,
+    });
+
+    // A link holds an http or https address, and only a link holds one.
+    assert.isTrue(
+      yield* refused(change(sam, put("link:bad", { kind: "link", url: "javascript:alert(1)" }))),
+    );
+    assert.isTrue(
+      Option.isNone(decodeChange(put("link:bad", { kind: "link", url: "file:///etc" }))),
+    );
+    assert.isTrue(yield* refused(change(sam, put("link:none", { kind: "link" }))));
+    assert.isTrue(yield* refused(change(sam, put("note:url", { url: "https://example.com" }))));
+    yield* change(sam, put("link", { kind: "link", url: "https://github.com/acme/app/pull/1" }));
+
+    // A task is assigned to someone in the room, and only a task is done or assigned.
+    const outsider = GuestId.make("guest:outsider");
+    assert.isTrue(
+      yield* refused(change(sam, put("task", { kind: "task", assignee: { guestId: outsider } }))),
+    );
+    assert.isTrue(yield* refused(change(sam, put("note", { done: true }))));
+    yield* change(
+      sam,
+      put("task", { kind: "task", text: "Fix login", assignee: { guestId: alex } }),
+    );
+    yield* change(alex, put("task", { text: "Fix login", done: true }));
+    // An older client's edit says nothing of the task's state, which stays.
+    yield* change(null, put("task", { text: "Fix login now" }));
+    yield* change(alex, put("comment", { text: "Why 15 minutes?", pinnedTo: "message:1" }));
+    yield* change(null, put("owner-task", { kind: "task", assignee: {} }));
+
+    // Arrows join two cards that are on the board, once each.
+    const arrow = (edgeId: string, from: string, to: string): RoomBoardChange => ({
+      type: "edge.put",
+      edgeId,
+      from,
+      to,
+    });
+    yield* change(sam, arrow("a1", "note:task", "card:thread"));
+    yield* change(sam, arrow("a1-again", "note:task", "card:thread"));
+    yield* change(alex, arrow("a2", "note:comment", `card:guest:${sam}`));
+    yield* change(alex, arrow("a3", "note:link", "note:owner-task"));
+    yield* change(null, arrow("a4", `card:agent:${alex}`, "note:link"));
+    assert.isTrue(yield* refused(change(sam, arrow("a5", "note:task", "note:task"))));
+    assert.isTrue(yield* refused(change(sam, arrow("a5", "note:gone", "card:thread"))));
+    assert.isTrue(yield* refused(change(sam, arrow("a5", "card:guest:nobody", "card:thread"))));
+
+    const arranged = yield* board;
+    assert.deepEqual(arranged.board?.notes, [
+      {
+        id: "link",
+        text: "",
+        x: 0,
+        y: 0,
+        guestId: sam,
+        kind: "link",
+        url: "https://github.com/acme/app/pull/1",
+      },
+      {
+        id: "task",
+        text: "Fix login now",
+        x: 0,
+        y: 0,
+        guestId: sam,
+        kind: "task",
+        done: true,
+        assignee: { guestId: alex },
+      },
+      { id: "comment", text: "Why 15 minutes?", x: 0, y: 0, guestId: alex, pinnedTo: "message:1" },
+      { id: "owner-task", text: "", x: 0, y: 0, kind: "task", assignee: {} },
+    ]);
+    assert.deepEqual(
+      arranged.board?.edges?.map((edge) => edge.id),
+      ["a1", "a2", "a3", "a4"],
+    );
+    // Shown only: nothing on the board reaches the agent or starts a run.
+    assert.lengthOf(arranged.runs, 0);
+    assert.lengthOf(arranged.messages, 0);
+
+    // Taking a card off takes its arrows; clearing an assignee leaves the task.
+    yield* change(null, { type: "note.remove", noteId: "link" });
+    yield* change(null, put("owner-task", { assignee: null }));
+    yield* change(sam, { type: "edge.remove", edgeId: "a1" });
+    const trimmed = (yield* board).board;
+    assert.deepEqual(
+      trimmed?.edges?.map((edge) => edge.id),
+      ["a2"],
+    );
+    assert.isUndefined(trimmed?.notes.find((note) => note.id === "owner-task")?.assignee);
+
+    // A removed guest's cards, comments and arrows go; tasks they had are left with no one.
+    yield* change(sam, arrow("a6", "note:task", `card:guest:${alex}`));
+    yield* orchestrator.dispatch({
+      type: "thread.guest.remove",
+      commandId: CommandId.make("remove-alex"),
+      threadId,
+      guestId: alex,
+    });
+    const after = (yield* board).board;
+    assert.deepEqual(
+      after?.notes.map((note) => note.id),
+      ["task", "owner-task"],
+    );
+    assert.isUndefined(after?.notes[0]?.assignee);
+    assert.deepEqual(after?.edges, []);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it("caps the arrows on a board", () => {
+  const notes = Array.from({ length: ROOM_BOARD_MAX_EDGES + 1 }, (_, index) => ({
+    id: `n${index}`,
+    text: "",
+    x: 0,
+    y: 0,
+  }));
+  const edges = notes.slice(1).map((note, index) => ({
+    id: `e${index}`,
+    from: "note:n0",
+    to: `note:${note.id}`,
+  }));
+  const thread = {
+    guestShare: {
+      id: shareId,
+      expiresAt: "2999-01-01T00:00:00.000Z",
+      guestName: null,
+      guests: [],
+      messages: [],
+      board: { positions: {}, notes, edges },
+    },
+  } as unknown as OrchestrationV2AppThread;
+  const decide = (to: string) =>
+    decideGuestShareCommand({
+      thread,
+      now: DateTime.makeUnsafe("2026-11-12T00:00:00.000Z"),
+      command: {
+        type: "thread.guest-board.change",
+        commandId: CommandId.make("board:cap"),
+        threadId,
+        shareId,
+        author: null,
+        change: { type: "edge.put", edgeId: "over", from: "card:thread", to },
+      },
+    });
+  assert.isTrue(Result.isFailure(decide("note:n1")));
+});
 
 it.effect("starts a thread with a conversation from elsewhere and hands it to the first turn", () =>
   Effect.gen(function* () {

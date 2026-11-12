@@ -3,12 +3,16 @@ import {
   ChatAttachmentId,
   CommandId,
   GUEST_HANDOFF_TTL_MS,
+  GUEST_NAME_MAX_LENGTH,
   GUEST_SHARE_TTL_MS,
   type GuestHandoff,
   GuestMessageId,
   GuestShareCreateError,
   type GuestShareCreateInput,
   type GuestShareCreateResult,
+  type GuestShareTeam,
+  TEAM_SESSION_TTL_MS,
+  TEAM_SHARE_TTL_MS,
   type ThreadGuestShare,
   type GuestAccount,
   GuestId,
@@ -32,6 +36,7 @@ import {
   type RoomAgentsEvent,
   type RoomBoardChange,
   type RoomBoardPoint,
+  type RoomBoardViewport,
   type RoomCursorsEvent,
   type RoomLiveInput,
   type RoomUpdates,
@@ -99,6 +104,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import { type GuestRedactor, type GuestSafe, makeGuestRedactor } from "./guestRedaction.ts";
 import * as GuestLinkNames from "./GuestLinkNames.ts";
+import * as GuestTeamShares from "./GuestTeamShares.ts";
 import * as GuestSignIn from "./GuestSignIn.ts";
 import { guestShareView, guestThreadModel } from "./guestView.ts";
 import { clip, roomUpdatesOf } from "./roomUpdates.ts";
@@ -138,6 +144,8 @@ const CURSOR_RATE_WINDOW_MS = 1_000;
 const AGENT_ACTIVITY_TTL_MS = 10 * 60_000;
 // A pointer nobody moved for this long is taken off the board.
 const CURSOR_TTL_MS = 60_000;
+// A view is dropped when its board closes; this only catches a board that never said so.
+const VIEW_TTL_MS = 10 * 60_000;
 // How soon an open room stream drops what expired when nothing else changed.
 const ROOM_LIVE_SWEEP_INTERVAL = Duration.seconds(5);
 // The owner's pointer, keyed apart from every guest id.
@@ -146,18 +154,23 @@ const OWNER_CURSOR = "";
 interface Expiring {
   readonly until: number;
 }
-/** A share's live room: running agents by guest, and pointers by guest id or `OWNER_CURSOR`. */
+/**
+ * A share's live room: running agents by guest, and pointers and board views by guest id or
+ * `OWNER_CURSOR`.
+ */
 interface RoomLive {
   readonly agents: ReadonlyMap<
     GuestId,
     Expiring & { readonly id: string; readonly prompt: string }
   >;
   readonly cursors: ReadonlyMap<string, Expiring & RoomBoardPoint>;
+  readonly views: ReadonlyMap<string, Expiring & RoomBoardViewport>;
 }
-const EMPTY_ROOM_LIVE: RoomLive = { agents: new Map(), cursors: new Map() };
+const EMPTY_ROOM_LIVE: RoomLive = { agents: new Map(), cursors: new Map(), views: new Map() };
 const unexpired = <K, V extends Expiring>(entries: ReadonlyMap<K, V>, now: number) =>
   new Map([...entries].filter(([, entry]) => entry.until > now));
-const roomIsEmpty = (room: RoomLive) => room.agents.size === 0 && room.cursors.size === 0;
+const roomIsEmpty = (room: RoomLive) =>
+  room.agents.size === 0 && room.cursors.size === 0 && room.views.size === 0;
 
 const GUEST_ACCESS_MESSAGES = {
   ...GUEST_FAILURE,
@@ -175,6 +188,8 @@ const GUEST_ACCESS_MESSAGES = {
   sign_in_failed: "Could not start the GitHub sign-in. Try again.",
   ended: "This room has ended, or you are no longer in it.",
   too_fast: "Too many requests at once. Try again in a minute.",
+  team_member_required:
+    "This thread is shared with a team. Open it from the team's page in T Code while signed in.",
 } as const;
 
 /** What a guest is told. The message comes from `reason`, never from a cause. */
@@ -201,6 +216,8 @@ export class GuestShareAccessError extends Schema.TaggedError<GuestShareAccessEr
       "sign_in_failed",
       "ended",
       "too_fast",
+      "removed",
+      "team_member_required",
     ]),
   },
 ) {
@@ -218,6 +235,7 @@ const GUEST_FAILURE_REASONS = new Map<unknown, GuestShareAccessError["reason"]>(
   [GUEST_FAILURE.busy, "busy"],
   [GUEST_FAILURE.filesBusy, "files_busy"],
   [GUEST_FAILURE.boardFull, "board_full"],
+  [GUEST_FAILURE.removed, "removed"],
 ]);
 const guestFailureReason = (cause: unknown): GuestShareAccessError["reason"] =>
   GUEST_FAILURE_REASONS.get(cause) ?? "rejected";
@@ -237,6 +255,21 @@ type SessionClaims = typeof SessionClaims.Type;
 const decodeSessionClaims = Schema.decodeUnknownOption(Schema.fromJsonString(SessionClaims));
 
 const inactive = new GuestShareAccessError({ reason: "inactive" });
+
+// A member's account name lands in the agent's attribution line: one plain line, unique here.
+const LINE_BREAKING = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+const memberGuestName = (share: ThreadGuestShare, accountName: string) => {
+  const base =
+    accountName
+      .replace(LINE_BREAKING, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, GUEST_NAME_MAX_LENGTH - 3) || "Member";
+  const taken = new Set(share.guests?.map((guest) => guest.name.toLowerCase()) ?? []);
+  let name = base;
+  for (let suffix = 2; taken.has(name.toLowerCase()); suffix++) name = `${base} ${suffix}`;
+  return name;
+};
 
 export class GuestShareService extends Context.Service<
   GuestShareService,
@@ -324,6 +357,7 @@ export class GuestShareService extends Context.Service<
     readonly moveCursor: (
       by: RoomLiveInput | { readonly session: string },
       at: RoomBoardPoint | null,
+      view?: RoomBoardViewport | null,
     ) => Effect.Effect<void, GuestShareAccessError>;
     /** What the room said after `after`, for the guest's own machine. Changes nothing here. */
     readonly roomUpdates: (
@@ -409,6 +443,7 @@ const make = Effect.gen(function* () {
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const guestSignIn = yield* GuestSignIn.GuestSignIn;
   const linkNames = yield* GuestLinkNames.GuestLinkNames;
+  const teamShares = yield* GuestTeamShares.GuestTeamShares;
   const managedEndpoint = yield* CloudManagedEndpointRuntime;
   const { attachmentsDir } = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -526,7 +561,9 @@ const make = Effect.gen(function* () {
     }
     if (
       !(yield* sharingEnabled) ||
-      (kind === "handoff" && DateTime.toEpochMillis(now) >= (claims.value.expiresAt ?? 0)) ||
+      // A handoff token always ends early, and a team member's session ends a day after joining.
+      ((kind === "handoff" || claims.value.expiresAt !== undefined) &&
+        DateTime.toEpochMillis(now) >= (claims.value.expiresAt ?? 0)) ||
       (yield* connectHostname) !== share.host
     ) {
       return yield* inactive;
@@ -560,7 +597,8 @@ const make = Effect.gen(function* () {
   ) {
     const credential = yield* signInvite(share.id);
     const url = buildGuestLink({ host, credential, hostedAppUrl });
-    if (hostedAppUrl === null) return { url, share };
+    // Members open a team share from the team's page; its bare link lets no one in.
+    if (hostedAppUrl === null || share.team !== undefined) return { url, share };
     const name = yield* linkNames.register({ host, credential, expiresAt: share.expiresAt });
     return name === null
       ? { url, share }
@@ -576,22 +614,54 @@ const make = Effect.gen(function* () {
       return yield* new GuestShareCreateError({ reason: "connect_unavailable" });
     }
     const now = yield* DateTime.now;
-    if (input.replace !== true) {
-      const current = yield* orchestrator.getThreadRecords(input.threadId, []).pipe(
-        Effect.map(({ thread }) => thread.guestShare),
-        Effect.orElseSucceed(() => null),
+    const currentThread = yield* orchestrator.getThreadRecords(input.threadId, []).pipe(
+      Effect.map(({ thread }) => thread),
+      Effect.orElseSucceed(() => null),
+    );
+    const current = currentThread?.guestShare ?? null;
+    const listOnTeam = (teamId: string, shareId: GuestShareId, expiresAt: string) =>
+      signInvite(shareId).pipe(
+        Effect.flatMap((credential) =>
+          teamShares.register({
+            teamId,
+            threadId: input.threadId,
+            shareId,
+            title: currentThread?.title ?? "",
+            host,
+            credential,
+            expiresAt,
+          }),
+        ),
       );
-      if (
-        current &&
-        current.host === host &&
-        current.joinsClosed !== true &&
-        DateTime.toEpochMillis(now) < Date.parse(current.expiresAt)
-      ) {
-        return yield* linkFor(host, current);
+    // A link is returned again only to the same audience: a guest link, or the same team.
+    if (
+      input.replace !== true &&
+      current &&
+      current.team?.id === input.teamId &&
+      current.host === host &&
+      current.joinsClosed !== true &&
+      DateTime.toEpochMillis(now) < Date.parse(current.expiresAt)
+    ) {
+      // Sharing again lists it again, in case the relay dropped it.
+      if (current.team !== undefined) {
+        yield* listOnTeam(current.team.id, current.id, current.expiresAt);
       }
+      return yield* linkFor(host, current);
     }
     const shareId = GuestShareId.make(base64UrlEncode(yield* random.randomBytes(SHARE_ID_BYTES)));
-    const expiresAt = DateTime.formatIso(DateTime.add(now, { milliseconds: GUEST_SHARE_TTL_MS }));
+    const expiresAt = DateTime.formatIso(
+      DateTime.add(now, {
+        milliseconds: input.teamId === undefined ? GUEST_SHARE_TTL_MS : TEAM_SHARE_TTL_MS,
+      }),
+    );
+    let team: GuestShareTeam | undefined;
+    if (input.teamId !== undefined) {
+      const teamName = yield* listOnTeam(input.teamId, shareId, expiresAt);
+      if (teamName === null) {
+        return yield* new GuestShareCreateError({ reason: "team_unavailable" });
+      }
+      team = { id: input.teamId, name: teamName };
+    }
     yield* orchestrator
       .dispatch({
         type: "thread.guest-share.open",
@@ -600,8 +670,18 @@ const make = Effect.gen(function* () {
         shareId,
         host,
         expiresAt,
+        ...(team === undefined ? {} : { team }),
       })
-      .pipe(Effect.mapError(() => new GuestShareCreateError({ reason: "thread_unavailable" })));
+      .pipe(
+        Effect.tapError(() =>
+          team === undefined ? Effect.void : teamShares.unregister(input.threadId),
+        ),
+        Effect.mapError(() => new GuestShareCreateError({ reason: "thread_unavailable" })),
+      );
+    // A team share replaced by a guest link stops being listed on the team.
+    if (team === undefined && current?.team !== undefined) {
+      yield* teamShares.unregister(input.threadId);
+    }
     const { thread } = yield* orchestrator
       .getThreadRecords(input.threadId, [])
       .pipe(Effect.mapError(() => new GuestShareCreateError({ reason: "read_failed" })));
@@ -615,8 +695,72 @@ const make = Effect.gen(function* () {
     yield* authorize(credential, "invite");
   });
 
+  /**
+   * Joins a team share as the member an assertion names. The same member always gets the same
+   * guest, under their account's name, and the session ends a day later, so a member removed
+   * from the team stops getting in once their app has to ask the team again.
+   */
+  const redeemAsMember = Effect.fn("GuestShareService.redeemAsMember")(function* (
+    threadId: ThreadId,
+    share: ThreadGuestShare,
+    team: GuestShareTeam,
+    assertion: string | undefined,
+  ) {
+    const claims =
+      assertion === undefined ? Option.none() : yield* teamShares.verifyMember(assertion);
+    if (Option.isNone(claims) || claims.value.teamId !== team.id) {
+      return yield* new GuestShareAccessError({ reason: "team_member_required" });
+    }
+    const { userId, avatarUrl } = claims.value;
+    if (share.removedMembers?.includes(userId) === true) {
+      return yield* new GuestShareAccessError({ reason: "removed" });
+    }
+    const joinedAs = (current: ThreadGuestShare) =>
+      current.guests?.find((guest) => guest.member?.userId === userId)?.id;
+    let guestId = joinedAs(share);
+    if (guestId === undefined) {
+      const newGuestId = GuestId.make(yield* random.uuidV4().pipe(Effect.orDie));
+      guestId = yield* dispatchGuestCommand({
+        type: "thread.guest-share.redeem",
+        commandId: yield* commandId("redeem"),
+        threadId,
+        shareId: share.id,
+        guestId: newGuestId,
+        guestName: memberGuestName(share, claims.value.name),
+        member: avatarUrl ? { userId, avatarUrl } : { userId },
+      }).pipe(
+        Effect.as(newGuestId),
+        // Two of the member's browsers joining at once: the second gets the first one's guest.
+        Effect.catch((error) =>
+          orchestrator.getThreadRecords(threadId, []).pipe(
+            Effect.map(({ thread }) =>
+              thread.guestShare ? joinedAs(thread.guestShare) : undefined,
+            ),
+            Effect.orElseSucceed(() => undefined),
+            Effect.filterOrFail(
+              (existing): existing is GuestId => existing !== undefined,
+              () => error,
+            ),
+          ),
+        ),
+      );
+      yield* analytics.record("feature.used", { feature: "guest_share.join" });
+    }
+    const token = yield* signSession({
+      kind: "session",
+      threadId,
+      shareId: share.id,
+      guestId,
+      expiresAt: DateTime.toEpochMillis(yield* DateTime.now) + TEAM_SESSION_TTL_MS,
+    });
+    return { token, shareId: share.id, threadId };
+  });
+
   const redeem = Effect.fn("GuestShareService.redeem")(function* (request: GuestRedeemRequest) {
     const { thread, share } = yield* authorize(request.credential, "invite");
+    if (share.team !== undefined) {
+      return yield* redeemAsMember(thread.id, share, share.team, request.memberAssertion);
+    }
     const guestId = GuestId.make(yield* random.uuidV4().pipe(Effect.orDie));
     yield* dispatchGuestCommand({
       type: "thread.guest-share.redeem",
@@ -955,6 +1099,7 @@ const make = Effect.gen(function* () {
           const kept = {
             agents: unexpired(room.agents, now),
             cursors: unexpired(room.cursors, now),
+            views: unexpired(room.views, now),
           };
           if (!roomIsEmpty(kept)) next.set(id, kept);
         }
@@ -964,12 +1109,22 @@ const make = Effect.gen(function* () {
         return next;
       });
     });
-  const setCursor = (shareId: GuestShareId, key: string, at: RoomBoardPoint | null) =>
+  /** Moves someone's pointer, and their view unless `view` is absent. Null takes either away. */
+  const setCursor = (
+    shareId: GuestShareId,
+    key: string,
+    at: RoomBoardPoint | null,
+    view?: RoomBoardViewport | null,
+  ) =>
     changeRoom(shareId, (room, now) => {
       const cursors = new Map(room.cursors);
       if (at === null) cursors.delete(key);
       else cursors.set(key, { x: at.x, y: at.y, until: now + CURSOR_TTL_MS });
-      return { ...room, cursors };
+      if (view === undefined) return { ...room, cursors };
+      const views = new Map(room.views);
+      if (view === null) views.delete(key);
+      else views.set(key, { x: view.x, y: view.y, zoom: view.zoom, until: now + VIEW_TTL_MS });
+      return { ...room, cursors, views };
     });
   const clearAgent = (shareId: GuestShareId, guestId: GuestId, id: string) =>
     changeRoom(shareId, (room) => {
@@ -1002,17 +1157,18 @@ const make = Effect.gen(function* () {
         .map(([guestId, agent]) => ({ guestId, prompt: agent.prompt }))
         .toSorted((left, right) => left.guestId.localeCompare(right.guestId)),
     }));
-  /** Everyone's pointers but the reader's own. */
+  /** Everyone's pointers and views but the reader's own. */
   const cursorsOf = (shareId: GuestShareId, reader: string) =>
-    roomEvents(shareId, (room, now): RoomCursorsEvent => ({
-      type: "cursors",
-      cursors: [...room.cursors]
-        .filter(([key, cursor]) => key !== reader && cursor.until > now)
-        .toSorted(([left], [right]) => left.localeCompare(right))
-        .map(([key, { x, y }]) =>
-          key === OWNER_CURSOR ? { x, y } : { guestId: GuestId.make(key), x, y },
-        ),
-    }));
+    roomEvents(shareId, (room, now): RoomCursorsEvent => {
+      const others = <V extends Expiring>(entries: ReadonlyMap<string, V>) =>
+        [...entries]
+          .filter(([key, entry]) => key !== reader && entry.until > now)
+          .toSorted(([left], [right]) => left.localeCompare(right))
+          .map(([key, { until: _until, ...entry }]) =>
+            key === OWNER_CURSOR ? entry : { guestId: GuestId.make(key), ...entry },
+          );
+      return { type: "cursors", cursors: others(room.cursors), views: others(room.views) };
+    });
 
   /**
    * The thread as the owner's thread subscription sends it: a bounded snapshot, then the same
@@ -1188,10 +1344,10 @@ const make = Effect.gen(function* () {
               guestId === undefined
                 ? Effect.void
                 : countViewer(thread.id, guestId, -1).pipe(
-                    // Their last page closed, so their pointer leaves the board with it.
+                    // Their last page closed, so their pointer and view leave the board with it.
                     Effect.andThen(isViewing(thread.id, guestId)),
                     Effect.flatMap((still) =>
-                      still ? Effect.void : setCursor(share.id, guestId, null),
+                      still ? Effect.void : setCursor(share.id, guestId, null, null),
                     ),
                   ),
             ),
@@ -1394,7 +1550,7 @@ const make = Effect.gen(function* () {
                       return Effect.void;
                     }
                     ownerBoards.delete(input.shareId);
-                    return setCursor(input.shareId, OWNER_CURSOR, null);
+                    return setCursor(input.shareId, OWNER_CURSOR, null, null);
                   }),
               ).pipe(Effect.as(cursorsOf(input.shareId, OWNER_CURSOR))),
             )
@@ -1407,10 +1563,11 @@ const make = Effect.gen(function* () {
   const moveCursor = Effect.fnUntraced(function* (
     by: RoomLiveInput | { readonly session: string },
     at: RoomBoardPoint | null,
+    view?: RoomBoardViewport | null,
   ) {
     if (!("session" in by)) {
       if (!ownerBoards.has(by.shareId)) return yield* inactive;
-      return yield* setCursor(by.shareId, OWNER_CURSOR, at);
+      return yield* setCursor(by.shareId, OWNER_CURSOR, at, view);
     }
     const claims = yield* verifySession(by.session);
     if (Option.isNone(claims) || claims.value.kind !== "session") {
@@ -1419,10 +1576,11 @@ const make = Effect.gen(function* () {
     const { threadId, shareId, guestId } = claims.value;
     if (guestId === undefined || !(yield* isViewing(threadId, guestId))) return yield* inactive;
     const now = DateTime.toEpochMillis(yield* DateTime.now);
-    if (at !== null && !allowCursorMove(`${shareId}:${guestId}`, now)) {
+    const moves = at !== null || (view !== undefined && view !== null);
+    if (moves && !allowCursorMove(`${shareId}:${guestId}`, now)) {
       return yield* new GuestShareAccessError({ reason: "too_fast" });
     }
-    yield* setCursor(shareId, guestId, at);
+    yield* setCursor(shareId, guestId, at, view);
   });
 
   const roomUpdates = Effect.fn("GuestShareService.roomUpdates")(function* (

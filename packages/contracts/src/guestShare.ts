@@ -19,6 +19,14 @@ import {
 export const GUEST_SHARE_TTL_MS = 24 * 60 * 60 * 1000;
 /** How many people one link lets in. */
 export const GUEST_SHARE_MAX_GUESTS = 8;
+/**
+ * A thread shared to a team lasts longer, and lets in every member who opens it. Members join as
+ * their signed-in account, so a person keeps one guest record however often they come back.
+ */
+export const TEAM_SHARE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+export const TEAM_SHARE_MAX_GUESTS = 50;
+/** How long a team member's session lasts before their app joins again with a fresh assertion. */
+export const TEAM_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 export const GUEST_MESSAGE_MAX_LENGTH = 4_000;
 export const GUEST_NAME_MAX_LENGTH = 40;
 /** Waiting messages one guest can have. */
@@ -87,6 +95,32 @@ const RoomBoardCoordinate = Schema.Int.check(
 export const RoomBoardPoint = Schema.Struct({ x: RoomBoardCoordinate, y: RoomBoardCoordinate });
 export type RoomBoardPoint = typeof RoomBoardPoint.Type;
 
+export const ROOM_BOARD_MAX_EDGES = 100;
+const ROOM_BOARD_URL_MAX_LENGTH = 2_048;
+
+/** Whether a link card may hold this address: an http or https URL with a host. */
+export const isRoomBoardUrl = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && url.hostname !== "";
+  } catch {
+    return false;
+  }
+};
+
+const RoomBoardUrl = Schema.String.check(
+  Schema.isMaxLength(ROOM_BOARD_URL_MAX_LENGTH),
+  Schema.makeFilter(isRoomBoardUrl, { expected: "an http or https URL" }),
+);
+
+/** Who a task card is for. Absent `guestId` is the owner. */
+export const RoomBoardAssignee = Schema.Struct({ guestId: Schema.optional(GuestId) });
+export type RoomBoardAssignee = typeof RoomBoardAssignee.Type;
+
+/**
+ * A card someone added to the board: a note, unless `kind` says it is a task or a link. A note
+ * with `pinnedTo` is a comment on that message of the thread.
+ */
 export const RoomBoardNote = Schema.Struct({
   /** The client that adds the note names it. */
   id: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
@@ -94,16 +128,39 @@ export const RoomBoardNote = Schema.Struct({
   ...RoomBoardPoint.fields,
   /** The guest who added it. Absent on the owner's notes. */
   guestId: Schema.optional(GuestId),
+  kind: Schema.optional(Schema.Literals(["task", "link"])),
+  /** A task that is done. */
+  done: Schema.optional(Schema.Boolean),
+  assignee: Schema.optional(RoomBoardAssignee),
+  /** A link card's address. Clients read it; the server never fetches it. */
+  url: Schema.optional(RoomBoardUrl),
+  /** The id of the thread's message this comment is pinned to. */
+  pinnedTo: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
 });
 export type RoomBoardNote = typeof RoomBoardNote.Type;
 
+/** A card or note on the board as an arrow names it: `card:<card id>` or `note:<note id>`. */
+const RoomBoardItemRef = TrimmedNonEmptyString.check(Schema.isMaxLength(170));
+export const roomBoardCardRef = (cardId: string) => `card:${cardId}`;
+export const roomBoardNoteRef = (noteId: string) => `note:${noteId}`;
+
+/** An arrow from one card or note to another. */
+export const RoomBoardEdge = Schema.Struct({
+  id: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+  from: RoomBoardItemRef,
+  to: RoomBoardItemRef,
+});
+export type RoomBoardEdge = typeof RoomBoardEdge.Type;
+
 /**
- * What the people in a room arranged on its board: where each card sits, and their notes. The
- * room only shows it. It never starts a turn and never reaches an agent.
+ * What the people in a room arranged on its board: where each card sits, their notes, and the
+ * arrows between them. The room only shows it. It never starts a turn and never reaches an agent.
  */
 export const RoomBoard = Schema.Struct({
   positions: Schema.Record(Schema.String, RoomBoardPoint),
   notes: Schema.Array(RoomBoardNote),
+  /** Absent until someone draws an arrow, and from an older server. */
+  edges: Schema.optional(Schema.Array(RoomBoardEdge)),
 });
 export type RoomBoard = typeof RoomBoard.Type;
 
@@ -118,14 +175,33 @@ export const RoomBoardChange = Schema.Union([
     cardId: TrimmedNonEmptyString.check(Schema.isMaxLength(160)),
     ...RoomBoardPoint.fields,
   }),
-  /** Adds the note, or replaces the text and place of the one with this id. */
+  /**
+   * Adds the note, or replaces the text and place of the one with this id. `kind`, `url` and
+   * `pinnedTo` are taken when the note is added and kept after. A task's `done` and `assignee`
+   * stay as they were when absent, so an older client's edit keeps them; a null `assignee`
+   * clears it.
+   */
   Schema.Struct({
     type: Schema.Literal("note.put"),
     noteId: RoomBoardNote.fields.id,
     text: RoomBoardNote.fields.text,
     ...RoomBoardPoint.fields,
+    kind: RoomBoardNote.fields.kind,
+    url: RoomBoardNote.fields.url,
+    pinnedTo: RoomBoardNote.fields.pinnedTo,
+    done: RoomBoardNote.fields.done,
+    assignee: Schema.optional(Schema.NullOr(RoomBoardAssignee)),
   }),
+  /** Removes the note and its arrows. */
   Schema.Struct({ type: Schema.Literal("note.remove"), noteId: RoomBoardNote.fields.id }),
+  /** Adds an arrow. One that exists, or one between the same two cards, changes nothing. */
+  Schema.Struct({
+    type: Schema.Literal("edge.put"),
+    edgeId: RoomBoardEdge.fields.id,
+    from: RoomBoardEdge.fields.from,
+    to: RoomBoardEdge.fields.to,
+  }),
+  Schema.Struct({ type: Schema.Literal("edge.remove"), edgeId: RoomBoardEdge.fields.id }),
 ]);
 export type RoomBoardChange = typeof RoomBoardChange.Type;
 
@@ -149,6 +225,20 @@ export const RoomCursor = Schema.Struct({
 });
 export type RoomCursor = typeof RoomCursor.Type;
 
+/** What someone's board shows: the board point in the middle of their screen, and their zoom. */
+export const RoomBoardViewport = Schema.Struct({
+  ...RoomBoardPoint.fields,
+  zoom: Schema.Number.check(Schema.isBetween({ minimum: 0.1, maximum: 10 })),
+});
+export type RoomBoardViewport = typeof RoomBoardViewport.Type;
+
+/** Someone's view of the board, while they have it open. Absent `guestId` is the owner's. */
+export const RoomViewport = Schema.Struct({
+  guestId: Schema.optional(GuestId),
+  ...RoomBoardViewport.fields,
+});
+export type RoomViewport = typeof RoomViewport.Type;
+
 /** The guests' agents running now, sent whenever that changes. */
 export const RoomAgentsEvent = Schema.Struct({
   type: Schema.Literal("agents"),
@@ -160,6 +250,8 @@ export type RoomAgentsEvent = typeof RoomAgentsEvent.Type;
 export const RoomCursorsEvent = Schema.Struct({
   type: Schema.Literal("cursors"),
   cursors: Schema.Array(RoomCursor),
+  /** Everyone else's view of the board, so one can follow another. Absent from an older server. */
+  views: Schema.optional(Schema.Array(RoomViewport)),
 });
 export type RoomCursorsEvent = typeof RoomCursorsEvent.Type;
 
@@ -167,16 +259,25 @@ export type RoomCursorsEvent = typeof RoomCursorsEvent.Type;
 export const RoomLiveInput = Schema.Struct({ threadId: ThreadId, shareId: GuestShareId });
 export type RoomLiveInput = typeof RoomLiveInput.Type;
 
-/** Where the owner's pointer is on the board, or null once it left. */
+/**
+ * Where someone's pointer is on the board, or null once it left. `view` is what their board
+ * shows, null once they closed it, and unchanged when absent.
+ */
+const RoomCursorFields = {
+  at: Schema.NullOr(RoomBoardPoint),
+  view: Schema.optional(Schema.NullOr(RoomBoardViewport)),
+};
+
+/** The owner's pointer and view on the board. */
 export const RoomCursorInput = Schema.Struct({
   threadId: ThreadId,
   shareId: GuestShareId,
-  at: Schema.NullOr(RoomBoardPoint),
+  ...RoomCursorFields,
 });
 export type RoomCursorInput = typeof RoomCursorInput.Type;
 
-/** A guest's pointer on the board, or null once it left. */
-export const GuestCursorRequest = Schema.Struct({ at: Schema.NullOr(RoomBoardPoint) });
+/** A guest's pointer and view on the board. */
+export const GuestCursorRequest = Schema.Struct(RoomCursorFields);
 export type GuestCursorRequest = typeof GuestCursorRequest.Type;
 
 /** The GitHub account a guest signed in with. The id stays the same when the login changes. */
@@ -203,10 +304,23 @@ export const guestContributorFor = (
       (contributor.id === undefined || contributor.id === account.id),
   );
 
+/** The signed-in account of a guest who joined as a member of the team the thread is shared to. */
+export const GuestTeamMember = Schema.Struct({
+  userId: TrimmedNonEmptyString,
+  avatarUrl: Schema.optional(TrimmedNonEmptyString),
+});
+export type GuestTeamMember = typeof GuestTeamMember.Type;
+
+/** The team a thread is shared to. */
+export const GuestShareTeam = Schema.Struct({ id: TrimmedNonEmptyString, name: Schema.String });
+export type GuestShareTeam = typeof GuestShareTeam.Type;
+
 export const ThreadGuest = Schema.Struct({
   id: GuestId,
   name: TrimmedNonEmptyString,
   joinedAt: IsoDateTime,
+  /** Set when they joined as a team member: their name then comes from their account. */
+  member: Schema.optional(GuestTeamMember),
   /** Set once the guest signs in, so the owner knows who they are beyond a typed name. */
   account: Schema.optional(GuestAccount),
   /** The owner lets this guest's messages reach the agent without sending each one. */
@@ -252,6 +366,10 @@ export const ThreadGuestShare = Schema.Struct({
   turns: Schema.optional(Schema.Array(ThreadGuestTurn)),
   /** Absent until someone moves a card or adds a note. */
   board: Schema.optional(RoomBoard),
+  /** Set when the thread is shared to a team: only its members join, each as their account. */
+  team: Schema.optional(GuestShareTeam),
+  /** Team members the owner removed, who cannot join this share again. */
+  removedMembers: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
 });
 export type ThreadGuestShare = typeof ThreadGuestShare.Type;
 
@@ -297,6 +415,8 @@ export const GuestShareCreateInput = Schema.Struct({
   threadId: ThreadId,
   /** Ends a link people can still join with and makes a new one, instead of returning it. */
   replace: Schema.optional(Schema.Boolean),
+  /** Shares to this team instead of making a guest link. Needs T Connect and membership. */
+  teamId: Schema.optional(TrimmedNonEmptyString),
 });
 export type GuestShareCreateInput = typeof GuestShareCreateInput.Type;
 
@@ -314,6 +434,8 @@ const GUEST_SHARE_CREATE_MESSAGES = {
   thread_unavailable: "This thread cannot be shared.",
   read_failed: "Failed to read the shared thread.",
   changed: "The guest link changed while it was being created.",
+  team_unavailable:
+    "Could not share with this team. Check that this machine is linked to T Connect with an account in the team.",
 } as const;
 
 export class GuestShareCreateError extends Schema.TaggedError<GuestShareCreateError>()(
@@ -325,6 +447,7 @@ export class GuestShareCreateError extends Schema.TaggedError<GuestShareCreateEr
       "thread_unavailable",
       "read_failed",
       "changed",
+      "team_unavailable",
     ]),
   },
 ) {
@@ -364,6 +487,11 @@ export const GuestRedeemRequest = Schema.Struct({
       description: "a single line of text",
     }),
   ),
+  /**
+   * A team member's signed assertion from T Connect. A thread shared to a team takes nothing else,
+   * and joins the member under their account's name instead of `name`.
+   */
+  memberAssertion: Schema.optional(TrimmedNonEmptyString),
   /**
    * Asks for the session token in the response body. A page on another origin than the owner's
    * host cannot use the cookie, so it keeps the token and sends it as a bearer.

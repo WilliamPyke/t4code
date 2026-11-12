@@ -32,6 +32,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -45,6 +46,7 @@ import {
 } from "../attachmentStore.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as GuestLinkNames from "./GuestLinkNames.ts";
+import * as GuestTeamShares from "./GuestTeamShares.ts";
 import * as GuestSignIn from "./GuestSignIn.ts";
 import { CloudManagedEndpointRuntime } from "../cloud/ManagedEndpointRuntime.ts";
 import * as ServerConfig from "../config.ts";
@@ -103,6 +105,40 @@ const githubAccount = Ref.makeUnsafe<GuestAccount | null>(null);
 // The fake state is the session it was started for, so finishing needs no table.
 const layerLinkNames = Layer.mock(GuestLinkNames.GuestLinkNames)({
   register: () => Effect.succeed("tulip-otter-harbor"),
+});
+// The relay's side of team shares. A fake assertion is `member:<team>:<user>:<name>`; the real
+// signature check is GuestTeamShares' own test.
+const teamListings = Ref.makeUnsafe<ReadonlyMap<string, string>>(new Map());
+const layerTeamShares = Layer.mock(GuestTeamShares.GuestTeamShares)({
+  register: (input) =>
+    Ref.update(teamListings, (listed) => new Map(listed).set(input.threadId, input.teamId)).pipe(
+      Effect.as(input.teamId === "team-core" ? "Core" : null),
+    ),
+  unregister: (threadId) =>
+    Ref.update(teamListings, (listed) => {
+      const next = new Map(listed);
+      next.delete(threadId);
+      return next;
+    }),
+  verifyMember: (token) => {
+    const [kind, teamId = "", userId = "", name = ""] = token.split(":");
+    return Effect.succeed(
+      kind === "member"
+        ? Option.some({
+            iss: "https://relay.test",
+            aud: "t3-env:test",
+            sub: userId,
+            jti: token,
+            iat: 0,
+            exp: 300,
+            teamId,
+            userId,
+            name,
+            avatarUrl: `https://img.test/${userId}.png`,
+          })
+        : Option.none(),
+    );
+  },
 });
 const layerSignIn = Layer.mock(GuestSignIn.GuestSignIn)({
   enabled: true,
@@ -210,6 +246,7 @@ const layerTest = GuestShareService.layer.pipe(
   Layer.provide(layerCheckout),
   Layer.provide(layerSignIn),
   Layer.provide(layerLinkNames),
+  Layer.provide(layerTeamShares),
   Layer.provideMerge(ServerSettings.layerTest({ guestSharingEnabled: true })),
   Layer.provide(layerConnect),
   Layer.provideMerge(layerAnalytics),
@@ -901,6 +938,39 @@ it.effect("shows each person's pointer on the board to everyone else while they 
       (yield* Effect.flip(guestShares.moveCursor({ session: eve.token }, at(1)))).reason,
       "inactive",
     );
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("shows each person's view of the board to the others until they close it", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+    const samId = thread.guestShare!.guests![0]!.id;
+    const room = { threadId, shareId: thread.guestShare!.id };
+    const viewsSeenBy = <E extends { readonly type: string }>(events: Stream.Stream<E>) =>
+      Effect.gen(function* () {
+        const queue = yield* Queue.unbounded<unknown>();
+        yield* Stream.runForEach(events, (event) =>
+          "views" in event ? Queue.offer(queue, event.views) : Effect.void,
+        ).pipe(Effect.forkScoped);
+        assert.deepEqual(yield* Queue.take(queue), []);
+        return queue;
+      });
+    const owner = yield* viewsSeenBy(guestShares.roomCursors(room));
+    const samPage = yield* viewsSeenBy(yield* guestShares.stream(sam.token));
+    const view = { x: 400, y: -20, zoom: 1.25 };
+
+    yield* guestShares.moveCursor({ session: sam.token }, { x: 1, y: 1 }, view);
+    assert.deepEqual(yield* Queue.take(owner), [{ guestId: samId, ...view }]);
+    // The pointer leaving the board leaves the view; closing the board takes it.
+    yield* guestShares.moveCursor({ session: sam.token }, null);
+    assert.deepEqual(yield* Queue.take(owner), [{ guestId: samId, ...view }]);
+    yield* guestShares.moveCursor({ session: sam.token }, null, null);
+    assert.deepEqual(yield* Queue.take(owner), []);
+
+    yield* guestShares.moveCursor(room, null, view);
+    assert.deepEqual(yield* Queue.take(samPage), [view]);
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
 
@@ -2078,4 +2148,93 @@ it.effect("keeps a connected guest's images while other shares come and go", () 
     yield* Stream.runDrain(Stream.take(yield* guestShares.stream(next.token), 2));
     assert.equal((yield* guestShares.media(next.token, shot)).mimeType, "image/png");
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("joins a team share only with a member assertion, as one guest per member", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares } = yield* shareThread;
+    const { url, share } = yield* guestShares.create({ threadId, teamId: "team-core" });
+    assert.deepEqual(share.team, { id: "team-core", name: "Core" });
+    assert.equal((yield* Ref.get(teamListings)).get(threadId), "team-core");
+    assert.isAbove(Date.parse(share.expiresAt) - Date.parse(share.createdAt), 80 * 86_400_000);
+    const credential = url.slice(url.indexOf("#") + 1);
+
+    // The bare credential, a forged assertion, or one for another team lets no one in.
+    for (const memberAssertion of [undefined, "forged", "member:team-other:u-ann:Ann"]) {
+      const refused = yield* Effect.flip(
+        guestShares.redeem({
+          credential,
+          name: "Ann",
+          ...(memberAssertion === undefined ? {} : { memberAssertion }),
+        }),
+      );
+      assert.equal(refused.reason, "team_member_required");
+    }
+
+    const ann = yield* guestShares.redeem({
+      credential,
+      name: "typed name is ignored",
+      memberAssertion: "member:team-core:u-ann:Ann Lee",
+    });
+    // Another browser, another day: the same guest, not a second one.
+    const again = yield* guestShares.redeem({
+      credential,
+      name: "Ann",
+      memberAssertion: "member:team-core:u-ann:Ann Lee",
+    });
+    const namesake = yield* guestShares.redeem({
+      credential,
+      name: "Ann",
+      memberAssertion: "member:team-core:u-other:Ann Lee",
+    });
+    const guests = (yield* orchestrator.getThreadRecords(threadId, [])).thread.guestShare!.guests!;
+    assert.deepEqual(
+      guests.map((guest) => [guest.name, guest.member]),
+      [
+        ["Ann Lee", { userId: "u-ann", avatarUrl: "https://img.test/u-ann.png" }],
+        ["Ann Lee 2", { userId: "u-other", avatarUrl: "https://img.test/u-other.png" }],
+      ],
+    );
+    assert.isTrue(Exit.isSuccess(yield* Effect.exit(guestShares.check(again.token))));
+    assert.isTrue(Exit.isSuccess(yield* Effect.exit(guestShares.check(ann.token))));
+
+    // Removing a member keeps that account out without closing the share to the rest.
+    yield* orchestrator.dispatch({
+      type: "thread.guest.remove",
+      commandId: CommandId.make("remove-ann"),
+      threadId,
+      guestId: guests[0]!.id,
+    });
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(guestShares.check(ann.token))));
+    const removed = yield* Effect.flip(
+      guestShares.redeem({
+        credential,
+        name: "Ann",
+        memberAssertion: "member:team-core:u-ann:Ann",
+      }),
+    );
+    assert.equal(removed.reason, "removed");
+    assert.isTrue(Exit.isSuccess(yield* Effect.exit(guestShares.check(namesake.token))));
+    const newcomer = yield* guestShares.redeem({
+      credential,
+      name: "Bo",
+      memberAssertion: "member:team-core:u-bo:Bo",
+    });
+
+    // A member's session ends after a day; their app joins again with a fresh assertion.
+    yield* TestClock.adjust("25 hours");
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(guestShares.check(newcomer.token))));
+
+    // A guest link replacing the team share stops its listing on the team.
+    yield* guestShares.create({ threadId });
+    assert.isFalse((yield* Ref.get(teamListings)).has(threadId));
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("refuses a team share the relay would not list", () =>
+  Effect.gen(function* () {
+    const { guestShares } = yield* shareThread;
+    const failed = yield* Effect.flip(guestShares.create({ threadId, teamId: "team-elsewhere" }));
+    assert.equal(failed.reason, "team_unavailable");
+  }).pipe(Effect.provide(layerTest)),
 );

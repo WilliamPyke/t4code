@@ -1,7 +1,7 @@
 # Guest links
 
 A guest link lets up to 8 teammates follow one thread in their browsers and ask the agent questions,
-with no account. They see your messages and the agent's replies as they stream. Each message they
+with no account. For people you work with every day, share with a [team](./teams.md) instead. They see your messages and the agent's replies as they stream. Each message they
 send waits until you send or dismiss it, unless you let a guest
 [send without asking](#let-a-guest-send-without-asking).
 
@@ -44,21 +44,34 @@ says when your agent is working, and a guest's agent gets a card as soon as it s
 scrolling to zoom.
 
 Everyone with the board open sees the others' pointers on it, each with its owner's name. Yours
-shows only while your pointer is over the board.
+shows only while your pointer is over the board. Click a name on a pointer, or **Follow** on a
+guest's card, to see what they see as they move around; panning or zooming yourself, or **Stop
+following**, ends it.
+
+Besides notes, add a **Task**, which anyone can tick off and assign to someone in the room, or a
+**Link**: type or paste an address, or paste one on the board or into an empty note. A link to a
+GitHub pull request, issue or file shows as its repository and number or path, and **Open**
+opens it in a new tab; T Code does not load the page. To draw an arrow, drag the dot on a card's
+edge onto another card; click an arrow to delete it.
 
 To turn a note into a message, drag it onto the thread's card or choose **Use as message** on it.
 Its text lands in your message box, after anything you had written, and the note stays on the
 board. Nothing is sent until you send it, and a guest's message still waits for the owner.
 
+To comment on a message, choose **Comment for the room** beside it in the shared thread. The
+comment shows under that message for everyone, and on the board as a note with **Go to reply**;
+delete it from either place.
+
 The board belongs to the room. Guests open the same one with **Board** in the thread's header, and
 everyone sees a card land where it was dropped and a note once its author clicks away from it.
-Anyone in the room can move, edit or delete any note; each note names who added it. A board
-holds up to 50 notes of 280 characters. Agents never see the board, so use a message, not a note,
-for anything an agent should act on.
+Anyone in the room can move, edit or delete any card; each names who added it. A board holds up
+to 50 notes, tasks, links and comments of 280 characters, and 100 arrows. Agents never see the
+board, so use a message, not a note, for anything an agent should act on.
 
 The board lasts as long as the link: stopping sharing or creating a new link starts an empty
-one, and removing a guest removes their notes. Someone who continued the thread on their own
-machine does not get the board in their T Code; they still see it in the shared thread.
+one, and removing a guest removes what they added and leaves their tasks unassigned. Someone who
+continued the thread on their own machine does not get the board in their T Code; they still see
+it in the shared thread.
 
 ## Remove a guest
 
@@ -153,6 +166,11 @@ open it to read them, remove it if you do not want them, and send the message yo
 reads them as what other people and their agents said, not as your instructions, so say in your
 message what you want done with them. Removing the chip does not bring those updates back on the
 next catch-up; the shared page still shows them.
+
+**Summarize what I missed**, beside Catch up in the thread header, catches up the same way and
+also writes a request in your composer asking your agent to summarize the updates: what was decided,
+what changed, open questions, and anything addressed to you. Edit it or send it as it is; if the
+room has nothing new, nothing is written.
 
 One catch-up brings at most the 50 most recent updates, as text only, and shortens long ones; the
 chip says when something was cut. If the room has ended or the owner removed you, the header stops

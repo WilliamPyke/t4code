@@ -32,6 +32,16 @@ const share = {
     { id: "run:sam", guestId: sam, prompt: "Mine", reply: "Sam's reply", postedAt: minute(5) },
     { id: "run:alex", guestId: alex, prompt: "", reply: "Alex's reply", postedAt: minute(6) },
   ],
+  // The board is the room's alone: none of it may reach an agent through an update.
+  board: {
+    positions: {},
+    notes: [
+      { id: "c", text: "Board comment", x: 0, y: 0, guestId: alex, pinnedTo: "i3" },
+      { id: "t", text: "Board task", x: 0, y: 0, kind: "task", assignee: { guestId: sam } },
+      { id: "l", text: "", x: 0, y: 0, kind: "link", url: "https://example.com/board" },
+    ],
+    edges: [{ id: "e", from: "note:c", to: "card:thread" }],
+  },
 } as unknown as ThreadGuestShare;
 const items = [
   item("i1", 1, { type: "user_message", text: "Why does login fail?" }),

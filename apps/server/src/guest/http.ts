@@ -443,7 +443,7 @@ const boardRoute = HttpRouter.add(
   }),
 );
 
-// A pointer position is a few bytes; anything bigger is not one.
+// A pointer position and view are a few bytes; anything bigger is not one.
 const CURSOR_MAX_BODY_BYTES = 256;
 const decodeCursor = Schema.decodeUnknownEffect(GuestCursorRequest);
 
@@ -459,7 +459,7 @@ const boardCursorRoute = HttpRouter.add(
     if (body._tag === "None") return yield* badRequest;
     const guestShares = yield* GuestShareService;
     return yield* guestShares
-      .moveCursor({ session }, body.value.at)
+      .moveCursor({ session }, body.value.at, body.value.view)
       .pipe(
         Effect.as(HttpServerResponse.empty({ status: 204, headers: NO_STORE })),
         Effect.catchTags({ GuestShareAccessError: errorResponse }),

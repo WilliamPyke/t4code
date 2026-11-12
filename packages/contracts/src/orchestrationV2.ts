@@ -46,6 +46,8 @@ import { AuthMcpClientAccess } from "./auth.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
 import {
   GuestAccount,
+  GuestShareTeam,
+  GuestTeamMember,
   GuestTurnRequest,
   RoomBoardChange,
   SharedThreadMessage,
@@ -3453,6 +3455,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     shareId: GuestShareId,
     host: TrimmedNonEmptyString,
     expiresAt: IsoDateTime,
+    team: Schema.optional(GuestShareTeam),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.guest-share.redeem"),
@@ -3461,6 +3464,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     shareId: GuestShareId,
     guestId: GuestId,
     guestName: TrimmedNonEmptyString,
+    member: Schema.optional(GuestTeamMember),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.guest.identify"),

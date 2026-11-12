@@ -215,3 +215,69 @@ export const relayGuestLinks = pgTable(
     index("idx_relay_guest_links_expires_at").on(table.expiresAt),
   ],
 );
+
+export const relayTeams = pgTable("relay_teams", {
+  id: varchar("id", { length: 64 }).primaryKey(),
+  name: varchar("name", { length: 120 }).notNull(),
+  ownerUserId: varchar("owner_user_id", { length: 191 }).notNull(),
+  createdAt: varchar("created_at", { length: 64 }).notNull(),
+});
+
+/** Name and avatar are copied from the member's account each time they act on the team. */
+export const relayTeamMembers = pgTable(
+  "relay_team_members",
+  {
+    teamId: varchar("team_id", { length: 64 })
+      .notNull()
+      .references(() => relayTeams.id, { onDelete: "cascade" }),
+    userId: varchar("user_id", { length: 191 }).notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    avatarUrl: text("avatar_url"),
+    joinedAt: varchar("joined_at", { length: 64 }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.teamId, table.userId] }),
+    index("idx_relay_team_members_user").on(table.userId),
+  ],
+);
+
+export const relayTeamInvites = pgTable(
+  "relay_team_invites",
+  {
+    name: varchar("name", { length: 64 }).primaryKey(),
+    teamId: varchar("team_id", { length: 64 })
+      .notNull()
+      .references(() => relayTeams.id, { onDelete: "cascade" }),
+    createdByUserId: varchar("created_by_user_id", { length: 191 }).notNull(),
+    expiresAt: varchar("expires_at", { length: 64 }).notNull(),
+    createdAt: varchar("created_at", { length: 64 }).notNull(),
+  },
+  (table) => [
+    index("idx_relay_team_invites_team").on(table.teamId),
+    index("idx_relay_team_invites_expires_at").on(table.expiresAt),
+  ],
+);
+
+/** A thread shared to a team. The credential joins it only with a member assertion. */
+export const relayTeamThreads = pgTable(
+  "relay_team_threads",
+  {
+    environmentId: varchar("environment_id", { length: 191 }).notNull(),
+    threadId: varchar("thread_id", { length: 255 }).notNull(),
+    teamId: varchar("team_id", { length: 64 })
+      .notNull()
+      .references(() => relayTeams.id, { onDelete: "cascade" }),
+    shareId: varchar("share_id", { length: 64 }).notNull(),
+    title: text("title").notNull(),
+    host: varchar("host", { length: 255 }).notNull(),
+    credential: varchar("credential", { length: 255 }).notNull(),
+    ownerUserId: varchar("owner_user_id", { length: 191 }).notNull(),
+    expiresAt: varchar("expires_at", { length: 64 }).notNull(),
+    updatedAt: varchar("updated_at", { length: 64 }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.environmentId, table.threadId] }),
+    index("idx_relay_team_threads_team").on(table.teamId),
+    index("idx_relay_team_threads_expires_at").on(table.expiresAt),
+  ],
+);

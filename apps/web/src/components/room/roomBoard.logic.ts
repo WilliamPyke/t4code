@@ -1,9 +1,14 @@
 import {
   ROOM_BOARD_MAX_COORDINATE,
+  ROOM_BOARD_THREAD_CARD,
+  isRoomBoardUrl,
+  roomBoardCardRef,
   type RoomAgentActivity,
   type RoomBoard,
   type RoomBoardChange,
+  type RoomBoardEdge,
   type RoomBoardNote,
+  type RoomBoardViewport,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
@@ -125,28 +130,68 @@ export function placeBoardNote(
   return wanted;
 }
 
-/** A curve from the header of one card to the header of another, leaving and arriving level. */
-export function boardConnectorPath(from: BoardPoint, to: BoardPoint): string {
-  const headerY = 18;
-  const leftToRight = from.x <= to.x;
-  const start = { x: from.x + (leftToRight ? BOARD_CARD_WIDTH : 0), y: from.y + headerY };
-  const end = { x: to.x + (leftToRight ? 0 : BOARD_CARD_WIDTH), y: to.y + headerY };
-  const bend = Math.max(40, Math.abs(end.x - start.x) / 2) * (leftToRight ? 1 : -1);
-  return `M${start.x} ${start.y} C${start.x + bend} ${start.y}, ${end.x - bend} ${end.y}, ${end.x} ${end.y}`;
+/** Where a comment pinned to a reply lands on the board: beside the thread's card. */
+export function pinnedCommentSpot(board: RoomBoard): BoardPoint {
+  const thread = placeBoardCards([ROOM_BOARD_THREAD_CARD], board.positions)[
+    ROOM_BOARD_THREAD_CARD
+  ]!;
+  return placeBoardNote({ x: thread.x + BOARD_CARD_WIDTH + CARD_GAP, y: thread.y }, board.notes, [
+    thread,
+  ]);
 }
 
-/** A card or a note on the board. */
+/** Where a card or note is, how wide it is, and how far down the middle of its header is. */
+export interface BoardBox extends BoardPoint {
+  readonly width: number;
+  readonly headerY: number;
+}
+
+export const boardCardBox = (at: BoardPoint): BoardBox => ({
+  ...at,
+  width: BOARD_CARD_WIDTH,
+  headerY: 18,
+});
+export const boardNoteBox = (at: BoardPoint): BoardBox => ({
+  ...at,
+  width: NOTE_WIDTH,
+  headerY: 12,
+});
+
+/**
+ * A curve from the header of one box to the header of another, leaving and arriving level, and
+ * the point halfway along it.
+ */
+export function boardConnector(
+  from: BoardBox,
+  to: BoardBox,
+): { readonly path: string; readonly middle: BoardPoint } {
+  const leftToRight = from.x <= to.x;
+  const start = { x: from.x + (leftToRight ? from.width : 0), y: from.y + from.headerY };
+  const end = { x: to.x + (leftToRight ? 0 : to.width), y: to.y + to.headerY };
+  const bend = Math.max(40, Math.abs(end.x - start.x) / 2) * (leftToRight ? 1 : -1);
+  return {
+    path: `M${start.x} ${start.y} C${start.x + bend} ${start.y}, ${end.x - bend} ${end.y}, ${end.x} ${end.y}`,
+    // The curve's controls pull level from each end, so halfway is the midpoint of the ends.
+    middle: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 },
+  };
+}
+
+/** A curve from the header of one card to the header of another. */
+export const boardConnectorPath = (from: BoardPoint, to: BoardPoint): string =>
+  boardConnector(boardCardBox(from), boardCardBox(to)).path;
+
+/** A card, a note or an arrow on the board. */
 export interface BoardTarget {
-  readonly kind: "card" | "note";
+  readonly kind: "card" | "note" | "edge";
   readonly id: string;
 }
 
-/** Where a card is, a note as it reads, or null for a note taken off the board. */
-export type BoardValue = BoardPoint | RoomBoardNote | null;
+/** Where a card is, a note as it reads, an arrow, or null for a note or arrow taken off. */
+export type BoardValue = BoardPoint | RoomBoardNote | RoomBoardEdge | null;
 
 /**
- * What this person did to one card or note, shown over the room's board so a drag does not
- * wait for the server.
+ * What this person did to one card, note or arrow, shown over the room's board so a drag does
+ * not wait for the server.
  */
 export interface BoardEdit {
   readonly target: BoardTarget;
@@ -159,20 +204,32 @@ export interface BoardEdit {
 export type BoardEdits = Readonly<Record<string, BoardEdit>>;
 export const NO_BOARD_EDITS: BoardEdits = {};
 
+/** A card's or note's key, which is also how an arrow names its ends. */
 export const boardEditKey = (target: BoardTarget) => `${target.kind}:${target.id}`;
 
 const roomCopy = (board: RoomBoard, target: BoardTarget): BoardValue | undefined =>
   target.kind === "card"
     ? board.positions[target.id]
-    : board.notes.find((note) => note.id === target.id);
+    : target.kind === "note"
+      ? board.notes.find((note) => note.id === target.id)
+      : board.edges?.find((edge) => edge.id === target.id);
 
-const noteText = (value: BoardValue | undefined) =>
-  value !== null && value !== undefined && "text" in value ? value.text : undefined;
-const sameValue = (a: BoardValue | undefined, b: BoardValue | undefined) =>
-  a?.x === b?.x && a?.y === b?.y && noteText(a) === noteText(b);
+/** What the room's copy and an edit are compared on, in whatever order the server wrote it. */
+const valueKey = (value: BoardValue | undefined): string => {
+  if (value === undefined || value === null) return String(value);
+  if ("from" in value) return `${value.from}>${value.to}`;
+  if (!("text" in value)) return `${value.x},${value.y}`;
+  return JSON.stringify([
+    value.x,
+    value.y,
+    value.text,
+    value.done === true,
+    value.assignee === undefined ? null : (value.assignee.guestId ?? ""),
+  ]);
+};
 
 const shows = (board: RoomBoard, edit: BoardEdit) =>
-  edit.held || sameValue(edit.base, roomCopy(board, edit.target));
+  edit.held || valueKey(edit.base) === valueKey(roomCopy(board, edit.target));
 
 /**
  * Records an edit, and forgets the ones the room's copy has moved past. Held while the drag or
@@ -209,24 +266,42 @@ export function dropBoardEdit(
   return rest;
 }
 
-/** The room's board with this person's own edits over it. */
+const replaceById = <Item extends { readonly id: string }>(
+  items: ReadonlyArray<Item>,
+  item: Item,
+): ReadonlyArray<Item> =>
+  items.some((other) => other.id === item.id)
+    ? items.map((other) => (other.id === item.id ? item : other))
+    : [...items, item];
+
+const CARD_REF = roomBoardCardRef("");
+
+/** The room's board with this person's own edits over it. A note taken off takes its arrows. */
 export function resolveBoard(board: RoomBoard, edits: BoardEdits): RoomBoard {
   const positions = { ...board.positions };
   let notes = board.notes;
+  let edges = board.edges ?? [];
   for (const edit of Object.values(edits)) {
     if (!shows(board, edit)) continue;
     const { target, value } = edit;
     if (target.kind === "card") {
-      if (value !== null) positions[target.id] = { x: value.x, y: value.y };
+      if (value !== null && "x" in value) positions[target.id] = { x: value.x, y: value.y };
+    } else if (target.kind === "edge") {
+      if (value === null) edges = edges.filter((edge) => edge.id !== target.id);
+      else if ("from" in value) edges = replaceById(edges, value);
     } else if (value === null) {
       notes = notes.filter((note) => note.id !== target.id);
     } else if ("text" in value) {
-      notes = notes.some((note) => note.id === target.id)
-        ? notes.map((note) => (note.id === target.id ? value : note))
-        : [...notes, value];
+      notes = replaceById(notes, value);
     }
   }
-  return { positions, notes };
+  const noteRefs = new Set(notes.map((note) => boardEditKey({ kind: "note", id: note.id })));
+  const present = (ref: string) => ref.startsWith(CARD_REF) || noteRefs.has(ref);
+  return {
+    positions,
+    notes,
+    edges: edges.filter((edge) => present(edge.from) && present(edge.to)),
+  };
 }
 
 const coordinate = (value: number) =>
@@ -234,16 +309,35 @@ const coordinate = (value: number) =>
 
 /** The value at the whole pixels the room keeps, so the server's copy equals what was let go. */
 export const settleBoardValue = <Value extends BoardValue>(value: Value): Value =>
-  value === null ? value : { ...value, x: coordinate(value.x), y: coordinate(value.y) };
+  value === null || !("x" in value)
+    ? value
+    : { ...value, x: coordinate(value.x), y: coordinate(value.y) };
 
-/** The change that makes the room's copy of a card or note this value. */
+/** The change that makes the room's copy of a card, note or arrow this value. */
 export function boardChangeOf(target: BoardTarget, value: BoardValue): RoomBoardChange {
   if (target.kind === "card") {
-    return { type: "card.move", cardId: target.id, x: value?.x ?? 0, y: value?.y ?? 0 };
+    const at = value !== null && "x" in value ? value : { x: 0, y: 0 };
+    return { type: "card.move", cardId: target.id, x: at.x, y: at.y };
   }
-  return value === null
-    ? { type: "note.remove", noteId: target.id }
-    : { type: "note.put", noteId: target.id, text: noteText(value) ?? "", x: value.x, y: value.y };
+  if (target.kind === "edge") {
+    return value === null || !("from" in value)
+      ? { type: "edge.remove", edgeId: target.id }
+      : { type: "edge.put", edgeId: target.id, from: value.from, to: value.to };
+  }
+  if (value === null || !("text" in value)) return { type: "note.remove", noteId: target.id };
+  return {
+    type: "note.put",
+    noteId: target.id,
+    text: value.text,
+    x: value.x,
+    y: value.y,
+    ...(value.kind === undefined ? {} : { kind: value.kind }),
+    ...(value.url === undefined ? {} : { url: value.url }),
+    ...(value.pinnedTo === undefined ? {} : { pinnedTo: value.pinnedTo }),
+    ...(value.kind === "task"
+      ? { done: value.done === true, assignee: value.assignee ?? null }
+      : {}),
+  };
 }
 
 /** Where a pointer at `screen` is on the board, at the whole pixels the room takes. */
@@ -253,36 +347,90 @@ export const boardCursorAt = (view: BoardView, screen: BoardPoint): BoardPoint =
 const CURSOR_SEND_INTERVAL_MS = 80;
 
 /**
- * Sends a pointer's position at most every `CURSOR_SEND_INTERVAL_MS`, always ending on the
- * latest, and nothing for a position already sent or a pointer that is not moving.
+ * What the room hears of this person on the board: their pointer, or null once it left, and their
+ * view when it changed, or null once they closed the board.
  */
-export function cursorSender(send: (at: BoardPoint | null) => void) {
+export interface BoardPresence {
+  readonly at: BoardPoint | null;
+  readonly view?: RoomBoardViewport | null;
+}
+
+const samePoint = (a: BoardPoint | null, b: BoardPoint | null) =>
+  a === null || b === null ? a === b : a.x === b.x && a.y === b.y;
+const sameViewport = (a: RoomBoardViewport | null, b: RoomBoardViewport | null) =>
+  a === null || b === null ? a === b : samePoint(a, b) && a.zoom === b.zoom;
+
+/**
+ * Sends a pointer's position and the board's view at most every `CURSOR_SEND_INTERVAL_MS`,
+ * always ending on the latest, and nothing already sent. A pointer leaving is sent at once, and
+ * closing the board takes both away.
+ */
+export function cursorSender(send: (presence: BoardPresence) => void) {
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let next: BoardPoint | null = null;
-  let sent: BoardPoint | null = null;
-  let sentAt = Number.NEGATIVE_INFINITY;
+  let at: BoardPoint | null = null;
+  let view: RoomBoardViewport | null = null;
+  let sentAt: BoardPoint | null = null;
+  let sentView: RoomBoardViewport | null = null;
+  let lastSend = Number.NEGATIVE_INFINITY;
   const flush = () => {
+    if (timer !== null) clearTimeout(timer);
     timer = null;
-    if (next === null || (next.x === sent?.x && next.y === sent.y)) return;
-    sent = next;
-    sentAt = Date.now();
-    send(next);
+    const viewChanged = !sameViewport(view, sentView);
+    if (samePoint(at, sentAt) && !viewChanged) return;
+    sentAt = at;
+    sentView = view;
+    lastSend = Date.now();
+    send(viewChanged ? { at, view } : { at });
+  };
+  const schedule = () => {
+    if (timer !== null) return;
+    timer = setTimeout(flush, Math.max(0, lastSend + CURSOR_SEND_INTERVAL_MS - Date.now()));
   };
   return {
-    move: (at: BoardPoint) => {
-      next = at;
-      if (timer !== null) return;
-      timer = setTimeout(flush, Math.max(0, sentAt + CURSOR_SEND_INTERVAL_MS - Date.now()));
+    move: (point: BoardPoint) => {
+      at = point;
+      schedule();
+    },
+    look: (next: RoomBoardViewport) => {
+      view = next;
+      schedule();
     },
     leave: () => {
+      at = null;
+      flush();
+    },
+    close: () => {
       if (timer !== null) clearTimeout(timer);
       timer = null;
-      next = null;
-      if (sent === null) return;
-      sent = null;
-      send(null);
+      at = null;
+      view = null;
+      if (sentAt === null && sentView === null) return;
+      sentAt = null;
+      sentView = null;
+      send({ at: null, view: null });
     },
   };
+}
+
+export interface BoardSize {
+  readonly width: number;
+  readonly height: number;
+}
+
+/** What this board shows, as the room hears it: the board point in its middle, and its zoom. */
+export function boardViewportOf(view: BoardView, size: BoardSize): RoomBoardViewport {
+  const middle = screenToBoard(view, { x: size.width / 2, y: size.height / 2 });
+  return {
+    x: coordinate(middle.x),
+    y: coordinate(middle.y),
+    zoom: Math.round(view.zoom * 1000) / 1000,
+  };
+}
+
+/** The view that shows what someone else's board shows, on a board of this size. */
+export function followBoardView(viewport: RoomBoardViewport, size: BoardSize): BoardView {
+  const zoom = Math.min(BOARD_MAX_ZOOM, Math.max(BOARD_MIN_ZOOM, viewport.zoom));
+  return { zoom, x: size.width / 2 - viewport.x * zoom, y: size.height / 2 - viewport.y * zoom };
 }
 
 // Semantic colours that read on the board in both themes; guests take them in join order.
@@ -306,6 +454,24 @@ export function boardCursorColor(
     guests.findIndex((guest) => guest.id === guestId),
   );
   return GUEST_CURSOR_COLORS[index % GUEST_CURSOR_COLORS.length]!;
+}
+
+/** Who someone is on the board, as follow mode names them: a guest's id, or the owner. */
+export const boardPersonKey = (guestId: string | undefined) => guestId ?? "owner";
+
+export interface BoardPeople {
+  readonly guests: ReadonlyArray<{ readonly id: string; readonly name: string }>;
+  /** The guest looking, or null for the owner. */
+  readonly viewer: string | null;
+  /** What the owner is called, when they chose a name to show. */
+  readonly ownerName?: string | undefined;
+}
+
+/** What the board calls someone: "You", the owner's name or "Owner", or a guest's name. */
+export function boardPersonName(people: BoardPeople, guestId: string | undefined): string {
+  if ((guestId ?? null) === people.viewer) return "You";
+  if (guestId === undefined) return people.ownerName ?? "Owner";
+  return people.guests.find((guest) => guest.id === guestId)?.name ?? "Guest";
 }
 
 /**
@@ -332,6 +498,60 @@ export function appendNoteToDraft(draft: string, note: string): string {
   const text = note.trim();
   if (text === "") return draft;
   return draft.trim() === "" ? text : `${draft.trimEnd()}\n\n${text}`;
+}
+
+/** The text "Use as message" puts in a draft: a link card gives its address with its caption. */
+export const boardNoteMessage = (note: RoomBoardNote): string =>
+  note.url === undefined ? note.text : [note.text.trim(), note.url].filter(Boolean).join("\n");
+
+/** A link card's address as the card shows it. GitHub pull requests, issues and files read short. */
+export interface BoardLink {
+  readonly href: string;
+  readonly title: string;
+  readonly detail: string;
+}
+
+const GITHUB_KINDS: Readonly<Record<string, string>> = { pull: "Pull request", issues: "Issue" };
+
+const decodeSegment = (segment: string) => {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+};
+
+export function parseBoardLink(value: string): BoardLink | null {
+  if (!isRoomBoardUrl(value)) return null;
+  const url = new URL(value);
+  const host = url.hostname.replace(/^www\./, "");
+  const parts = url.pathname
+    .split("/")
+    .filter((part) => part !== "")
+    .map(decodeSegment);
+  const [owner, repo, section, ...rest] = parts;
+  if (host === "github.com" && owner !== undefined && repo !== undefined) {
+    const name = `${owner}/${repo}`;
+    const kind = section === undefined ? undefined : GITHUB_KINDS[section];
+    if (kind !== undefined && /^\d+$/.test(rest[0] ?? "")) {
+      return { href: url.href, title: `${name} #${rest[0]}`, detail: kind };
+    }
+    if ((section === "blob" || section === "tree") && rest.length >= 2) {
+      return { href: url.href, title: rest.slice(1).join("/"), detail: `${name} · ${rest[0]}` };
+    }
+    return { href: url.href, title: name, detail: host };
+  }
+  return {
+    href: url.href,
+    title: host,
+    detail: parts.length === 0 ? url.search : `/${parts.join("/")}`,
+  };
+}
+
+/** The address in pasted or typed text that is one http or https URL and nothing else. */
+export function boardUrlIn(text: string): string | null {
+  const trimmed = text.trim();
+  return /\s/.test(trimmed) || !isRoomBoardUrl(trimmed) ? null : trimmed;
 }
 
 export interface BoardMessage {

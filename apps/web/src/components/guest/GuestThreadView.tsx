@@ -30,7 +30,6 @@ import {
   type GuestThreadModel,
   type OrchestrationV2ThreadProjection,
   type RoomBoardChange,
-  type RoomBoardPoint,
   type ScopedThreadRef,
   type ThreadGuest,
   type ThreadGuestMessage,
@@ -57,6 +56,7 @@ import { flushSync } from "react-dom";
 import {
   guestRoomAtom,
   guestRoomCursorsAtom,
+  guestRoomViewsAtom,
   guestShareEndpointOf,
   guestSharesAtom,
   type JoinedGuestShare,
@@ -84,7 +84,14 @@ import { ScrollToEndButton } from "../chat/TimelineOverlays";
 import type { TimelineRow } from "../chat/timelineRowContext";
 import { useTimelineFollow } from "../chat/useTimelineFollow";
 import { RoomBoard, RoomCursors } from "../room/RoomBoard";
-import { BOARD_THREAD_MESSAGES, appendNoteToDraft, boardMessages } from "../room/roomBoard.logic";
+import { RoomReplyProvider, revealRoomReply } from "../room/RoomReplyComments";
+import {
+  BOARD_THREAD_MESSAGES,
+  type BoardPresence,
+  EMPTY_ROOM_BOARD,
+  appendNoteToDraft,
+  boardMessages,
+} from "../room/roomBoard.logic";
 import { Button } from "../ui/button";
 import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { GuestHtmlRender } from "./GuestHtmlRender";
@@ -175,15 +182,15 @@ async function postBoardChange(
   }
 }
 
-/** Shows the room where this guest's pointer is on the board. A lost one is replaced soon. */
-function postBoardCursor(endpoint: GuestShareEndpoint, at: RoomBoardPoint | null) {
+/** Shows the room where this guest's pointer is and what their board shows. A lost one is replaced soon. */
+function postBoardCursor(endpoint: GuestShareEndpoint, presence: BoardPresence) {
   void guestShareRequest(endpoint, GUEST_BOARD_CURSOR_ROUTE, {
     init: {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ at }),
-      // The pointer leaving is sent even as the page goes away.
-      keepalive: at === null,
+      body: JSON.stringify(presence),
+      // The pointer leaving, or the board closing, is sent even as the page goes away.
+      keepalive: presence.at === null,
     },
   }).catch(() => {});
 }
@@ -298,6 +305,9 @@ function GuestThreadSession({
           awaitingRowIds={awaitingRowIds}
           historyControls={historyControls}
           onOpenBoard={guestId === undefined ? undefined : () => setBoardOpen(true)}
+          onBoardChange={
+            guestId === undefined ? undefined : (change) => postBoardChange(endpoint, change)
+          }
           draft={draft}
           onDraftChange={setDraft}
           composerRef={composerRef}
@@ -316,6 +326,7 @@ function GuestThreadSession({
           agentWorking={deriveThreadAgentWorking(projection)}
           running={running}
           viewer={guestId}
+          ownerName={view.ownerName}
           cursorLayer={
             <GuestBoardCursors
               shareId={share.shareId}
@@ -324,8 +335,12 @@ function GuestThreadSession({
             />
           }
           onOpenThread={() => setBoardOpen(false)}
+          onOpenReply={(messageId) => {
+            revealRoomReply(messageId);
+            setBoardOpen(false);
+          }}
           onChange={(change) => postBoardChange(endpoint, change)}
-          onCursor={(at) => postBoardCursor(endpoint, at)}
+          onCursor={(presence) => postBoardCursor(endpoint, presence)}
           onUseNote={(text) => {
             // Only a draft in the message box: the guest sends it, and the owner still approves it.
             flushSync(() => {
@@ -342,7 +357,7 @@ function GuestThreadSession({
   );
 }
 
-/** Everyone else's pointers, read here so a pointer moving renders only this. */
+/** Everyone else's pointers and views, read here so a pointer moving renders only this. */
 function GuestBoardCursors({
   shareId,
   guests,
@@ -353,7 +368,8 @@ function GuestBoardCursors({
   readonly ownerName: string | undefined;
 }) {
   const cursors = useAtomValue(guestRoomCursorsAtom(shareId));
-  return <RoomCursors cursors={cursors} guests={guests} ownerName={ownerName} />;
+  const views = useAtomValue(guestRoomViewsAtom(shareId));
+  return <RoomCursors cursors={cursors} views={views} guests={guests} ownerName={ownerName} />;
 }
 
 const NO_TURN_DIFFS: ReadonlyArray<never> = [];
@@ -368,12 +384,26 @@ const ignore = () => {};
 function GuestThread({
   endpoint,
   host,
-  view: { shareId, title, expiresAt, messages, turns, model, guests, guestId, direct, signIn },
+  view: {
+    shareId,
+    title,
+    expiresAt,
+    messages,
+    turns,
+    model,
+    guests,
+    guestId,
+    direct,
+    signIn,
+    ownerName,
+    board,
+  },
   projection,
   online,
   awaitingRowIds,
   historyControls,
   onOpenBoard,
+  onBoardChange,
   draft,
   onDraftChange,
   composerRef,
@@ -387,6 +417,8 @@ function GuestThread({
   readonly historyControls: MessagesTimelineHistoryControls | undefined;
   /** Absent for the one guest of a link made before several could join, who cannot sign a note. */
   readonly onOpenBoard: (() => void) | undefined;
+  /** Sends one change to the room's board. Absent, like the board, for that one guest. */
+  readonly onBoardChange: ((change: RoomBoardChange) => Promise<boolean>) | undefined;
   readonly draft: string;
   readonly onDraftChange: Dispatch<SetStateAction<string>>;
   readonly composerRef: RefObject<HTMLTextAreaElement | null>;
@@ -487,72 +519,84 @@ function GuestThread({
         <ExpiryLabel expiresAt={expiresAt} />
       </header>
       <div className="relative min-h-0 flex-1">
-        <HostImageUrlContext value={hostImageUrl}>
-          <MessagesTimeline
-            listRef={listRef}
-            timelineEntries={entries}
-            isWorking={isWorking}
-            activeTurnStartedAt={workStartedAt}
-            latestRun={activityRun}
-            runningRunId={runningRunId}
-            turnDiffSummaries={NO_TURN_DIFFS}
-            runs={projection.runs}
-            routeThreadKey={threadKey}
-            onOpenThread={ignore}
-            supportsConversationRollback={false}
-            onRevertToTurnCount={ignore}
-            isRevertingCheckpoint={false}
-            onImageExpand={openExpandedImage}
-            onFileOpen={openFile}
-            onFileDownload={openFile}
-            renderHtmlRender={renderHtmlRender}
-            turnItemSource={turnItemSource}
-            historyControls={historyControls}
-            activeThreadEnvironmentId={guestEnvironmentId(shareId)}
-            markdownCwd={undefined}
-            resolvedTheme={resolvedTheme}
-            timestampFormat="locale"
-            workspaceRoot={undefined}
-            anchorMessageId={null}
-            onAnchorReady={ignore}
-            onAnchorSizeChanged={ignore}
-            contentInsetEndAdjustment={0}
-            emptyPlaceholderInset={0}
-            liveFollowEnabled={follow.timelineLiveFollowEnabled}
-            onIsAtEndChange={follow.onIsAtEndChangeStable}
-            onViewportAttach={follow.attachTimelineViewport}
-            onFooterGrow={follow.onTimelineFooterGrowStable}
-            footer={
-              unplaced.length === 0 && (turns ?? []).length === 0 ? null : (
-                <>
-                  <GuestTurnList
-                    roster={{ guests, guestName: null }}
-                    turns={turns ?? []}
-                    ownGuestId={guestId}
-                  />
-                  {unplaced.length === 0 ? null : (
-                    <ol className="chat-content-lane flex flex-col gap-4 pb-4">
-                      {unplaced.map((message) => (
-                        <li key={message.id}>
-                          <UnplacedGuestMessage
-                            endpoint={endpoint}
-                            fileUrl={(id) => files.url(GUEST_ATTACHMENT_ROUTE, { id })}
-                            message={message}
-                            author={
-                              message.guestId === guestId
-                                ? "You"
-                                : guestMessageAuthorName({ guests, guestName: null }, message)
-                            }
-                          />
-                        </li>
-                      ))}
-                    </ol>
-                  )}
-                </>
-              )
-            }
-          />
-        </HostImageUrlContext>
+        <RoomReplyProvider
+          room={
+            guestId === undefined
+              ? null
+              : {
+                  board: board ?? EMPTY_ROOM_BOARD,
+                  people: { guests, viewer: guestId, ownerName },
+                  onChange: onBoardChange,
+                }
+          }
+        >
+          <HostImageUrlContext value={hostImageUrl}>
+            <MessagesTimeline
+              listRef={listRef}
+              timelineEntries={entries}
+              isWorking={isWorking}
+              activeTurnStartedAt={workStartedAt}
+              latestRun={activityRun}
+              runningRunId={runningRunId}
+              turnDiffSummaries={NO_TURN_DIFFS}
+              runs={projection.runs}
+              routeThreadKey={threadKey}
+              onOpenThread={ignore}
+              supportsConversationRollback={false}
+              onRevertToTurnCount={ignore}
+              isRevertingCheckpoint={false}
+              onImageExpand={openExpandedImage}
+              onFileOpen={openFile}
+              onFileDownload={openFile}
+              renderHtmlRender={renderHtmlRender}
+              turnItemSource={turnItemSource}
+              historyControls={historyControls}
+              activeThreadEnvironmentId={guestEnvironmentId(shareId)}
+              markdownCwd={undefined}
+              resolvedTheme={resolvedTheme}
+              timestampFormat="locale"
+              workspaceRoot={undefined}
+              anchorMessageId={null}
+              onAnchorReady={ignore}
+              onAnchorSizeChanged={ignore}
+              contentInsetEndAdjustment={0}
+              emptyPlaceholderInset={0}
+              liveFollowEnabled={follow.timelineLiveFollowEnabled}
+              onIsAtEndChange={follow.onIsAtEndChangeStable}
+              onViewportAttach={follow.attachTimelineViewport}
+              onFooterGrow={follow.onTimelineFooterGrowStable}
+              footer={
+                unplaced.length === 0 && (turns ?? []).length === 0 ? null : (
+                  <>
+                    <GuestTurnList
+                      roster={{ guests, guestName: null }}
+                      turns={turns ?? []}
+                      ownGuestId={guestId}
+                    />
+                    {unplaced.length === 0 ? null : (
+                      <ol className="chat-content-lane flex flex-col gap-4 pb-4">
+                        {unplaced.map((message) => (
+                          <li key={message.id}>
+                            <UnplacedGuestMessage
+                              endpoint={endpoint}
+                              fileUrl={(id) => files.url(GUEST_ATTACHMENT_ROUTE, { id })}
+                              message={message}
+                              author={
+                                message.guestId === guestId
+                                  ? "You"
+                                  : guestMessageAuthorName({ guests, guestName: null }, message)
+                              }
+                            />
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                  </>
+                )
+              }
+            />
+          </HostImageUrlContext>
+        </RoomReplyProvider>
         {follow.showScrollToBottom ? (
           <ScrollToEndButton
             summary={null}

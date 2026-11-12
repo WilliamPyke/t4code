@@ -7,14 +7,23 @@ import {
   EMPTY_ROOM_BOARD,
   INITIAL_BOARD_VIEW,
   NO_BOARD_EDITS,
+  type BoardPresence,
   appendNoteToDraft,
   boardAgents,
+  boardCardBox,
   boardChangeOf,
+  boardConnector,
   boardCursorAt,
   boardCursorColor,
   boardMessages,
+  boardNoteBox,
+  boardUrlIn,
+  boardViewportOf,
   cursorSender,
   dropBoardEdit,
+  followBoardView,
+  parseBoardLink,
+  pinnedCommentSpot,
   placeBoardCards,
   placeBoardNote,
   putBoardEdit,
@@ -117,6 +126,124 @@ describe("resolveBoard", () => {
     expect(resolveBoard(stored, removed).notes).toEqual([]);
     expect(boardChangeOf(target, null)).toEqual({ type: "note.remove", noteId: "n" });
   });
+
+  it("draws an arrow at once, and a note taken off takes its arrows", () => {
+    const note = { id: "n", text: "Ship", x: 0, y: 0 };
+    const stored: RoomBoard = { positions: {}, notes: [note] };
+    const arrow = { kind: "edge", id: "e" } as const;
+    const value = { id: "e", from: "note:n", to: "card:thread" };
+    const drawn = putBoardEdit(stored, NO_BOARD_EDITS, arrow, value, false);
+    expect(resolveBoard(stored, drawn).edges).toEqual([value]);
+    expect(boardChangeOf(arrow, value)).toEqual({
+      type: "edge.put",
+      edgeId: "e",
+      from: "note:n",
+      to: "card:thread",
+    });
+    // The server's copy stands in for the edit, whatever order it wrote the fields in.
+    const linked: RoomBoard = {
+      ...stored,
+      edges: [{ to: "card:thread", from: "note:n", id: "e" }],
+    };
+    expect(resolveBoard(linked, drawn).edges).toHaveLength(1);
+    const gone = putBoardEdit(linked, drawn, { kind: "note", id: "n" }, null, false);
+    expect(resolveBoard(linked, gone).edges).toEqual([]);
+    expect(boardChangeOf(arrow, null)).toEqual({ type: "edge.remove", edgeId: "e" });
+  });
+
+  it("sends a task whole, so clearing its assignee reaches the room", () => {
+    const task = { id: "t", text: "Fix login", x: 1, y: 2, kind: "task" as const };
+    const target = { kind: "note", id: "t" } as const;
+    expect(boardChangeOf(target, { ...task, done: true })).toEqual({
+      type: "note.put",
+      noteId: "t",
+      text: "Fix login",
+      x: 1,
+      y: 2,
+      kind: "task",
+      done: true,
+      assignee: null,
+    });
+    const assigned: RoomBoard = {
+      positions: {},
+      notes: [{ ...task, assignee: { guestId: GuestId.make("sam") } }],
+    };
+    // Unassigning differs from the room's copy, so it shows until the server answers.
+    const cleared = putBoardEdit(assigned, NO_BOARD_EDITS, target, task, false);
+    expect(resolveBoard(assigned, cleared).notes[0]?.assignee).toBeUndefined();
+  });
+});
+
+describe("boardConnector", () => {
+  it("joins the facing sides of two headers and finds the middle of the curve", () => {
+    const card = boardCardBox({ x: 0, y: 0 });
+    const note = boardNoteBox({ x: 500, y: 100 });
+    const ahead = boardConnector(card, note);
+    expect(ahead.path.startsWith("M320 18 ")).toBe(true);
+    expect(ahead.path.endsWith(" 500 112")).toBe(true);
+    expect(ahead.middle).toEqual({ x: 410, y: 65 });
+    // Pointing back, the arrow leaves the left side and lands on the right one.
+    const back = boardConnector(note, card);
+    expect(back.path.startsWith("M500 112 ")).toBe(true);
+    expect(back.path.endsWith(" 320 18")).toBe(true);
+  });
+});
+
+describe("followBoardView", () => {
+  it("shows what someone else's board shows, on a screen of another size", () => {
+    const theirs = { x: -340, y: 120, zoom: 1.5 };
+    const viewport = boardViewportOf(theirs, { width: 1200, height: 800 });
+    expect(viewport).toEqual({ x: 627, y: 187, zoom: 1.5 });
+    const mine = followBoardView(viewport, { width: 600, height: 400 });
+    // The board point in the middle of their screen is in the middle of this one.
+    expect(screenToBoard(mine, { x: 300, y: 200 })).toEqual({ x: 627, y: 187 });
+    expect(mine.zoom).toBe(1.5);
+    expect(followBoardView({ x: 0, y: 0, zoom: 9 }, { width: 10, height: 10 }).zoom).toBe(
+      BOARD_MAX_ZOOM,
+    );
+  });
+});
+
+describe("parseBoardLink", () => {
+  it("reads GitHub pull requests, issues and files short, and other links by host and path", () => {
+    const shown = (url: string) => {
+      const link = parseBoardLink(url);
+      return link === null ? null : [link.title, link.detail];
+    };
+    expect(shown("https://github.com/acme/app/pull/123/files")).toEqual([
+      "acme/app #123",
+      "Pull request",
+    ]);
+    expect(shown("https://github.com/acme/app/issues/9")).toEqual(["acme/app #9", "Issue"]);
+    expect(shown("https://github.com/acme/app/blob/main/src/a%20b.ts")).toEqual([
+      "src/a b.ts",
+      "acme/app · main",
+    ]);
+    expect(shown("https://github.com/acme/app")).toEqual(["acme/app", "github.com"]);
+    expect(shown("https://www.example.com/docs/setup?x=1")).toEqual(["example.com", "/docs/setup"]);
+    expect(shown("javascript:alert(1)")).toBeNull();
+    expect(shown("ftp://example.com/file")).toBeNull();
+  });
+
+  it("takes pasted text as a link only when it is one http or https URL", () => {
+    expect(boardUrlIn("  https://example.com/a  ")).toBe("https://example.com/a");
+    expect(boardUrlIn("see https://example.com/a")).toBeNull();
+    expect(boardUrlIn("data:text/html,hi")).toBeNull();
+    expect(boardUrlIn("example.com")).toBeNull();
+  });
+});
+
+describe("pinnedCommentSpot", () => {
+  it("puts a comment beside the thread's card, clear of the notes there", () => {
+    const thread = { x: 80, y: 72 };
+    const first = pinnedCommentSpot({ positions: { thread }, notes: [] });
+    expect(first).toEqual({ x: 440, y: 72 });
+    const next = pinnedCommentSpot({
+      positions: { thread },
+      notes: [{ id: "c", text: "Why?", ...first, pinnedTo: "message:1" }],
+    });
+    expect(next).not.toEqual(first);
+  });
 });
 
 describe("boardMessages", () => {
@@ -183,18 +310,18 @@ describe("cursorSender", () => {
   it("sends at most every interval, ending on the latest, and nothing for a still pointer", () => {
     using _timers = { [Symbol.dispose]: () => vi.useRealTimers() };
     vi.useFakeTimers();
-    const sent: Array<{ x: number; y: number } | null> = [];
-    const cursor = cursorSender((at) => sent.push(at));
+    const sent: Array<BoardPresence> = [];
+    const cursor = cursorSender((presence) => sent.push(presence));
     cursor.leave();
     cursor.move({ x: 1, y: 1 });
     cursor.move({ x: 2, y: 2 });
     vi.advanceTimersByTime(0);
-    expect(sent).toEqual([{ x: 2, y: 2 }]);
+    expect(sent).toEqual([{ at: { x: 2, y: 2 } }]);
     cursor.move({ x: 3, y: 3 });
     vi.advanceTimersByTime(40);
     expect(sent).toHaveLength(1);
     vi.advanceTimersByTime(40);
-    expect(sent.at(-1)).toEqual({ x: 3, y: 3 });
+    expect(sent.at(-1)).toEqual({ at: { x: 3, y: 3 } });
     // Back where it was sent last: nothing new to say.
     vi.advanceTimersByTime(200);
     cursor.move({ x: 3, y: 3 });
@@ -205,7 +332,27 @@ describe("cursorSender", () => {
     cursor.leave();
     cursor.leave();
     vi.advanceTimersByTime(200);
-    expect(sent.slice(2)).toEqual([null]);
+    expect(sent.slice(2)).toEqual([{ at: null }]);
+  });
+
+  it("sends the view with the pointer, keeps it once the pointer leaves, and drops both on close", () => {
+    using _timers = { [Symbol.dispose]: () => vi.useRealTimers() };
+    vi.useFakeTimers();
+    const sent: Array<BoardPresence> = [];
+    const cursor = cursorSender((presence) => sent.push(presence));
+    const view = { x: 10, y: 20, zoom: 1 };
+    cursor.look(view);
+    cursor.move({ x: 1, y: 1 });
+    vi.advanceTimersByTime(0);
+    expect(sent).toEqual([{ at: { x: 1, y: 1 }, view }]);
+    // A zoom with the pointer off the board still tells the room the view.
+    cursor.leave();
+    cursor.look({ ...view, zoom: 2 });
+    vi.advanceTimersByTime(200);
+    expect(sent.slice(1)).toEqual([{ at: null }, { at: null, view: { ...view, zoom: 2 } }]);
+    cursor.close();
+    cursor.close();
+    expect(sent.slice(3)).toEqual([{ at: null, view: null }]);
   });
 });
 

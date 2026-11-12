@@ -1,6 +1,7 @@
 import * as WorktreeBranchSync from "./WorktreeBranchSync.ts";
 import * as GuestShareService from "../guest/GuestShareService.ts";
 import * as GuestLinkNames from "../guest/GuestLinkNames.ts";
+import * as GuestTeamShares from "../guest/GuestTeamShares.ts";
 import * as GuestSignIn from "../guest/GuestSignIn.ts";
 import * as SharedRoomLink from "../guest/SharedRoomLink.ts";
 import * as SharedThreadJoin from "../guest/SharedThreadJoin.ts";
@@ -399,6 +400,7 @@ export const layerProduction = Layer.mergeAll(
         layerProjectService,
         GuestSignIn.layer,
         GuestLinkNames.layer,
+        GuestTeamShares.layer.pipe(Layer.provide(layerOrchestratorProvided)),
       ),
     ),
   ),

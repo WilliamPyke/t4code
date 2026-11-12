@@ -2378,8 +2378,8 @@ export const layerWsRpc = (
         [WS_METHODS.guestShareSubscribeRoomAgents]: (input) => guestShares.roomAgents(input),
         [WS_METHODS.guestShareSubscribeRoomCursors]: (input) => guestShares.roomCursors(input),
         // A pointer that does not land changes nothing anyone relies on.
-        [WS_METHODS.guestShareMoveCursor]: ({ at, ...room }) =>
-          guestShares.moveCursor(room, at).pipe(Effect.ignore),
+        [WS_METHODS.guestShareMoveCursor]: ({ at, view, ...room }) =>
+          guestShares.moveCursor(room, at, view).pipe(Effect.ignore),
         [WS_METHODS.guestShareChangeBoard]: (input) =>
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(guestShares.changeBoard({ threadId: input.threadId }, input.change)),
