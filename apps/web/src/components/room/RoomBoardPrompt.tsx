@@ -1,5 +1,5 @@
-import { BotIcon, SendHorizontalIcon, XIcon } from "lucide-react";
-import { type PointerEvent, useState } from "react";
+import { SendHorizontalIcon, XIcon } from "lucide-react";
+import { type PointerEvent, type ReactNode, useState } from "react";
 
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
@@ -11,53 +11,46 @@ const NONE_LEFT_OUT: ReadonlySet<string> = new Set();
 const PREVIEW_LENGTH = 240;
 
 /**
- * The box on the thread's card, or on an artifact card, that sends a message from the board. The
- * cards connected to it by arrows show as chips and go with every message; one left out stays out
- * until the message goes.
+ * The prompt box on a thread box. The cards connected to the box by lines show as chips and go
+ * with every prompt; one left out stays out until the prompt goes. Only the chips shown when Send
+ * is pressed go.
  */
 export function BoardPromptBox({
   cards,
-  artifactId,
-  fills,
+  artifact,
   label,
   placeholder,
+  model,
   onPrompt,
-  onTake,
 }: {
   readonly cards: ReadonlyArray<BoardPromptCard>;
-  /** The artifact the reply fills, or null. */
-  readonly artifactId: string | null;
-  /** The title of that artifact, said under the box, when an arrow from this card chose it. */
-  readonly fills: string | null;
+  /** The artifact the box has a line to, which the reply rewrites, or null. */
+  readonly artifact: { readonly id: string; readonly title: string } | null;
   readonly label: string;
   readonly placeholder: string;
+  /** Which model runs the prompt, and the way to change it. */
+  readonly model?: ReactNode;
   readonly onPrompt: (prompt: BoardPrompt) => Promise<boolean>;
-  /** Opens the message as a draft for the viewer's own agent. The box keeps its text. */
-  readonly onTake?: ((prompt: BoardPrompt) => void) | undefined;
 }) {
   const [text, setText] = useState("");
   const [leftOut, setLeftOut] = useState(NONE_LEFT_OUT);
   const [sending, setSending] = useState(false);
   const attached = cards.filter((card) => !leftOut.has(card.ref));
   const hidden = cards.length - attached.length;
-  const prompt = (): BoardPrompt | null => {
-    const message = text.trim();
-    return message === "" ? null : { text: message, cards: attached, artifactId };
-  };
   const send = async () => {
-    const message = prompt();
-    if (message === null || sending) return;
+    const message = text.trim();
+    if (message === "" || sending) return;
     setSending(true);
-    const sent = await onPrompt(message).catch(() => false);
+    const sent = await onPrompt({
+      text: message,
+      cards: attached,
+      artifactId: artifact?.id ?? null,
+    }).catch(() => false);
     setSending(false);
     if (sent) {
       setText("");
       setLeftOut(NONE_LEFT_OUT);
     }
-  };
-  const take = () => {
-    const message = prompt();
-    if (message !== null) onTake?.(message);
   };
   return (
     <div className="flex flex-col gap-1.5" onPointerDown={stopPointer}>
@@ -65,8 +58,8 @@ export function BoardPromptBox({
         <div className="flex flex-col gap-1">
           <p className="text-2xs text-muted-foreground">
             {attached.length === 0
-              ? "No connected cards go with this message."
-              : "Connected cards go with each message:"}
+              ? "No connected cards go with this prompt."
+              : "Connected cards go with each prompt:"}
           </p>
           <ul className="flex flex-wrap gap-1">
             {attached.map((card) => (
@@ -116,6 +109,7 @@ export function BoardPromptBox({
         aria-label={label}
         placeholder={placeholder}
         value={text}
+        data-box-prompt
         // Read-only rather than disabled while it sends, so the box keeps focus.
         readOnly={sending}
         aria-busy={sending}
@@ -128,18 +122,13 @@ export function BoardPromptBox({
           }
         }}
       />
-      <div className="flex items-center gap-2">
-        <p className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">
-          {fills === null
-            ? null
-            : `Arrow to "${fills.trim() === "" ? "Untitled artifact" : fills.trim()}": replies fill it`}
+      {artifact === null ? null : (
+        <p className="truncate text-2xs text-success">
+          {`Replies rewrite "${artifact.title.trim() === "" ? "Untitled artifact" : artifact.title.trim()}"`}
         </p>
-        {onTake === undefined ? null : (
-          <Button size="xs" variant="outline" disabled={text.trim() === ""} onClick={take}>
-            <BotIcon />
-            Take to my agent
-          </Button>
-        )}
+      )}
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center">{model}</div>
         <Button size="xs" disabled={sending || text.trim() === ""} onClick={() => void send()}>
           <SendHorizontalIcon />
           {sending ? "Sending..." : "Send"}

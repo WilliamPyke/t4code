@@ -50,6 +50,9 @@ function isNonRetryableProviderTurnControlFailure(effectType: string, errorText:
   }
   return (
     /is not active/i.test(errorText) ||
+    // Claude's adapter: its query no longer runs the turn, so no retry can stop it.
+    /is not the active turn/i.test(errorText) ||
+    /has no live query/i.test(errorText) ||
     /hard teardown is already in progress/i.test(errorText) ||
     /treating as already interrupted/i.test(errorText) ||
     /treating as already stopped/i.test(errorText)

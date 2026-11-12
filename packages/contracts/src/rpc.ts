@@ -194,6 +194,12 @@ import {
   SharedThreadTakeTaskInput,
   SharedThreadTakeTaskResult,
 } from "./sharedThread.ts";
+import {
+  GuestMessageSendInput,
+  RoomBoxError,
+  RoomBoxPromptInput,
+  RoomBoxPromptResult,
+} from "./roomBox.ts";
 import { PullRequestReviewGuideResult } from "./pullRequestReviewGuide.ts";
 import {
   PullRequestActionInput,
@@ -583,6 +589,8 @@ export const WS_METHODS = {
   guestShareSubscribeRoomAgents: "guestShare.subscribeRoomAgents",
   guestShareSubscribeRoomCursors: "guestShare.subscribeRoomCursors",
   guestShareMoveCursor: "guestShare.moveCursor",
+  guestSharePromptBox: "guestShare.promptBox",
+  guestShareSendMessage: "guestShare.sendMessage",
   sharedThreadPreview: "sharedThread.preview",
   sharedThreadJoin: "sharedThread.join",
   sharedThreadLeave: "sharedThread.leave",
@@ -2121,6 +2129,17 @@ const WsGuestShareChangeBoardRpc = Rpc.make(WS_METHODS.guestShareChangeBoard, {
   error: Schema.Union([RoomBoardChangeError, EnvironmentAuthorizationError]),
 });
 
+const WsGuestSharePromptBoxRpc = Rpc.make(WS_METHODS.guestSharePromptBox, {
+  payload: RoomBoxPromptInput,
+  success: RoomBoxPromptResult,
+  error: Schema.Union([RoomBoxError, EnvironmentAuthorizationError]),
+});
+
+const WsGuestShareSendMessageRpc = Rpc.make(WS_METHODS.guestShareSendMessage, {
+  payload: GuestMessageSendInput,
+  error: Schema.Union([RoomBoxError, EnvironmentAuthorizationError]),
+});
+
 const WsSecretsAnswerRequestRpc = Rpc.make(WS_METHODS.secretsAnswerRequest, {
   payload: SecretRequestAnswerInput,
   error: Schema.Union([SecretRequestError, EnvironmentAuthorizationError]),
@@ -2167,6 +2186,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsGuestShareCreateRpc,
   WsGuestShareSubscribePresenceRpc,
   WsGuestShareChangeBoardRpc,
+  WsGuestSharePromptBoxRpc,
+  WsGuestShareSendMessageRpc,
   WsGuestShareSubscribeRoomAgentsRpc,
   WsGuestShareSubscribeRoomCursorsRpc,
   WsGuestShareMoveCursorRpc,

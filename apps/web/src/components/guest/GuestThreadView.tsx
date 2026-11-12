@@ -29,6 +29,7 @@ import {
   guestMessageAuthorName,
   type GuestThreadModel,
   type OrchestrationV2ThreadProjection,
+  type RoomAgentActivity,
   type RoomBoardChange,
   type RoomBoardNote,
   type ScopedThreadRef,
@@ -36,7 +37,7 @@ import {
   type ThreadGuestMessage,
   type ThreadGuestMessageStatus,
 } from "@t3tools/contracts";
-import { buildJoinLink, PROMPT_LINK_MAX_PROMPT_LENGTH } from "@t3tools/shared/promptLinks";
+import { buildJoinLink } from "@t3tools/shared/promptLinks";
 import type { LegendListRef } from "@legendapp/list/react";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -56,6 +57,7 @@ import { flushSync } from "react-dom";
 
 import {
   guestRoomAtom,
+  guestRoomBoxesAtom,
   guestRoomCursorsAtom,
   guestRoomViewsAtom,
   guestShareEndpointOf,
@@ -90,6 +92,7 @@ import { getDisplayModelName, getTriggerDisplayModelName } from "../chat/provide
 import { ScrollToEndButton } from "../chat/TimelineOverlays";
 import type { TimelineRow } from "../chat/timelineRowContext";
 import { useTimelineFollow } from "../chat/useTimelineFollow";
+import { BoardSplit } from "../room/BoardSplit";
 import { RoomBoard, RoomCursors } from "../room/RoomBoard";
 import { RoomReplyProvider, revealRoomReply } from "../room/RoomReplyComments";
 import {
@@ -101,6 +104,7 @@ import {
   boardMessages,
   boardNoteMessage,
 } from "../room/roomBoard.logic";
+import { RoomLiveContext, type RoomLiveStore, createRoomLiveStore } from "../room/roomBoardLive";
 import { Button } from "../ui/button";
 import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
@@ -200,13 +204,18 @@ async function postGuestMessage(
   endpoint: GuestShareEndpoint,
   text: string,
   files: ReadonlyArray<File>,
-  /** The artifact card the reply should fill once the owner sends it. */
-  artifactId: string | null = null,
+  board: {
+    /** The artifact card the reply should rewrite once the owner sends it. */
+    readonly artifactId?: string | undefined;
+    /** The thread box it was asked from, whose own conversation runs it. */
+    readonly boxId?: string;
+  } = {},
 ): Promise<string | null> {
   const form = new FormData();
   form.append("shareId", endpoint.shareId);
   form.append("text", text);
-  if (artifactId !== null) form.append("artifactId", artifactId);
+  if (board.artifactId !== undefined) form.append("artifactId", board.artifactId);
+  if (board.boxId !== undefined) form.append("boxId", board.boxId);
   for (const file of files) form.append("file", file, file.name);
   return guestShareRequest(endpoint, `${GUEST_ROUTE_PREFIX}/messages`, {
     init: { method: "POST", body: form },
@@ -294,7 +303,9 @@ function GuestThreadSession({
     label: "load earlier thread history",
     reportFailure: false,
   });
-  const [boardOpen, setBoardOpen] = useState(false);
+  // The room thread's conversation beside the board; closing it hides it without unmounting it.
+  const [panelOpen, setPanelOpen] = useState(true);
+  const [live] = useState(createRoomLiveStore);
   // Here, not in the composer, so a note from the board can land in it.
   const [draft, setDraft] = useState("");
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -349,22 +360,26 @@ function GuestThreadSession({
     }
     void opened.then(reportOpenFailure);
   };
-  const boardPromptText = (prompt: BoardPrompt) =>
-    guestBoardPromptText(prompt.text, boardContextCards(view.board, view.guests, prompt.cards));
-  // A message for the owner to approve, like one from the composer. One for an artifact names
-  // the card, and the owner's server attaches it when the owner sends the message.
-  const messageOwner = async (prompt: BoardPrompt) => {
-    const text = boardPromptText(prompt);
+  // A request from this guest's own thread box, which waits for the owner like any message. The
+  // cards are written into it, so the owner reads exactly what would reach their agent.
+  const promptBox = async (boxId: string, prompt: BoardPrompt) => {
+    const text = guestBoardPromptText(
+      prompt.text,
+      boardContextCards(view.board, view.guests, prompt.cards),
+    );
     const failure =
       text === ""
-        ? "Write a message first."
+        ? "Write a prompt first."
         : text.length > GUEST_MESSAGE_MAX_LENGTH
-          ? "This message and its cards are too long. Remove a card or shorten the message."
-          : await postGuestMessage(endpoint, text, [], prompt.artifactId);
+          ? "This prompt and its cards are too long. Remove a card or shorten the prompt."
+          : await postGuestMessage(endpoint, text, [], {
+              boxId,
+              ...(prompt.artifactId === null ? {} : { artifactId: prompt.artifactId }),
+            });
     if (failure !== null) {
       toastManager.add({
         type: "error",
-        title: "Could not send the message",
+        title: "Could not send the prompt",
         description: failure,
       });
     }
@@ -375,104 +390,114 @@ function GuestThreadSession({
     void openOnMyMachine(endpoint, share.host, {
       task: { shareId: share.shareId, taskId: note.id, text: boardNoteMessage(note) },
     }).then(reportOpenFailure);
-  // A draft in this guest's own T Code, which reads the card from the room there. Their agent
-  // runs only when they send it, and its reply then fills the card.
-  const takeArtifact = (prompt: BoardPrompt & { readonly artifactId: string }) => {
-    const text = boardPromptText(prompt);
-    if (text === "" || text.length > PROMPT_LINK_MAX_PROMPT_LENGTH) {
-      reportOpenFailure(
-        text === ""
-          ? "Write what you want changed first."
-          : "This message and its cards are too long. Remove a card or shorten the message.",
-      );
-      return;
-    }
-    void openOnMyMachine(endpoint, share.host, {
-      artifact: { shareId: share.shareId, artifactId: prompt.artifactId, text },
-    }).then(reportOpenFailure);
-  };
-  // As the board offers giving a note to this guest's own agent: once their machine is in the room.
-  const ownMachineInRoom =
-    guestId !== undefined &&
-    ((view.turns ?? []).some((turn) => turn.guestId === guestId) ||
-      running.some((agent) => agent.guestId === guestId));
-  return (
-    <>
-      {/* Hidden, not unmounted, so the board does not cost the guest their draft or place. */}
-      <div className={boardOpen ? "hidden" : "contents"}>
-        <GuestThread
-          endpoint={endpoint}
-          host={share.host}
-          view={view}
-          projection={projection}
-          online={online}
-          awaitingRowIds={awaitingRowIds}
-          historyControls={historyControls}
-          onOpenBoard={guestId === undefined ? undefined : () => setBoardOpen(true)}
-          onBoardChange={
-            guestId === undefined ? undefined : (change) => postBoardChange(endpoint, change)
-          }
-          draft={draft}
-          onDraftChange={setDraft}
-          composerRef={composerRef}
-        />
-      </div>
-      {boardOpen && guestId !== undefined ? (
-        <RoomBoard
-          title={view.title}
-          room={view}
-          online={online}
-          messages={boardMessages(
-            projection.visibleTurnItems.map((row) => row.item),
-            BOARD_THREAD_MESSAGES,
-            "Owner",
-          )}
-          agentWorking={deriveThreadAgentWorking(projection)}
-          running={running}
-          ownerCode={ownerCode}
-          onTakeTask={takeTask}
-          onGiveNote={giveNote}
-          viewer={guestId}
-          ownerName={view.ownerName}
-          cursorLayer={
-            <GuestBoardCursors
-              shareId={share.shareId}
-              guests={view.guests}
-              ownerName={view.ownerName}
-            />
-          }
-          onOpenThread={() => setBoardOpen(false)}
-          onOpenReply={(messageId) => {
-            revealRoomReply(messageId);
-            setBoardOpen(false);
-          }}
-          onChange={(change) => postBoardChange(endpoint, change)}
-          onCursor={(presence) => postBoardCursor(endpoint, presence)}
-          onPrompt={messageOwner}
-          onTakeArtifact={ownMachineInRoom ? takeArtifact : undefined}
-          ownerWritingArtifactId={ownerWritingArtifactId(
-            projection.visibleTurnItems.map((row) => row.item),
-            deriveThreadStructureRuntime(projection)?.activeRunId,
-            view.shareId,
-          )}
-          needsApproval={(pendingRequests?.approvals.length ?? 0) > 0}
-          promptPlaceholder="Message the owner"
-          canFillArtifacts
-          artifactPromptPlaceholder="Ask the owner to change this"
-          onUseNote={(text) => {
-            // Only a draft in the message box: the guest sends it, and the owner still approves it.
-            flushSync(() => {
-              setDraft((current) =>
-                appendNoteToDraft(current, text).slice(0, GUEST_MESSAGE_MAX_LENGTH),
-              );
-              setBoardOpen(false);
-            });
-            composerRef.current?.focus();
-          }}
-        />
-      ) : null}
-    </>
+  const conversation = (
+    <GuestThread
+      endpoint={endpoint}
+      host={share.host}
+      view={view}
+      projection={projection}
+      online={online}
+      awaitingRowIds={awaitingRowIds}
+      historyControls={historyControls}
+      onClose={guestId === undefined ? undefined : () => setPanelOpen(false)}
+      onBoardChange={
+        guestId === undefined ? undefined : (change) => postBoardChange(endpoint, change)
+      }
+      draft={draft}
+      onDraftChange={setDraft}
+      composerRef={composerRef}
+    />
   );
+  // The one guest of a link made before several could join cannot sign a note, so has no board.
+  if (guestId === undefined) return conversation;
+  return (
+    <RoomLiveContext value={live}>
+      <GuestBoardLive shareId={share.shareId} running={running} live={live} />
+      <BoardSplit
+        open={panelOpen}
+        panel={<div className="flex h-full min-h-0 flex-col">{conversation}</div>}
+        board={
+          <RoomBoard
+            title={view.title}
+            room={view}
+            online={online}
+            messages={boardMessages(
+              projection.visibleTurnItems.map((row) => row.item),
+              BOARD_THREAD_MESSAGES,
+              "Owner",
+            )}
+            agentWorking={deriveThreadAgentWorking(projection)}
+            ownerCode={ownerCode}
+            onTakeTask={takeTask}
+            onGiveNote={giveNote}
+            viewer={guestId}
+            ownerName={view.ownerName}
+            cursorLayer={
+              <GuestBoardCursors
+                shareId={share.shareId}
+                guests={view.guests}
+                ownerName={view.ownerName}
+              />
+            }
+            onOpenThread={() => setPanelOpen(true)}
+            onOpenReply={(messageId) => {
+              revealRoomReply(messageId);
+              setPanelOpen(true);
+            }}
+            onChange={(change) => postBoardChange(endpoint, change)}
+            onCursor={(presence) => postBoardCursor(endpoint, presence)}
+            onPromptBox={promptBox}
+            renderBoxModel={() => (
+              <span className="truncate text-2xs text-muted-foreground">Goes to the owner</span>
+            )}
+            ownerWritingArtifactId={ownerWritingArtifactId(
+              projection.visibleTurnItems.map((row) => row.item),
+              deriveThreadStructureRuntime(projection)?.activeRunId,
+              view.shareId,
+            )}
+            needsApproval={(pendingRequests?.approvals.length ?? 0) > 0}
+            onUseNote={(text) => {
+              // Only a draft in the message box: the guest sends it, and the owner still approves it.
+              flushSync(() => {
+                setDraft((current) =>
+                  appendNoteToDraft(current, text).slice(0, GUEST_MESSAGE_MAX_LENGTH),
+                );
+                setPanelOpen(true);
+              });
+              composerRef.current?.focus();
+            }}
+          />
+        }
+      />
+    </RoomLiveContext>
+  );
+}
+
+/** The thread boxes' runs, read here and kept in the board's live store. */
+function GuestBoardLive({
+  shareId,
+  running,
+  live,
+}: {
+  readonly shareId: string;
+  readonly running: ReadonlyArray<RoomAgentActivity>;
+  readonly live: RoomLiveStore;
+}) {
+  const boxes = useAtomValue(guestRoomBoxesAtom(shareId));
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- hands the room's live runs to the board's store, which lives outside React
+  useEffect(() => {
+    live.setRunning(running);
+    live.setBoxes(boxes);
+  }, [live, running, boxes]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- stops the store's clock once the board closes
+  useEffect(
+    () => () => {
+      live.setRunning([]);
+      live.setBoxes(undefined);
+    },
+    [live],
+  );
+  return null;
 }
 
 /** Everyone else's pointers and views, read here so a pointer moving renders only this. */
@@ -520,7 +545,7 @@ function GuestThread({
   online,
   awaitingRowIds,
   historyControls,
-  onOpenBoard,
+  onClose,
   onBoardChange,
   draft,
   onDraftChange,
@@ -533,8 +558,8 @@ function GuestThread({
   readonly online: ReadonlyArray<string>;
   readonly awaitingRowIds: ReadonlySet<GuestMessageId>;
   readonly historyControls: MessagesTimelineHistoryControls | undefined;
-  /** Absent for the one guest of a link made before several could join, who cannot sign a note. */
-  readonly onOpenBoard: (() => void) | undefined;
+  /** Closes the conversation beside the board. Absent where there is no board beside it. */
+  readonly onClose: (() => void) | undefined;
   /** Sends one change to the room's board. Absent, like the board, for that one guest. */
   readonly onBoardChange: ((change: RoomBoardChange) => Promise<boolean>) | undefined;
   readonly draft: string;
@@ -615,18 +640,13 @@ function GuestThread({
     .map((guest) => (online.includes(guest.id) ? guest.name : `${guest.name} (away)`));
   return (
     <>
-      <header className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-2.5">
+      <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-border px-4 py-2.5">
         <SidebarTrigger className="md:hidden" />
         <h1 className="min-w-0 flex-1 truncate text-sm font-medium">{title}</h1>
         {otherGuests.length === 0 ? null : (
           <span className="max-w-[40%] min-w-0 truncate text-xs text-muted-foreground">
             With {otherGuests.join(", ")}
           </span>
-        )}
-        {onOpenBoard === undefined ? null : (
-          <Button size="xs" variant="outline" onClick={onOpenBoard}>
-            Board
-          </Button>
         )}
         <GuestGitHubSignIn
           endpoint={endpoint}
@@ -635,6 +655,11 @@ function GuestThread({
         />
         <ContinueOnMyMachine endpoint={endpoint} host={host} />
         <ExpiryLabel expiresAt={expiresAt} />
+        {onClose === undefined ? null : (
+          <Button size="icon-xs" variant="ghost" aria-label="Close conversation" onClick={onClose}>
+            <XIcon />
+          </Button>
+        )}
       </header>
       <div className="relative min-h-0 flex-1">
         <RoomReplyProvider

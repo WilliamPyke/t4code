@@ -21,6 +21,15 @@ describe("RoomArtifactBody", () => {
     expect(frame?.getAttribute("srcdoc")).toBe(page);
   });
 
+  it("shows a page still being written as its source, never running it in a frame", async () => {
+    const page = "<!doctype html><html><body><h1>Pricing mockup</h1></body></html>";
+    await using screen = await render(
+      <RoomArtifactBody artifact={written(page)} draft="<!doctype html><html><body><scr" />,
+    );
+    await expect.element(screen.getByLabelText("Page being written")).toBeVisible();
+    expect(screen.container.querySelector("iframe")).toBeNull();
+  });
+
   it("shows markdown as text, with no frame", async () => {
     await using screen = await render(
       <RoomArtifactBody artifact={written("# Release plan\n\nShip the board on Friday.")} />,

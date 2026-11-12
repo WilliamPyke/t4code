@@ -1,10 +1,9 @@
 import {
   COMPOSER_CONTEXT_LABEL_MAX_CHARS,
-  type ComposerContextRecord,
   type GuestShareId,
   type ModelSelection,
-  type OrchestrationMessageContext,
   type OrchestrationV2TurnItem,
+  ROOM_BOARD_ROOM_BOX,
   type RoomBoard,
   type RoomBoardContextCard,
   type RunId,
@@ -13,16 +12,9 @@ import {
   type ThreadGuestMessage,
   roomBoardNoteRef,
 } from "@t3tools/contracts";
-import {
-  formatComposerContextReference,
-  formatRoomBoardCards,
-  roomArtifactContextRecord,
-  roomCardsContextRecord,
-} from "@t3tools/shared/composerContextReferences";
+import { formatRoomBoardCards } from "@t3tools/shared/composerContextReferences";
 import { createModelSelection } from "@t3tools/shared/model";
 import { roomArtifactRequestOf } from "@t3tools/shared/roomBoard";
-
-import { randomUUID } from "~/lib/utils";
 
 import { formatOutgoingPrompt } from "../ChatView.logic";
 import { getComposerPromptInjectionState, getComposerProviderState } from "./composerProviderState";
@@ -65,43 +57,6 @@ export function boardContextCards(
       text: card.text,
     };
   });
-}
-
-/**
- * The owner's message from their board: their text, a chip for the cards they left attached,
- * and one for the artifact the reply fills. The chips are in the text, so the owner sees in the
- * thread exactly what went to their agent.
- */
-export function ownerBoardPromptMessage(input: {
-  readonly text: string;
-  readonly shareId: GuestShareId;
-  readonly board: RoomBoard | undefined;
-  readonly cards: ReadonlyArray<RoomBoardContextCard>;
-  readonly artifactId: string | null;
-}): { readonly text: string; readonly context: OrchestrationMessageContext | undefined } {
-  const batch = randomUUID();
-  const artifact = input.board?.notes.find(
-    (note) => note.id === input.artifactId && note.kind === "artifact",
-  );
-  const records: ReadonlyArray<ComposerContextRecord> = [
-    ...(input.cards.length === 0 ? [] : [roomCardsContextRecord({ batch, cards: input.cards })]),
-    ...(artifact === undefined
-      ? []
-      : [
-          roomArtifactContextRecord({
-            batch,
-            shareId: input.shareId,
-            noteId: artifact.id,
-            title: artifact.text,
-            current: artifact.artifact?.body,
-          }),
-        ]),
-  ];
-  const chips = records.map(formatComposerContextReference).join(" ");
-  return {
-    text: [input.text.trim(), chips].filter((part) => part !== "").join("\n\n"),
-    context: records.length === 0 ? undefined : { version: 1, records: [...records] },
-  };
 }
 
 /**
@@ -168,6 +123,20 @@ export function guestMessageArtifactTitle(
     (candidate) => candidate.id === message.artifactId && candidate.kind === "artifact",
   );
   return note === undefined ? null : note.text.trim() || "Untitled";
+}
+
+/**
+ * The thread box a guest's waiting message was asked from, as the owner's timeline names it, or
+ * null for one asked in the room thread itself.
+ */
+export function guestMessageBoxTitle(
+  board: RoomBoard | undefined,
+  message: Pick<ThreadGuestMessage, "boxId">,
+): string | null {
+  if (message.boxId === undefined || message.boxId === ROOM_BOARD_ROOM_BOX) return null;
+  const note = board?.notes.find((candidate) => candidate.id === message.boxId);
+  const title = note?.text.trim() ?? "";
+  return title === "" ? "a thread box" : `the thread box "${title}"`;
 }
 
 /**

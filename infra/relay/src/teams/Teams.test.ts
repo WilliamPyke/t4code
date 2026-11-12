@@ -475,7 +475,11 @@ describe("Teams", () => {
           refusal("board_rejected"),
         );
       }
-      for (const fields of [{ pinnedTo: "message-1" }, { kind: "artifact" as const }]) {
+      for (const fields of [
+        { pinnedTo: "message-1" },
+        { kind: "artifact" as const },
+        { kind: "thread" as const },
+      ]) {
         expect(yield* refused("ann", note("other", fields))).toMatchObject(
           refusal("board_rejected"),
         );

@@ -36,6 +36,7 @@ import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as McpToolAccessTestkit from "../mcp/McpToolAccess.testkit.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as SharedRoomLink from "./SharedRoomLink.ts";
 
 const threadId = ThreadId.make("thread:joined");
@@ -48,11 +49,20 @@ const items = [
   item(2, { type: "assistant_message", text: "Looking." }),
 ];
 
-/** A thread its owner shares: the events its runs send, and each run's items. */
+/**
+ * A thread of the owner's: the events its runs send, and each run's items. `share` is null for a
+ * thread box's own thread, whose room is one of `rooms`, by thread id.
+ */
 interface OwnerThread {
-  readonly share: Pick<ThreadGuestShare, "id" | "board" | "messages">;
+  readonly share: Pick<ThreadGuestShare, "id" | "board" | "messages" | "boardThreads"> | null;
   readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
   readonly itemsOf: (runId: string) => ReadonlyArray<OrchestrationV2TurnItem>;
+  readonly rooms?: ReadonlyMap<
+    string,
+    Pick<ThreadGuestShare, "id" | "board" | "messages" | "boardThreads">
+  >;
+  /** The message each run was asked with, by run id. */
+  readonly userMessageOf?: (runId: string) => string;
 }
 
 /**
@@ -79,18 +89,24 @@ const world = Effect.fn(function* (
           command.type === "thread.room-link.set"
             ? Ref.set(link, command.roomLink).pipe(Effect.as({} as never))
             : (command.type === "thread.room-task.answer" ||
-                  command.type === "thread.room-artifact.fill") &&
+                  command.type === "thread.room-artifact.fill" ||
+                  command.type === "thread.room-box.turn") &&
                 owner !== undefined
               ? Queue.offer(answers, command).pipe(Effect.as({} as never))
               : Effect.die("Only the room link changes here"),
-        getThreadRecords: (_threadId, _fields, filter) =>
+        findGuestShareThreadId: (shareId) =>
+          Effect.succeed(
+            ([...(owner?.rooms ?? [])].find(([, share]) => share.id === shareId)?.[0] ??
+              null) as never,
+          ),
+        getThreadRecords: (readThreadId, _fields, filter) =>
           Effect.all([Ref.get(link), Ref.get(requestedAt)]).pipe(
             Effect.map(
               ([roomLink, at]) =>
                 ({
                   thread: {
                     roomLink,
-                    guestShare: owner?.share ?? null,
+                    guestShare: owner?.rooms?.get(readThreadId) ?? owner?.share ?? null,
                     projectId: "project:joined",
                     worktreePath: null,
                     branch: null,
@@ -102,6 +118,8 @@ const world = Effect.fn(function* (
                   runs: (filter?.runIds ?? []).map((id) => ({
                     id,
                     requestedAt: DateTime.makeUnsafe(at),
+                    userMessageId: owner?.userMessageOf?.(id) ?? `message:${id}`,
+                    modelSelection: { instanceId: "codex", model: "gpt-5.1-codex" },
                   })),
                 }) as never,
             ),
@@ -114,6 +132,17 @@ const world = Effect.fn(function* (
       }),
     ),
     Layer.provide(Layer.mock(GitWorkflow.GitWorkflowService)({ status: () => Ref.get(status) })),
+    Layer.provide(
+      Layer.mock(ProviderRegistry.ProviderRegistry)({
+        getProviders: Effect.succeed([
+          {
+            instanceId: "codex",
+            driver: "codex",
+            models: [{ slug: "gpt-5.1-codex", name: "GPT-5.1 Codex" }],
+          } as never,
+        ]),
+      }),
+    ),
     Layer.provide(
       Layer.succeed(
         HttpClient.HttpClient,
@@ -604,6 +633,9 @@ it.effect(
           turnId: "run:guest",
           body: "# Sam's plan",
           askedBy: sam,
+          prompt: "Draw the plan",
+          model: "GPT-5.1 Codex",
+          boxId: "thread",
         } as never);
         assert.deepEqual(yield* Queue.take(answers), {
           type: "thread.room-artifact.fill",
@@ -613,6 +645,141 @@ it.effect(
           noteId: "note:plan",
           turnId: "run:artifact",
           body: page,
+          prompt: "Draw the plan",
+          model: "GPT-5.1 Codex",
+          boxId: "thread",
+        } as never);
+        assert.equal(yield* Queue.size(answers), 0);
+      }).pipe(Effect.provide(layer));
+    }),
+);
+
+it.effect(
+  "shows a finished turn of a box's own thread on its box and artifact, only from the box's thread",
+  () =>
+    Effect.gen(function* () {
+      const shareId = GuestShareId.make("share:mine");
+      const roomThreadId = "thread:room";
+      const sam = "guest:sam";
+      const context = (share: string, boxId: string) => ({
+        version: 1,
+        records: [
+          {
+            version: 1,
+            contextId: "room-cards_1",
+            kind: "room-cards",
+            label: "Board · 1 card",
+            cards: [{ label: "Note from Cam", author: "guest", name: "Cam", text: "Dark mode" }],
+          },
+          {
+            version: 1,
+            contextId: "room-artifact_1",
+            kind: "room-artifact",
+            label: 'Artifact "Plan"',
+            shareId: share,
+            noteId: "note:plan",
+            title: "Plan",
+            threadId: roomThreadId,
+            boxId,
+          },
+          {
+            version: 1,
+            contextId: "room-box_1",
+            kind: "room-box",
+            label: "Thread box",
+            payload: { shareId: share, boxId },
+          },
+        ],
+      });
+      const turn = (ctx: object, reply: string) => [
+        item(1, {
+          type: "user_message",
+          text: "Message from guest Sam: Make it dark",
+          context: ctx,
+        }),
+        item(2, { type: "assistant_message", text: reply }),
+      ];
+      const runs: Record<string, ReadonlyArray<OrchestrationV2TurnItem>> = {
+        "run:cancelled": turn(context(shareId, "box:plan"), "Stopped."),
+        // Names a box whose thread is another one, so this thread cannot write to it.
+        "run:unregistered": turn(context(shareId, "box:other"), "Not mine."),
+        "run:old-share": turn(context("share:old", "box:plan"), "Old room."),
+        "run:asked": turn(context(shareId, "box:plan"), "# Dark plan"),
+      };
+      const settled = (id: string, status: string) =>
+        ({ type: "run.updated", threadId, payload: { id, status } }) as never;
+      const note = (id: string, kind: string) => ({ id, text: "Plan", x: 0, y: 0, kind });
+      const { answers, layer } = yield* world([], {
+        share: null,
+        rooms: new Map([
+          [
+            roomThreadId,
+            {
+              id: shareId,
+              board: {
+                positions: {},
+                notes: [
+                  note("box:plan", "thread"),
+                  note("box:other", "thread"),
+                  note("note:plan", "artifact"),
+                ],
+              },
+              messages: [
+                {
+                  id: "guest-message:1",
+                  text: "Make it dark",
+                  status: "sent",
+                  submittedAt: "1970-01-01T00:00:00.000Z",
+                  guestId: sam,
+                  boxId: "box:plan",
+                  sentAs: "message:asked",
+                },
+              ],
+              boardThreads: { "box:plan": threadId, "box:other": "thread:other" },
+            } as never,
+          ],
+        ]),
+        userMessageOf: (runId) => (runId === "run:asked" ? "message:asked" : `message:${runId}`),
+        events: [
+          settled("run:cancelled", "cancelled"),
+          settled("run:unregistered", "completed"),
+          settled("run:old-share", "completed"),
+          settled("run:asked", "completed"),
+        ],
+        itemsOf: (runId) => runs[runId] ?? [],
+      });
+      yield* Effect.gen(function* () {
+        yield* SharedRoomLink.SharedRoomLink;
+        // Runs are taken in order, so the first command shows none came before it.
+        const shown = yield* Queue.take(answers);
+        assert.deepInclude(shown, {
+          type: "thread.room-box.turn",
+          commandId: "server:room-box:run:asked",
+          threadId: roomThreadId,
+          shareId,
+          boxId: "box:plan",
+        } as never);
+        assert.deepInclude((shown as { turn: object }).turn, {
+          id: "run:asked",
+          prompt: "Make it dark",
+          reply: "Dark plan",
+          cards: ["Note from Cam"],
+          model: "GPT-5.1 Codex",
+          askedBy: sam,
+        });
+        assert.deepEqual(yield* Queue.take(answers), {
+          type: "thread.room-artifact.fill",
+          commandId: "server:room-artifact:run:asked",
+          threadId: roomThreadId,
+          shareId,
+          noteId: "note:plan",
+          turnId: "run:asked",
+          body: "# Dark plan",
+          askedBy: sam,
+          prompt: "Make it dark",
+          cards: ["Note from Cam"],
+          model: "GPT-5.1 Codex",
+          boxId: "box:plan",
         } as never);
         assert.equal(yield* Queue.size(answers), 0);
       }).pipe(Effect.provide(layer));

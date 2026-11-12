@@ -38,8 +38,14 @@ provider login.
    T3CODE_DEV_ALLOWED_ORIGINS=https://app.trellium.org
    ```
 
-4. Start it with `vp run dev` and open the address it prints. On Windows without a global `vp`,
-   use `pnpm install --frozen-lockfile` and `pnpm exec vp run dev`.
+4. Start it with `vp run dev --steady` and open the address it prints. On Windows without a
+   global `vp`, use `pnpm install --frozen-lockfile` and `pnpm exec vp run dev --steady`.
+
+   `--steady` (or `T3CODE_DEV_STEADY=1`) keeps the server running when files change. Plain
+   `vp run dev` restarts the server on every saved file, which is right for developing T Code but
+   cuts off your agents' turns and your guests' connections while you use it. Restart the command
+   after you pull.
+
 5. In **Settings → Sharing & access**, sign in and link this machine. Then turn on
    **Settings → Labs → Guest links**, and set **Name shown to guests** there.
 
@@ -48,12 +54,13 @@ machine** in a room someone else shared opens in your T Code.
 
 ## Things to know
 
-- Your machine must stay on, with `vp run dev` running, while guests use a thread you shared.
+- Your machine must stay on, with `vp run dev --steady` running, while guests use a thread you
+  shared.
 - Guest messages reach your agent only when you choose **Send**. **Send without asking** works only
   on a Claude or Codex API key, never on a plan sign-in.
 - Guests signing in with GitHub works only on a server started with
   `T3CODE_GITHUB_APP_CLIENT_SECRET`. Ask the deployment's owner for it out of band; do not commit
   it.
-- To update, `git pull` and run `vp i` again. Pull before joining a room: an older build may not
+- To update, `git pull`, run `vp i` again, and restart `vp run dev --steady`. Pull before joining a room: an older build may not
   understand a newer room.
 - The sign-in service is a development instance, so the sign-in page shows a development notice.

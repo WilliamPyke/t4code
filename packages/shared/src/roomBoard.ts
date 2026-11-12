@@ -3,10 +3,15 @@ import {
   ROOM_BOARD_MAX_ARTIFACTS,
   ROOM_BOARD_MAX_EDGES,
   ROOM_BOARD_MAX_NOTES,
+  ROOM_BOARD_MAX_THREADS,
+  ROOM_BOX_CARD_LABELS_MAX,
+  ROOM_BOX_CONTEXT_KIND,
   isRoomBoardUrl,
   roomBoardCardRef,
   roomBoardNoteRef,
   RoomArtifactContextRecord,
+  RoomBoxContextPayload,
+  RoomCardsContextRecord,
   type GuestId,
   type GuestMessageId,
   type GuestShareId,
@@ -18,6 +23,7 @@ import {
   type RoomBoardNote,
   type RoomBoardSize,
 } from "@t3tools/contracts";
+import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
@@ -107,7 +113,8 @@ function putNote(
   if (change.assignee?.guestId !== undefined && !scope.hasPerson(change.assignee.guestId)) {
     return Result.fail("A task can only be assigned to someone in the room.");
   }
-  // An artifact's content and a task's answer come only from the owner's server, never a change.
+  // An artifact's content, a task's answer and a thread box's turns come only from the owner's
+  // server, never a change.
   const base: RoomBoardNote =
     existing ??
     ({
@@ -189,6 +196,13 @@ export function applyRoomBoardChange(
       ) {
         return Result.fail("This board has as many artifacts as it holds. Remove one first.");
       }
+      if (
+        existing === undefined &&
+        change.kind === "thread" &&
+        board.notes.filter((note) => note.kind === "thread").length >= ROOM_BOARD_MAX_THREADS
+      ) {
+        return Result.fail("This board has as many thread boxes as it holds. Remove one first.");
+      }
       return Result.map(putNote(scope, author, existing, change), (note) => {
         if (existing === undefined) return { ...board, notes: [...board.notes, note] };
         // A note stays its author's whoever edits it.
@@ -261,25 +275,83 @@ export function roomArtifactAfterFill(
 }
 
 const isRoomArtifactRecord = Schema.is(RoomArtifactContextRecord);
+const isRoomCardsRecord = Schema.is(RoomCardsContextRecord);
+const decodeRoomBox = Schema.decodeUnknownOption(RoomBoxContextPayload);
 
 /**
- * The artifact card of this share that one of a run's messages asked its agent to fill, and the
- * guest message it was, if a guest's. A guest's message carries only records the owner's server
- * attached, so the share id names a card of that server's own board.
+ * The artifact card of this share that one of a run's messages asked its agent to fill, the
+ * guest message it was, if a guest's, and the thread box it went from. A guest's message carries
+ * only records the owner's server attached, so the share id names a card of that server's own
+ * board.
  */
 export function roomArtifactRequestOf(
   items: ReadonlyArray<OrchestrationV2TurnItem>,
   shareId: GuestShareId,
-): { readonly noteId: string; readonly guestMessageId?: GuestMessageId } | undefined {
+):
+  | {
+      readonly noteId: string;
+      readonly guestMessageId?: GuestMessageId;
+      readonly boxId?: string;
+    }
+  | undefined {
   for (const item of items) {
     if (item.type !== "user_message") continue;
     for (const record of item.context?.records ?? []) {
       if (!isRoomArtifactRecord(record) || record.shareId !== shareId) continue;
       const guestMessageId = item.context?.guest?.guestMessageId;
-      return { noteId: record.noteId, ...(guestMessageId === undefined ? {} : { guestMessageId }) };
+      return {
+        noteId: record.noteId,
+        ...(guestMessageId === undefined ? {} : { guestMessageId }),
+        ...(record.boxId === undefined ? {} : { boxId: record.boxId }),
+      };
     }
   }
   return undefined;
+}
+
+/**
+ * The thread box whose own thread a run's message was sent in, as the owner's server marked it.
+ * Whether that thread really is the box's is for the owner's server to check.
+ */
+export function roomBoxRequestOf(
+  items: ReadonlyArray<OrchestrationV2TurnItem>,
+): RoomBoxContextPayload | undefined {
+  for (const item of items) {
+    if (item.type !== "user_message") continue;
+    for (const record of item.context?.records ?? []) {
+      if (record.kind !== ROOM_BOX_CONTEXT_KIND || !("payload" in record)) continue;
+      const box = decodeRoomBox(record.payload);
+      if (Option.isSome(box)) return box.value;
+    }
+  }
+  return undefined;
+}
+
+/** The labels of the board cards that went with a run's messages. */
+export function roomCardLabelsOf(
+  items: ReadonlyArray<OrchestrationV2TurnItem>,
+): ReadonlyArray<string> {
+  return items
+    .flatMap((item) =>
+      item.type === "user_message"
+        ? (item.context?.records ?? []).flatMap((record) =>
+            isRoomCardsRecord(record) ? record.cards.map((card) => card.label) : [],
+          )
+        : [],
+    )
+    .slice(0, ROOM_BOX_CARD_LABELS_MAX);
+}
+
+/** Text as a thread box or an artifact shows it: one paragraph of plain text, cut to `max`. */
+export function roomBoxExcerpt(text: string, max: number): string {
+  const plain = text
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/```\w*|`|\*\*/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return plain.length <= max
+    ? plain
+    : `${plain.slice(0, max - 1).replace(/[\uD800-\uDBFF]$/, "")}…`;
 }
 
 const HTML_DOCUMENT = /^(?:<!doctype html|<html)/i;

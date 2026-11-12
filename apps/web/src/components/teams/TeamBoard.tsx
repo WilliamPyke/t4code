@@ -157,8 +157,6 @@ export function TeamBoard({
       room={{ guests, messages: [], board }}
       online={[]}
       messages={[]}
-      agentWorking={false}
-      running={[]}
       viewer={GuestId.make(accountId)}
       ownerName={undefined}
       cursorLayer={null}

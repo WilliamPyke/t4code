@@ -34,7 +34,7 @@ import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 
-import { getInitialServerConfig, request } from "../rpc/client.ts";
+import { getInitialServerConfig, request, requestGuarded } from "../rpc/client.ts";
 
 interface CommandMetadata {
   readonly commandId?: CommandId;
@@ -487,32 +487,29 @@ export interface ResolveGuestMessageInput extends ThreadCommandInput {
   readonly modelSelection?: ModelSelection;
   readonly creationSource?: "web" | "mobile";
 }
-/** Send runs the guest's text as a normal turn; the server supplies the text, not the client. */
+/**
+ * Send runs the guest's text as a normal turn, in the guest's thread box when the message names
+ * one; the server supplies the text, not the client.
+ */
 export const resolveGuestMessage = Effect.fn("EnvironmentCommands.resolveGuestMessage")(function* (
   input: ResolveGuestMessageInput,
 ) {
-  const commandId = yield* allocateCommandId(input);
   if (input.decision === "dismiss") {
     return yield* dispatch({
       type: "thread.guest-message.dismiss",
-      commandId,
+      commandId: yield* allocateCommandId(input),
       threadId: input.threadId,
       guestMessageId: input.guestMessageId,
     });
   }
-  return yield* dispatch({
-    type: "message.dispatch",
-    commandId,
+  // Its permission is the dispatch the Send button already needs; the server checks it again.
+  yield* requestGuarded(WS_METHODS.guestShareSendMessage, {
     threadId: input.threadId,
-    messageId: MessageId.make(commandId),
     guestMessageId: input.guestMessageId,
-    text: "",
-    attachments: [],
     ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
-    dispatchMode: { type: "queue_after_active" },
-    createdBy: "user",
-    creationSource: input.creationSource ?? "web",
+    ...(input.creationSource === undefined ? {} : { creationSource: input.creationSource }),
   });
+  return { sequence: 0 };
 });
 
 export const archiveThread = Effect.fn("EnvironmentCommands.archiveThread")(function* (

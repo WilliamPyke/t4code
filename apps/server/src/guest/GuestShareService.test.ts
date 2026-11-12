@@ -67,7 +67,9 @@ import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolv
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
+import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as GuestShareService from "./GuestShareService.ts";
+import * as RoomBoxes from "./RoomBoxes.ts";
 
 const instanceId = ProviderInstanceId.make("codex");
 const adapter = {
@@ -242,7 +244,60 @@ const layerAnalytics = Layer.effectContext(
     );
   }),
 );
+// Launching is ThreadLaunchService's own test; this makes a box's thread with the same commands.
+const layerLaunches = Layer.effect(
+  ThreadLaunch.ThreadLaunchService,
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    return ThreadLaunch.ThreadLaunchService.of({
+      launch: (input) =>
+        Effect.gen(function* () {
+          const threadId = input.threadId ?? ThreadId.make(`thread:${input.commandId}`);
+          const strategy = input.workspaceStrategy;
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            commandId: input.commandId,
+            threadId,
+            projectId: input.projectId,
+            title: input.title,
+            modelSelection: input.modelSelection,
+            runtimeMode: input.runtimeMode,
+            interactionMode: input.interactionMode,
+            branch: strategy.branch ?? null,
+            worktreePath: strategy.type === "existing_worktree" ? strategy.worktreePath : null,
+            createdBy: input.createdBy,
+            creationSource: input.creationSource,
+          });
+          const message = input.initialMessage;
+          if (message !== undefined) {
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make(`${input.commandId}:initial-message`),
+              threadId,
+              messageId: message.messageId ?? MessageId.make(`${input.commandId}:message`),
+              text: message.text,
+              attachments: [...message.attachments],
+              ...(message.context === undefined ? {} : { context: message.context }),
+              modelSelection: input.modelSelection,
+              dispatchMode: { type: "queue_after_active" },
+              createdBy: input.createdBy,
+              creationSource: input.creationSource,
+            });
+          }
+          return {
+            threadId,
+            projection: yield* orchestrator.getThreadProjection(threadId),
+            resumed: false,
+          };
+        }).pipe(Effect.orDie),
+      checkWorktreeBase: () => Effect.void,
+      retryPreparation: () => Effect.die("Not used by thread boxes"),
+      prepareRun: () => Effect.void,
+    });
+  }),
+);
 const layerTest = GuestShareService.layer.pipe(
+  Layer.provideMerge(RoomBoxes.layer.pipe(Layer.provide(layerLaunches))),
   Layer.provideMerge(
     CommandOutputHub.layer.pipe(
       Layer.provideMerge(layerOrchestration.pipe(Layer.provide(layerCleanup))),
@@ -2403,5 +2458,163 @@ it.effect(
         (yield* share).guests?.map((guest) => guest.name),
         ["Bo", "Ann"],
       );
+    }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect(
+  "runs the owner's thread box in a thread of its own, made once where the room works",
+  () =>
+    Effect.gen(function* () {
+      const roomThreadId = ThreadId.make("thread:room-boxes");
+      const { orchestrator, guestShares, credential } = yield* shareThreadFor(
+        roomThreadId,
+        "/work/tree",
+      );
+      const boxes = yield* RoomBoxes.RoomBoxes;
+      const owner = { threadId: roomThreadId };
+      const put = (noteId: string, kind: "thread" | "artifact", text: string) =>
+        ({ type: "note.put", noteId, text, x: 0, y: 0, kind }) as const;
+      yield* guestShares.changeBoard(owner, put("box:1", "thread", "Landing page"));
+      yield* guestShares.changeBoard(owner, put("art:1", "artifact", "Hero"));
+      const roomShare = orchestrator
+        .getThreadRecords(roomThreadId, [])
+        .pipe(Effect.map(({ thread }) => thread.guestShare!));
+
+      const { boxThreadId } = yield* boxes.prompt({
+        threadId: roomThreadId,
+        boxId: "box:1",
+        text: "Make the hero",
+        cards: [{ label: "Note from Sam", author: "guest", name: "Sam", text: "Dark mode" }],
+        artifactId: "art:1",
+      });
+      assert.notEqual(boxThreadId, roomThreadId);
+      assert.deepEqual((yield* roomShare).boardThreads, { "box:1": boxThreadId });
+      const made = yield* orchestrator.getThreadRecords(boxThreadId, ["messages"]);
+      assert.deepInclude(made.thread, {
+        title: "Landing page",
+        worktreePath: "/work/tree",
+        projectId: ProjectId.make("project:guest-share-service"),
+      });
+      const [asked] = made.messages;
+      assert.isTrue(asked?.text.startsWith("Make the hero\n\n[Board · 1 card]("));
+      assert.deepEqual(
+        asked?.context?.records.map((record) => record.kind),
+        ["room-cards", "room-artifact", "room-box"],
+      );
+      assert.deepInclude(asked?.context?.records[1], {
+        noteId: "art:1",
+        threadId: roomThreadId,
+        boxId: "box:1",
+      });
+      // The room thread's own card runs in the room thread.
+      const inRoom = yield* boxes.prompt({ threadId: roomThreadId, boxId: "thread", text: "Hi" });
+      assert.equal(inRoom.boxThreadId, roomThreadId);
+      // Prompted again, the box keeps its thread.
+      const again = yield* boxes.prompt({ threadId: roomThreadId, boxId: "box:1", text: "More" });
+      assert.equal(again.boxThreadId, boxThreadId);
+      assert.lengthOf(
+        (yield* orchestrator.getThreadRecords(boxThreadId, ["messages"])).messages,
+        2,
+      );
+
+      // A guest's box is run by their own requests, which the owner sends.
+      const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+      yield* guestShares.changeBoard({ session: sam.token }, put("box:sam", "thread", "Sam's"));
+      const theirs = yield* Effect.flip(
+        boxes.prompt({ threadId: roomThreadId, boxId: "box:sam", text: "Mine now" }),
+      );
+      assert.equal(theirs.reason, "not_yours");
+
+      // Removing the box forgets its thread and leaves it.
+      yield* guestShares.changeBoard(owner, { type: "note.remove", noteId: "box:1" });
+      assert.isUndefined((yield* roomShare).boardThreads);
+      const kept = yield* orchestrator.getThreadRecords(boxThreadId, []);
+      assert.isNull(kept.thread.deletedAt);
+      const gone = yield* Effect.flip(
+        boxes.prompt({ threadId: roomThreadId, boxId: "box:1", text: "Still there?" }),
+      );
+      assert.equal(gone.reason, "box_gone");
+    }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect(
+  "sends a guest's request for their own box in that box's thread, with only server-built text",
+  () =>
+    Effect.gen(function* () {
+      const roomThreadId = ThreadId.make("thread:guest-boxes");
+      const { orchestrator, guestShares, credential } = yield* shareThreadFor(roomThreadId);
+      const boxes = yield* RoomBoxes.RoomBoxes;
+      const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+      const eve = yield* guestShares.redeem({ credential, name: "Eve" });
+      yield* guestShares.changeBoard(
+        { session: sam.token },
+        { type: "note.put", noteId: "box:sam", text: "Sam's page", x: 0, y: 0, kind: "thread" },
+      );
+      yield* guestShares.changeBoard(
+        { threadId: roomThreadId },
+        { type: "note.put", noteId: "art:1", text: "Page", x: 0, y: 0, kind: "artifact" },
+      );
+      const ask = (who: typeof sam, text: string, boxId: string) =>
+        guestShares.submit(
+          who.token,
+          { shareId: who.shareId, text, boxId, artifactId: "art:1" },
+          [],
+        );
+      // Someone else's box, and one that is not on the board, take nothing.
+      assert.equal((yield* Effect.flip(ask(eve, "Mine?", "box:sam"))).reason, "box_not_yours");
+      assert.equal((yield* Effect.flip(ask(sam, "Where?", "box:none"))).reason, "box_gone");
+      yield* ask(sam, "Make it dark", "box:sam");
+      const room = orchestrator.getThreadRecords(roomThreadId, ["messages"]);
+      const waiting = (yield* room).thread.guestShare!.messages[0]!;
+      assert.deepInclude(waiting, { status: "pending", boxId: "box:sam", artifactId: "art:1" });
+
+      yield* boxes.sendGuestMessage({ threadId: roomThreadId, guestMessageId: waiting.id }, "web");
+      const afterSend = yield* room;
+      const sent = afterSend.thread.guestShare!.messages[0]!;
+      const boxThreadId = afterSend.thread.guestShare!.boardThreads!["box:sam"]!;
+      assert.equal(sent.status, "sent");
+      // It ran in the box's thread, never the room thread.
+      assert.lengthOf(afterSend.messages, 0);
+      const [delivered] = (yield* orchestrator.getThreadRecords(boxThreadId, ["messages"]))
+        .messages;
+      assert.equal(sent.sentAs, delivered?.id);
+      assert.isTrue(
+        delivered?.text.startsWith("Message from guest Sam, sent by the owner:\n\nMake it dark"),
+      );
+      assert.isUndefined(delivered?.context?.guest);
+      assert.deepEqual(
+        delivered?.context?.records.map((record) => record.kind),
+        ["room-artifact", "room-box"],
+      );
+      assert.deepInclude(delivered?.context?.records[0], {
+        noteId: "art:1",
+        threadId: roomThreadId,
+        boxId: "box:sam",
+      });
+      // Sending again finds nothing waiting.
+      const twice = yield* Effect.flip(
+        boxes.sendGuestMessage({ threadId: roomThreadId, guestMessageId: waiting.id }, "web"),
+      );
+      assert.equal(twice.reason, "not_pending");
+      // A guest never sees the owner's thread behind a box, or which message it was sent as.
+      const [opened] = Array.from(
+        yield* Stream.runCollect(Stream.take(yield* guestShares.stream(sam.token), 1)),
+      );
+      if (opened?.type !== "view") return assert.fail("Expected the share view first.");
+      assert.notProperty(opened.view, "boardThreads");
+      assert.notProperty(opened.view.messages[0], "sentAs");
+      assert.equal(opened.view.messages[0]?.boxId, "box:sam");
+
+      // Once the box is gone, a request for it goes to the room thread like any other.
+      yield* ask(sam, "Still dark?", "box:sam");
+      yield* guestShares.changeBoard(
+        { threadId: roomThreadId },
+        { type: "note.remove", noteId: "box:sam" },
+      );
+      const later = (yield* room).thread.guestShare!.messages.at(-1)!;
+      yield* boxes.sendGuestMessage({ threadId: roomThreadId, guestMessageId: later.id }, "web");
+      const [inRoom] = (yield* room).messages;
+      assert.isTrue(inRoom?.text.startsWith("Message from guest Sam, sent by the owner:"));
+      assert.equal(inRoom?.context?.guest?.guestMessageId, later.id);
     }).pipe(Effect.provide(layerTest)),
 );

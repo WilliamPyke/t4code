@@ -290,6 +290,10 @@ export const RoomArtifactContextRecord = Schema.Struct({
   title: BoundedString(ROOM_BOARD_NOTE_MAX_LENGTH),
   /** What the artifact shows now, so the agent can revise it. */
   current: Schema.optional(BoundedString(ROOM_ARTIFACT_MAX_LENGTH)),
+  /** The room thread whose share holds the card. Absent from an older client. */
+  threadId: Schema.optional(ThreadId),
+  /** The thread box the message was sent from. Absent from an older client. */
+  boxId: Schema.optional(RoomBoardNote.fields.id),
 });
 export type RoomArtifactContextRecord = typeof RoomArtifactContextRecord.Type;
 

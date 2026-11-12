@@ -1597,6 +1597,11 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:guest-share:board",
       tag: WS_METHODS.guestShareChangeBoard,
     }),
+    // Prompts one of the owner's thread boxes on a shared thread's board; starts a turn.
+    promptRoomBox: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:guest-share:prompt-box",
+      tag: WS_METHODS.guestSharePromptBox,
+    }),
     // What a shared thread's link would bring to this environment, read before joining.
     previewSharedThread: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:shared-thread:preview",

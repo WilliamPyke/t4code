@@ -3,6 +3,7 @@ import * as GuestShareService from "../guest/GuestShareService.ts";
 import * as GuestLinkNames from "../guest/GuestLinkNames.ts";
 import * as GuestTeamShares from "../guest/GuestTeamShares.ts";
 import * as GuestSignIn from "../guest/GuestSignIn.ts";
+import * as RoomBoxes from "../guest/RoomBoxes.ts";
 import * as SharedRoomLink from "../guest/SharedRoomLink.ts";
 import * as SharedThreadJoin from "../guest/SharedThreadJoin.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
@@ -376,6 +377,9 @@ export const layer = Layer.mergeAll(
 const layerSharedRoomLinkProvided = SharedRoomLink.layer.pipe(
   Layer.provide(Layer.merge(layerOrchestratorProvided, layerProjectService)),
 );
+const layerRoomBoxesProvided = RoomBoxes.layer.pipe(
+  Layer.provide(Layer.merge(layerOrchestratorProvided, layerThreadLaunchProvided)),
+);
 
 export const layerProduction = Layer.mergeAll(
   WorktreeBranchSync.layer.pipe(
@@ -389,6 +393,7 @@ export const layerProduction = Layer.mergeAll(
   layerScratchThreadPromotionProvided,
   layerSecretRequestsProvided,
   layerSharedRoomLinkProvided,
+  layerRoomBoxesProvided,
   SharedThreadJoin.layer.pipe(
     Layer.provide(Layer.merge(layerThreadLaunchProvided, layerSharedRoomLinkProvided)),
   ),
@@ -398,6 +403,7 @@ export const layerProduction = Layer.mergeAll(
         layerOrchestratorProvided,
         layerCommandOutputHubProvided,
         layerProjectService,
+        layerRoomBoxesProvided,
         GuestSignIn.layer,
         GuestLinkNames.layer,
         GuestTeamShares.layer.pipe(Layer.provide(layerOrchestratorProvided)),

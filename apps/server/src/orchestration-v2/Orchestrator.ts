@@ -571,6 +571,9 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.guest-board.change":
     case "thread.room-task.answer":
     case "thread.room-artifact.fill":
+    case "thread.room-box.link":
+    case "thread.room-box.turn":
+    case "thread.guest-message.route":
     case "thread.room-link.set":
     case "thread.settle":
     case "thread.auto-settle":
@@ -13634,6 +13637,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.guest-board.change":
       case "thread.room-task.answer":
       case "thread.room-artifact.fill":
+      case "thread.room-box.link":
+      case "thread.room-box.turn":
+      case "thread.guest-message.route":
       case "thread.room-link.set":
         yield* dispatchGuestShare(command, events, effects);
         break;
@@ -13999,6 +14005,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.type === "thread.guest-board.change" ||
           command.type === "thread.room-task.answer" ||
           command.type === "thread.room-artifact.fill" ||
+          command.type === "thread.room-box.link" ||
+          command.type === "thread.room-box.turn" ||
+          command.type === "thread.guest-message.route" ||
           command.type === "thread.room-link.set" ||
           (command.type === "thread.delete" && command.onlyIfUnused === true),
         (_planned) =>

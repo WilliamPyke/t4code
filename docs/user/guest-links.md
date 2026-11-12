@@ -37,9 +37,10 @@ messages from the mobile app.
 
 ## See the room as a board
 
-On web, choose **Board** in a shared thread's header. The thread and each guest appear as cards
-you can drag, with what each guest has waiting for you, and you can add notes. The thread's card
-says when your agent is working, and a guest's agent gets a card as soon as it starts a turn
+On web, choose **Board** in a shared thread's header. The board is where the room works: the
+thread, each guest, and every [thread box](#thread-boxes) appear as cards you can drag, with what
+each guest has waiting for you, and you can add notes. The thread's card says when your agent is
+working, and a guest's agent gets a card as soon as it starts a turn
 [on their machine](#your-turns-show-in-the-room). Scroll to move, and hold Ctrl or Cmd while
 scrolling to zoom.
 
@@ -61,48 +62,57 @@ board. Nothing is sent until you send it, and a guest's message still waits for 
 whose agent has a card on the board can instead drag a note onto **Your agent** or choose **Give
 to my agent**: it opens as a draft in their own T Code, as a task does below.
 
-### Prompt your agent from the board
+### Thread boxes
 
-The thread's card has a message box. Cards with an arrow into the thread's card, and cards with an
-arrow into those, are listed under it; remove any you do not want to send. When you press Send,
-the listed cards go with your message, each with who wrote it.
+A thread box is a conversation of its own on the board. The thread's own card is the owner's
+first one; anyone in the room can add more, and each belongs to whoever added it. Write in a box's
+message box and press Send. The model the box will use shows beside it, and the owner can pick
+another there.
 
-For the owner, that is a message on the shared thread, as if sent from its composer: it uses the
-model and mode picked in the thread's composer, and waits behind a turn that is running. While the
-thread waits for you to approve something, its card says so. The cards show as a **Board**
-chip on the message; open it to read exactly what your agent got. Your agent reads each card as
-the words of whoever wrote it, so a guest's note is background, not your instruction.
+- **The owner's box** runs on the owner's agent. Its first prompt starts a new thread on the
+  owner's machine, in the same project, worktree and branch as the shared thread, named after the
+  box; it is in the owner's thread list like any other. Later prompts go to that thread, and wait
+  behind a turn it is running. The box shows its last few turns.
+- **A guest's box** runs on the owner's agent too, for now. The guest's prompt waits for the
+  owner, saying which box (and which artifact) it is for, and runs in that box's thread once the
+  owner chooses **Send**, unless the guest may
+  [send without asking](#let-a-guest-send-without-asking). Only the guest who added a box can
+  prompt it.
 
-For a guest, it is a guest message like any other. The cards are written into its text, so the
-owner reads all of it before choosing **Send**, unless the guest may
-[send without asking](#let-a-guest-send-without-asking).
+While a box's agent works, everyone sees what it is doing: waiting its turn, thinking, using a
+tool, writing its reply, or waiting for the owner to approve something. Removing a box leaves its
+thread where it is. A board holds up to 12 thread boxes.
+
+### Lines between cards
+
+Lines carry meaning. A note, task, link, comment or artifact with a line into a thread box goes
+with every prompt to that box, each with who wrote it, so anyone can steer a box by attaching a
+note to it. The box's message lists them; remove any you do not want to send. The owner sees them
+as a **Board** chip on the message, and opening it shows exactly what the agent got. The agent
+reads each card as the words of whoever wrote it, so a guest's note is background, not the
+owner's instruction. A guest's cards are written into their message's text, so the owner reads
+all of it before sending.
+
+A line from a thread box to an artifact means that box's replies fill the artifact.
 
 ### Artifacts
 
-An **Artifact** is a card an agent writes into. Add one and give it a title. To ask for it, use the
-message box on the artifact card itself, or draw an arrow from the thread's card to it and prompt
-from the thread's card. The agent is told its reply fills that card, and gets what the card shows
-now to revise. Once the turn finishes, the card shows the agent's final reply to everyone in the
-room: markdown as text, or, when the reply holds a whole HTML page in an `html` code block, the
-live page. An interrupted or failed turn leaves the card as it was.
+An **Artifact** is a card agents write into. Add one, give it a title, and draw a line to it from a
+thread box. Each prompt to that box tells its agent that its reply fills the artifact, with what
+the artifact shows now to revise. While the turn runs, everyone watches the artifact being
+written. Once it finishes, the artifact shows the final reply: markdown as text, or, when the
+reply holds a whole HTML page in an `html` code block, the live page. An interrupted or failed
+turn leaves the artifact as it was.
 
-Anyone in the room can prompt an artifact, each through an agent they may drive:
+Several boxes can point at one artifact, and the last turn to finish wins. The artifact says which
+box wrote it, from which prompt and cards, on which model, and for whom. Each artifact keeps the
+version it replaced: anyone can go back to it, and back again. A board holds up to 6 artifacts,
+each up to 16,000 characters, and a longer reply is cut.
 
-- The owner's message runs on the owner's agent, as above.
-- A guest who [continued on their machine](#continue-on-your-own-machine) can take it to their own
-  agent. It opens as a draft in their thread from this room, with the artifact's current content
-  attached so they can read what goes to their agent. Nothing runs until they send it; when their
-  turn finishes, its reply fills the card.
-- Any other guest's prompt goes to the owner as a waiting message, which says which artifact
-  sending it fills. When the owner sends it (or it goes through because the guest may
-  [send without asking](#let-a-guest-send-without-asking)), the owner's agent gets the artifact
-  as it is then, and its reply fills the card. If the artifact was deleted first, the message goes
-  as a plain message.
-
-The card says whose agent is writing it while a turn runs, and whose agent wrote it, and for whom.
-When two agents finish close together, the last one wins. Each card keeps the version it replaced:
-anyone can go back to it, and back again. A board holds up to 6 artifacts, each up to 16,000
-characters, and a longer reply is cut.
+A guest who [continued on their machine](#continue-on-your-own-machine) can also take an artifact
+to their own agent. It opens as a draft in their thread from this room, with the artifact's
+current content attached. Nothing runs until they send it; when their turn finishes, its reply
+fills the artifact.
 
 ### Take a task to your agent
 
@@ -133,9 +143,10 @@ and the start of the reply it is about; delete it from either place.
 The board belongs to the room. Guests open the same one with **Board** in the thread's header, and
 everyone sees a card land where it was dropped and a note once its author clicks away from it.
 Anyone in the room can move, edit or delete any card; each names who added it. A board holds up
-to 50 notes, tasks, links, comments and artifacts of 280 characters, and 100 arrows. An agent
-sees a card only when someone [sends it from the board](#prompt-your-agent-from-the-board), and
-then only that person's own agent, or the owner's once the owner sends a guest's message.
+to 50 notes, tasks, links, comments, artifacts and thread boxes of 280 characters, and 100
+lines. An agent sees a card only when it is [on a line into a box](#lines-between-cards) someone
+prompts, and then only that person's own agent, or the owner's once the owner sends a guest's
+message.
 
 The board lasts as long as the link: stopping sharing or creating a new link starts an empty
 one, and removing a guest removes what they added and leaves their tasks unassigned. Someone who

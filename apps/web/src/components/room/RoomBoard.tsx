@@ -3,7 +3,9 @@ import {
   ROOM_BOARD_MAX_ARTIFACTS,
   ROOM_BOARD_MAX_EDGES,
   ROOM_BOARD_MAX_NOTES,
+  ROOM_BOARD_MAX_THREADS,
   ROOM_BOARD_NOTE_MAX_LENGTH,
+  ROOM_BOARD_ROOM_BOX,
   ROOM_BOARD_THREAD_CARD,
   type RoomAgentActivity,
   type RoomBoardAssignee,
@@ -15,6 +17,7 @@ import {
   type RoomCursor,
   type RoomViewport,
   type ThreadGuest,
+  type ThreadGuestMessage,
   type ThreadGuestShare,
   roomBoardAgentCard,
   roomBoardGuestCard,
@@ -29,6 +32,7 @@ import {
   ListTodoIcon,
   MessageSquareShareIcon,
   MessageSquareTextIcon,
+  MessagesSquareIcon,
   MinusIcon,
   MousePointer2Icon,
   PlusIcon,
@@ -67,9 +71,9 @@ import {
   type BoardPoint,
   type BoardPresence,
   type BoardPrompt,
-  type BoardPromptContext,
   type BoardRect,
   type BoardTarget,
+  type BoardThreadBox,
   type BoardValue,
   type BoardView,
   EMPTY_ROOM_BOARD,
@@ -77,9 +81,14 @@ import {
   boardAgentName,
   INITIAL_BOARD_VIEW,
   NO_BOARD_EDITS,
+  besideBoardItem,
   boardAgents,
   boardArtifactAuthor,
   boardArtifactWriting,
+  boardBoxAgentLabel,
+  boardBoxName,
+  boardBoxRef,
+  boardBoxRequests,
   boardCardBox,
   boardChangeOf,
   boardChangeQueue,
@@ -92,11 +101,14 @@ import {
   boardNewNoteSize,
   boardNoteQuote,
   boardNoteSize,
+  boardOwnBoxFor,
   boardPersonKey,
   boardPersonName,
   boardPromptContext,
+  boardThreadBoxes,
   boardUrlIn,
   boardViewportOf,
+  canPromptBoardBox,
   clampBoardSize,
   cursorSender,
   dropBoardEdit,
@@ -106,6 +118,7 @@ import {
   placeBoardCards,
   placeBoardItem,
   putBoardEdit,
+  resizeBoardFromLeft,
   resolveBoard,
   roomCodeStatus,
   roomFetchCommand,
@@ -113,8 +126,10 @@ import {
   settleBoardValue,
   zoomBoardAt,
 } from "./roomBoard.logic";
-import { RoomArtifactBody, RoomArtifactMeta } from "./RoomBoardArtifact";
+import { RoomArtifactLive } from "./RoomBoardArtifact";
 import { BoardPromptBox } from "./RoomBoardPrompt";
+import { BoxProgress, BoxRequests, BoxTurns } from "./RoomBoardThreadBox";
+import { useRoomHasProgress, useRoomRunning } from "./roomBoardLive";
 
 const guestCardId = (guest: ThreadGuest) => roomBoardGuestCard(guest.id);
 const agentCardId = (guest: ThreadGuest) => roomBoardAgentCard(guest.id);
@@ -127,7 +142,7 @@ const FOLLOW_NOTICE_MS = 4_000;
 // About what three clamped lines of a quote hold on a note of the default width.
 const QUOTE_CLAMP_LENGTH = 90;
 
-/** What an arrow does: carries a card into a message from the thread, or takes its reply. */
+/** What a line does: carries a card into a thread box's prompts, or takes the box's replies. */
 type EdgeRole = "plain" | "context" | "artifact";
 type EdgeStroke = EdgeRole | "selected";
 const EDGE_STROKE_COLORS: Readonly<Record<EdgeStroke, string>> = {
@@ -185,20 +200,23 @@ function scrollsInside(event: WheelEvent): boolean {
   );
 }
 
+type BoardCorner = "left" | "right";
+
 /**
- * The corner a card or note is resized by. It reports the size the card had when it was taken
- * and how far the pointer went since, in screen pixels, so the size never drifts from the pointer.
+ * A bottom corner a card or note is resized by. It reports where the card was and how big when
+ * it was taken, in board pixels, and how far the pointer went since, in screen pixels, so the size
+ * never drifts from the pointer.
  */
 function ResizeHandle({
+  corner,
   onResize,
   onEnd,
 }: {
-  readonly onResize: (from: RoomBoardSize, dx: number, dy: number) => void;
+  readonly corner: BoardCorner;
+  readonly onResize: (from: BoardRect, dx: number, dy: number) => void;
   readonly onEnd: () => void;
 }) {
-  const start = useRef<{ readonly x: number; readonly y: number; size: RoomBoardSize } | null>(
-    null,
-  );
+  const start = useRef<{ readonly x: number; readonly y: number; from: BoardRect } | null>(null);
   const release = (event: PointerEvent<HTMLElement>) => {
     if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
     event.currentTarget.releasePointerCapture(event.pointerId);
@@ -210,7 +228,10 @@ function ResizeHandle({
   return (
     <div
       aria-hidden
-      className="absolute -right-3 -bottom-3 z-10 grid size-6 cursor-nwse-resize touch-none place-items-center opacity-40 transition-opacity group-hover/item:opacity-100"
+      className={cn(
+        "absolute -bottom-3 z-10 grid size-6 touch-none place-items-center opacity-40 transition-opacity group-hover/item:opacity-100",
+        corner === "right" ? "-right-3 cursor-nwse-resize" : "-left-3 cursor-nesw-resize",
+      )}
       onPointerDown={(event) => {
         const box = event.currentTarget.parentElement;
         if (event.button !== 0 || box === null) return;
@@ -221,18 +242,30 @@ function ResizeHandle({
         start.current = {
           x: event.clientX,
           y: event.clientY,
-          size: { w: box.offsetWidth, h: box.offsetHeight },
+          from: {
+            x: box.offsetLeft,
+            y: box.offsetTop,
+            width: box.offsetWidth,
+            height: box.offsetHeight,
+          },
         };
       }}
       onPointerMove={(event) => {
-        const from = start.current;
-        if (from === null || !event.currentTarget.hasPointerCapture(event.pointerId)) return;
-        onResize(from.size, event.clientX - from.x, event.clientY - from.y);
+        const held = start.current;
+        if (held === null || !event.currentTarget.hasPointerCapture(event.pointerId)) return;
+        onResize(held.from, event.clientX - held.x, event.clientY - held.y);
       }}
       onPointerUp={release}
       onPointerCancel={release}
     >
-      <span className="size-2 -translate-x-1 -translate-y-1 rounded-br-xs border-e-2 border-b-2 border-muted-foreground" />
+      <span
+        className={cn(
+          "size-2 -translate-y-1 border-b-2 border-muted-foreground",
+          corner === "right"
+            ? "-translate-x-1 rounded-br-xs border-e-2"
+            : "translate-x-1 rounded-bl-xs border-s-2",
+        )}
+      />
     </div>
   );
 }
@@ -289,23 +322,24 @@ interface Linking {
 }
 
 /**
- * A shared thread laid out as a board: the thread, each person in the room, and their cards,
- * with arrows between them. The arrangement and the cards are the room's: the owner and every
- * guest see the same ones.
+ * A shared thread laid out as a board: the thread boxes everyone added, each its own
+ * conversation, each person in the room, and their cards, with lines between them. The
+ * arrangement and the cards are the room's: the owner and every guest see the same ones.
  */
 const NO_FORMER_PEOPLE: BoardPeople["guests"] = [];
+const NO_BOXES: ReadonlySet<string> = new Set();
 
 export function RoomBoard({
   title,
   room,
   online,
   messages,
-  agentWorking,
-  running,
+  agentWorking = false,
   viewer,
   ownerName,
   cursorLayer,
   onOpenThread,
+  onBack,
   onOpenReply,
   onChange,
   onCursor,
@@ -320,30 +354,32 @@ export function RoomBoard({
   backLabel = "Thread",
   ownerAssignable = true,
   formerPeople = NO_FORMER_PEOPLE,
-  onPrompt,
-  onTakeArtifact,
+  onPromptBox,
+  renderBoxModel,
+  onOpenConversation,
+  conversationBoxes = NO_BOXES,
+  onResolveRequest,
+  resolvingRequests = NO_BOXES,
   ownerWritingArtifactId = null,
   needsApproval = false,
-  promptPlaceholder,
-  artifactPromptPlaceholder,
-  canFillArtifacts = false,
 }: {
   readonly title: string;
   /** Null when the thread is not shared, so there is no room to arrange a board for. */
   readonly room: BoardRoom | null;
   readonly online: ReadonlyArray<GuestId>;
   readonly messages: ReadonlyArray<BoardMessage>;
-  /** The owner's agent is working on the thread right now. */
-  readonly agentWorking: boolean;
-  /** The guests' agents running a turn on their own machines now. */
-  readonly running: ReadonlyArray<RoomAgentActivity>;
+  /** The owner's agent is working on the room thread, for a server that reports no box runs. */
+  readonly agentWorking?: boolean;
   /** The guest looking at the board, or null for the owner. */
   readonly viewer: GuestId | null;
   /** What the owner is called, when they chose a name to show. */
   readonly ownerName: string | undefined;
   /** Everyone else's pointers, drawn in board space. A component of its own reads them. */
   readonly cursorLayer: ReactNode;
+  /** Shows the room thread's conversation, from its box. */
   readonly onOpenThread: () => void;
+  /** The header's way back; `onOpenThread` when absent. */
+  readonly onBack?: (() => void) | undefined;
   /** Opens the thread at the message a comment is pinned to. */
   readonly onOpenReply: (messageId: string) => void;
   /** Sends one change to the room and says whether it was taken. Absent when they may not. */
@@ -367,7 +403,7 @@ export function RoomBoard({
   /** Opens a pull request for the owner's branch, from their own card. Absent when they cannot. */
   readonly onOpenPullRequest?: (() => void) | undefined;
   readonly openingPullRequest?: boolean | undefined;
-  /** Replaces the thread's card and the room's people and agents. */
+  /** Replaces the thread boxes and the room's people and agents. */
   readonly cards?: ReadonlyArray<BoardCardSpec>;
   /** Said beside the title instead of who joined the room. */
   readonly summary?: string;
@@ -376,23 +412,30 @@ export function RoomBoard({
   readonly ownerAssignable?: boolean;
   /** People named on a note who can no longer be given one. */
   readonly formerPeople?: BoardPeople["guests"];
-  /** Sends a message from the thread's card and says whether it went. Absent: no prompt box. */
-  readonly onPrompt?: ((prompt: BoardPrompt) => Promise<boolean>) | undefined;
-  /** A guest whose own machine is in the room: opens the artifact prompt as a draft in their T Code. */
-  readonly onTakeArtifact?:
-    | ((prompt: BoardPrompt & { readonly artifactId: string }) => void)
+  /**
+   * Sends a prompt from one of the viewer's own thread boxes and says whether it went. Absent:
+   * no prompt boxes.
+   */
+  readonly onPromptBox?: ((boxId: string, prompt: BoardPrompt) => Promise<boolean>) | undefined;
+  /** Which model the viewer's own box runs, and the way to change it. */
+  readonly renderBoxModel?: ((boxId: string) => ReactNode) | undefined;
+  /** Shows a box's conversation beside the board; the owner's. */
+  readonly onOpenConversation?: ((boxId: string) => void) | undefined;
+  /** The boxes with a conversation to show yet. */
+  readonly conversationBoxes?: ReadonlySet<string>;
+  /** Sends or dismisses a guest's request waiting on a box; the owner's. */
+  readonly onResolveRequest?:
+    | ((message: ThreadGuestMessage, decision: "send" | "dismiss") => void)
     | undefined;
-  /** The artifact the owner's running turn will fill, if any. Guests' come from `running[].artifactId`. */
+  readonly resolvingRequests?: ReadonlySet<string>;
+  /** The artifact the owner's running turn will fill, for a server that reports no box runs. */
   readonly ownerWritingArtifactId?: string | null | undefined;
   /** The owner's thread is waiting for the owner to approve something. */
   readonly needsApproval?: boolean | undefined;
-  readonly promptPlaceholder?: string | undefined;
-  /** What the prompt box on an artifact card says it does; "Ask for a change" when absent. */
-  readonly artifactPromptPlaceholder?: string | undefined;
-  /** Whether a reply sent from the board may fill an artifact card. */
-  readonly canFillArtifacts?: boolean | undefined;
 }) {
   const board = room?.board ?? EMPTY_ROOM_BOARD;
+  const running = useRoomRunning();
+  const hasProgress = useRoomHasProgress();
   const [edits, setEdits] = useState(NO_BOARD_EDITS);
   // What each drag or draft has reached, read when it is let go. A render may not have caught up.
   const held = useRef(new Map<string, NonNullable<BoardValue>>());
@@ -482,50 +525,23 @@ export function RoomBoard({
     ),
     ...shown.notes.map((note) => [noteRef(note.id), boardNoteBox(note)] as const),
   ]);
-  const prompt =
-    onPrompt === undefined || cards !== undefined || room === null
-      ? null
-      : boardPromptContext(shown, people, messages);
-  const fillsArtifact = prompt !== null && canFillArtifacts;
-  // Each artifact card then has a box of its own, and the arrows into it carry cards too.
-  const artifactPrompts = new Map<string, BoardPromptContext>(
-    fillsArtifact
-      ? shown.notes.flatMap((note) =>
-          note.kind === "artifact"
-            ? [[note.id, boardPromptContext(shown, people, messages, noteRef(note.id))] as const]
-            : [],
-        )
-      : [],
+  const threadBoxes = cards === undefined ? boardThreadBoxes(shown, title) : [];
+  const contexts = new Map(
+    threadBoxes.map((box) => [box.id, boardPromptContext(shown, people, messages, box.id)]),
   );
-  const contextEdges = new Set([
-    ...(prompt?.edgeIds ?? []),
-    ...[...artifactPrompts.values()].flatMap((context) => [...context.edgeIds]),
-  ]);
+  const contextEdges = new Set([...contexts.values()].flatMap((context) => [...context.edgeIds]));
+  const artifactEdges = new Set(
+    [...contexts.values()].flatMap((context) =>
+      context.artifactEdgeId === null ? [] : [context.artifactEdgeId],
+    ),
+  );
   const edgeRole = (id: string): EdgeRole =>
-    contextEdges.has(id)
-      ? "context"
-      : fillsArtifact && prompt?.artifactEdgeId === id
-        ? "artifact"
-        : "plain";
-  const artifactPromptOf = (note: RoomBoardNote) => {
-    const context = artifactPrompts.get(note.id);
-    if (context === undefined || onPrompt === undefined) return undefined;
-    return (
-      <BoardPromptBox
-        cards={context.cards}
-        artifactId={note.id}
-        fills={null}
-        label="Ask for a change to this artifact"
-        placeholder={artifactPromptPlaceholder ?? "Ask for a change"}
-        onPrompt={onPrompt}
-        onTake={
-          onTakeArtifact === undefined
-            ? undefined
-            : (taken) => onTakeArtifact({ ...taken, artifactId: note.id })
-        }
-      />
+    contextEdges.has(id) ? "context" : artifactEdges.has(id) ? "artifact" : "plain";
+  const boxName = (boxId: string) =>
+    boardBoxName(
+      threadBoxes.find((box) => box.id === boxId) ?? { id: boxId, guestId: undefined, title: "" },
+      people,
     );
-  };
   const restoreOf = (note: RoomBoardNote) =>
     onChange === undefined || !canEdit || note.artifact?.previous === undefined
       ? undefined
@@ -533,12 +549,13 @@ export function RoomBoard({
           queueChange(noteRef(note.id), () =>
             onChange({ type: "artifact.restore", noteId: note.id }),
           );
-  const send = (target: BoardTarget, value: BoardValue) => {
+  // `after` names the queue a change waits in: a line to a new card goes once the card is there.
+  const send = (target: BoardTarget, value: BoardValue, after = boardEditKey(target)) => {
     if (onChange === undefined) return;
     held.current.delete(boardEditKey(target));
     setEdits((current) => putBoardEdit(board, current, target, value, false));
     const change = boardChangeOf(target, value);
-    void queueChange(boardEditKey(target), () => onChange(change)).then((taken) => {
+    void queueChange(after, () => onChange(change)).then((taken) => {
       if (!taken) setEdits((current) => dropBoardEdit(current, target, value));
     });
   };
@@ -547,9 +564,9 @@ export function RoomBoard({
     setEdits((current) => putBoardEdit(board, current, target, value, true));
   };
   // The room hears of a drag or a draft once, when it ends.
-  const letGo = (target: BoardTarget) => {
+  const letGo = (target: BoardTarget, after?: string) => {
     const value = held.current.get(boardEditKey(target));
-    if (value !== undefined) send(target, settleBoardValue(value));
+    if (value !== undefined) send(target, settleBoardValue(value), after);
   };
   const dragBy = (target: BoardTarget, from: BoardPoint, dx: number, dy: number) => {
     if (!canEdit) return;
@@ -561,14 +578,35 @@ export function RoomBoard({
     const last = held.current.get(noteRef(note.id));
     return last !== undefined && "text" in last ? last : note;
   };
-  const sizedBy = (from: RoomBoardSize, dx: number, dy: number) =>
-    clampBoardSize({ w: from.w + dx / view.zoom, h: from.h + dy / view.zoom });
-  const resizeCard = (id: string, from: RoomBoardSize, dx: number, dy: number) => {
-    if (canEdit) hold({ kind: "size", id }, sizedBy(from, dx, dy));
+  const sizedBy = (from: BoardRect, dx: number, dy: number) =>
+    clampBoardSize({ w: from.width + dx / view.zoom, h: from.height + dy / view.zoom });
+  const resizeCard = (id: string, corner: BoardCorner, from: BoardRect, dx: number, dy: number) => {
+    if (!canEdit) return;
+    if (corner === "right") return hold({ kind: "size", id }, sizedBy(from, dx, dy));
+    const next = resizeBoardFromLeft(from, dx / view.zoom, dy / view.zoom);
+    hold({ kind: "size", id }, next.size);
+    hold({ kind: "card", id }, { x: next.x, y: next.y });
   };
-  const resizeNote = (note: RoomBoardNote, from: RoomBoardSize, dx: number, dy: number) => {
-    if (canEdit)
-      hold({ kind: "note", id: note.id }, { ...noteNow(note), size: sizedBy(from, dx, dy) });
+  // A card's size and place are two changes; one queue sends them in order.
+  const endCardResize = (id: string, corner: BoardCorner) => {
+    const queue = boardEditKey({ kind: "size", id });
+    letGo({ kind: "size", id });
+    if (corner === "left") letGo({ kind: "card", id }, queue);
+  };
+  const resizeNote = (
+    note: RoomBoardNote,
+    corner: BoardCorner,
+    from: BoardRect,
+    dx: number,
+    dy: number,
+  ) => {
+    if (!canEdit) return;
+    const now = noteNow(note);
+    if (corner === "right") {
+      return hold({ kind: "note", id: note.id }, { ...now, size: sizedBy(from, dx, dy) });
+    }
+    const next = resizeBoardFromLeft(from, dx / view.zoom, dy / view.zoom);
+    hold({ kind: "note", id: note.id }, { ...now, x: next.x, size: next.size });
   };
   const dragNote = (
     note: RoomBoardNote,
@@ -590,7 +628,10 @@ export function RoomBoard({
       ? undefined
       : () => onTakeTask(note);
   const messageOf = (note: RoomBoardNote) =>
-    onUseNote === undefined || note.kind === "artifact" || boardNoteMessage(note).trim() === ""
+    onUseNote === undefined ||
+    note.kind === "artifact" ||
+    note.kind === "thread" ||
+    boardNoteMessage(note).trim() === ""
       ? undefined
       : () => onUseNote(boardNoteMessage(note));
   const giveOf = (note: RoomBoardNote) =>
@@ -598,6 +639,7 @@ export function RoomBoard({
     !canGive ||
     note.kind === "task" ||
     note.kind === "artifact" ||
+    note.kind === "thread" ||
     boardNoteMessage(note).trim() === ""
       ? undefined
       : () => onGiveNote(note);
@@ -633,6 +675,25 @@ export function RoomBoard({
   const full = shown.notes.length >= ROOM_BOARD_MAX_NOTES;
   const artifactsFull =
     shown.notes.filter((note) => note.kind === "artifact").length >= ROOM_BOARD_MAX_ARTIFACTS;
+  const threadsFull =
+    shown.notes.filter((note) => note.kind === "thread").length >= ROOM_BOARD_MAX_THREADS;
+  // Everything on the board at the size the browser drew it.
+  const drawnRects = (): Array<BoardRect> => {
+    const taken: Array<BoardRect> = [];
+    for (const item of surfaceRef.current?.querySelectorAll<HTMLElement>("[data-board-item]") ??
+      []) {
+      taken.push({
+        x: item.offsetLeft,
+        y: item.offsetTop,
+        width: item.offsetWidth,
+        height: item.offsetHeight,
+      });
+    }
+    return taken;
+  };
+  const drawnItem = (ref: string) =>
+    surfaceRef.current?.querySelector<HTMLElement>(`[data-board-item="${CSS.escape(ref)}"]`) ??
+    null;
   // A new card lands in view, clear of everything there at the size the browser drew it.
   const freeSpot = (kind: RoomBoardNote["kind"]): BoardPoint => {
     const surface = surfaceRef.current;
@@ -645,25 +706,14 @@ export function RoomBoard({
       width: bounds.width / view.zoom,
       height: bounds.height / view.zoom,
     };
-    const taken: Array<BoardRect> = [];
-    for (const item of surface.querySelectorAll<HTMLElement>("[data-board-item]")) {
-      taken.push({
-        x: item.offsetLeft,
-        y: item.offsetTop,
-        width: item.offsetWidth,
-        height: item.offsetHeight,
-      });
-    }
     return placeBoardItem(
       size,
       { x: within.x + within.width / 2, y: within.y + within.height / 2 },
-      taken,
+      drawnRects(),
       within,
     );
   };
-  const addCard = (fields: Pick<RoomBoardNote, "kind" | "url">, wanted?: BoardPoint) => {
-    if (!canEdit || full) return;
-    const at = wanted ?? freeSpot(fields.kind);
+  const newNote = (fields: Pick<RoomBoardNote, "kind" | "url">, at: BoardPoint) => {
     const id = randomUUID();
     send(
       { kind: "note", id },
@@ -676,6 +726,56 @@ export function RoomBoard({
         ...(fields.url === undefined ? {} : { url: fields.url }),
       }),
     );
+    return id;
+  };
+  const addCard = (fields: Pick<RoomBoardNote, "kind" | "url">, wanted?: BoardPoint) => {
+    if (!canEdit || full) return;
+    newNote(fields, wanted ?? freeSpot(fields.kind));
+  };
+  /** Adds a card of `kind` beside an item, with a line between them in the direction given. */
+  const addBeside = (ref: string, kind: "artifact" | "thread", direction: "from" | "to") => {
+    const element = drawnItem(ref);
+    const box = boxes.get(ref);
+    if (!canEdit || full || (element === null && box === undefined)) return;
+    const rect =
+      element === null
+        ? { x: box!.x, y: box!.y, width: box!.width, height: 0 }
+        : {
+            x: element.offsetLeft,
+            y: element.offsetTop,
+            width: element.offsetWidth,
+            height: element.offsetHeight,
+          };
+    const id = newNote({ kind }, besideBoardItem(rect, boardNewNoteSize(kind), drawnRects()));
+    const line = randomUUID();
+    const added = noteRef(id);
+    send(
+      { kind: "edge", id: line },
+      direction === "from"
+        ? { id: line, from: ref, to: added }
+        : { id: line, from: added, to: ref },
+      boardEditKey({ kind: "note", id }),
+    );
+  };
+  // Centres an item in view and puts the caret in its prompt box.
+  const focusItem = (ref: string) => {
+    const element = drawnItem(ref);
+    const bounds = surfaceRef.current?.getBoundingClientRect();
+    if (element === null || bounds === undefined) return;
+    setFollowing(null);
+    setView((current) => ({
+      ...current,
+      x: bounds.width / 2 - (element.offsetLeft + element.offsetWidth / 2) * current.zoom,
+      y: bounds.height / 2 - (element.offsetTop + element.offsetHeight / 2) * current.zoom,
+    }));
+    element.querySelector<HTMLElement>("[data-box-prompt]")?.focus({ preventScroll: true });
+  };
+  const attachAgentOf = (note: RoomBoardNote) => {
+    if (note.kind !== "artifact" || cards !== undefined || room === null) return undefined;
+    const existing = boardOwnBoxFor(shown, viewer, note.id);
+    if (existing !== null) return () => focusItem(boardBoxRef(existing));
+    if (!canEdit || full || threadsFull) return undefined;
+    return () => addBeside(noteRef(note.id), "thread", "to");
   };
   const addLink = (url: string, wanted?: BoardPoint) => addCard({ kind: "link", url }, wanted);
   // A URL pasted in an empty note makes that note a link card.
@@ -730,7 +830,7 @@ export function RoomBoard({
   };
   const link = canEdit ? { onStart: startLink, onMove: moveLink, onEnd: endLink } : undefined;
   const resize: CardResize | undefined = canEdit
-    ? { onResize: resizeCard, onEnd: (id) => letGo({ kind: "size", id }) }
+    ? { onResize: resizeCard, onEnd: endCardResize }
     : undefined;
   const removeEdge = (id: string) => {
     setSelectedEdge(null);
@@ -774,14 +874,100 @@ export function RoomBoard({
     </Button>
   );
 
+  /** What a thread box shows below its title, and its prompt box for the person it belongs to. */
+  const boxParts = (box: BoardThreadBox, tail: ReactNode, fallback?: ReactNode) => {
+    const context = contexts.get(box.id);
+    const own = canPromptBoardBox(box, viewer);
+    // A box rewrites one artifact; a second would draw a line that does nothing.
+    const canAddArtifact = canEdit && !full && !artifactsFull && context?.artifact === null;
+    const conversation =
+      onOpenConversation !== undefined && conversationBoxes.has(box.id)
+        ? () => onOpenConversation(box.id)
+        : undefined;
+    const prompt =
+      onPromptBox === undefined || context === undefined || !own ? undefined : (
+        <BoardPromptBox
+          cards={context.cards}
+          artifact={
+            context.artifact === null
+              ? null
+              : { id: context.artifact.id, title: context.artifact.text }
+          }
+          label={box.title === "" ? "Prompt this thread" : `Prompt ${box.title}`}
+          placeholder={box.guestId === undefined ? "Ask your agent" : "Ask the owner's agent"}
+          model={renderBoxModel?.(box.id)}
+          onPrompt={(prompt) => onPromptBox(box.id, prompt)}
+        />
+      );
+    const body = (
+      <>
+        <p className="text-2xs text-muted-foreground">{boardBoxAgentLabel(box, people)}</p>
+        {tail}
+        <BoxProgress boxId={box.id} onOpenConversation={conversation} fallback={fallback} />
+        <BoxRequests
+          requests={boardBoxRequests(room?.messages ?? [], box.id)}
+          board={shown}
+          people={people}
+          onResolve={onResolveRequest}
+          resolving={resolvingRequests}
+        />
+        {canAddArtifact || (conversation !== undefined && box.id !== ROOM_BOARD_ROOM_BOX) ? (
+          <div className="flex flex-wrap gap-1">
+            {canAddArtifact ? (
+              <Button
+                size="micro"
+                variant="outline"
+                onPointerDown={stopPointer}
+                onClick={() => addBeside(boardBoxRef(box.id), "artifact", "from")}
+              >
+                <AppWindowIcon />
+                New artifact
+              </Button>
+            ) : null}
+            {conversation !== undefined && box.id !== ROOM_BOARD_ROOM_BOX ? (
+              <Button
+                size="micro"
+                variant="outline"
+                onPointerDown={stopPointer}
+                onClick={conversation}
+              >
+                <MessagesSquareIcon />
+                Open conversation
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+      </>
+    );
+    return { body, prompt };
+  };
+  const roomBox = threadBoxes[0];
+  const roomParts =
+    roomBox === undefined
+      ? null
+      : boxParts(
+          roomBox,
+          <ThreadMessages messages={messages} />,
+          hasProgress ? undefined : needsApproval ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <p role="status" className="min-w-0 flex-1 text-xs font-medium text-warning">
+                {viewer === null ? "Waiting for your approval" : "Waiting for the owner's approval"}
+              </p>
+              <Button size="xs" onPointerDown={stopPointer} onClick={onOpenThread}>
+                Open thread
+              </Button>
+            </div>
+          ) : undefined,
+        );
+
   const edgeArea = drawingArea([...boxes.values()]);
   // Marker ids land in `url(#…)`, which takes no colons.
   const markerId = `board-arrow${useId().replace(/[^\w-]/g, "")}`;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden overscroll-none">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden overscroll-none">
       <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-        <Button size="sm" variant="ghost" onClick={onOpenThread}>
+        <Button size="sm" variant="ghost" onClick={onBack ?? onOpenThread}>
           <ArrowLeftIcon />
           {backLabel}
         </Button>
@@ -806,6 +992,17 @@ export function RoomBoard({
         )}
         {linkDraft === null ? (
           <>
+            {cards === undefined ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!canEdit || full || threadsFull}
+                onClick={() => addCard({ kind: "thread" })}
+              >
+                <MessagesSquareIcon />
+                Thread
+              </Button>
+            ) : null}
             <Button
               size="sm"
               variant="outline"
@@ -1029,11 +1226,19 @@ export function RoomBoard({
               {card.children}
             </BoardCard>
           ))}
-          {cards === undefined ? (
+          {roomParts !== null ? (
             <BoardCard
               at={positions[ROOM_BOARD_THREAD_CARD]!}
               title={title}
-              kind={needsApproval ? "needs approval" : agentWorking ? "agent working" : "thread"}
+              kind={
+                hasProgress
+                  ? "thread"
+                  : needsApproval
+                    ? "needs approval"
+                    : agentWorking
+                      ? "agent working"
+                      : "thread"
+              }
               id={ROOM_BOARD_THREAD_CARD}
               size={sizes[ROOM_BOARD_THREAD_CARD]}
               dropTarget={onUseNote === undefined ? undefined : THREAD_DROP}
@@ -1042,40 +1247,18 @@ export function RoomBoard({
               resize={resize}
               onMove={dragBy}
               onDrop={letGo}
-              footer={
-                prompt === null || onPrompt === undefined ? undefined : (
-                  <BoardPromptBox
-                    cards={prompt.cards}
-                    artifactId={fillsArtifact ? (prompt.artifact?.id ?? null) : null}
-                    fills={fillsArtifact ? (prompt.artifact?.text ?? null) : null}
-                    label="Message from the board"
-                    placeholder={promptPlaceholder ?? "Ask the agent"}
-                    onPrompt={onPrompt}
-                  />
-                )
-              }
+              footer={roomParts.prompt}
             >
-              {needsApproval ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <p role="status" className="min-w-0 flex-1 text-xs font-medium text-warning">
-                    {viewer === null
-                      ? "Waiting for your approval"
-                      : "Waiting for the owner's approval"}
-                  </p>
-                  <Button size="xs" onPointerDown={stopPointer} onClick={onOpenThread}>
-                    Open thread
-                  </Button>
-                </div>
-              ) : null}
-              <ThreadMessages messages={messages} />
+              {roomParts.body}
               <RoomCode
                 code={ownerCode}
                 onOpenPullRequest={onOpenPullRequest}
                 openingPullRequest={openingPullRequest}
               />
-              {needsApproval ? null : (
+              {!hasProgress && needsApproval ? null : (
                 <div>
                   <Button size="xs" variant="outline" onClick={onOpenThread}>
+                    <MessagesSquareIcon />
                     Open thread
                   </Button>
                 </div>
@@ -1132,8 +1315,8 @@ export function RoomBoard({
               >
                 <p className="text-2xs text-muted-foreground">Runs on their machine</p>
                 {now !== undefined ? (
-                  <p className="line-clamp-4 text-xs [overflow-wrap:anywhere]">
-                    {now.prompt === "" ? "Working" : `Working on: ${now.prompt}`}
+                  <p role="status" className="text-xs font-medium text-info first-letter:uppercase">
+                    {boardAgentName(people, guest.id)} is working
                   </p>
                 ) : latest !== undefined ? (
                   <>
@@ -1151,41 +1334,67 @@ export function RoomBoard({
               </BoardCard>
             );
           })}
-          {shown.notes.map((note) => (
-            <BoardNote
-              key={note.id}
-              note={note}
-              people={people}
-              guests={guests}
-              ownerAssignable={ownerAssignable}
-              canEdit={canEdit}
-              link={link}
-              quote={boardNoteQuote(note, messages)}
-              onResize={canEdit ? resizeNote : undefined}
-              onMove={dragNote}
-              onDrop={dropNote}
-              onBlur={letGo}
-              onText={writeNote}
-              onChange={changeNote}
-              onPasteLink={full ? undefined : pasteLinkInto}
-              onDelete={send}
-              onOpenReply={onOpenReply}
-              worker={running.find((agent) => agent.taskId === note.id)}
-              onTake={takeOf(note)}
-              onUse={messageOf(note)}
-              onGive={giveOf(note)}
-              artifactAuthor={
-                note.artifact === undefined ? undefined : boardArtifactAuthor(note.artifact, people)
-              }
-              artifactWriting={
-                note.kind === "artifact"
-                  ? boardArtifactWriting(note.id, running, ownerWritingArtifactId, people)
-                  : null
-              }
-              onRestore={restoreOf(note)}
-              artifactPrompt={artifactPromptOf(note)}
-            />
-          ))}
+          {shown.notes.map((note) => {
+            const box =
+              note.kind === "thread" && cards === undefined
+                ? boxParts(
+                    { id: note.id, guestId: note.guestId, title: note.text.trim() },
+                    <BoxTurns turns={note.thread?.turns ?? []} people={people} />,
+                  )
+                : undefined;
+            return (
+              <BoardNote
+                key={note.id}
+                note={note}
+                people={people}
+                guests={guests}
+                ownerAssignable={ownerAssignable}
+                canEdit={canEdit}
+                link={link}
+                quote={boardNoteQuote(note, messages)}
+                onResize={canEdit ? resizeNote : undefined}
+                onMove={dragNote}
+                onDrop={dropNote}
+                onBlur={letGo}
+                onText={writeNote}
+                onChange={changeNote}
+                onPasteLink={full ? undefined : pasteLinkInto}
+                onDelete={send}
+                onOpenReply={onOpenReply}
+                worker={running.find((agent) => agent.taskId === note.id)}
+                onTake={takeOf(note)}
+                onUse={messageOf(note)}
+                onGive={giveOf(note)}
+                artifactAuthor={
+                  note.artifact === undefined
+                    ? undefined
+                    : boardArtifactAuthor(note.artifact, people)
+                }
+                artifactWriting={
+                  note.kind === "artifact"
+                    ? boardArtifactWriting(
+                        note.id,
+                        running,
+                        hasProgress ? null : ownerWritingArtifactId,
+                        people,
+                      )
+                    : null
+                }
+                boxName={boxName}
+                onRestore={restoreOf(note)}
+                onAttachAgent={attachAgentOf(note)}
+                box={
+                  box === undefined
+                    ? undefined
+                    : {
+                        label: boardBoxAgentLabel(note, people),
+                        body: box.body,
+                        footer: box.prompt,
+                      }
+                }
+              />
+            );
+          })}
           {edges.map((edge) => {
             const from = boxes.get(edge.from);
             const to = boxes.get(edge.to);
@@ -1200,7 +1409,7 @@ export function RoomBoard({
                 <Button
                   size="icon-xs"
                   variant="outline"
-                  aria-label="Delete arrow"
+                  aria-label="Delete line"
                   autoFocus
                   onPointerDown={stopPointer}
                   onClick={() => removeEdge(edge.id)}
@@ -1216,9 +1425,7 @@ export function RoomBoard({
           })}
           <BoardFollowContext value={follow}>{cursorLayer}</BoardFollowContext>
         </div>
-        {prompt === null ? null : (
-          <ArrowLegend fillsArtifact={fillsArtifact} artifactBoxes={artifactPrompts.size > 0} />
-        )}
+        {cards === undefined && room !== null ? <LineLegend /> : null}
         {room === null ? (
           <p className="pointer-events-none absolute inset-x-0 bottom-6 text-center text-sm text-muted-foreground">
             Share this thread with guests and each person who joins gets a card here.
@@ -1266,52 +1473,53 @@ interface LinkHandlers {
   readonly onEnd: (event: PointerEvent<HTMLElement>) => void;
 }
 
-/** Resizes a card by its id: while the corner is held, then once when it is let go. */
+/** Resizes a card by its id and a bottom corner: while the corner is held, then once let go. */
 interface CardResize {
-  readonly onResize: (id: string, from: RoomBoardSize, dx: number, dy: number) => void;
-  readonly onEnd: (id: string) => void;
+  readonly onResize: (
+    id: string,
+    corner: BoardCorner,
+    from: BoardRect,
+    dx: number,
+    dy: number,
+  ) => void;
+  readonly onEnd: (id: string, corner: BoardCorner) => void;
 }
 
-/** What the coloured arrows do, said where people see them. */
-function ArrowLegend({
-  fillsArtifact,
-  artifactBoxes,
-}: {
-  readonly fillsArtifact: boolean;
-  /** Artifact cards have prompt boxes of their own. */
-  readonly artifactBoxes: boolean;
-}) {
+/** What the coloured lines do, said where people see them. */
+function LineLegend() {
   return (
     <div className="pointer-events-none absolute bottom-3 left-3 flex flex-col gap-1 rounded-md border border-border bg-card/90 px-2 py-1.5 text-2xs text-muted-foreground">
       <span className="flex items-center gap-1.5">
         <span aria-hidden className="h-0.5 w-4 rounded-full bg-info" />
-        {artifactBoxes
-          ? "Arrow into the thread or an artifact: that card goes with each message to it"
-          : "Arrow into the thread: that card goes with each message"}
+        Into a thread, or into the artifact it rewrites: goes with its prompts
       </span>
-      {fillsArtifact ? (
-        <span className="flex items-center gap-1.5">
-          <span aria-hidden className="h-0.5 w-4 rounded-full bg-success" />
-          Arrow from the thread to an artifact: the reply fills it
-        </span>
-      ) : null}
+      <span className="flex items-center gap-1.5">
+        <span aria-hidden className="h-0.5 w-4 rounded-full bg-success" />
+        From a thread to an artifact: its replies rewrite it
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span aria-hidden className="h-0.5 w-4 rounded-full bg-muted-foreground" />
+        Any other line: only shows a link
+      </span>
     </div>
   );
 }
 
 /**
- * A 24px grip centred on the card's right edge, level with its header. Cards and notes keep 12px
- * of padding at the right of their header so it covers none of their buttons.
+ * A 24px grip centred on one side of a card, level with its header. Cards and notes keep 12px of
+ * padding at each end of their header so it covers none of their buttons.
  */
 function LinkHandle({
   from,
   link,
   on,
+  side,
 }: {
   readonly from: string;
   readonly link: LinkHandlers;
   /** A card's header is taller than a note's; the grip sits level with its middle. */
   readonly on: "card" | "note";
+  readonly side: BoardCorner;
 }) {
   return (
     <Tooltip>
@@ -1319,9 +1527,10 @@ function LinkHandle({
         render={
           <button
             type="button"
-            aria-label="Draw an arrow"
+            aria-label={side === "right" ? "Draw a line" : "Draw a line from the left"}
             className={cn(
-              "group/link absolute -right-3 z-10 grid size-6 cursor-crosshair touch-none place-items-center",
+              "group/link absolute z-10 grid size-6 cursor-crosshair touch-none place-items-center",
+              side === "right" ? "-right-3" : "-left-3",
               on === "card" ? "top-1.5" : "top-0",
             )}
             onPointerDown={(event) => link.onStart(from, event)}
@@ -1333,8 +1542,50 @@ function LinkHandle({
       >
         <span className="size-3.5 rounded-full border-2 border-primary bg-background opacity-0 transition-opacity group-hover/item:opacity-100 group-focus-visible/link:opacity-100" />
       </TooltipTrigger>
-      <TooltipPopup side="right">Drag to another card to draw an arrow</TooltipPopup>
+      <TooltipPopup side={side}>Drag to another card to draw a line</TooltipPopup>
     </Tooltip>
+  );
+}
+
+/** Both side grips and both bottom corners of a card or note, for whoever may edit the board. */
+function ItemHandles({
+  from,
+  on,
+  link,
+  onResize,
+  onEnd,
+}: {
+  readonly from: string;
+  readonly on: "card" | "note";
+  readonly link: LinkHandlers | undefined;
+  readonly onResize:
+    | ((corner: BoardCorner, from: BoardRect, dx: number, dy: number) => void)
+    | undefined;
+  readonly onEnd: (corner: BoardCorner) => void;
+}) {
+  return (
+    <>
+      {link === undefined ? null : (
+        <>
+          <LinkHandle from={from} link={link} on={on} side="left" />
+          <LinkHandle from={from} link={link} on={on} side="right" />
+        </>
+      )}
+      {onResize === undefined ? null : (
+        <>
+          <ResizeHandle
+            corner="left"
+            onResize={(rect, dx, dy) => onResize("left", rect, dx, dy)}
+            onEnd={() => onEnd("left")}
+          />
+          <ResizeHandle
+            corner="right"
+            onResize={(rect, dx, dy) => onResize("right", rect, dx, dy)}
+            onEnd={() => onEnd("right")}
+          />
+        </>
+      )}
+    </>
   );
 }
 
@@ -1361,8 +1612,10 @@ function BoardNote({
   onGive,
   artifactAuthor,
   artifactWriting,
+  boxName,
   onRestore,
-  artifactPrompt,
+  onAttachAgent,
+  box,
 }: {
   readonly note: RoomBoardNote;
   readonly people: BoardPeople;
@@ -1373,7 +1626,7 @@ function BoardNote({
   /** The start of the reply a comment is pinned to. */
   readonly quote: string | undefined;
   readonly onResize:
-    | ((note: RoomBoardNote, from: RoomBoardSize, dx: number, dy: number) => void)
+    | ((note: RoomBoardNote, corner: BoardCorner, from: BoardRect, dx: number, dy: number) => void)
     | undefined;
   readonly onMove: (
     note: RoomBoardNote,
@@ -1397,17 +1650,24 @@ function BoardNote({
   readonly onGive: (() => void) | undefined;
   /** Whose agent wrote the artifact's current version. */
   readonly artifactAuthor: string | undefined;
-  /** Whose agents are writing the artifact now, or null. */
+  /** Who is writing the artifact now, from a guest's machine or an older server, or null. */
   readonly artifactWriting: string | null;
+  readonly boxName: (boxId: string) => string;
   readonly onRestore: (() => Promise<boolean>) | undefined;
-  /** The artifact's own prompt box, when the viewer may ask for it to change. */
-  readonly artifactPrompt: ReactNode | undefined;
+  /** Gives the viewer a thread box that rewrites this artifact, or shows the one they have. */
+  readonly onAttachAgent: (() => void) | undefined;
+  /** A thread box's agent, conversation and prompt box. */
+  readonly box:
+    | { readonly label: string; readonly body: ReactNode; readonly footer: ReactNode }
+    | undefined;
 }) {
   const target = { kind: "note", id: note.id } as const;
   const author = boardPersonName(people, note.guestId);
   const parsed = note.url === undefined ? null : parseBoardLink(note.url);
   const plain = note.kind === undefined && note.pinnedTo === undefined;
   const artifact = note.kind === "artifact";
+  const thread = note.kind === "thread";
+  const titled = artifact || thread;
   const size = boardNoteSize(note);
   const [quoteOpen, setQuoteOpen] = useState(false);
   return (
@@ -1442,15 +1702,21 @@ function BoardNote({
           <LinkIcon aria-hidden className="size-3 shrink-0 opacity-60" />
         ) : artifact ? (
           <AppWindowIcon aria-hidden className="size-3 shrink-0 opacity-60" />
+        ) : thread ? (
+          <MessagesSquareIcon aria-hidden className="size-3 shrink-0 opacity-60" />
         ) : note.pinnedTo !== undefined ? (
           <MessageSquareTextIcon aria-hidden className="size-3 shrink-0 opacity-60" />
         ) : null}
         <span className="min-w-0 flex-1 truncate text-2xs opacity-60">
-          {artifact
-            ? `Artifact from ${author}`
-            : note.pinnedTo === undefined
-              ? author
-              : `${author} on a reply`}
+          {box !== undefined
+            ? box.label
+            : thread
+              ? `Thread from ${author}`
+              : artifact
+                ? `Artifact from ${author}`
+                : note.pinnedTo === undefined
+                  ? author
+                  : `${author} on a reply`}
         </span>
         {onUse === undefined ? null : (
           <Tooltip>
@@ -1553,12 +1819,14 @@ function BoardNote({
                 ? "Caption"
                 : artifact
                   ? "Artifact title"
-                  : "Note"
+                  : thread
+                    ? "Thread name"
+                    : "Note"
           }
           value={note.text}
           readOnly={!canEdit}
           maxLength={ROOM_BOARD_NOTE_MAX_LENGTH}
-          rows={artifact ? 1 : note.kind === "link" ? 2 : note.kind === "task" ? 3 : 4}
+          rows={titled ? 1 : note.kind === "link" ? 2 : note.kind === "task" ? 3 : 4}
           placeholder={
             note.kind === "task"
               ? "Write a task"
@@ -1566,17 +1834,19 @@ function BoardNote({
                 ? "Add a caption"
                 : artifact
                   ? "Name this artifact"
-                  : "Write a note, or paste a link"
+                  : thread
+                    ? "Name this thread"
+                    : "Write a note, or paste a link"
           }
           className={cn(
             "resize-none bg-transparent px-3 pb-3 text-sm leading-snug outline-none placeholder:text-placeholder",
             note.kind === "task" && note.done === true && "text-muted-foreground line-through",
-            artifact ? "shrink-0 pb-2 font-medium" : size !== undefined && "min-h-0 flex-1",
+            titled ? "shrink-0 pb-2 font-medium" : size !== undefined && "min-h-0 flex-1",
           )}
           onPointerDown={stopPointer}
           onChange={(event) => onText(note, event.target.value)}
           onKeyDown={(event) => {
-            if (artifact && event.key === "Enter") {
+            if (titled && event.key === "Enter") {
               event.preventDefault();
               event.currentTarget.blur();
             }
@@ -1620,28 +1890,54 @@ function BoardNote({
             </Button>
           </div>
         )}
+        {artifact && onAttachAgent !== undefined ? (
+          <div className="flex shrink-0 px-3 pb-1.5">
+            <Button
+              size="micro"
+              variant="outline"
+              onPointerDown={stopPointer}
+              onClick={onAttachAgent}
+            >
+              <BotIcon />
+              Attach my agent
+            </Button>
+          </div>
+        ) : null}
         {artifact ? (
-          <RoomArtifactMeta
+          <RoomArtifactLive
+            noteId={note.id}
+            artifact={note.artifact}
             author={artifactAuthor}
-            updatedAt={note.artifact?.updatedAt}
-            writing={artifactWriting}
+            writingFallback={artifactWriting}
+            boxName={boxName}
             onRestore={onRestore}
           />
         ) : null}
-        {artifact ? (
-          <RoomArtifactBody artifact={note.artifact} promptable={artifactPrompt !== undefined} />
-        ) : null}
-        {artifact && artifactPrompt !== undefined ? (
-          <div className="shrink-0 border-t border-border px-3 pt-2 pb-3">{artifactPrompt}</div>
-        ) : null}
+        {box === undefined ? null : (
+          <>
+            <div
+              data-board-scroll
+              className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-3 pb-2"
+            >
+              {box.body}
+            </div>
+            {box.footer === undefined ? null : (
+              <div className="shrink-0 border-t border-border px-3 pt-2 pb-3">{box.footer}</div>
+            )}
+          </>
+        )}
       </div>
-      {link === undefined ? null : <LinkHandle from={noteRef(note.id)} link={link} on="note" />}
-      {onResize === undefined ? null : (
-        <ResizeHandle
-          onResize={(from, dx, dy) => onResize(note, from, dx, dy)}
-          onEnd={() => onBlur(target)}
-        />
-      )}
+      <ItemHandles
+        from={noteRef(note.id)}
+        on="note"
+        link={link}
+        onResize={
+          onResize === undefined
+            ? undefined
+            : (corner, from, dx, dy) => onResize(note, corner, from, dx, dy)
+        }
+        onEnd={() => onBlur(target)}
+      />
     </div>
   );
 }
@@ -1796,13 +2092,17 @@ function BoardCard({
       {footer === undefined ? null : (
         <div className="shrink-0 border-t border-border px-3 pt-2 pb-3">{footer}</div>
       )}
-      {link === undefined ? null : <LinkHandle from={cardRef(id)} link={link} on="card" />}
-      {resize === undefined ? null : (
-        <ResizeHandle
-          onResize={(from, dx, dy) => resize.onResize(id, from, dx, dy)}
-          onEnd={() => resize.onEnd(id)}
-        />
-      )}
+      <ItemHandles
+        from={cardRef(id)}
+        on="card"
+        link={link}
+        onResize={
+          resize === undefined
+            ? undefined
+            : (corner, from, dx, dy) => resize.onResize(id, corner, from, dx, dy)
+        }
+        onEnd={(corner) => resize?.onEnd(id, corner)}
+      />
     </section>
   );
 }

@@ -3,6 +3,7 @@ import {
   ROOM_BOARD_MAX_COORDINATE,
   ROOM_BOARD_MIN_CARD_SIZE,
   ROOM_BOARD_QUOTE_MAX_LENGTH,
+  ROOM_BOARD_ROOM_BOX,
   ROOM_BOARD_THREAD_CARD,
   isRoomBoardUrl,
   isRoomBranchName,
@@ -17,7 +18,9 @@ import {
   type RoomBoardNote,
   type RoomBoardSize,
   type RoomBoardViewport,
+  type RoomBoxProgress,
   type RoomCodeState,
+  type ThreadGuestMessage,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
@@ -137,7 +140,7 @@ export interface BoardRect extends BoardPoint {
 
 /** How big a new card of this kind is, for finding it a spot. */
 export const boardNewNoteSize = (kind: RoomBoardNote["kind"]): RoomBoardSize =>
-  kind === "artifact" ? BOARD_ARTIFACT_SIZE : { w: NOTE_WIDTH, h: NOTE_HEIGHT };
+  boardNoteSize({ kind }) ?? { w: NOTE_WIDTH, h: NOTE_HEIGHT };
 
 const PLACE_GAP = 16;
 const PLACE_REACH = 1_200;
@@ -205,6 +208,18 @@ export function placeBoardItem(
   return best ?? { x: Math.round(start.x), y: Math.round(start.y) };
 }
 
+/** Where a new item goes beside `rect`: to its right and level with its top, or the nearest clear spot. */
+export const besideBoardItem = (
+  rect: BoardRect,
+  size: RoomBoardSize,
+  taken: ReadonlyArray<BoardRect>,
+): BoardPoint =>
+  placeBoardItem(
+    size,
+    { x: rect.x + rect.width + CARD_GAP + size.w / 2, y: rect.y + size.h / 2 },
+    taken,
+  );
+
 /**
  * What is on a board and where, at the sizes it was given or, for heights the browser decides,
  * a guess. For when nothing on screen can be measured.
@@ -264,8 +279,10 @@ export interface BoardBox extends BoardPoint {
   readonly headerY: number;
 }
 
-/** How big an artifact card is until someone resizes it, with room for its prompt box. */
-const BOARD_ARTIFACT_SIZE: RoomBoardSize = { w: 380, h: 440 };
+/** How big an artifact card is until someone resizes it. */
+const BOARD_ARTIFACT_SIZE: RoomBoardSize = { w: 380, h: 400 };
+/** How big a thread box is until someone resizes it, with room for its prompt box. */
+const BOARD_THREAD_BOX_SIZE: RoomBoardSize = { w: 340, h: 460 };
 
 const boardLength = (value: number) =>
   Math.round(Math.min(ROOM_BOARD_MAX_CARD_SIZE, Math.max(ROOM_BOARD_MIN_CARD_SIZE, value)));
@@ -276,11 +293,29 @@ export const clampBoardSize = (size: RoomBoardSize): RoomBoardSize => ({
   h: boardLength(size.h),
 });
 
+/**
+ * A card resized by its bottom-left corner, `dx`/`dy` board pixels from where it was taken: the
+ * left edge follows the pointer and the right edge stays, within the bounds the room takes.
+ */
+export function resizeBoardFromLeft(
+  from: BoardRect,
+  dx: number,
+  dy: number,
+): { readonly x: number; readonly y: number; readonly size: RoomBoardSize } {
+  const size = clampBoardSize({ w: from.width - dx, h: from.height + dy });
+  return { x: from.x + from.width - size.w, y: from.y, size };
+}
+
 /** The size a note shows at, or undefined for one that grows with its text. */
 export const boardNoteSize = (
   note: Pick<RoomBoardNote, "kind" | "size">,
 ): RoomBoardSize | undefined =>
-  note.size ?? (note.kind === "artifact" ? BOARD_ARTIFACT_SIZE : undefined);
+  note.size ??
+  (note.kind === "artifact"
+    ? BOARD_ARTIFACT_SIZE
+    : note.kind === "thread"
+      ? BOARD_THREAD_BOX_SIZE
+      : undefined);
 
 export const boardCardBox = (at: BoardPoint, size?: RoomBoardSize): BoardBox => ({
   x: at.x,
@@ -297,22 +332,41 @@ export const boardNoteBox = (
   headerY: 12,
 });
 
+type BoardSide = "left" | "right";
+const sideX = (box: BoardBox, side: BoardSide) => box.x + (side === "right" ? box.width : 0);
+// The facing sides first, so a tie between two pairs keeps the line between the cards.
+const SIDE_PAIRS: ReadonlyArray<readonly [BoardSide, BoardSide]> = [
+  ["right", "left"],
+  ["left", "right"],
+  ["right", "right"],
+  ["left", "left"],
+];
+
 /**
- * A curve from the header of one box to the header of another, leaving and arriving level, and
- * the point halfway along it.
+ * A curve from the header of one box to the header of another, leaving and arriving level from
+ * the sides of each that are nearest the other, and the point halfway along it.
  */
 export function boardConnector(
   from: BoardBox,
   to: BoardBox,
 ): { readonly path: string; readonly middle: BoardPoint } {
-  const leftToRight = from.x <= to.x;
-  const start = { x: from.x + (leftToRight ? from.width : 0), y: from.y + from.headerY };
-  const end = { x: to.x + (leftToRight ? 0 : to.width), y: to.y + to.headerY };
-  const bend = Math.max(40, Math.abs(end.x - start.x) / 2) * (leftToRight ? 1 : -1);
+  const toRight = from.x + from.width / 2 <= to.x + to.width / 2;
+  const pairs = toRight ? SIDE_PAIRS : SIDE_PAIRS.map(([a, b]) => [b, a] as const);
+  let best = pairs[0]!;
+  for (const pair of pairs) {
+    const gap = Math.abs(sideX(to, pair[1]) - sideX(from, pair[0]));
+    if (gap < Math.abs(sideX(to, best[1]) - sideX(from, best[0]))) best = pair;
+  }
+  const [fromSide, toSide] = best;
+  const start = { x: sideX(from, fromSide), y: from.y + from.headerY };
+  const end = { x: sideX(to, toSide), y: to.y + to.headerY };
+  // Each end leaves its card outward, away from the side it sits on.
+  const bend = Math.max(40, Math.abs(end.x - start.x) / 2);
+  const c1 = start.x + (fromSide === "right" ? bend : -bend);
+  const c2 = end.x + (toSide === "right" ? bend : -bend);
   return {
-    path: `M${start.x} ${start.y} C${start.x + bend} ${start.y}, ${end.x - bend} ${end.y}, ${end.x} ${end.y}`,
-    // The curve's controls pull level from each end, so halfway is the midpoint of the ends.
-    middle: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 },
+    path: `M${start.x} ${start.y} C${c1} ${start.y}, ${c2} ${end.y}, ${end.x} ${end.y}`,
+    middle: { x: (start.x + 3 * c1 + 3 * c2 + end.x) / 8, y: (start.y + end.y) / 2 },
   };
 }
 
@@ -442,11 +496,12 @@ const CARD_REF = roomBoardCardRef("");
 
 /** A note as this person edits it, with what only the owner's server writes taken from the room. */
 const withServerFields = (note: RoomBoardNote, room: RoomBoardNote | undefined): RoomBoardNote => {
-  const { answer: _answer, artifact: _artifact, ...own } = note;
+  const { answer: _answer, artifact: _artifact, thread: _thread, ...own } = note;
   return {
     ...own,
     ...(room?.answer === undefined ? {} : { answer: room.answer }),
     ...(room?.artifact === undefined ? {} : { artifact: room.artifact }),
+    ...(room?.thread === undefined ? {} : { thread: room.thread }),
   };
 };
 
@@ -716,7 +771,7 @@ export function roomFetchCommand(branch: string): string | null {
   return `git fetch origin ${arg} && git switch ${arg}`;
 }
 
-/** A card an arrow connects to the thread's card, as a prompt from the board carries it. */
+/** A card a line connects to a thread box, as a prompt from the board carries it. */
 export interface BoardPromptCard {
   /** `note:<id>` as arrows name it. */
   readonly ref: string;
@@ -725,12 +780,12 @@ export interface BoardPromptCard {
   readonly text: string;
 }
 
-/** A message sent from the thread's card on the board. */
+/** A message sent from a thread box on the board. */
 export interface BoardPrompt {
   readonly text: string;
   /** The connected cards the sender left attached. */
   readonly cards: ReadonlyArray<BoardPromptCard>;
-  /** The artifact note the thread card points to, when the sender may fill one. */
+  /** The artifact note the box has a line to, which the reply rewrites. */
   readonly artifactId: string | null;
 }
 
@@ -900,16 +955,16 @@ export const isBoardHtmlArtifact = (body: string): boolean =>
 export const BOARD_PROMPT_MAX_CARDS = 8;
 const PROMPT_ARTIFACT_LENGTH = 4_000;
 
-/**
- * What a card with a prompt box does with the arrows at it: what goes with a message, and, for
- * the thread's card, where the reply goes.
- */
+/** What a thread box does with the lines at it: what goes with a prompt, and where the reply goes. */
 export interface BoardPromptContext {
-  /** Every card with an arrow into the target, and into those, nearest first. */
+  /**
+   * Every card with a line into the box or into the artifact it rewrites, and into those,
+   * nearest first.
+   */
   readonly cards: ReadonlyArray<BoardPromptCard>;
-  /** The arrows that carry them. */
+  /** The lines that carry them. */
   readonly edgeIds: ReadonlySet<string>;
-  /** The artifact the thread's card points to, and the arrow that does. Null for an artifact's box. */
+  /** The first artifact the box has a line to, which its replies rewrite, and that line. */
   readonly artifact: RoomBoardNote | null;
   readonly artifactEdgeId: string | null;
 }
@@ -950,24 +1005,34 @@ function boardPromptCard(
   }
 }
 
+/** A thread box as lines name it: the room thread's own card, or a thread note. */
+export const boardBoxRef = (boxId: string): string =>
+  boxId === ROOM_BOARD_ROOM_BOX
+    ? roomBoardCardRef(ROOM_BOARD_THREAD_CARD)
+    : roomBoardNoteRef(boxId);
+
 /**
- * The cards a message from a prompt box carries: each note with an arrow into its card (`target`,
- * as arrows name it; the thread's card by default), and each note with an arrow into one of
- * those, once each, nearest first and in the order the arrows were drawn. Plus, for the thread's
- * card, the artifact it has an arrow to, first drawn first.
+ * The cards a prompt from a thread box carries: each note with a line into the box, or into the
+ * artifact the box rewrites, and each note with a line into one of those, once each, nearest
+ * first and in the order the lines were drawn. Thread boxes are never carried; the artifact the
+ * box rewrites goes as its own record. The box's artifact is the first one it has a line to.
  */
 export function boardPromptContext(
   board: RoomBoard,
   people: BoardPeople,
   messages: ReadonlyArray<BoardMessage> = [],
-  target: string = roomBoardCardRef(ROOM_BOARD_THREAD_CARD),
+  boxId: string = ROOM_BOARD_ROOM_BOX,
 ): BoardPromptContext {
-  const thread = roomBoardCardRef(ROOM_BOARD_THREAD_CARD);
+  const target = boardBoxRef(boxId);
   const notes = new Map(board.notes.map((note) => [roomBoardNoteRef(note.id), note]));
   const edges = board.edges ?? [];
+  const artifactEdge = edges.find(
+    (edge) => edge.from === target && notes.get(edge.to)?.kind === "artifact",
+  );
+  const roots = artifactEdge === undefined ? [target] : [target, artifactEdge.to];
   const reached = new Set<string>();
   const cards: Array<BoardPromptCard> = [];
-  let frontier = [target];
+  let frontier = roots;
   while (frontier.length > 0 && reached.size < BOARD_PROMPT_MAX_CARDS) {
     const next: Array<string> = [];
     for (const edge of edges) {
@@ -975,7 +1040,8 @@ export function boardPromptContext(
       if (
         !frontier.includes(edge.to) ||
         note === undefined ||
-        edge.from === target ||
+        note.kind === "thread" ||
+        roots.includes(edge.from) ||
         reached.has(edge.from)
       ) {
         continue;
@@ -988,11 +1054,7 @@ export function boardPromptContext(
     }
     frontier = next;
   }
-  const carried = (ref: string) => ref === target || reached.has(ref);
-  const artifactEdge =
-    target === thread
-      ? edges.find((edge) => edge.from === thread && notes.get(edge.to)?.kind === "artifact")
-      : undefined;
+  const carried = (ref: string) => roots.includes(ref) || reached.has(ref);
   return {
     cards,
     edgeIds: new Set(
@@ -1002,6 +1064,130 @@ export function boardPromptContext(
     artifactEdgeId: artifactEdge?.id ?? null,
   };
 }
+
+/** A thread box: the room thread's own card, or a thread note someone added. */
+export interface BoardThreadBox {
+  readonly id: string;
+  /** The guest whose box it is. Absent: the owner's. */
+  readonly guestId?: string | undefined;
+  readonly title: string;
+}
+
+/** Every thread box on a board, the room thread's first. */
+export function boardThreadBoxes(
+  board: RoomBoard,
+  roomTitle: string,
+): ReadonlyArray<BoardThreadBox> {
+  return [
+    { id: ROOM_BOARD_ROOM_BOX, guestId: undefined, title: roomTitle },
+    ...board.notes
+      .filter((note) => note.kind === "thread")
+      .map((note) => ({ id: note.id, guestId: note.guestId, title: note.text.trim() })),
+  ];
+}
+
+/** Whether this person may prompt a box: only the person it belongs to. */
+export const canPromptBoardBox = (
+  box: Pick<BoardThreadBox, "guestId">,
+  viewer: string | null,
+): boolean => (box.guestId ?? null) === viewer;
+
+/**
+ * Whose agent a box runs on, as its card says it. This round a guest's box runs on the owner's
+ * agent: "Sam, through the owner's agent".
+ */
+export function boardBoxAgentLabel(
+  box: Pick<BoardThreadBox, "guestId">,
+  people: BoardPeople,
+): string {
+  const ownerAgent =
+    people.viewer === null
+      ? "your agent"
+      : people.ownerName === undefined
+        ? "the owner's agent"
+        : `${people.ownerName}'s agent`;
+  if (box.guestId === undefined) return sentenceStart(ownerAgent);
+  return `${boardPersonName(people, box.guestId)}, through ${ownerAgent}`;
+}
+
+/** A box as other cards name it: `Your thread "Pricing"`, or `Sam's thread`. */
+export function boardBoxName(box: BoardThreadBox, people: BoardPeople): string {
+  const person = boardPersonName(people, box.guestId);
+  const whose = person === "You" ? "Your" : `${person}'s`;
+  return box.title === "" ? `${whose} thread` : `${whose} thread "${box.title}"`;
+}
+
+/** The guests' requests for a box still waiting for the owner, oldest first. */
+export const boardBoxRequests = (
+  messages: ReadonlyArray<ThreadGuestMessage>,
+  boxId: string,
+): ReadonlyArray<ThreadGuestMessage> =>
+  messages.filter((message) => message.status === "pending" && message.boxId === boxId);
+
+/**
+ * The viewer's own box that already rewrites this artifact, so "Attach my agent" reuses it
+ * instead of adding another. Null when they have none.
+ */
+export function boardOwnBoxFor(
+  board: RoomBoard,
+  viewer: string | null,
+  artifactId: string,
+): string | null {
+  const artifact = roomBoardNoteRef(artifactId);
+  const own = [
+    ...(viewer === null ? [ROOM_BOARD_ROOM_BOX] : []),
+    ...board.notes
+      .filter((note) => note.kind === "thread" && (note.guestId ?? null) === viewer)
+      .map((note) => note.id),
+  ];
+  return (
+    own.find((boxId) =>
+      (board.edges ?? []).some((edge) => edge.from === boardBoxRef(boxId) && edge.to === artifact),
+    ) ?? null
+  );
+}
+
+const PROGRESS_PHASES: Readonly<Record<RoomBoxProgress["phase"], string>> = {
+  queued: "Queued",
+  thinking: "Thinking",
+  tool: "Running a tool",
+  writing: "Writing",
+  approval: "Waiting for approval",
+};
+
+/** What a box's agent is doing, in words: "Thinking", "Running pnpm test", "Writing". */
+export const boardProgressPhase = (progress: Pick<RoomBoxProgress, "phase" | "detail">): string =>
+  progress.phase === "tool" && progress.detail !== undefined && progress.detail.trim() !== ""
+    ? `Running ${progress.detail.trim()}`
+    : PROGRESS_PHASES[progress.phase];
+
+/** How long something has run: "8s", "2m 05s", "1h 04m". */
+export function formatBoardElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
+}
+
+/** A run's status line: its phase, its model, and how long it has run at `now`. */
+export const boardProgressLine = (
+  progress: Pick<RoomBoxProgress, "phase" | "detail" | "model" | "startedAt">,
+  now: number,
+): string =>
+  [
+    boardProgressPhase(progress),
+    progress.model,
+    formatBoardElapsed(now - Date.parse(progress.startedAt)),
+  ]
+    .filter((part) => part !== undefined && part !== "")
+    .join(" · ");
+
+/**
+ * Whether an artifact draft still streaming is a page, which shows as source until it lands so a
+ * half-written page never runs.
+ */
+export const boardDraftIsPage = (draft: string): boolean => /^\s*</.test(draft);
 
 const sentenceStart = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 

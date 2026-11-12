@@ -15,6 +15,9 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
   RoomArtifactRead,
+  ROOM_BOARD_ROOM_BOX,
+  ROOM_BOX_PROMPT_MAX_LENGTH,
+  ROOM_BOX_REPLY_MAX_LENGTH,
   ROOM_TASK_CONTEXT_KIND,
   ROOM_UPDATES_MAX_CHARS,
   RoomTaskContextPayload,
@@ -29,8 +32,15 @@ import {
   ThreadId,
   type ThreadRoomLink,
 } from "@t3tools/contracts";
+import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
-import { roomArtifactBody, roomArtifactRequestOf } from "@t3tools/shared/roomBoard";
+import {
+  roomArtifactBody,
+  roomArtifactRequestOf,
+  roomBoxExcerpt,
+  roomBoxRequestOf,
+  roomCardLabelsOf,
+} from "@t3tools/shared/roomBoard";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -48,7 +58,9 @@ import { base64UrlEncode } from "../auth/utils.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { forkParked } from "../serverActivation.ts";
+import { isBoxThread, roomBoxModelName } from "./RoomBoxes.ts";
 import { clip } from "./roomUpdates.ts";
 
 const REQUEST_TIMEOUT = Duration.seconds(20);
@@ -167,6 +179,15 @@ function artifactOfRun(
   return { noteId, body, ...(truncated ? { truncated } : {}) };
 }
 
+/** What a run was asked, without the chips its cards and artifact left in the text. */
+const promptTextOf = (items: ReadonlyArray<OrchestrationV2TurnItem>) =>
+  replaceComposerContextReferences(
+    items
+      .toSorted((left, right) => left.ordinal - right.ordinal)
+      .flatMap((item) => (item.type === "user_message" ? [item.text] : []))[0] ?? "",
+    () => "",
+  );
+
 /** The start of a run's prompt, as the room shows it while the run goes on. */
 function runPromptOf(items: ReadonlyArray<OrchestrationV2TurnItem>): string {
   const prompt =
@@ -239,6 +260,7 @@ const make = Effect.gen(function* () {
   const http = withoutRedirects(yield* HttpClient.HttpClient);
   const projects = yield* ProjectService.ProjectService;
   const git = yield* GitWorkflow.GitWorkflowService;
+  const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   // The last run posted per thread: a finished run is updated again when its checkpoint lands.
   const posted = new Map<ThreadId, RunId>();
   // The run each connected thread told its room is running, and when it last said so.
@@ -600,17 +622,42 @@ const make = Effect.gen(function* () {
   );
 
   /**
+   * What a finished run shows on the board: the start of what was asked (a guest's own words
+   * when it was their request), the cards that went with it, and the model that ran it.
+   */
+  const aboutRun = Effect.fn("SharedRoomLink.aboutRun")(function* (
+    items: ReadonlyArray<OrchestrationV2TurnItem>,
+    run: OrchestrationV2Run | undefined,
+    guestText: string | undefined,
+  ) {
+    const cards = roomCardLabelsOf(items);
+    const model =
+      run === undefined
+        ? undefined
+        : roomBoxModelName(run.modelSelection, yield* providerRegistry.getProviders);
+    return {
+      prompt: roomBoxExcerpt(guestText ?? promptTextOf(items), ROOM_BOX_PROMPT_MAX_LENGTH),
+      ...(cards.length === 0 ? {} : { cards: [...cards] }),
+      ...(model === undefined || model === "" ? {} : { model }),
+    };
+  });
+
+  /**
    * Shows a finished run of the owner's on the board of their room: it answers the task card it
-   * was sent for, and fills the artifact card it was asked to.
+   * was sent for, and fills the artifact card it was asked to. A run in a thread box's own thread
+   * shows on the box, and only when the share recorded that thread for that box.
    */
   const answerOnOwnBoard = Effect.fn("SharedRoomLink.answerOnOwnBoard")(
     function* (threadId: ThreadId, runId: RunId) {
-      const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+      const { thread, turnItems, runs } = yield* orchestrator.getThreadRecords(
+        threadId,
+        ["turnItems", "runs"],
+        { turnItemRunIds: [runId], runIds: [runId] },
+      );
+      const run = runs.find((candidate) => candidate.id === runId);
       const share = thread.guestShare ?? null;
-      if (share === null || share.board === undefined) return;
-      const { turnItems } = yield* orchestrator.getThreadRecords(threadId, ["turnItems"], {
-        turnItemRunIds: [runId],
-      });
+      if (share === null) return yield* answerOnBox(threadId, runId, turnItems, run);
+      if (share.board === undefined) return;
       const taskId = roomTaskOfRun(turnItems, share.id);
       const turn = taskId === undefined ? null : guestTurnOf(runId, turnItems);
       if (taskId !== undefined && turn !== null) {
@@ -626,10 +673,10 @@ const make = Effect.gen(function* () {
       const request = roomArtifactRequestOf(turnItems, share.id);
       const artifact = artifactOfRun(request?.noteId, turnItems);
       if (request === undefined || artifact === undefined) return;
-      const askedBy =
+      const asked =
         request.guestMessageId === undefined
           ? undefined
-          : share.messages.find((message) => message.id === request.guestMessageId)?.guestId;
+          : share.messages.find((message) => message.id === request.guestMessageId);
       yield* orchestrator.dispatch({
         type: "thread.room-artifact.fill",
         commandId: CommandId.make(`server:room-artifact:${runId}`),
@@ -637,11 +684,64 @@ const make = Effect.gen(function* () {
         shareId: share.id,
         turnId: runId,
         ...artifact,
-        ...(askedBy === undefined ? {} : { askedBy }),
+        ...(asked?.guestId === undefined ? {} : { askedBy: asked.guestId }),
+        ...(yield* aboutRun(turnItems, run, asked?.text)),
+        boxId: ROOM_BOARD_ROOM_BOX,
       });
     },
     Effect.catch((cause) => Effect.logWarning("Could not show a turn on the board", { cause })),
   );
+
+  const answerOnBox = Effect.fn("SharedRoomLink.answerOnBox")(function* (
+    threadId: ThreadId,
+    runId: RunId,
+    turnItems: ReadonlyArray<OrchestrationV2TurnItem>,
+    run: OrchestrationV2Run | undefined,
+  ) {
+    const box = roomBoxRequestOf(turnItems);
+    if (box === undefined) return;
+    const roomThreadId = yield* orchestrator.findGuestShareThreadId(box.shareId);
+    if (roomThreadId === null) return;
+    const { thread: room } = yield* orchestrator.getThreadRecords(roomThreadId, []);
+    const share = room.guestShare ?? null;
+    if (share === null || !isBoxThread(share, box.shareId, box.boxId, threadId)) return;
+    const reply = replyOf(turnItems);
+    if (reply === "") return;
+    // The guest's request the owner sent, found by the message this server sent it as.
+    const asked =
+      run === undefined
+        ? undefined
+        : share.messages.find((message) => message.sentAs === run.userMessageId);
+    const askedBy = asked?.guestId === undefined ? {} : { askedBy: asked.guestId };
+    const about = yield* aboutRun(turnItems, run, asked?.text);
+    yield* orchestrator.dispatch({
+      type: "thread.room-box.turn",
+      commandId: CommandId.make(`server:room-box:${runId}`),
+      threadId: roomThreadId,
+      shareId: share.id,
+      boxId: box.boxId,
+      turn: {
+        id: runId,
+        ...about,
+        reply: roomBoxExcerpt(reply, ROOM_BOX_REPLY_MAX_LENGTH),
+        at: DateTime.formatIso(yield* DateTime.now),
+        ...askedBy,
+      },
+    });
+    const artifact = artifactOfRun(roomArtifactRequestOf(turnItems, share.id)?.noteId, turnItems);
+    if (artifact === undefined) return;
+    yield* orchestrator.dispatch({
+      type: "thread.room-artifact.fill",
+      commandId: CommandId.make(`server:room-artifact:${runId}`),
+      threadId: roomThreadId,
+      shareId: share.id,
+      turnId: runId,
+      ...artifact,
+      ...askedBy,
+      ...about,
+      boxId: box.boxId,
+    });
+  });
 
   type Job = {
     readonly kind: "turn" | "answer" | GuestAgentActivityRequest["state"];

@@ -8,6 +8,7 @@ import {
   type GuestId,
   type GuestShareView,
   type RoomAgentActivity,
+  type RoomBoxProgress,
   type RoomAgentsEvent,
   type RoomCodeState,
   type RoomCursor,
@@ -124,6 +125,17 @@ export const guestRoomCursorsAtom = Atom.family((shareId: string) =>
   ),
 );
 
+/**
+ * What each thread box's agent is doing now, undefined from an older server. Apart from the room,
+ * so a progress tick renders only the board's store and not the guest's whole view.
+ */
+export const guestRoomBoxesAtom = Atom.family((shareId: string) =>
+  Atom.make<ReadonlyArray<RoomBoxProgress> | undefined>(undefined).pipe(
+    Atom.keepAlive,
+    Atom.withLabel(`guest-room-boxes:${shareId}`),
+  ),
+);
+
 /** Everyone else's view of the board, so this guest can follow one. Apart, like the pointers. */
 export const guestRoomViewsAtom = Atom.family((shareId: string) =>
   Atom.make<ReadonlyArray<RoomViewport> | undefined>(undefined).pipe(
@@ -200,11 +212,14 @@ export const layerGuestShareAccess = Layer.succeed(
           appAtomRegistry.set(guestRoomCursorsAtom(shareId), event.cursors);
           appAtomRegistry.set(guestRoomViewsAtom(shareId), event.views);
         } else {
-          appAtomRegistry.update(guestRoomAtom(shareId), (room) => ({
-            ...room,
-            running: event.running,
-            ownerCode: event.owner,
-          }));
+          appAtomRegistry.set(guestRoomBoxesAtom(shareId), event.boxes);
+          // Box progress arrives many times a second; the room changes only when these do.
+          appAtomRegistry.update(guestRoomAtom(shareId), (room) =>
+            JSON.stringify([room.running, room.ownerCode]) ===
+            JSON.stringify([event.running, event.owner])
+              ? room
+              : { ...room, running: event.running, ownerCode: event.owner },
+          );
         }
       });
     }),

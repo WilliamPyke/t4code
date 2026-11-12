@@ -109,6 +109,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.guestShareSubscribeRoomAgents]: "guest-share",
   [WS_METHODS.guestShareSubscribeRoomCursors]: "guest-share",
   [WS_METHODS.guestShareMoveCursor]: "guest-share",
+  [WS_METHODS.guestSharePromptBox]: "guest-share",
+  [WS_METHODS.guestShareSendMessage]: "guest-share",
   [WS_METHODS.sharedThreadPreview]: "guest-share",
   [WS_METHODS.sharedThreadJoin]: "guest-share",
   [WS_METHODS.sharedThreadLeave]: "guest-share",

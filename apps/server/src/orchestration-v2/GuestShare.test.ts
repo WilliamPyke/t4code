@@ -511,8 +511,28 @@ it.effect("fills an artifact card with the owner's turn, and nothing else on the
       [renamed?.text, renamed?.size, renamed?.artifact],
       ["The plan", { w: 480, h: 360 }, artifact],
     );
-    yield* fill("artifact", "run:2", shareId, alex);
+    yield* orchestrator.dispatch({
+      type: "thread.room-artifact.fill",
+      commandId: CommandId.make(`fill:${commands++}`),
+      threadId,
+      shareId,
+      noteId: "artifact",
+      turnId: "run:2",
+      body: "# Plan from run:2",
+      askedBy: alex,
+      prompt: "Make it dark",
+      cards: ["Note from Sam"],
+      boxId: "box:1",
+      model: "GPT-5.1 Codex",
+    });
     const second = (yield* read).notes.get("artifact")?.artifact;
+    // It says what made it: the prompt, the cards with it, the box it came from, and the model.
+    assert.deepInclude(second, {
+      prompt: "Make it dark",
+      cards: ["Note from Sam"],
+      boxId: "box:1",
+      model: "GPT-5.1 Codex",
+    });
     // The version it replaced is kept, without its own earlier one, and says who asked for it.
     assert.deepEqual(
       [second?.body, second?.askedBy, second?.previous],
@@ -565,6 +585,124 @@ it.effect("fills an artifact card with the owner's turn, and nothing else on the
     const after = yield* read;
     assert.lengthOf(after.runs, 0);
     assert.lengthOf(after.messages, 0);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("shows a thread box's last turns, and keeps the owner's box threads apart", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* setup;
+    let commands = 0;
+    const next = (label: string) => CommandId.make(`${label}:${commands++}`);
+    const change = (change: RoomBoardChange) =>
+      orchestrator.dispatch({
+        type: "thread.guest-board.change",
+        commandId: next("board"),
+        threadId,
+        shareId,
+        author: null,
+        change,
+      });
+    const link = (boxId: string, boxThreadId: string | null) =>
+      orchestrator.dispatch({
+        type: "thread.room-box.link",
+        commandId: next("link"),
+        threadId,
+        shareId,
+        boxId,
+        boxThreadId: boxThreadId === null ? null : ThreadId.make(boxThreadId),
+      });
+    const turn = (boxId: string, id: string) =>
+      orchestrator.dispatch({
+        type: "thread.room-box.turn",
+        commandId: next("turn"),
+        threadId,
+        shareId,
+        boxId,
+        turn: { id, prompt: "Go", reply: `Reply ${id}`, at: "2026-11-12T00:00:00.000Z" },
+      });
+    const share = Effect.map(
+      orchestrator.getThreadRecords(threadId, []),
+      ({ thread }) => thread.guestShare!,
+    );
+    const turnsOf = (boxId: string) =>
+      Effect.map(share, (current) =>
+        current.board?.notes.find((note) => note.id === boxId)?.thread?.turns.map((t) => t.id),
+      );
+    yield* change({ type: "note.put", noteId: "box", text: "Box", x: 0, y: 0, kind: "thread" });
+    yield* change({ type: "note.put", noteId: "note", text: "Note", x: 0, y: 0 });
+    // Only a box on the board gets a thread.
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(link("gone", "thread:gone"))));
+    yield* link("box", "thread:box");
+    yield* link("box", "thread:box");
+    assert.deepEqual((yield* share).boardThreads, { box: ThreadId.make("thread:box") });
+
+    for (const id of ["run:1", "run:2", "run:2", "run:3", "run:4"]) yield* turn("box", id);
+    // A box keeps its last few turns, each once; a note that is no box shows none.
+    assert.deepEqual(yield* turnsOf("box"), ["run:2", "run:3", "run:4"]);
+    yield* turn("note", "run:5");
+    assert.isUndefined(yield* turnsOf("note"));
+    // Renaming the box keeps its turns and its thread.
+    yield* change({ type: "note.put", noteId: "box", text: "Renamed", x: 9, y: 9 });
+    assert.deepEqual(yield* turnsOf("box"), ["run:2", "run:3", "run:4"]);
+    assert.deepEqual((yield* share).boardThreads, { box: ThreadId.make("thread:box") });
+    // Removing the box forgets its thread; unlinking one with none changes nothing.
+    yield* change({ type: "note.remove", noteId: "box" });
+    assert.isUndefined((yield* share).boardThreads);
+    yield* link("box", null);
+
+    // A guest's request for their box is marked sent as the message it went as, and put back
+    // to waiting only if that send failed.
+    yield* orchestrator.dispatch({
+      type: "thread.guest-share.redeem",
+      commandId: next("redeem"),
+      threadId,
+      shareId,
+      guestId: sam,
+      guestName: "Sam",
+    });
+    yield* change({ type: "note.put", noteId: "sam-box", text: "Sam", x: 0, y: 0, kind: "thread" });
+    const submit = (boxId: string, author: GuestId) =>
+      orchestrator.dispatch({
+        type: "thread.guest-message.submit",
+        commandId: next("submit"),
+        threadId,
+        shareId,
+        guestId: author,
+        guestMessageId,
+        text: "Dark mode",
+        boxId,
+      });
+    // The owner's box is not Sam's to send to.
+    yield* orchestrator.dispatch({
+      type: "thread.guest-board.change",
+      commandId: next("board"),
+      threadId,
+      shareId,
+      author: sam,
+      change: { type: "note.put", noteId: "his", text: "His", x: 0, y: 0, kind: "thread" },
+    });
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(submit("sam-box", sam))));
+    yield* submit("his", sam);
+    const route = (sentAs: string | null) =>
+      orchestrator.dispatch({
+        type: "thread.guest-message.route",
+        commandId: next("route"),
+        threadId,
+        guestMessageId,
+        sentAs: sentAs === null ? null : MessageId.make(sentAs),
+      });
+    const message = Effect.map(share, (current) => current.messages[0]);
+    yield* route("message:box");
+    assert.deepInclude(yield* message, {
+      status: "sent",
+      sentAs: MessageId.make("message:box"),
+      boxId: "his",
+    });
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(route("message:again"))));
+    yield* route(null);
+    const back = yield* message;
+    assert.equal(back?.status, "pending");
+    assert.isUndefined(back?.sentAs);
   }).pipe(Effect.provide(layerTest)),
 );
 

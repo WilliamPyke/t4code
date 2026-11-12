@@ -5,7 +5,10 @@ import {
   GUEST_SHARE_MAX_GUESTS,
   GUEST_TURN_LIMIT,
   TEAM_SHARE_MAX_GUESTS,
+  ROOM_BOARD_ROOM_BOX,
   ROOM_BOARD_THREAD_CARD,
+  ROOM_BOX_CONTEXT_KIND,
+  ROOM_BOX_TURN_LIMIT,
   guestMessageAuthorName,
   roomBoardAgentCard,
   roomBoardCardRef,
@@ -18,16 +21,18 @@ import {
   type GuestId,
   type GuestMessageAttribution,
   type GuestMessageId,
+  type ComposerContextRecord,
   type OrchestrationMessageContext,
   type OrchestrationV2AppThread,
   type OrchestrationV2ServerCommand,
-  type RoomArtifactContextRecord,
   type ThreadGuestMessage,
   type ThreadGuestShare,
+  type ThreadId,
 } from "@t3tools/contracts";
 import {
   formatComposerContextReference,
   roomArtifactContextRecord,
+  toKindScopedComposerContextId,
 } from "@t3tools/shared/composerContextReferences";
 import {
   EMPTY_ROOM_BOARD,
@@ -57,6 +62,9 @@ export type GuestShareCommand = Extract<
       | "thread.guest-board.change"
       | "thread.room-task.answer"
       | "thread.room-artifact.fill"
+      | "thread.room-box.link"
+      | "thread.room-box.turn"
+      | "thread.guest-message.route"
       | "thread.room-link.set";
   }
 >;
@@ -74,6 +82,8 @@ export const GUEST_FAILURE = {
   removed: "The owner removed you from this thread.",
   memberJoined: "This member already joined.",
   artifactGone: "This artifact is no longer on the board.",
+  boxGone: "This thread box is no longer on the board.",
+  boxNotYours: "This thread box is someone else's. Only your own takes your messages.",
 } as const;
 
 const isExpired = (share: ThreadGuestShare, now: DateTime.Utc) =>
@@ -233,6 +243,41 @@ const artifactOn = (share: ThreadGuestShare, noteId: string | undefined) =>
     ? undefined
     : share.board?.notes.find((note) => note.id === noteId && note.kind === "artifact");
 
+/** The thread box with this id on the share's board, if it is still there. */
+export const roomBoxOn = (share: ThreadGuestShare, boxId: string | undefined) =>
+  boxId === undefined
+    ? undefined
+    : share.board?.notes.find((note) => note.id === boxId && note.kind === "thread");
+
+/** The share without the threads of boxes its board no longer has; the same share when none. */
+function withLiveBoardThreads(share: ThreadGuestShare): ThreadGuestShare {
+  const threads = share.boardThreads;
+  if (threads === undefined) return share;
+  const kept = Object.entries(threads).filter(([boxId]) => roomBoxOn(share, boxId) !== undefined);
+  if (kept.length === Object.keys(threads).length) return share;
+  const { boardThreads: _gone, ...rest } = share;
+  return kept.length === 0 ? rest : { ...rest, boardThreads: Object.fromEntries(kept) };
+}
+
+/**
+ * The board with a turn shown on a thread box, keeping the last few. A box that is gone, or the
+ * same turn again, leaves the board as it was.
+ */
+function boardWithBoxTurn(
+  board: RoomBoard,
+  boxId: string,
+  turn: NonNullable<RoomBoardNote["thread"]>["turns"][number],
+): RoomBoard {
+  const box = board.notes.find((note) => note.id === boxId && note.kind === "thread");
+  const turns = box?.thread?.turns ?? [];
+  if (box === undefined || turns.some((shown) => shown.id === turn.id)) return board;
+  const updated: RoomBoardNote = {
+    ...box,
+    thread: { turns: [...turns, turn].slice(-ROOM_BOX_TURN_LIMIT) },
+  };
+  return { ...board, notes: board.notes.map((note) => (note === box ? updated : note)) };
+}
+
 const resolveMessage = (
   share: ThreadGuestShare,
   guestMessageId: GuestMessageId,
@@ -344,6 +389,14 @@ export function decideGuestShareCommand(input: {
       if (command.artifactId !== undefined && artifactOn(share, command.artifactId) === undefined) {
         return Result.fail(GUEST_FAILURE.artifactGone);
       }
+      // The room thread's card is the owner's and takes guests' messages as it always has.
+      if (command.boxId !== undefined && command.boxId !== ROOM_BOARD_ROOM_BOX) {
+        const box = roomBoxOn(share, command.boxId);
+        if (box === undefined) return Result.fail(GUEST_FAILURE.boxGone);
+        if (command.guestId === undefined || box.guestId !== command.guestId) {
+          return Result.fail(GUEST_FAILURE.boxNotYours);
+        }
+      }
       const attachments = command.attachments ?? [];
       const pendingBytes = [...pendingAttachments(share), ...attachments].reduce(
         (total, attachment) => total + attachment.sizeBytes,
@@ -365,6 +418,7 @@ export function decideGuestShareCommand(input: {
             ...(command.guestId === undefined ? {} : { guestId: command.guestId }),
             ...(command.direct === true ? { direct: true } : {}),
             ...(command.artifactId === undefined ? {} : { artifactId: command.artifactId }),
+            ...(command.boxId === undefined ? {} : { boxId: command.boxId }),
           },
         ]),
       };
@@ -443,6 +497,69 @@ export function decideGuestShareCommand(input: {
           : { board: boardWithoutGuest(share.board, command.guestId) }),
       });
     }
+    // The owner's thread behind a thread box: it stays when the box goes, unlinked.
+    case "thread.room-box.link": {
+      if (share === null || share.id !== command.shareId)
+        return Result.fail(GUEST_FAILURE.inactive);
+      const threads = share.boardThreads ?? {};
+      if (command.boxThreadId === null) {
+        if (threads[command.boxId] === undefined) return Result.succeed(thread);
+        const { [command.boxId]: _gone, ...kept } = threads;
+        const { boardThreads: _all, ...rest } = share;
+        return Result.succeed({
+          ...thread,
+          guestShare: Object.keys(kept).length === 0 ? rest : { ...rest, boardThreads: kept },
+        });
+      }
+      // A guest's box runs here too while its requests come through the owner.
+      if (roomBoxOn(share, command.boxId) === undefined) return Result.fail(GUEST_FAILURE.boxGone);
+      if (threads[command.boxId] === command.boxThreadId) return Result.succeed(thread);
+      return Result.succeed({
+        ...thread,
+        guestShare: {
+          ...share,
+          boardThreads: { ...threads, [command.boxId]: command.boxThreadId },
+        },
+      });
+    }
+    // Like an artifact's fill: the box's turn already ran, and the room only sees it.
+    case "thread.room-box.turn": {
+      if (share === null || share.id !== command.shareId || share.board === undefined) {
+        return Result.succeed(thread);
+      }
+      const board = boardWithBoxTurn(share.board, command.boxId, command.turn);
+      return Result.succeed(
+        board === share.board ? thread : { ...thread, guestShare: { ...share, board } },
+      );
+    }
+    case "thread.guest-message.route": {
+      if (share === null) return Result.fail("This thread has no guest link.");
+      const message = share.messages.find((candidate) => candidate.id === command.guestMessageId);
+      if (command.sentAs === null) {
+        // Only a send this server routed and that then failed goes back to waiting.
+        if (message?.status !== "sent" || message.sentAs === undefined) {
+          return Result.succeed(thread);
+        }
+        const { sentAs: _sentAs, ...waiting } = message;
+        return withShare({
+          ...share,
+          messages: share.messages.map((candidate) =>
+            candidate === message ? { ...waiting, status: "pending" } : candidate,
+          ),
+        });
+      }
+      const sentAs = command.sentAs;
+      return Result.map(resolveMessage(share, command.guestMessageId, "sent"), (next) => ({
+        ...thread,
+        guestShare: {
+          ...next,
+          messages: next.messages.map((candidate) =>
+            candidate.id === command.guestMessageId ? { ...candidate, sentAs } : candidate,
+          ),
+        },
+        updatedAt: now,
+      }));
+    }
     // Only the share changes, and the thread keeps its place in every list: arranging a board
     // starts nothing here and reaches no agent.
     case "thread.guest-board.change": {
@@ -454,9 +571,13 @@ export function decideGuestShareCommand(input: {
         return Result.fail(GUEST_FAILURE.inactive);
       }
       const before = share.board ?? EMPTY_ROOM_BOARD;
+      // A removed thread box forgets its thread, which stays the owner's.
       return Result.map(
         applyRoomBoardChange(before, roomScope(share), command.author, command.change),
-        (board) => (board === before ? thread : { ...thread, guestShare: { ...share, board } }),
+        (board) =>
+          board === before
+            ? thread
+            : { ...thread, guestShare: withLiveBoardThreads({ ...share, board }) },
       );
     }
     // Only the share changes: a guest's own turn starts nothing here and reaches no agent.
@@ -524,6 +645,12 @@ export function decideGuestShareCommand(input: {
         ...(command.askedBy === undefined ? {} : { askedBy: command.askedBy }),
         turnId: command.turnId,
         updatedAt: DateTime.formatIso(now),
+        ...(command.prompt === undefined ? {} : { prompt: command.prompt }),
+        ...(command.cards === undefined || command.cards.length === 0
+          ? {}
+          : { cards: command.cards }),
+        ...(command.boxId === undefined ? {} : { boxId: command.boxId }),
+        ...(command.model === undefined ? {} : { model: command.model }),
       });
       return Result.succeed(
         board === share.board ? thread : { ...thread, guestShare: { ...share, board } },
@@ -559,38 +686,84 @@ export function decideGuestMessageSend(input: {
     readonly thread: OrchestrationV2AppThread;
     readonly text: string;
     readonly guest: GuestMessageAttribution;
-    readonly records: ReadonlyArray<RoomArtifactContextRecord>;
+    readonly records: ReadonlyArray<ComposerContextRecord>;
   },
   string
 > {
   const share = input.thread.guestShare ?? null;
   if (share === null) return Result.fail("This thread has no guest link.");
   const message = share.messages.find((candidate) => candidate.id === input.guestMessageId);
+  const built = guestMessageForAgent(share, input.thread.id, input.guestMessageId, message);
+  return Result.map(resolveMessage(share, input.guestMessageId, "sent"), (next) => ({
+    thread: { ...input.thread, guestShare: next, updatedAt: input.now },
+    text: built.text,
+    guest: built.guest,
+    records: built.records,
+  }));
+}
+
+/**
+ * A guest's message as the owner's agent gets it: text that names the guest and whether the
+ * owner read it, and only records this server builds. `boxId` names the guest's own thread box
+ * when the message goes to that box's thread, which the box record lets the server find again.
+ */
+export function guestMessageForAgent(
+  share: ThreadGuestShare,
+  roomThreadId: ThreadId,
+  guestMessageId: GuestMessageId,
+  message: ThreadGuestMessage | undefined,
+  boxId: string = ROOM_BOARD_ROOM_BOX,
+): {
+  readonly text: string;
+  readonly guest: GuestMessageAttribution;
+  readonly records: ReadonlyArray<ComposerContextRecord>;
+} {
   const name = guestMessageAuthorName(share, message ?? {});
   const guestText = message?.text ?? "";
   const artifact = artifactOn(share, message?.artifactId);
-  const records =
+  const artifactRecords =
     artifact === undefined
       ? []
       : [
           roomArtifactContextRecord({
-            batch: input.guestMessageId,
+            batch: guestMessageId,
             shareId: share.id,
             noteId: artifact.id,
             title: artifact.text,
             current: artifact.artifact?.body,
+            threadId: roomThreadId,
+            boxId,
           }),
         ];
-  const chips = records.map((record) => `\n\n${formatComposerContextReference(record)}`).join("");
-  return Result.map(resolveMessage(share, input.guestMessageId, "sent"), (next) => ({
-    thread: { ...input.thread, guestShare: next, updatedAt: input.now },
+  const chips = artifactRecords
+    .map((record) => `\n\n${formatComposerContextReference(record)}`)
+    .join("");
+  return {
     text:
       (message?.direct === true
         ? `Message from guest ${name}, sent without the owner reading it:\n\n${guestText}`
         : `Message from guest ${name}, sent by the owner:\n\n${guestText}`) + chips,
-    guest: { guestMessageId: input.guestMessageId, name, text: guestText, shareId: share.id },
-    records,
-  }));
+    guest: { guestMessageId, name, text: guestText, shareId: share.id },
+    records:
+      boxId === ROOM_BOARD_ROOM_BOX
+        ? artifactRecords
+        : [...artifactRecords, roomBoxContextRecord(guestMessageId, share.id, boxId)],
+  };
+}
+
+/** Ties a message in a thread box's own thread to the box. The text never references it. */
+export function roomBoxContextRecord(
+  batch: string,
+  shareId: ThreadGuestShare["id"],
+  boxId: string,
+): ComposerContextRecord {
+  return {
+    version: 1,
+    kind: ROOM_BOX_CONTEXT_KIND,
+    contextId: toKindScopedComposerContextId(ROOM_BOX_CONTEXT_KIND, batch),
+    label: "Thread box",
+    payload: { shareId, boxId },
+  };
 }
 
 /**

@@ -239,7 +239,7 @@ const inviteRoute = HttpRouter.add(
 // The parser stops a request with too many parts or bytes before it reaches the disk; the
 // service checks the exact limits and types.
 const UPLOAD_LIMITS = Multipart.limitsServices({
-  maxParts: GUEST_MESSAGE_MAX_ATTACHMENTS + 4,
+  maxParts: GUEST_MESSAGE_MAX_ATTACHMENTS + 5,
   maxFileSize: GUEST_MESSAGE_MAX_ATTACHMENT_BYTES,
   maxTotalSize: GUEST_MESSAGE_MAX_ATTACHMENT_BYTES + 64 * 1024,
   // By default a JSON part is read as a field, which would drop a guest's `.json` file.
@@ -271,6 +271,7 @@ export const readSubmission = Effect.gen(function* () {
     shareId: parts.shareId,
     text: parts.text ?? "",
     ...(parts.artifactId === undefined ? {} : { artifactId: parts.artifactId }),
+    ...(parts.boxId === undefined ? {} : { boxId: parts.boxId }),
   }).pipe(Effect.option);
   if (fields._tag === "None") return null;
   const files = parts.file;

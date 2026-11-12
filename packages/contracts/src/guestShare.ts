@@ -6,6 +6,7 @@ import {
   GuestMessageId,
   GuestShareId,
   IsoDateTime,
+  MessageId,
   ThreadId,
   TrimmedNonEmptyString,
   TrimmedString,
@@ -136,6 +137,17 @@ export const ROOM_TASK_CONTEXT_KIND = "room-task";
 export const RoomTaskContextPayload = Schema.Struct({ shareId: GuestShareId, taskId: RoomTaskId });
 export type RoomTaskContextPayload = typeof RoomTaskContextPayload.Type;
 
+/**
+ * The kind of the context record that ties a message in a thread box's own thread to its box.
+ * Only the owner's server attaches it, and the text never references it.
+ */
+export const ROOM_BOX_CONTEXT_KIND = "room-box";
+export const RoomBoxContextPayload = Schema.Struct({
+  shareId: GuestShareId,
+  boxId: RoomBoardNoteId,
+});
+export type RoomBoxContextPayload = typeof RoomBoxContextPayload.Type;
+
 /** One catch-up from a room: how many messages, how long each, and how much in all. */
 export const ROOM_UPDATES_MAX_MESSAGES = 50;
 export const ROOM_UPDATE_MAX_LENGTH = 8_000;
@@ -160,6 +172,13 @@ export const ThreadGuestMessage = Schema.Struct({
    * card when it sends the message; one removed by then leaves a plain message.
    */
   artifactId: Schema.optional(RoomBoardNoteId),
+  /** The guest's own thread box this message is for. The owner's Send runs it in that box. */
+  boxId: Schema.optional(RoomBoardNoteId),
+  /**
+   * The message the owner's server sent it as in its box's own thread. The owner's only: a guest
+   * never receives it.
+   */
+  sentAs: Schema.optional(MessageId),
 });
 export type ThreadGuestMessage = typeof ThreadGuestMessage.Type;
 
@@ -255,6 +274,46 @@ export type RoomBoardSize = typeof RoomBoardSize.Type;
 export const ROOM_BOARD_QUOTE_MAX_LENGTH = 280;
 export const ROOM_ARTIFACT_MAX_LENGTH = 16_000;
 export const ROOM_BOARD_MAX_ARTIFACTS = 6;
+/** Thread boxes one board holds, the room thread's own card not counted. */
+export const ROOM_BOARD_MAX_THREADS = 12;
+
+/** What a thread box and an artifact show of a turn: its prompt and reply, cut to these. */
+export const ROOM_BOX_PROMPT_MAX_LENGTH = 280;
+export const ROOM_BOX_REPLY_MAX_LENGTH = 600;
+/** The turns a thread box keeps, newest last. */
+export const ROOM_BOX_TURN_LIMIT = 3;
+/** The labels of the cards that went with a turn, at most this many. */
+export const ROOM_BOX_CARD_LABELS_MAX = 8;
+const ROOM_BOX_MODEL_MAX_LENGTH = 120;
+
+const RoomBoxCardLabels = Schema.Array(Schema.String.check(Schema.isMaxLength(200))).check(
+  Schema.isMaxLength(ROOM_BOX_CARD_LABELS_MAX),
+);
+const RoomBoxModelName = Schema.String.check(Schema.isMaxLength(ROOM_BOX_MODEL_MAX_LENGTH));
+
+/** One turn of a thread box's conversation, as the board shows it. Plain text only. */
+export const RoomBoxTurn = Schema.Struct({
+  /** The turn as the machine that ran it named it. */
+  id: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  prompt: Schema.String.check(Schema.isMaxLength(ROOM_BOX_PROMPT_MAX_LENGTH)),
+  reply: Schema.String.check(Schema.isMaxLength(ROOM_BOX_REPLY_MAX_LENGTH)),
+  cards: Schema.optional(RoomBoxCardLabels),
+  at: IsoDateTime,
+  /** The model's display name. */
+  model: Schema.optional(RoomBoxModelName),
+  /** Whose agent ran it. Absent: the owner's. */
+  guestId: Schema.optional(GuestId),
+  /** The guest whose request the owner sent. */
+  askedBy: Schema.optional(GuestId),
+});
+export type RoomBoxTurn = typeof RoomBoxTurn.Type;
+
+/** What a thread box shows of its conversation. Only the owner's server writes it. */
+export const RoomBoxState = Schema.Struct({
+  /** The last few turns, newest last. */
+  turns: Schema.Array(RoomBoxTurn).check(Schema.isMaxLength(ROOM_BOX_TURN_LIMIT)),
+});
+export type RoomBoxState = typeof RoomBoxState.Type;
 
 const RoomArtifactVersionFields = {
   body: Schema.String.check(Schema.isMaxLength(ROOM_ARTIFACT_MAX_LENGTH)),
@@ -267,6 +326,14 @@ const RoomArtifactVersionFields = {
   /** The turn that wrote it, as the machine that ran it named it. */
   turnId: ThreadGuestTurn.fields.id,
   updatedAt: IsoDateTime,
+  /** The start of the prompt that produced it. Absent on older versions. */
+  prompt: Schema.optional(RoomBoxTurn.fields.prompt),
+  /** The labels of the cards that went with that prompt. */
+  cards: Schema.optional(RoomBoxCardLabels),
+  /** The thread box whose turn wrote it: `ROOM_BOARD_ROOM_BOX` for the room thread. */
+  boxId: Schema.optional(RoomBoardNoteId),
+  /** The model's display name. */
+  model: Schema.optional(RoomBoxModelName),
 };
 
 /** The version of an artifact that the current one replaced, kept so anyone can go back to it. */
@@ -285,9 +352,10 @@ export const RoomArtifactContent = Schema.Struct({
 export type RoomArtifactContent = typeof RoomArtifactContent.Type;
 
 /**
- * A card someone added to the board: a note, unless `kind` says it is a task, a link or an
- * artifact. A note with `pinnedTo` is a comment on that message of the thread. An artifact's
- * `text` is its title.
+ * A card someone added to the board: a note, unless `kind` says it is a task, a link, an
+ * artifact or a thread box. A note with `pinnedTo` is a comment on that message of the thread.
+ * An artifact's and a thread box's `text` is its title. A thread box is a conversation of its
+ * own, run by the agent of whoever added it.
  */
 export const RoomBoardNote = Schema.Struct({
   /** The client that adds the note names it. */
@@ -296,7 +364,7 @@ export const RoomBoardNote = Schema.Struct({
   ...RoomBoardPoint.fields,
   /** The guest who added it. Absent on the owner's notes. */
   guestId: Schema.optional(GuestId),
-  kind: Schema.optional(Schema.Literals(["task", "link", "artifact"])),
+  kind: Schema.optional(Schema.Literals(["task", "link", "artifact", "thread"])),
   /** A task that is done. */
   done: Schema.optional(Schema.Boolean),
   assignee: Schema.optional(RoomBoardAssignee),
@@ -312,6 +380,8 @@ export const RoomBoardNote = Schema.Struct({
   size: Schema.optional(RoomBoardSize),
   /** What an agent wrote into an artifact. No board change sets it. */
   artifact: Schema.optional(RoomArtifactContent),
+  /** A thread box's recent turns. No board change sets it; it stays when the box changes. */
+  thread: Schema.optional(RoomBoxState),
 });
 export type RoomBoardNote = typeof RoomBoardNote.Type;
 
@@ -345,6 +415,8 @@ export const RoomBoard = Schema.Struct({
 export type RoomBoard = typeof RoomBoard.Type;
 
 export const ROOM_BOARD_THREAD_CARD = "thread";
+/** The box id of the room thread's own card, which behaves as the owner's first thread box. */
+export const ROOM_BOARD_ROOM_BOX = "thread";
 export const roomBoardGuestCard = (guestId: string) => `guest:${guestId}`;
 export const roomBoardAgentCard = (guestId: string) => `agent:${guestId}`;
 
@@ -437,12 +509,45 @@ export const RoomViewport = Schema.Struct({
 });
 export type RoomViewport = typeof RoomViewport.Type;
 
+export const ROOM_BOX_PROGRESS_DETAIL_MAX_LENGTH = 120;
+export const ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH = 240;
+
+/**
+ * What a thread box's agent is doing in a run, live: waiting its turn, thinking, using a tool,
+ * writing its reply, or waiting for the owner to approve something. Never stored.
+ */
+export const RoomBoxProgress = Schema.Struct({
+  /** `ROOM_BOARD_ROOM_BOX` for the room thread. */
+  boxId: RoomBoardNoteId,
+  /** Whose agent runs it. Absent: the owner's. */
+  guestId: Schema.optional(GuestId),
+  /** The artifact card the run's reply will fill. */
+  artifactId: Schema.optional(RoomBoardNoteId),
+  phase: Schema.Literals(["queued", "thinking", "tool", "writing", "approval"]),
+  /** For `tool`: the tool's name or a few words. Never its arguments. */
+  detail: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(ROOM_BOX_PROGRESS_DETAIL_MAX_LENGTH)),
+  ),
+  /** For `writing`: the end of the reply so far. */
+  preview: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH)),
+  ),
+  /** With `artifactId`: what the artifact would show if the reply ended now. */
+  draft: Schema.optional(Schema.String.check(Schema.isMaxLength(ROOM_ARTIFACT_MAX_LENGTH))),
+  startedAt: IsoDateTime,
+  /** The model's display name. */
+  model: Schema.optional(RoomBoxModelName),
+});
+export type RoomBoxProgress = typeof RoomBoxProgress.Type;
+
 /** The guests' agents running now, sent whenever that changes. */
 export const RoomAgentsEvent = Schema.Struct({
   type: Schema.Literal("agents"),
   running: Schema.Array(RoomAgentActivity),
   /** Where the owner's code is, on a guest's stream once the owner's server could say. */
   owner: Schema.optional(RoomCodeState),
+  /** What each thread box's agent is doing now. Absent from an older server. */
+  boxes: Schema.optional(Schema.Array(RoomBoxProgress)),
 });
 export type RoomAgentsEvent = typeof RoomAgentsEvent.Type;
 
@@ -570,6 +675,11 @@ export const ThreadGuestShare = Schema.Struct({
   team: Schema.optional(GuestShareTeam),
   /** Team members the owner removed, who cannot join this share again. */
   removedMembers: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  /**
+   * The owner's own thread behind each of their thread boxes, by box id. The owner's only: a
+   * guest never receives it.
+   */
+  boardThreads: Schema.optional(Schema.Record(Schema.String, ThreadId)),
 });
 export type ThreadGuestShare = typeof ThreadGuestShare.Type;
 
@@ -720,6 +830,8 @@ export const GuestSubmitRequest = Schema.Struct({
   text: TrimmedString.check(Schema.isMaxLength(GUEST_MESSAGE_MAX_LENGTH)),
   /** The artifact card the reply should fill, which the owner sees before sending it. */
   artifactId: Schema.optional(RoomBoardNoteId),
+  /** The guest's own thread box the message is for. Another person's box is refused. */
+  boxId: Schema.optional(RoomBoardNoteId),
 });
 export type GuestSubmitRequest = typeof GuestSubmitRequest.Type;
 

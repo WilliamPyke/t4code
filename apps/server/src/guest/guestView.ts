@@ -59,7 +59,8 @@ export function guestShareView(
     direct: providerAllowsDirect && guest?.trusted === true,
     ...(signIn && guestId !== undefined ? { signIn: true } : {}),
     expiresAt: share.expiresAt,
-    messages: share.messages,
+    // Which message of the owner's box thread a request was sent as is the owner's alone.
+    messages: share.messages.map(({ sentAs: _sentAs, ...message }) => message),
     ...(share.turns === undefined ? {} : { turns: share.turns }),
     ...(share.board === undefined ? {} : { board: share.board }),
     model,

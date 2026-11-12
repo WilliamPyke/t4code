@@ -15,6 +15,7 @@ import {
   type RoomUpdatesContextRecord,
   type ScopedThreadRef,
   type ThreadContextRecord,
+  type ThreadId,
 } from "@t3tools/contracts";
 
 import { replaceThreadLinks, threadLinkCandidates } from "./threadLinks.ts";
@@ -197,6 +198,9 @@ export function roomArtifactContextRecord(input: {
   readonly noteId: string;
   readonly title: string;
   readonly current: string | undefined;
+  /** The room thread and the thread box the message goes from. */
+  readonly threadId?: ThreadId;
+  readonly boxId?: string;
 }): RoomArtifactContextRecord {
   const title = input.title.trim() || "Untitled";
   return {
@@ -208,6 +212,8 @@ export function roomArtifactContextRecord(input: {
     noteId: input.noteId,
     title,
     ...(input.current === undefined || input.current === "" ? {} : { current: input.current }),
+    ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
+    ...(input.boxId === undefined ? {} : { boxId: input.boxId }),
   };
 }
 

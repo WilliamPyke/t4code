@@ -1,25 +1,30 @@
 import { useAtomValue } from "@effect/atom-react";
-import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { deriveThreadStructureRuntime } from "@t3tools/client-runtime/state/thread-execution";
 import {
-  AuthOrchestrationOperateScope,
   type GuestShareId,
+  type ModelSelection,
+  ROOM_BOARD_ROOM_BOX,
   type RoomBoardChange,
   type RoomBoardNote,
   type ScopedThreadRef,
   type ServerProvider,
   type ThreadGuest,
+  type ThreadGuestMessage,
+  type ThreadId,
   roomCodeStateOf,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { type ReactNode, useRef, useState } from "react";
+import { XIcon } from "lucide-react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
-import { newMessageId, randomUUID } from "~/lib/utils";
+import { useStableCallback } from "~/hooks/useStableCallback";
+import { randomUUID } from "~/lib/utils";
 import { deriveThreadAgentWorking } from "~/session-logic";
 import { useGitStackedAction, useSourceControlActionRunning } from "~/state/sourceControlActions";
 import {
@@ -31,22 +36,24 @@ import {
 import { useEnvironmentProviders } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
-import { useEnvironmentScope } from "~/state/session";
-import { environmentThreadDetails, threadEnvironment } from "~/state/threads";
+import { environmentThreadDetails } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { useOrchestrationCommand } from "~/state/use-orchestration-command";
 import { vcsEnvironment } from "~/state/vcs";
 
+import { useGuestMessageResolver } from "../chat/GuestShareControls";
 import {
   boardContextCards,
   boardTurnSelection,
-  ownerBoardPromptMessage,
   ownerWritingArtifactId,
 } from "../chat/roomBoardPrompt";
 import { takeRoomTaskToDraft } from "../chat/roomTaskDraft";
 import { resolveQuickAction } from "../GitActionsControl.logic";
+import { Button } from "../ui/button";
 import { SidebarInset } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
+import { BoardChatPanel } from "./BoardChatPanel";
+import { BoardModelPicker, ThreadBoardModelPicker, composerDraftPick } from "./BoardModelPicker";
+import { BoardSplit } from "./BoardSplit";
 import { RoomBoard, RoomCursors } from "./RoomBoard";
 import { RoomReplyProvider, revealRoomReply } from "./RoomReplyComments";
 import {
@@ -56,9 +63,11 @@ import {
   type BoardPrompt,
   boardMessages,
 } from "./roomBoard.logic";
+import { RoomLiveContext, type RoomLiveStore, createRoomLiveStore } from "./roomBoardLive";
 
 const NO_GUESTS: ReadonlyArray<ThreadGuest> = [];
 const NO_PROVIDERS: ReadonlyArray<ServerProvider> = [];
+const NO_BOARD_THREADS: Readonly<Record<string, ThreadId>> = {};
 const GIT_ACTIONS = ["runStackedAction", "pull", "publishRepository"] as const;
 
 /** The share of a thread its owner reads, and how they change its board when they may. */
@@ -109,25 +118,29 @@ export function OwnerRoomReplies({
   );
 }
 
-/** The owner's board for a thread they share, read from the thread and changed on its server. */
-export function ThreadRoomBoard({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
+/**
+ * The owner's board for a thread they share, read from the thread and changed on its server, with
+ * a conversation beside it. `chat` names the thread box whose conversation is open, from the URL.
+ */
+export function ThreadRoomBoard({
+  threadRef,
+  chat,
+  onChat,
+}: {
+  readonly threadRef: ScopedThreadRef;
+  readonly chat: string | null;
+  readonly onChat: (chat: string | null) => void;
+}) {
   const navigate = useNavigate();
   const shell = useThreadShell(threadRef);
   const { structure, share, onChange } = useOwnerRoom(threadRef);
   const items = useThreadVisibleTurnItems(threadRef);
+  const [live] = useState(createRoomLiveStore);
   const { data: presence } = useEnvironmentQuery(
     serverEnvironment.guestPresence({
       environmentId: threadRef.environmentId,
       input: { threadId: threadRef.threadId },
     }),
-  );
-  const { data: agents } = useEnvironmentQuery(
-    share === null
-      ? null
-      : serverEnvironment.guestRoomAgents({
-          environmentId: threadRef.environmentId,
-          input: { threadId: threadRef.threadId, shareId: share.id },
-        }),
   );
   const canPoint = useAtomValue(
     serverEnvironment.moveGuestRoomCursor.permissionAtom(threadRef.environmentId),
@@ -136,17 +149,20 @@ export function ThreadRoomBoard({ threadRef }: { readonly threadRef: ScopedThrea
     label: "show your pointer",
     reportFailure: false,
   });
-  const openThread = () =>
-    void navigate({
-      to: "/$environmentId/$threadId",
-      params: { environmentId: threadRef.environmentId, threadId: threadRef.threadId },
-    });
+  const openFullThread = useStableCallback(
+    () =>
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: { environmentId: threadRef.environmentId, threadId: threadRef.threadId },
+      }),
+  );
+  const openPanel = (boxId: string = ROOM_BOARD_ROOM_BOX) => onChat(boxId);
   const putInDraft = (text: string) => {
     // Only a draft: the owner reads it and sends it themselves.
     const store = useComposerDraftStore.getState();
     const draft = store.getComposerDraft(threadRef)?.prompt ?? "";
     store.setPrompt(threadRef, appendNoteToDraft(draft, text));
-    openThread();
+    openPanel();
   };
   // The task becomes the owner's, and a draft whose send answers it once the turn finishes.
   const takeTask = (task: RoomBoardNote) => {
@@ -175,59 +191,85 @@ export function ThreadRoomBoard({ threadRef }: { readonly threadRef: ScopedThrea
         );
   const pendingRequests = useAtomValue(environmentThreadDetails.pendingRequestsAtom(threadRef));
   const providers = useEnvironmentProviders().get(threadRef.environmentId) ?? NO_PROVIDERS;
-  const canSend = useEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope);
-  const startTurn = useOrchestrationCommand(threadEnvironment.startTurn, "send the message");
+  const canPrompt = useAtomValue(
+    serverEnvironment.promptRoomBox.permissionAtom(threadRef.environmentId),
+  );
+  const promptRoomBox = useAtomCommand(serverEnvironment.promptRoomBox, "send the prompt");
+  const boardThreads = share?.boardThreads ?? NO_BOARD_THREADS;
+  // What the room thread's composer would send with now; a new box starts from it.
+  const roomPick = useComposerDraftStore((store) =>
+    composerDraftPick(store.getComposerDraft(threadRef)),
+  );
+  const roomSelection = roomPick ?? shell?.modelSelection ?? null;
+  // A box with no conversation yet has no composer to keep its pick, so the board keeps it.
+  const [boxPicks, setBoxPicks] = useState<Readonly<Record<string, ModelSelection>>>({});
+  const boxThreadRef = (boxId: string) => {
+    if (boxId === ROOM_BOARD_ROOM_BOX) return threadRef;
+    const threadId = boardThreads[boxId];
+    return threadId === undefined ? null : scopeThreadRef(threadRef.environmentId, threadId);
+  };
+  // The pick a box's prompt runs with; none leaves its own thread's model.
+  const boxSelection = (boxId: string): ModelSelection | undefined => {
+    const ref = boxThreadRef(boxId);
+    if (ref === null) return boxPicks[boxId] ?? roomSelection ?? undefined;
+    const picked = composerDraftPick(useComposerDraftStore.getState().getComposerDraft(ref));
+    return (
+      picked ?? (boxId === ROOM_BOARD_ROOM_BOX ? (shell?.modelSelection ?? undefined) : undefined)
+    );
+  };
   const sendingRef = useRef(false);
-  // The owner's own message on their own thread, sent as the composer would send one now; while
-  // a turn runs it waits behind it, so the reply that fills an artifact is this message's.
-  const sendFromBoard = async (prompt: BoardPrompt) => {
-    if (share === null || shell === null || sendingRef.current) return false;
-    const message = ownerBoardPromptMessage({
-      text: prompt.text,
-      shareId: share.id,
-      board: share.board,
-      cards: boardContextCards(share.board, share.guests ?? NO_GUESTS, prompt.cards),
-      artifactId: prompt.artifactId,
-    });
-    if (message.text === "") return false;
-    // What the owner picked in this thread's composer and has not sent with yet.
-    const draft = useComposerDraftStore.getState().getComposerDraft(threadRef);
-    const picked =
-      draft?.activeProvider === null || draft?.activeProvider === undefined
-        ? undefined
-        : draft.modelSelectionByProvider[draft.activeProvider];
-    const turn = boardTurnSelection({
-      selection: picked ?? shell.modelSelection,
-      providers,
-      text: message.text,
-    });
+  const promptBox = async (boxId: string, prompt: BoardPrompt) => {
+    if (share === null || sendingRef.current) return false;
+    const selection = boxSelection(boxId);
+    // As the composer sends it: the options picked, and an effort the model reads from the prompt.
+    const turn =
+      selection === undefined
+        ? { modelSelection: undefined, text: prompt.text }
+        : boardTurnSelection({ selection, providers, text: prompt.text });
     sendingRef.current = true;
-    const result = await startTurn({
+    const result = await promptRoomBox({
       environmentId: threadRef.environmentId,
       input: {
         threadId: threadRef.threadId,
-        message: {
-          messageId: newMessageId(),
-          role: "user",
-          text: turn.text,
-          ...(message.context === undefined ? {} : { context: message.context }),
-          attachments: [],
-        },
-        modelSelection: turn.modelSelection,
-        runtimeMode: draft?.runtimeMode ?? shell.runtimeMode,
-        interactionMode: draft?.interactionMode ?? shell.interactionMode,
-        ...(agentWorking ? { dispatchMode: "queue" as const } : {}),
-        createdAt: new Date().toISOString(),
+        boxId,
+        text: turn.text,
+        cards: boardContextCards(share.board, share.guests ?? NO_GUESTS, prompt.cards),
+        ...(prompt.artifactId === null ? {} : { artifactId: prompt.artifactId }),
+        ...(turn.modelSelection === undefined ? {} : { modelSelection: turn.modelSelection }),
       },
-    }).finally(() => {
-      sendingRef.current = false;
     });
+    sendingRef.current = false;
     return result._tag === "Success";
   };
+  const requests = useGuestMessageResolver(threadRef);
+  const resolveRequest = (message: ThreadGuestMessage, decision: "send" | "dismiss") =>
+    void requests.resolve(
+      message.id,
+      decision,
+      message.boxId === undefined ? undefined : boxSelection(message.boxId),
+    );
   const thread = structure?.thread ?? null;
+  const projectId = thread?.projectId ?? null;
   const project = useProject(
-    thread === null ? null : scopeProjectRef(threadRef.environmentId, thread.projectId),
+    projectId === null ? null : scopeProjectRef(threadRef.environmentId, projectId),
   );
+  const renderBoxModel = (boxId: string) => {
+    const ref = boxThreadRef(boxId);
+    if (ref !== null) {
+      return (
+        <ThreadBoardModelPicker threadRef={ref} projectId={projectId} fallback={roomSelection} />
+      );
+    }
+    const selection = boxPicks[boxId] ?? roomSelection;
+    return selection === null ? null : (
+      <BoardModelPicker
+        environmentId={threadRef.environmentId}
+        projectId={projectId}
+        selection={selection}
+        onChange={(next) => setBoxPicks((current) => ({ ...current, [boxId]: next }))}
+      />
+    );
+  };
   const cwd = thread?.worktreePath ?? project?.workspaceRoot ?? null;
   const { data: gitStatus } = useEnvironmentQuery(
     share === null || cwd === null
@@ -267,58 +309,157 @@ export function ThreadRoomBoard({ threadRef }: { readonly threadRef: ScopedThrea
       });
     }
   };
+  const title = shell?.title ?? "Board";
+  const panelRef = chat === null ? null : boxThreadRef(chat);
+  const panelTitle =
+    chat === null || chat === ROOM_BOARD_ROOM_BOX
+      ? title
+      : share?.board?.notes.find((note) => note.id === chat)?.text.trim() || "Thread box";
+  const closePanel = useStableCallback(() => onChat(null));
+  const popOut = useStableCallback(() => {
+    if (panelRef === null) return;
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: { environmentId: panelRef.environmentId, threadId: panelRef.threadId },
+    });
+  });
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-none">
-      <RoomBoard
-        title={shell?.title ?? "Board"}
-        room={share}
-        online={presence?.online ?? []}
-        messages={boardMessages(
-          items.map((projected) => projected.item),
-          BOARD_THREAD_MESSAGES,
+      <RoomLiveContext value={live}>
+        {share === null ? null : (
+          <OwnerBoardLive threadRef={threadRef} shareId={share.id} live={live} />
         )}
-        agentWorking={agentWorking}
-        running={agents?.running ?? []}
-        viewer={null}
-        ownerName={undefined}
-        cursorLayer={
-          share === null ? null : (
-            <OwnerBoardCursors
-              threadRef={threadRef}
-              shareId={share.id}
-              guests={share.guests ?? NO_GUESTS}
+        <BoardSplit
+          open={chat !== null}
+          board={
+            <RoomBoard
+              title={title}
+              room={share}
+              online={presence?.online ?? []}
+              messages={boardMessages(
+                items.map((projected) => projected.item),
+                BOARD_THREAD_MESSAGES,
+              )}
+              agentWorking={agentWorking}
+              viewer={null}
+              ownerName={undefined}
+              cursorLayer={
+                share === null ? null : (
+                  <OwnerBoardCursors
+                    threadRef={threadRef}
+                    shareId={share.id}
+                    guests={share.guests ?? NO_GUESTS}
+                  />
+                )
+              }
+              onOpenThread={() => openPanel()}
+              onBack={openFullThread}
+              onOpenReply={(messageId) => {
+                revealRoomReply(messageId);
+                openPanel();
+              }}
+              onChange={onChange}
+              onCursor={
+                share !== null && canPoint
+                  ? (presence) =>
+                      void moveCursor({
+                        environmentId: threadRef.environmentId,
+                        input: { threadId: threadRef.threadId, shareId: share.id, ...presence },
+                      })
+                  : undefined
+              }
+              onUseNote={putInDraft}
+              ownerCode={ownerCode}
+              onTakeTask={takeTask}
+              onOpenPullRequest={canOpenPullRequest ? () => void openPullRequest() : undefined}
+              openingPullRequest={openingPullRequest}
+              onPromptBox={share !== null && canPrompt ? promptBox : undefined}
+              renderBoxModel={renderBoxModel}
+              onOpenConversation={openPanel}
+              conversationBoxes={new Set([ROOM_BOARD_ROOM_BOX, ...Object.keys(boardThreads)])}
+              onResolveRequest={requests.canOperate ? resolveRequest : undefined}
+              resolvingRequests={requests.busyIds}
+              ownerWritingArtifactId={writingArtifactId}
+              needsApproval={(pendingRequests?.approvals.length ?? 0) > 0}
             />
-          )
-        }
-        onOpenThread={openThread}
-        onOpenReply={(messageId) => {
-          revealRoomReply(messageId);
-          openThread();
-        }}
-        onChange={onChange}
-        onCursor={
-          share !== null && canPoint
-            ? (presence) =>
-                void moveCursor({
-                  environmentId: threadRef.environmentId,
-                  input: { threadId: threadRef.threadId, shareId: share.id, ...presence },
-                })
-            : undefined
-        }
-        onUseNote={putInDraft}
-        ownerCode={ownerCode}
-        onTakeTask={takeTask}
-        onOpenPullRequest={canOpenPullRequest ? () => void openPullRequest() : undefined}
-        openingPullRequest={openingPullRequest}
-        onPrompt={share !== null && canSend ? sendFromBoard : undefined}
-        promptPlaceholder="Ask your agent"
-        canFillArtifacts
-        artifactPromptPlaceholder="Ask your agent to change this"
-        ownerWritingArtifactId={writingArtifactId}
-        needsApproval={(pendingRequests?.approvals.length ?? 0) > 0}
-      />
+          }
+          panel={
+            chat === null ? null : panelRef === null ? (
+              <BoardPanelEmpty title={panelTitle} onClose={closePanel} />
+            ) : (
+              <BoardChatPanel
+                environmentId={panelRef.environmentId}
+                threadId={panelRef.threadId}
+                title={panelTitle}
+                onClose={closePanel}
+                onPopOut={popOut}
+              />
+            )
+          }
+        />
+      </RoomLiveContext>
     </SidebarInset>
   );
+}
+
+/** A box whose conversation has not started: its first prompt starts it. */
+function BoardPanelEmpty({
+  title,
+  onClose,
+}: {
+  readonly title: string;
+  readonly onClose: () => void;
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border pr-1 pl-3">
+        <span className="min-w-0 flex-1 truncate text-xs font-medium">{title}</span>
+        <Button variant="ghost" size="icon-xs" aria-label="Close conversation" onClick={onClose}>
+          <XIcon />
+        </Button>
+      </div>
+      <p className="p-4 text-sm text-muted-foreground">
+        This thread box has no conversation yet. Prompt it from its box on the board to start one.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * What runs in the room now, read here and kept in the board's live store, so a progress tick
+ * renders only the cards it changes and never the whole board.
+ */
+function OwnerBoardLive({
+  threadRef,
+  shareId,
+  live,
+}: {
+  readonly threadRef: ScopedThreadRef;
+  readonly shareId: GuestShareId;
+  readonly live: RoomLiveStore;
+}) {
+  const { data } = useEnvironmentQuery(
+    serverEnvironment.guestRoomAgents({
+      environmentId: threadRef.environmentId,
+      input: { threadId: threadRef.threadId, shareId },
+    }),
+  );
+  const running = data?.running;
+  const boxes = data?.boxes;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- hands the room's live runs to the board's store, which lives outside React
+  useEffect(() => {
+    live.setRunning(running ?? []);
+    live.setBoxes(boxes);
+  }, [live, running, boxes]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- stops the store's clock once the board closes
+  useEffect(
+    () => () => {
+      live.setRunning([]);
+      live.setBoxes(undefined);
+    },
+    [live],
+  );
+  return null;
 }
 
 /** The guests' pointers and views, read here so a pointer moving renders only this. */

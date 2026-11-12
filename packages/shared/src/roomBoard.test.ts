@@ -4,6 +4,7 @@ import {
   type OrchestrationV2TurnItem,
   ROOM_ARTIFACT_MAX_LENGTH,
   ROOM_BOARD_MAX_ARTIFACTS,
+  ROOM_BOARD_MAX_THREADS,
   type RoomBoard,
   type RoomBoardChange,
 } from "@t3tools/contracts";
@@ -18,6 +19,7 @@ import {
   roomArtifactBody,
   roomArtifactRequestOf,
   roomBoardWithCards,
+  roomBoxRequestOf,
 } from "./roomBoard.ts";
 
 describe("roomBoardWithCards", () => {
@@ -106,6 +108,32 @@ describe("applyRoomBoardChange", () => {
     expect(added.notes.at(-1)?.artifact).toBeUndefined();
   });
 
+  it("holds a few thread boxes, whose turns no change sets or clears, and drops their arrows", () => {
+    let board = EMPTY_ROOM_BOARD;
+    for (let index = 0; index < ROOM_BOARD_MAX_THREADS; index++) {
+      board = applied(board, put(`t${index}`, { kind: "thread", text: `Box ${index}` }));
+    }
+    expect(Result.isFailure(apply(board, put("over", { kind: "thread" })))).toBe(true);
+    expect(board.notes[0]).toMatchObject({ kind: "thread", guestId: sam });
+    const thread = {
+      turns: [{ id: "run:1", prompt: "Go", reply: "Done", at: "2026-11-12T00:00:00.000Z" }],
+    };
+    const ran: RoomBoard = {
+      ...board,
+      notes: board.notes.map((note) => (note.id === "t0" ? { ...note, thread } : note)),
+      edges: [{ id: "into", from: "note:t1", to: "note:t0" }],
+    };
+    expect(applied(ran, put("t0", { text: "Renamed" })).notes[0]).toMatchObject({
+      text: "Renamed",
+      kind: "thread",
+      thread,
+    });
+    // A box is no task: it is never done or assigned.
+    expect(Result.isFailure(apply(ran, put("t0", { done: true })))).toBe(true);
+    const removed = applied(ran, { type: "note.remove", noteId: "t0" });
+    expect(removed.edges).toEqual([]);
+  });
+
   it("swaps an artifact with the version it replaced, and back, for anyone", () => {
     const first = { body: "# One", turnId: "run:1", updatedAt: "2026-11-12T00:00:00.000Z" };
     const second = roomArtifactAfterFill(roomArtifactAfterFill(undefined, first), {
@@ -165,6 +193,28 @@ describe("roomArtifactRequestOf", () => {
       undefined,
     );
     expect(roomArtifactRequestOf([message({ records: [] })], shareId)).toBeUndefined();
+    expect(
+      roomArtifactRequestOf(
+        [message({ records: [{ ...record(shareId), boxId: "box:1" }] })],
+        shareId,
+      ),
+    ).toEqual({ noteId: "note:plan", boxId: "box:1" });
+  });
+
+  it("finds the thread box the owner's server marked a message for, and nothing else", () => {
+    const box = (payload: object) => ({
+      version: 1,
+      contextId: "room-box_1",
+      kind: "room-box",
+      label: "Thread box",
+      payload,
+    });
+    expect(roomBoxRequestOf([message({ records: [box({ shareId, boxId: "box:1" })] })])).toEqual({
+      shareId,
+      boxId: "box:1",
+    });
+    expect(roomBoxRequestOf([message({ records: [box({ shareId })] })])).toBeUndefined();
+    expect(roomBoxRequestOf([message({ records: [record(shareId)] })])).toBeUndefined();
   });
 });
 

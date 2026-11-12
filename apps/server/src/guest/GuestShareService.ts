@@ -31,7 +31,6 @@ import {
   type GuestAgentActivityRequest,
   GUEST_AGENT_PROMPT_MAX_LENGTH,
   isBranchSynced,
-  MessageId,
   providerAllowsDirectGuestSend,
   repositoryGroupingKeyOf,
   type RoomAgentsEvent,
@@ -112,6 +111,7 @@ import * as GuestLinkNames from "./GuestLinkNames.ts";
 import * as GuestTeamShares from "./GuestTeamShares.ts";
 import * as GuestSignIn from "./GuestSignIn.ts";
 import { guestShareView, guestThreadModel } from "./guestView.ts";
+import * as RoomBoxes from "./RoomBoxes.ts";
 import { clip, roomUpdatesOf } from "./roomUpdates.ts";
 import {
   classifyGuestUploads,
@@ -204,6 +204,8 @@ const GUEST_ACCESS_MESSAGES = {
   team_member_required:
     "This thread is shared with a team. Open it from the team's page in T Code while signed in.",
   artifact_gone: GUEST_FAILURE.artifactGone,
+  box_gone: GUEST_FAILURE.boxGone,
+  box_not_yours: GUEST_FAILURE.boxNotYours,
 } as const;
 
 /** What a guest is told. The message comes from `reason`, never from a cause. */
@@ -233,6 +235,8 @@ export class GuestShareAccessError extends Schema.TaggedError<GuestShareAccessEr
       "removed",
       "team_member_required",
       "artifact_gone",
+      "box_gone",
+      "box_not_yours",
     ]),
   },
 ) {
@@ -252,6 +256,8 @@ const GUEST_FAILURE_REASONS = new Map<unknown, GuestShareAccessError["reason"]>(
   [GUEST_FAILURE.boardFull, "board_full"],
   [GUEST_FAILURE.removed, "removed"],
   [GUEST_FAILURE.artifactGone, "artifact_gone"],
+  [GUEST_FAILURE.boxGone, "box_gone"],
+  [GUEST_FAILURE.boxNotYours, "box_not_yours"],
 ]);
 const guestFailureReason = (cause: unknown): GuestShareAccessError["reason"] =>
   GUEST_FAILURE_REASONS.get(cause) ?? "rejected";
@@ -471,6 +477,7 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const random = yield* SecureRandom.SecureRandom;
   const analytics = yield* AnalyticsService.AnalyticsService;
+  const roomBoxes = yield* RoomBoxes.RoomBoxes;
   const signer = yield* PayloadSigner.make(SIGNING_SECRET_NAME);
   // A value that is set but is not a usable origin counts as none: links stay on this host.
   const hostedAppUrl = yield* configuredHostedAppUrlConfig.pipe(
@@ -1026,30 +1033,17 @@ const make = Effect.gen(function* () {
       ...(attachments.length === 0 ? {} : { attachments }),
       ...(direct ? { direct } : {}),
       ...(request.artifactId === undefined ? {} : { artifactId: request.artifactId }),
+      ...(request.boxId === undefined ? {} : { boxId: request.boxId }),
     }).pipe(Effect.onError(() => removeStored(attachments)));
     if (direct) {
-      const sendId = yield* commandId("send");
       // The same send the owner's button makes. If it fails, the message waits for the owner.
-      yield* orchestrator
-        .dispatch({
-          type: "message.dispatch",
-          commandId: sendId,
-          threadId: thread.id,
-          messageId: MessageId.make(sendId),
-          guestMessageId,
-          text: "",
-          attachments,
-          dispatchMode: { type: "queue_after_active" },
-          createdBy: "user",
-          creationSource: "server",
-        })
-        .pipe(
-          Effect.catch((error) =>
-            Effect.logWarning("Could not send a trusted guest's message; it waits for the owner.", {
-              error,
-            }),
-          ),
-        );
+      yield* roomBoxes.sendGuestMessage({ threadId: thread.id, guestMessageId }, "server").pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("Could not send a trusted guest's message; it waits for the owner.", {
+            error,
+          }),
+        ),
+      );
     }
     yield* analytics.record("feature.used", {
       feature: direct ? "guest_message.submit_direct" : "guest_message.submit",
@@ -1190,7 +1184,7 @@ const make = Effect.gen(function* () {
       ),
       Stream.changesWith((left, right) => JSON.stringify(left) === JSON.stringify(right)),
     );
-  const agentsOf = (shareId: GuestShareId) =>
+  const runningOf = (shareId: GuestShareId) =>
     roomEvents(shareId, (room, now): RoomAgentsEvent => ({
       type: "agents",
       running: [...room.agents]
@@ -1204,6 +1198,16 @@ const make = Effect.gen(function* () {
         }))
         .toSorted((left, right) => left.guestId.localeCompare(right.guestId)),
     }));
+  /** The room's agents and what each thread box's agent is doing, for the owner or a guest. */
+  const agentsOf = (shareId: GuestShareId, reader: "owner" | "guest") =>
+    Stream.zipLatestWith(
+      runningOf(shareId),
+      roomBoxes.progress(shareId),
+      (agents, boxes): RoomAgentsEvent => ({
+        ...agents,
+        boxes: reader === "owner" ? boxes.owner : boxes.guests,
+      }),
+    );
   /** Everyone's pointers and views but the reader's own. */
   const cursorsOf = (shareId: GuestShareId, reader: string) =>
     roomEvents(shareId, (room, now): RoomCursorsEvent => {
@@ -1242,7 +1246,7 @@ const make = Effect.gen(function* () {
         }),
       );
       return Stream.merge(
-        agentsOf(shareId).pipe(
+        agentsOf(shareId, "guest").pipe(
           Stream.map((event): ReadonlyArray<RoomAgentsEvent> => {
             agents = event;
             return [event];
@@ -1640,7 +1644,9 @@ const make = Effect.gen(function* () {
     );
   const roomAgents = (input: RoomLiveInput) =>
     Stream.unwrap(
-      Effect.map(ownsRoom(input), (owned) => (owned ? agentsOf(input.shareId) : Stream.empty)),
+      Effect.map(ownsRoom(input), (owned) =>
+        owned ? agentsOf(input.shareId, "owner") : Stream.empty,
+      ),
     );
   // Shares whose owner has the board open, counted per board: only then is their pointer shown.
   const ownerBoards = new Map<GuestShareId, number>();

@@ -1,11 +1,13 @@
 import {
   GuestId,
+  GuestMessageId,
   ROOM_BOARD_MAX_CARD_SIZE,
   ROOM_BOARD_MAX_COORDINATE,
   ROOM_BOARD_MIN_CARD_SIZE,
   ROOM_BOARD_QUOTE_MAX_LENGTH,
   type RoomBoard,
   type RoomBoardNote,
+  type ThreadGuestMessage,
 } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -20,33 +22,45 @@ import {
   type BoardPresence,
   type BoardRect,
   appendNoteToDraft,
+  besideBoardItem,
   boardAgentCode,
   boardAgents,
   boardArtifactAuthor,
   boardArtifactWriting,
+  boardBoxAgentLabel,
+  boardBoxName,
+  boardBoxRequests,
   boardCardBox,
   boardChangeOf,
   boardChangeQueue,
   boardConnector,
   boardCursorAt,
   boardCursorColor,
+  boardDraftIsPage,
   boardItemRects,
   boardMessages,
   boardNewNoteSize,
   boardNoteBox,
+  boardOwnBoxFor,
+  boardProgressLine,
+  boardProgressPhase,
   boardPromptContext,
   boardReplyQuote,
+  boardThreadBoxes,
   boardUrlIn,
   boardViewportOf,
+  canPromptBoardBox,
   cursorSender,
   dropBoardEdit,
   followBoardView,
+  formatBoardElapsed,
   isBoardHtmlArtifact,
   parseBoardLink,
   pinnedCommentSpot,
   placeBoardCards,
   placeBoardItem,
   putBoardEdit,
+  resizeBoardFromLeft,
   resolveBoard,
   roomCodeStatus,
   roomFetchCommand,
@@ -131,6 +145,16 @@ describe("placeBoardItem", () => {
     const crowded = placeBoardItem(note, middle, [wall, corner], view);
     expect(inside(crowded, note, view)).toBe(true);
     expect(crowded.x).toBeGreaterThan(500 - note.w);
+  });
+
+  it("puts a card made from another beside it, to its right and clear of what is there", () => {
+    const box = { x: 100, y: 100, width: 340, height: 460 };
+    const artifact = boardNewNoteSize("artifact");
+    expect(besideBoardItem(box, artifact, [box])).toEqual({ x: 480, y: 100 });
+    const neighbour = { x: 470, y: 80, width: 300, height: 300 };
+    const at = besideBoardItem(box, artifact, [box, neighbour]);
+    expect(covers(at, artifact, neighbour)).toBe(false);
+    expect(covers(at, artifact, box)).toBe(false);
   });
 });
 
@@ -224,6 +248,17 @@ describe("resolveBoard", () => {
     expect(resolveBoard(resized, sent).sizes?.thread).toEqual(dropped);
     expect(resolveBoard(resized, sent).positions.thread).toEqual({ x: 0, y: 0 });
 
+    // From the bottom-left corner the left edge follows the pointer and the right edge stays,
+    // stopping at the bounds without pushing the card along.
+    const card = { x: 100, y: 50, width: 300, height: 200 };
+    expect(resizeBoardFromLeft(card, -40, 25)).toEqual({ x: 60, y: 50, size: { w: 340, h: 225 } });
+    expect(resizeBoardFromLeft(card, 250, -500)).toEqual({
+      x: 400 - ROOM_BOARD_MIN_CARD_SIZE,
+      y: 50,
+      size: { w: ROOM_BOARD_MIN_CARD_SIZE, h: ROOM_BOARD_MIN_CARD_SIZE },
+    });
+    expect(resizeBoardFromLeft(card, -5_000, 0).x).toBe(400 - ROOM_BOARD_MAX_CARD_SIZE);
+
     const note = { id: "n", text: "Ship", x: 0.4, y: 0, size: { w: 250.2, h: 3_000 } };
     const settled = settleBoardValue(note);
     expect(settled.size).toEqual({ w: 250, h: ROOM_BOARD_MAX_CARD_SIZE });
@@ -250,6 +285,23 @@ describe("resolveBoard", () => {
       ...empty,
       text: "Release plan",
       artifact,
+    });
+    // A thread box keeps the turns its server wrote while someone renames it.
+    const box = { id: "a", text: "", x: 0, y: 0, kind: "thread" as const };
+    const naming = putBoardEdit(
+      { positions: {}, notes: [box] },
+      NO_BOARD_EDITS,
+      target,
+      { ...box, text: "Pricing" },
+      true,
+    );
+    const thread = {
+      turns: [{ id: "t1", prompt: "Hi", reply: "Hello", at: "2026-11-12T00:00:00.000Z" }],
+    };
+    expect(resolveBoard({ positions: {}, notes: [{ ...box, thread }] }, naming).notes[0]).toEqual({
+      ...box,
+      text: "Pricing",
+      thread,
     });
   });
 
@@ -321,6 +373,22 @@ describe("boardConnector", () => {
     const artifact = boardNoteBox({ x: 0, y: 0, kind: "artifact" });
     expect(artifact.width).toBeGreaterThan(boardNoteBox({ x: 0, y: 0 }).width);
     expect(boardConnector(artifact, note).path.startsWith(`M${artifact.width} 12 `)).toBe(true);
+  });
+
+  it("joins whichever sides of two cards are nearer each other, from either side", () => {
+    const card = boardCardBox({ x: 600, y: 0 });
+    // A card to the left: the line leaves the card's left side for the note's right side.
+    const left = boardConnector(card, boardNoteBox({ x: 100, y: 300 }));
+    expect(left.path.startsWith("M600 18 ")).toBe(true);
+    expect(left.path.endsWith(" 292 312")).toBe(true);
+    // One under the other at the same place: both ends on the same side, curving out and back.
+    const below = boardConnector(card, boardCardBox({ x: 600, y: 400 }));
+    expect(below.path).toBe("M920 18 C960 18, 960 418, 920 418");
+    expect(below.middle).toEqual({ x: 950, y: 218 });
+    // Overlapping a little to the right: the right sides are nearer than the facing ones.
+    const overlap = boardConnector(card, boardCardBox({ x: 700, y: 400 }));
+    expect(overlap.path.startsWith("M920 18 ")).toBe(true);
+    expect(overlap.path.endsWith(" 1020 418")).toBe(true);
   });
 });
 
@@ -705,31 +773,45 @@ describe("boardPromptContext", () => {
     expect(context.artifactEdgeId).toBe("card:thread>note:empty");
   });
 
-  it("gathers the cards pointing into an artifact for its own box, never the artifact itself", () => {
+  it("carries the cards into any box and into the artifact it rewrites, never thread boxes", () => {
     const shared = board(
-      [note("a"), note("b"), note("art", { text: "Mockup", kind: "artifact" }), note("c")],
+      [
+        note("a"),
+        note("b"),
+        note("dark", { text: "Make it dark mode", guestId: sam }),
+        note("art", { text: "Mockup", kind: "artifact" }),
+        note("other", { text: "Other", kind: "artifact" }),
+        note("box", { text: "Sam's box", kind: "thread", guestId: sam }),
+        note("box2", { text: "", kind: "thread" }),
+      ],
       [
         arrow("note:a", "note:art"),
         arrow("note:b", "note:a"),
-        arrow("note:art", "note:a"),
-        arrow("note:art", "card:thread"),
+        arrow("note:dark", "note:box"),
+        // Another box pointing in is a conversation of its own, not a card.
+        arrow("note:box2", "note:box"),
+        arrow("note:box", "note:art"),
+        arrow("note:box", "note:other"),
+        arrow("note:art", "note:box"),
         arrow("card:thread", "note:art"),
-        arrow("note:c", "card:thread"),
       ],
     );
-    const context = boardPromptContext(shared, people, [], "note:art");
-    expect(context.cards.map((card) => card.ref)).toEqual(["note:a", "note:b"]);
-    expect([...context.edgeIds]).toEqual(["note:a>note:art", "note:b>note:a"]);
-    expect(context.artifact).toBeNull();
-    // The thread's card still carries the artifact and fills it.
-    const thread = boardPromptContext(shared, people);
-    expect(thread.cards.map((card) => card.ref)).toEqual([
-      "note:art",
-      "note:c",
-      "note:a",
-      "note:b",
+    const sams = boardPromptContext(shared, people, [], "box");
+    expect(sams.cards.map((card) => [card.ref, card.label])).toEqual([
+      ["note:a", "Note from You"],
+      ["note:dark", "Note from Sam"],
+      ["note:b", "Note from You"],
     ]);
-    expect(thread.artifactEdgeId).toBe("card:thread>note:art");
+    // The first artifact the box has a line to is the one its replies rewrite.
+    expect(sams.artifact?.id).toBe("art");
+    expect(sams.artifactEdgeId).toBe("note:box>note:art");
+    expect([...sams.edgeIds]).toEqual(["note:a>note:art", "note:b>note:a", "note:dark>note:box"]);
+    // The room thread's own card rewrites the same artifact and carries the cards into it.
+    const room = boardPromptContext(shared, people);
+    expect(room.cards.map((card) => card.ref)).toEqual(["note:a", "note:b"]);
+    expect(room.artifactEdgeId).toBe("card:thread>note:art");
+    // A box with no line to an artifact rewrites nothing.
+    expect(boardPromptContext(shared, people, [], "box2").artifact).toBeNull();
   });
 
   it("shows an artifact as a page only when it is a whole HTML document", () => {
@@ -779,5 +861,137 @@ describe("boardArtifactAuthor", () => {
         { guests, viewer: eve, ownerName: "Alex" },
       ),
     ).toBe("Alex's agent, Sam's agent and your agent are writing…");
+  });
+});
+
+describe("thread boxes", () => {
+  const sam = GuestId.make("sam");
+  const eve = GuestId.make("eve");
+  const guests = [
+    { id: sam, name: "Sam" },
+    { id: eve, name: "Eve" },
+  ];
+  const box = (id: string, guestId?: GuestId): RoomBoardNote => ({
+    id,
+    text: id === "b1" ? " Pricing " : "",
+    x: 0,
+    y: 0,
+    kind: "thread",
+    ...(guestId === undefined ? {} : { guestId }),
+  });
+  const shared: RoomBoard = {
+    positions: {},
+    notes: [
+      box("b1"),
+      box("b2", sam),
+      { id: "art", text: "Mockup", x: 0, y: 0, kind: "artifact" },
+      { id: "n", text: "Dark mode", x: 0, y: 0 },
+    ],
+    edges: [
+      { id: "e1", from: "note:b2", to: "note:art" },
+      { id: "e2", from: "card:thread", to: "note:art" },
+    ],
+  };
+
+  it("lists the room thread's own box first, and lets only its person prompt each", () => {
+    const boxes = boardThreadBoxes(shared, "Launch");
+    expect(boxes).toEqual([
+      { id: "thread", guestId: undefined, title: "Launch" },
+      { id: "b1", guestId: undefined, title: "Pricing" },
+      { id: "b2", guestId: sam, title: "" },
+    ]);
+    const [room, own, sams] = boxes;
+    expect([room, own, sams].map((each) => canPromptBoardBox(each!, null))).toEqual([
+      true,
+      true,
+      false,
+    ]);
+    expect([room, own, sams].map((each) => canPromptBoardBox(each!, sam))).toEqual([
+      false,
+      false,
+      true,
+    ]);
+    expect(canPromptBoardBox(sams!, eve)).toBe(false);
+  });
+
+  it("says whose agent runs a box, a guest's through the owner's this round", () => {
+    expect(boardBoxAgentLabel({}, { guests, viewer: null })).toBe("Your agent");
+    expect(boardBoxAgentLabel({}, { guests, viewer: sam, ownerName: "Alex" })).toBe("Alex's agent");
+    expect(boardBoxAgentLabel({ guestId: sam }, { guests, viewer: null })).toBe(
+      "Sam, through your agent",
+    );
+    expect(boardBoxAgentLabel({ guestId: sam }, { guests, viewer: sam })).toBe(
+      "You, through the owner's agent",
+    );
+    expect(boardBoxAgentLabel({ guestId: sam }, { guests, viewer: eve })).toBe(
+      "Sam, through the owner's agent",
+    );
+    expect(boardBoxName({ id: "b1", title: "Pricing" }, { guests, viewer: null })).toBe(
+      'Your thread "Pricing"',
+    );
+    expect(boardBoxName({ id: "b2", guestId: sam, title: "" }, { guests, viewer: null })).toBe(
+      "Sam's thread",
+    );
+  });
+
+  it("finds the requests waiting on each box, and none from the room thread's composer", () => {
+    const message = (id: string, fields: Partial<ThreadGuestMessage>): ThreadGuestMessage => ({
+      id: GuestMessageId.make(id),
+      text: id,
+      status: "pending",
+      submittedAt: "2026-11-12T00:00:00.000Z",
+      guestId: sam,
+      ...fields,
+    });
+    const messages = [
+      message("plain", {}),
+      message("first", { boxId: "b2" }),
+      message("sent", { boxId: "b2", status: "sent" }),
+      message("room", { boxId: "thread" }),
+      message("second", { boxId: "b2", artifactId: "art" }),
+    ];
+    expect(boardBoxRequests(messages, "b2").map((each) => each.id)).toEqual(["first", "second"]);
+    expect(boardBoxRequests(messages, "thread").map((each) => each.id)).toEqual(["room"]);
+    expect(boardBoxRequests(messages, "b1")).toEqual([]);
+  });
+
+  it("reuses the viewer's own box that already rewrites an artifact for Attach my agent", () => {
+    expect(boardOwnBoxFor(shared, sam, "art")).toBe("b2");
+    // The owner's room thread card counts as theirs.
+    expect(boardOwnBoxFor(shared, null, "art")).toBe("thread");
+    // Eve has no box on it, and a box pointing elsewhere is not one.
+    expect(boardOwnBoxFor(shared, eve, "art")).toBeNull();
+    expect(
+      boardOwnBoxFor(
+        { ...shared, edges: [{ id: "e", from: "note:b1", to: "note:n" }] },
+        null,
+        "art",
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("box progress", () => {
+  it("says what a box's agent is doing, with its model and how long it has run", () => {
+    const startedAt = "2026-11-12T10:00:00.000Z";
+    const at = (seconds: number) => Date.parse(startedAt) + seconds * 1000;
+    expect(boardProgressPhase({ phase: "queued" })).toBe("Queued");
+    expect(boardProgressPhase({ phase: "thinking" })).toBe("Thinking");
+    expect(boardProgressPhase({ phase: "tool", detail: " pnpm test " })).toBe("Running pnpm test");
+    expect(boardProgressPhase({ phase: "tool" })).toBe("Running a tool");
+    expect(boardProgressPhase({ phase: "writing" })).toBe("Writing");
+    expect(boardProgressPhase({ phase: "approval" })).toBe("Waiting for approval");
+    expect(
+      boardProgressLine({ phase: "writing", model: "Claude Opus 4.5", startedAt }, at(65)),
+    ).toBe("Writing · Claude Opus 4.5 · 1m 05s");
+    expect(boardProgressLine({ phase: "thinking", startedAt }, at(-3))).toBe("Thinking · 0s");
+    expect(formatBoardElapsed(8_900)).toBe("8s");
+    expect(formatBoardElapsed(3_840_000)).toBe("1h 04m");
+  });
+
+  it("shows a draft that starts as markup as a page's source while it streams", () => {
+    expect(boardDraftIsPage("<!doc")).toBe(true);
+    expect(boardDraftIsPage("\n  <html><body>")).toBe(true);
+    expect(boardDraftIsPage("# Plan\n\n<b>bold</b>")).toBe(false);
   });
 });

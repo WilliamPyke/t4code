@@ -129,6 +129,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as GuestShareService from "./guest/GuestShareService.ts";
+import * as RoomBoxes from "./guest/RoomBoxes.ts";
 import * as SharedRoomLink from "./guest/SharedRoomLink.ts";
 import * as SharedThreadJoin from "./guest/SharedThreadJoin.ts";
 import {
@@ -1454,6 +1455,7 @@ export const layerWsRpc = (
       const guestShares = yield* GuestShareService.GuestShareService;
       const sharedThreads = yield* SharedThreadJoin.SharedThreadJoin;
       const sharedRooms = yield* SharedRoomLink.SharedRoomLink;
+      const roomBoxes = yield* RoomBoxes.RoomBoxes;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -2390,6 +2392,14 @@ export const layerWsRpc = (
                     reason === "inactive" ? reason : reason === "board_full" ? "full" : "rejected",
                 }),
             ),
+          ),
+        [WS_METHODS.guestSharePromptBox]: (input) =>
+          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+            Effect.andThen(roomBoxes.prompt(input)),
+          ),
+        [WS_METHODS.guestShareSendMessage]: (input) =>
+          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+            Effect.andThen(roomBoxes.sendGuestMessage(input, input.creationSource ?? "web")),
           ),
         [WS_METHODS.sharedThreadPreview]: (input) => sharedThreads.preview(input),
         [WS_METHODS.sharedThreadJoin]: (input) =>

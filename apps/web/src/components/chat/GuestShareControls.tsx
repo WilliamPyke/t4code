@@ -14,6 +14,7 @@ import {
   guestShareStatusLabel,
   type ModelSelection,
   providerAllowsDirectGuestSend,
+  ROOM_BOARD_ROOM_BOX,
   type ScopedThreadRef,
   type SharedThreadCatchUpResult,
   type ThreadGuest,
@@ -74,7 +75,7 @@ import { GuestMessageAttachments } from "./GuestMessageAttachments";
 import { GuestMessageName, guestBubbleClassName } from "./guestMessageStyle";
 import { GuestTurnList } from "./GuestTurnList";
 import { guestShareDialogThreadAtom } from "./guestShareDialogState";
-import { guestMessageArtifactTitle } from "./roomBoardPrompt";
+import { guestMessageArtifactTitle, guestMessageBoxTitle } from "./roomBoardPrompt";
 
 function useThreadGuestShare(threadRef: ScopedThreadRef | null): ThreadGuestShare | null {
   return useQuietThreadProjection(threadRef)?.projection.thread.guestShare ?? null;
@@ -325,6 +326,8 @@ export function GuestShareIndicator({ threadRef }: { readonly threadRef: ScopedT
               roomEnvironmentId: threadRef.environmentId,
               roomThreadId: threadRef.threadId,
             },
+            // Side by side: the thread opens beside the board.
+            search: { chat: ROOM_BOARD_ROOM_BOX },
           })
         }
       >
@@ -633,6 +636,40 @@ export function RoomLinkIndicator({ threadRef }: { readonly threadRef: ScopedThr
 }
 
 /**
+ * Sends or dismisses a guest's waiting message, as the timeline and the board's thread boxes both
+ * offer it, and which ones are on their way.
+ */
+export function useGuestMessageResolver(threadRef: ScopedThreadRef) {
+  const canOperate = useEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope);
+  const resolveGuestMessage = useOrchestrationCommand(threadEnvironment.resolveGuestMessage, {
+    label: "resolve guest message",
+  });
+  const [busyIds, setBusyIds] = useState<ReadonlySet<GuestMessageId>>(new Set());
+  const resolve = async (
+    guestMessageId: GuestMessageId,
+    decision: "send" | "dismiss",
+    modelSelection: ModelSelection | undefined,
+  ) => {
+    setBusyIds((ids) => new Set(ids).add(guestMessageId));
+    await resolveGuestMessage({
+      environmentId: threadRef.environmentId,
+      input: {
+        threadId: threadRef.threadId,
+        guestMessageId,
+        decision,
+        ...(modelSelection === undefined ? {} : { modelSelection }),
+      },
+    });
+    setBusyIds((ids) => {
+      const next = new Set(ids);
+      next.delete(guestMessageId);
+      return next;
+    });
+  };
+  return { canOperate, busyIds, resolve };
+}
+
+/**
  * A guest's messages wait at the end of the timeline until the owner sends or dismisses each one.
  * Sent ones then show in the timeline as normal user messages with the guest's name.
  */
@@ -649,11 +686,7 @@ export function GuestPendingMessages({
   readonly onFileOpen: (attachment: ChatFileAttachment) => void;
 }) {
   const share = useThreadGuestShare(threadRef);
-  const canOperate = useEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope);
-  const resolveGuestMessage = useOrchestrationCommand(threadEnvironment.resolveGuestMessage, {
-    label: "resolve guest message",
-  });
-  const [busyIds, setBusyIds] = useState<ReadonlySet<GuestMessageId>>(new Set());
+  const { canOperate, busyIds, resolve: resolveMessage } = useGuestMessageResolver(threadRef);
   const pending = share?.messages.filter((message) => message.status === "pending") ?? [];
   // The files are the thread's attachments, which the owner's environment serves like any other.
   const images = pending.flatMap((message) => message.attachments ?? []).filter(isImageAttachment);
@@ -676,23 +709,8 @@ export function GuestPendingMessages({
     if (preview) onImageExpand(preview);
   };
 
-  const resolve = async (guestMessageId: GuestMessageId, decision: "send" | "dismiss") => {
-    setBusyIds((ids) => new Set(ids).add(guestMessageId));
-    await resolveGuestMessage({
-      environmentId: threadRef.environmentId,
-      input: {
-        threadId: threadRef.threadId,
-        guestMessageId,
-        decision,
-        ...(modelSelection === undefined ? {} : { modelSelection }),
-      },
-    });
-    setBusyIds((ids) => {
-      const next = new Set(ids);
-      next.delete(guestMessageId);
-      return next;
-    });
-  };
+  const resolve = (guestMessageId: GuestMessageId, decision: "send" | "dismiss") =>
+    resolveMessage(guestMessageId, decision, modelSelection);
 
   return (
     <ol
@@ -704,6 +722,7 @@ export function GuestPendingMessages({
         const busy = busyIds.has(message.id);
         const guestName = guestMessageAuthorName(share, message);
         const artifactTitle = guestMessageArtifactTitle(share.board, message);
+        const boxTitle = guestMessageBoxTitle(share.board, message);
         return (
           <li key={message.id} className="flex flex-col items-end gap-1">
             <GuestMessageName name={guestName} />
@@ -725,6 +744,11 @@ export function GuestPendingMessages({
                 </p>
               ) : null}
             </div>
+            {boxTitle === null ? null : (
+              <p className="me-1 max-w-[80%] text-xs text-muted-foreground">
+                {`Asked from ${boxTitle} on the board. Sending this runs it in that box's own conversation.`}
+              </p>
+            )}
             {artifactTitle === null ? null : (
               <p className="me-1 max-w-[80%] text-xs text-muted-foreground">
                 {`Sending this gives your agent the artifact "${artifactTitle}", and its reply replaces it on the board.`}

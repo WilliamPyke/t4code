@@ -52,6 +52,7 @@ import {
   RoomArtifactContent,
   RoomBoardChange,
   RoomBoardNote,
+  RoomBoxTurn,
   RoomTaskContextPayload,
   SharedThreadMessage,
   ThreadGuestMessage,
@@ -3496,6 +3497,8 @@ const OrchestrationV2InternalCommand = Schema.Union([
     direct: Schema.optional(Schema.Boolean),
     /** An artifact card on the share's board that the reply should fill. */
     artifactId: ThreadGuestMessage.fields.artifactId,
+    /** The guest's own thread box the message is for. */
+    boxId: ThreadGuestMessage.fields.boxId,
   }),
   /** Shows a turn a guest ran on their own machine. It changes the share and nothing else. */
   Schema.Struct({
@@ -3537,6 +3540,42 @@ const OrchestrationV2InternalCommand = Schema.Union([
     truncated: RoomArtifactContent.fields.truncated,
     /** The guest whose message the turn answered, when the owner sent one. */
     askedBy: RoomArtifactContent.fields.askedBy,
+    prompt: RoomArtifactContent.fields.prompt,
+    cards: RoomArtifactContent.fields.cards,
+    boxId: RoomArtifactContent.fields.boxId,
+    model: RoomArtifactContent.fields.model,
+  }),
+  /**
+   * Records the owner's thread behind one of their thread boxes, or with null forgets it. It
+   * changes the share and nothing else.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.room-box.link"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    boxId: RoomBoardNote.fields.id,
+    boxThreadId: Schema.NullOr(ThreadId),
+  }),
+  /** Shows a finished turn of a thread box's own thread on the box. It changes the share only. */
+  Schema.Struct({
+    type: Schema.Literal("thread.room-box.turn"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    boxId: RoomBoardNote.fields.id,
+    turn: RoomBoxTurn,
+  }),
+  /**
+   * Marks a guest's waiting message sent as `sentAs` in its thread box's own thread, or with null
+   * puts it back to waiting when that send failed. It changes the share and nothing else.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.guest-message.route"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    guestMessageId: GuestMessageId,
+    sentAs: Schema.NullOr(MessageId),
   }),
   /** Connects a thread joined from a room to it, or with null ends that. */
   Schema.Struct({

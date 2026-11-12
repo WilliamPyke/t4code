@@ -209,6 +209,8 @@ describe("command permissions", () => {
     ORCHESTRATION_V2_WS_METHODS.stopWorkflow,
     WS_METHODS.guestShareChangeBoard,
     WS_METHODS.guestShareMoveCursor,
+    WS_METHODS.guestSharePromptBox,
+    WS_METHODS.guestShareSendMessage,
     WS_METHODS.sharedThreadTakeArtifact,
   ])("uses the target grant for both availability and execution of %s", (method) =>
     Effect.scoped(
