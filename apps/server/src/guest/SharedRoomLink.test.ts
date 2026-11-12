@@ -669,7 +669,8 @@ it.effect(
             contextId: "room-cards_1",
             kind: "room-cards",
             label: "Board · 1 card",
-            cards: [{ label: "Note from Cam", author: "guest", name: "Cam", text: "Dark mode" }],
+            // As a viewer's client named it; the guest's request carries the board's own labels.
+            cards: [{ label: "Note from You", author: "guest", name: "Cam", text: "Dark mode" }],
           },
           {
             version: 1,
@@ -733,6 +734,7 @@ it.effect(
                   guestId: sam,
                   boxId: "box:plan",
                   sentAs: "message:asked",
+                  cards: ["Note from Cam"],
                 },
               ],
               boardThreads: { "box:plan": threadId, "box:other": "thread:other" },

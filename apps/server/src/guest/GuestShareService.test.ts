@@ -2510,12 +2510,23 @@ it.effect(
       const inRoom = yield* boxes.prompt({ threadId: roomThreadId, boxId: "thread", text: "Hi" });
       assert.equal(inRoom.boxThreadId, roomThreadId);
       // Prompted again, the box keeps its thread.
-      const again = yield* boxes.prompt({ threadId: roomThreadId, boxId: "box:1", text: "More" });
+      // A card that says which it is gets its label and author from the board; one gone is not sent.
+      const again = yield* boxes.prompt({
+        threadId: roomThreadId,
+        boxId: "box:1",
+        text: "More",
+        cards: [
+          { ref: "note:art:1", label: "Artifact from You", author: "guest", text: "Hero" },
+          { ref: "note:gone", label: "Note from You", author: "owner", text: "Gone" },
+        ],
+      });
       assert.equal(again.boxThreadId, boxThreadId);
-      assert.lengthOf(
-        (yield* orchestrator.getThreadRecords(boxThreadId, ["messages"])).messages,
-        2,
-      );
+      const both = (yield* orchestrator.getThreadRecords(boxThreadId, ["messages"])).messages;
+      assert.lengthOf(both, 2);
+      assert.deepInclude(both[1]?.context?.records[0], {
+        kind: "room-cards",
+        cards: [{ ref: "note:art:1", label: 'Artifact "Hero"', author: "owner", text: "Hero" }],
+      });
 
       // A guest's box is run by their own requests, which the owner sends.
       const sam = yield* guestShares.redeem({ credential, name: "Sam" });
@@ -2557,7 +2568,13 @@ it.effect(
       const ask = (who: typeof sam, text: string, boxId: string) =>
         guestShares.submit(
           who.token,
-          { shareId: who.shareId, text, boxId, artifactId: "art:1" },
+          {
+            shareId: who.shareId,
+            text,
+            boxId,
+            artifactId: "art:1",
+            cardRefs: ["note:art:1", "note:box:sam", "note:missing"],
+          },
           [],
         );
       // Someone else's box, and one that is not on the board, take nothing.
@@ -2567,6 +2584,8 @@ it.effect(
       const room = orchestrator.getThreadRecords(roomThreadId, ["messages"]);
       const waiting = (yield* room).thread.guestShare!.messages[0]!;
       assert.deepInclude(waiting, { status: "pending", boxId: "box:sam", artifactId: "art:1" });
+      // Labelled from the board, so they read the same to everyone.
+      assert.deepEqual(waiting.cards, ['Artifact "Page"', `Thread box "Sam's page"`]);
 
       yield* boxes.sendGuestMessage({ threadId: roomThreadId, guestMessageId: waiting.id }, "web");
       const afterSend = yield* room;

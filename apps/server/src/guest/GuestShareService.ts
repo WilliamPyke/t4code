@@ -92,7 +92,7 @@ import { CloudManagedEndpointRuntime } from "../cloud/ManagedEndpointRuntime.ts"
 import { configuredHostedAppUrlConfig } from "../cloud/publicConfig.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as CommandOutputHub from "../orchestration-v2/CommandOutputHub.ts";
-import { GUEST_FAILURE, hasGuest } from "../orchestration-v2/GuestShareDecider.ts";
+import { GUEST_FAILURE, hasGuest, roomCardLabels } from "../orchestration-v2/GuestShareDecider.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { coalesceThreadLiveStream } from "../orchestration-v2/ThreadLiveEventCoalescer.ts";
 import { buildBoundedThreadStreamSnapshot } from "../orchestration-v2/ThreadStream.ts";
@@ -1022,6 +1022,18 @@ const make = Effect.gen(function* () {
       share.guests?.find((guest) => guest.id === guestId)?.trusted === true &&
       providerAllowsDirect(thread, yield* providerRegistry.getProviders);
     const guestMessageId = GuestMessageId.make(yield* random.uuidV4());
+    // Labelled here from the board, so the box shows the cards the same way to everyone.
+    const cards =
+      request.cardRefs === undefined || request.cardRefs.length === 0
+        ? []
+        : roomCardLabels(
+            share,
+            yield* serverSettings.getSettings.pipe(
+              Effect.map((settings) => settings.guestOwnerName),
+              Effect.orElseSucceed(() => ""),
+            ),
+            request.cardRefs,
+          );
     yield* dispatchGuestCommand({
       type: "thread.guest-message.submit",
       commandId: yield* commandId("submit"),
@@ -1034,6 +1046,7 @@ const make = Effect.gen(function* () {
       ...(direct ? { direct } : {}),
       ...(request.artifactId === undefined ? {} : { artifactId: request.artifactId }),
       ...(request.boxId === undefined ? {} : { boxId: request.boxId }),
+      ...(cards.length === 0 ? {} : { cards: [...cards] }),
     }).pipe(Effect.onError(() => removeStored(attachments)));
     if (direct) {
       // The same send the owner's button makes. If it fails, the message waits for the owner.

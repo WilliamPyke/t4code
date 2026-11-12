@@ -146,23 +146,13 @@ const PLACE_GAP = 16;
 const PLACE_REACH = 1_200;
 const PLACE_STEPS = 60;
 
-/**
- * Where a new item of `size` goes: centred on `around` when that is clear, else the nearest spot
- * that is clear of everything `taken` by a small gap and, when `within` has room, fully inside it.
- * With no clear spot, the one that covers the least.
- */
-export function placeBoardItem(
+/** The spot nearest `around` that covers least of what is `taken`, inside `area` when given. */
+function searchBoardSpot(
   size: RoomBoardSize,
   around: BoardPoint,
   taken: ReadonlyArray<BoardRect>,
-  within?: BoardRect,
-): BoardPoint {
-  const area =
-    within !== undefined &&
-    within.width >= size.w + PLACE_GAP * 2 &&
-    within.height >= size.h + PLACE_GAP * 2
-      ? within
-      : undefined;
+  area: BoardRect | undefined,
+): { readonly at: BoardPoint; readonly cover: number } | null {
   const reach = area === undefined ? PLACE_REACH : Math.max(area.width, area.height);
   const step = Math.max(PLACE_GAP, Math.ceil(reach / PLACE_STEPS));
   const reachSteps = Math.ceil(reach / step);
@@ -193,19 +183,97 @@ export function placeBoardItem(
   offsets.sort(
     ([ai, aj], [bi, bj]) => ai * ai + aj * aj - (bi * bi + bj * bj) || aj - bj || ai - bi,
   );
-  let best: BoardPoint | null = null;
-  let bestCovered = Number.POSITIVE_INFINITY;
+  let best: { at: BoardPoint; cover: number } | null = null;
   for (const [i, j] of offsets) {
     const at = { x: Math.round(start.x + i * step), y: Math.round(start.y + j * step) };
     if (!inside(at)) continue;
     const cover = covered(at);
-    if (cover === 0) return at;
-    if (cover < bestCovered) {
-      best = at;
-      bestCovered = cover;
-    }
+    if (cover === 0) return { at, cover };
+    if (best === null || cover < best.cover) best = { at, cover };
   }
-  return best ?? { x: Math.round(start.x), y: Math.round(start.y) };
+  return best;
+}
+
+/**
+ * Where a new item of `size` goes: centred on `around` when that is clear, else the nearest spot
+ * that is clear of everything `taken` by a small gap, fully inside `within` when that has such a
+ * spot, else outside it. With no clear spot anywhere near, the one that covers the least.
+ */
+export function placeBoardItem(
+  size: RoomBoardSize,
+  around: BoardPoint,
+  taken: ReadonlyArray<BoardRect>,
+  within?: BoardRect,
+): BoardPoint {
+  const area =
+    within !== undefined &&
+    within.width >= size.w + PLACE_GAP * 2 &&
+    within.height >= size.h + PLACE_GAP * 2
+      ? within
+      : undefined;
+  const inView = area === undefined ? null : searchBoardSpot(size, around, taken, area);
+  if (inView !== null && inView.cover === 0) return inView.at;
+  const anywhere = searchBoardSpot(size, around, taken, undefined);
+  const best =
+    anywhere !== null && (inView === null || anywhere.cover < inView.cover) ? anywhere : inView;
+  return best?.at ?? { x: Math.round(around.x - size.w / 2), y: Math.round(around.y - size.h / 2) };
+}
+
+/** The view moved as little as it takes to show `rect` whole, or as it is when it already does. */
+export function panToShow(
+  view: BoardView,
+  rect: BoardRect,
+  size: BoardSize,
+  margin = 24,
+): BoardView {
+  // Too big to show whole, it shows from its start.
+  const shift = (start: number, length: number, room: number) =>
+    length > room - margin * 2 || start < margin
+      ? margin - start
+      : start + length > room - margin
+        ? room - margin - (start + length)
+        : 0;
+  const dx = shift(view.x + rect.x * view.zoom, rect.width * view.zoom, size.width);
+  const dy = shift(view.y + rect.y * view.zoom, rect.height * view.zoom, size.height);
+  return dx === 0 && dy === 0 ? view : { ...view, x: view.x + dx, y: view.y + dy };
+}
+
+/** The view that shows every rect, centred, at no more than full size. */
+export function fitBoardView(
+  rects: ReadonlyArray<BoardRect>,
+  size: BoardSize,
+  margin = 40,
+): BoardView {
+  const bounds = boardBounds(rects);
+  if (bounds === null) return INITIAL_BOARD_VIEW;
+  const zoom = Math.min(
+    1,
+    Math.max(
+      BOARD_MIN_ZOOM,
+      Math.min(
+        (size.width - margin * 2) / bounds.width,
+        (size.height - margin * 2) / bounds.height,
+      ),
+    ),
+  );
+  return {
+    zoom,
+    x: Math.round((size.width - bounds.width * zoom) / 2 - bounds.x * zoom),
+    y: Math.round((size.height - bounds.height * zoom) / 2 - bounds.y * zoom),
+  };
+}
+
+/** The smallest rect that holds all of these, or null for none. */
+export function boardBounds(rects: ReadonlyArray<BoardRect>): BoardRect | null {
+  if (rects.length === 0) return null;
+  const x = Math.min(...rects.map((rect) => rect.x));
+  const y = Math.min(...rects.map((rect) => rect.y));
+  return {
+    x,
+    y,
+    width: Math.max(...rects.map((rect) => rect.x + rect.width)) - x,
+    height: Math.max(...rects.map((rect) => rect.y + rect.height)) - y,
+  };
 }
 
 /** Where a new item goes beside `rect`: to its right and level with its top, or the nearest clear spot. */
@@ -775,9 +843,13 @@ export function roomFetchCommand(branch: string): string | null {
 export interface BoardPromptCard {
   /** `note:<id>` as arrows name it. */
   readonly ref: string;
-  /** For example "Note from Sam", "Task", "Comment on a reply", "Link", 'Artifact "Title"'. */
+  /** As this viewer reads it: "Note from You", "Task from Sam", 'Artifact "Title"'. */
   readonly label: string;
+  /** As everyone reads it, for what is sent and kept: "Note from the owner", "Note from Sam". */
+  readonly sharedLabel: string;
   readonly text: string;
+  /** The start of what the card itself says, for its chip. */
+  readonly excerpt: string;
 }
 
 /** A message sent from a thread box on the board. */
@@ -971,38 +1043,58 @@ export interface BoardPromptContext {
 
 const isComment = (note: RoomBoardNote) => note.kind === undefined && note.pinnedTo !== undefined;
 
+/** Who someone is as everyone in the room reads it: a guest's name, or the owner's, or "the owner". */
+const sharedPersonName = (people: BoardPeople, guestId: string | undefined): string =>
+  guestId === undefined
+    ? (people.ownerName ?? "the owner")
+    : (people.guests.find((guest) => guest.id === guestId)?.name ?? "a guest");
+
+const EXCERPT_CHIP_LENGTH = 80;
+
 /** A card as a message from the board carries it, or null for one with nothing written. */
 function boardPromptCard(
   note: RoomBoardNote,
   people: BoardPeople,
   quote?: string,
 ): BoardPromptCard | null {
-  const by = boardPersonName(people, note.guestId);
   const text = note.text.trim();
-  const card = (label: string, body: string) =>
-    body.trim() === "" ? null : { ref: roomBoardNoteRef(note.id), label, text: body };
-  switch (note.kind) {
-    case "artifact": {
-      const body = cutText(note.artifact?.body.trim() ?? "", PROMPT_ARTIFACT_LENGTH);
-      return card(
-        text === "" ? "Artifact" : `Artifact "${text}"`,
-        [text, body].filter(Boolean).join("\n\n"),
-      );
+  const comment = isComment(note);
+  const labelBy = (by: string) => {
+    switch (note.kind) {
+      case "artifact":
+        return text === "" ? "Artifact" : `Artifact "${text}"`;
+      case "task":
+        return `Task from ${by}`;
+      case "link":
+        return `Link from ${by}`;
+      default:
+        return comment ? `Comment from ${by} on a reply` : `Note from ${by}`;
     }
-    case "task":
-      return text === ""
-        ? null
-        : card(`Task from ${by}`, `${text}\nStatus: ${note.done === true ? "done" : "not done"}`);
-    case "link":
-      return card(`Link from ${by}`, [note.url ?? "", text].filter(Boolean).join("\n"));
-    default:
-      if (text === "") return null;
-      if (!isComment(note)) return card(`Note from ${by}`, text);
-      return card(
-        `Comment from ${by} on a reply`,
-        quote === undefined ? text : `On the reply: "${quote}"\n${text}`,
-      );
-  }
+  };
+  const body =
+    note.kind === "artifact"
+      ? [text, cutText(note.artifact?.body.trim() ?? "", PROMPT_ARTIFACT_LENGTH)]
+          .filter(Boolean)
+          .join("\n\n")
+      : note.kind === "task"
+        ? text === ""
+          ? ""
+          : `${text}\nStatus: ${note.done === true ? "done" : "not done"}`
+        : note.kind === "link"
+          ? [note.url ?? "", text].filter(Boolean).join("\n")
+          : comment && text !== "" && quote !== undefined
+            ? `On the reply: "${quote}"\n${text}`
+            : text;
+  if (body.trim() === "") return null;
+  const said = (text === "" ? (note.url ?? "") : text).split("\n")[0] ?? "";
+  return {
+    ref: roomBoardNoteRef(note.id),
+    label: labelBy(boardPersonName(people, note.guestId)),
+    sharedLabel: labelBy(sharedPersonName(people, note.guestId)),
+    text: body,
+    // An artifact's label already names it.
+    excerpt: note.kind === "artifact" ? "" : cutText(said.trim(), EXCERPT_CHIP_LENGTH),
+  };
 }
 
 /** A thread box as lines name it: the room thread's own card, or a thread note. */

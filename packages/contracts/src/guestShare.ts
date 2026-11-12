@@ -156,6 +156,16 @@ export const ROOM_UPDATES_MAX_CHARS = 48_000;
 export const ThreadGuestMessageStatus = Schema.Literals(["pending", "sent", "dismissed"]);
 export type ThreadGuestMessageStatus = typeof ThreadGuestMessageStatus.Type;
 
+/** The labels of the cards that went with a turn, at most this many. */
+export const ROOM_BOX_CARD_LABELS_MAX = 8;
+/**
+ * Board cards as a turn or an artifact names them: "Note from Sam", 'Artifact "Plan"'. The
+ * owner's server writes them from the board, so they read the same to everyone.
+ */
+const RoomBoxCardLabels = Schema.Array(Schema.String.check(Schema.isMaxLength(200))).check(
+  Schema.isMaxLength(ROOM_BOX_CARD_LABELS_MAX),
+);
+
 export const ThreadGuestMessage = Schema.Struct({
   id: GuestMessageId,
   text: Schema.String,
@@ -179,6 +189,8 @@ export const ThreadGuestMessage = Schema.Struct({
    * never receives it.
    */
   sentAs: Schema.optional(MessageId),
+  /** The board cards the guest attached, as this server labelled them when it took the message. */
+  cards: Schema.optional(RoomBoxCardLabels),
 });
 export type ThreadGuestMessage = typeof ThreadGuestMessage.Type;
 
@@ -282,13 +294,8 @@ export const ROOM_BOX_PROMPT_MAX_LENGTH = 280;
 export const ROOM_BOX_REPLY_MAX_LENGTH = 600;
 /** The turns a thread box keeps, newest last. */
 export const ROOM_BOX_TURN_LIMIT = 3;
-/** The labels of the cards that went with a turn, at most this many. */
-export const ROOM_BOX_CARD_LABELS_MAX = 8;
 const ROOM_BOX_MODEL_MAX_LENGTH = 120;
 
-const RoomBoxCardLabels = Schema.Array(Schema.String.check(Schema.isMaxLength(200))).check(
-  Schema.isMaxLength(ROOM_BOX_CARD_LABELS_MAX),
-);
 const RoomBoxModelName = Schema.String.check(Schema.isMaxLength(ROOM_BOX_MODEL_MAX_LENGTH));
 
 /** One turn of a thread box's conversation, as the board shows it. Plain text only. */
@@ -537,6 +544,10 @@ export const RoomBoxProgress = Schema.Struct({
   startedAt: IsoDateTime,
   /** The model's display name. */
   model: Schema.optional(RoomBoxModelName),
+  /** The start of what the run answers: a guest's own words when it is their request. */
+  prompt: Schema.optional(RoomBoxTurn.fields.prompt),
+  /** The guest whose request the owner sent. */
+  askedBy: Schema.optional(GuestId),
 });
 export type RoomBoxProgress = typeof RoomBoxProgress.Type;
 
@@ -832,6 +843,13 @@ export const GuestSubmitRequest = Schema.Struct({
   artifactId: Schema.optional(RoomBoardNoteId),
   /** The guest's own thread box the message is for. Another person's box is refused. */
   boxId: Schema.optional(RoomBoardNoteId),
+  /**
+   * The cards written into `text`, as arrows name them (`note:<id>`). The owner's server labels
+   * them from its board for the box to show; they never reach an agent apart from the text.
+   */
+  cardRefs: Schema.optional(
+    Schema.Array(RoomBoardItemRef).check(Schema.isMaxLength(ROOM_BOX_CARD_LABELS_MAX)),
+  ),
 });
 export type GuestSubmitRequest = typeof GuestSubmitRequest.Type;
 

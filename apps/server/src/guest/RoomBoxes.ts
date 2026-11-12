@@ -3,6 +3,7 @@ import {
   CommandId,
   type ComposerContextRecord,
   type GuestMessageSendInput,
+  type GuestId,
   type GuestShareId,
   MessageId,
   type ModelSelection,
@@ -18,9 +19,12 @@ import {
   type RoomBoxProgress,
   type RoomBoxPromptInput,
   type RoomBoxPromptResult,
+  type RoomBoardContextCard,
+  ROOM_BOX_PROMPT_MAX_LENGTH,
   type RunId,
   type ServerProvider,
   ThreadId,
+  type ThreadGuestMessage,
   type ThreadGuestShare,
 } from "@t3tools/contracts";
 import {
@@ -31,7 +35,11 @@ import {
 import {
   roomArtifactBody,
   roomArtifactRequestOf,
+  roomBoardCardIdentity,
+  roomBoardNoteOfRef,
+  roomBoxExcerpt,
   roomBoxRequestOf,
+  roomRunPromptText,
 } from "@t3tools/shared/roomBoard";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -47,11 +55,13 @@ import {
   guestMessageForAgent,
   roomBoxContextRecord,
   roomBoxOn,
+  roomPersonName,
 } from "../orchestration-v2/GuestShareDecider.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { forkParked } from "../serverActivation.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { guestThreadModel } from "./guestView.ts";
 import { clip } from "./roomUpdates.ts";
 
@@ -98,12 +108,18 @@ function toolActivity(
 /** A run of a box's agent that the board shows, as it stands now. */
 interface TrackedRun {
   readonly runId: RunId;
+  readonly threadId: ThreadId;
   readonly shareId: GuestShareId;
   readonly boxId: string;
   readonly artifactId: string | undefined;
   readonly model: string | undefined;
+  readonly prompt: string;
+  readonly askedBy: GuestId | undefined;
   readonly startedAt: string;
-  phase: RoomBoxProgress["phase"];
+  /** What the agent does; `approval` shows over it while a request waits on the owner. */
+  work: Exclude<RoomBoxProgress["phase"], "approval">;
+  /** The run's requests waiting on the owner: an approval, or an answer to a question. */
+  readonly waitingOn: Set<string>;
   detail: string | undefined;
   sharedDetail: string | undefined;
   preview: string | undefined;
@@ -112,16 +128,24 @@ interface TrackedRun {
   flushing: boolean;
 }
 
-const progressOf = (run: TrackedRun): RoomBoxProgress => ({
-  boxId: run.boxId,
-  ...(run.artifactId === undefined ? {} : { artifactId: run.artifactId }),
-  phase: run.phase,
-  ...(run.phase === "tool" && run.detail !== undefined ? { detail: run.detail } : {}),
-  ...(run.phase === "writing" && run.preview !== undefined ? { preview: run.preview } : {}),
-  ...(run.draft === undefined ? {} : { draft: run.draft }),
-  startedAt: run.startedAt,
-  ...(run.model === undefined ? {} : { model: run.model }),
-});
+const phaseOf = (run: TrackedRun): RoomBoxProgress["phase"] =>
+  run.waitingOn.size > 0 ? "approval" : run.work;
+
+const progressOf = (run: TrackedRun): RoomBoxProgress => {
+  const phase = phaseOf(run);
+  return {
+    boxId: run.boxId,
+    ...(run.artifactId === undefined ? {} : { artifactId: run.artifactId }),
+    phase,
+    ...(phase === "tool" && run.detail !== undefined ? { detail: run.detail } : {}),
+    ...(phase === "writing" && run.preview !== undefined ? { preview: run.preview } : {}),
+    ...(run.draft === undefined ? {} : { draft: run.draft }),
+    startedAt: run.startedAt,
+    ...(run.model === undefined ? {} : { model: run.model }),
+    ...(run.prompt === "" ? {} : { prompt: run.prompt }),
+    ...(run.askedBy === undefined ? {} : { askedBy: run.askedBy }),
+  };
+};
 
 /**
  * A box's progress as a guest gets it. A tool's name stays with the owner, and so does any word
@@ -189,6 +213,7 @@ const make = Effect.gen(function* () {
   const launches = yield* ThreadLaunch.ThreadLaunchService;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const random = yield* SecureRandom.SecureRandom;
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
   const scope = yield* Effect.scope;
   // One box gets one thread, however many prompts reach it at once.
   const boxThreads = yield* Semaphore.make(1);
@@ -321,6 +346,28 @@ const make = Effect.gen(function* () {
     clip(prompt.replace(/\s+/g, " ").trim(), BOX_TITLE_MAX_LENGTH) ||
     "Board thread";
 
+  /**
+   * The cards a prompt carries, each named and attributed from this board when it says which card
+   * it is, so the label reads the same to everyone and no card passes for someone else's. One no
+   * longer on the board is left out; one that names none is taken as sent.
+   */
+  const boardCards = Effect.fn("RoomBoxes.boardCards")(function* (
+    share: ThreadGuestShare,
+    cards: ReadonlyArray<RoomBoardContextCard>,
+  ) {
+    const ownerName = yield* serverSettings.getSettings.pipe(
+      Effect.map((settings) => settings.guestOwnerName),
+      Effect.orElseSucceed(() => ""),
+    );
+    return cards.flatMap((card): ReadonlyArray<RoomBoardContextCard> => {
+      if (card.ref === undefined) return [card];
+      const note = roomBoardNoteOfRef(share.board, card.ref);
+      if (note === undefined) return [];
+      const { label: _label, author: _author, name: _name, ...rest } = card;
+      return [{ ...rest, ...roomBoardCardIdentity(note, roomPersonName(share, ownerName)) }];
+    });
+  });
+
   const prompt = Effect.fn("RoomBoxes.prompt")(function* (input: RoomBoxPromptInput) {
     const { thread: room, share } = yield* readRoom(input.threadId);
     const box = roomBoxOn(share, input.boxId);
@@ -334,7 +381,7 @@ const make = Effect.gen(function* () {
     const artifact = share.board?.notes.find(
       (note) => note.id === input.artifactId && note.kind === "artifact",
     );
-    const cards = input.cards ?? [];
+    const cards = yield* boardCards(share, input.cards ?? []);
     const shown: ReadonlyArray<ComposerContextRecord> = [
       ...(cards.length === 0 ? [] : [roomCardsContextRecord({ batch, cards })]),
       ...(artifact === undefined
@@ -460,7 +507,7 @@ const make = Effect.gen(function* () {
       else
         runs.set(run.runId, {
           ...progressOf(run),
-          ...(run.phase === "tool" && run.sharedDetail !== undefined
+          ...(phaseOf(run) === "tool" && run.sharedDetail !== undefined
             ? { sharedDetail: run.sharedDetail }
             : {}),
         });
@@ -497,7 +544,10 @@ const make = Effect.gen(function* () {
     );
   });
 
-  /** The box a run belongs to, or null when it is no box's, checked against the share. */
+  /**
+   * The box a run belongs to, or null when it is no box's, checked against the share, with what
+   * the run answers: the guest's own words when the owner sent a guest's request.
+   */
   const boxOfRun = Effect.fn("RoomBoxes.boxOfRun")(function* (
     threadId: ThreadId,
     run: OrchestrationV2Run,
@@ -505,33 +555,71 @@ const make = Effect.gen(function* () {
     const { thread, turnItems } = yield* orchestrator.getThreadRecords(threadId, ["turnItems"], {
       turnItemRunIds: [run.id],
     });
-    let shareId: GuestShareId;
+    let share: ThreadGuestShare;
     let boxId: string;
+    let asked: ThreadGuestMessage | undefined;
     if (thread.guestShare) {
-      shareId = thread.guestShare.id;
+      share = thread.guestShare;
       boxId = ROOM_BOARD_ROOM_BOX;
+      const guestMessageId = turnItems.find((item) => item.type === "user_message")?.context?.guest
+        ?.guestMessageId;
+      asked = share.messages.find((message) => message.id === guestMessageId);
     } else {
       const box = roomBoxRequestOf(turnItems);
       if (box === undefined) return null;
       const roomThreadId = yield* orchestrator.findGuestShareThreadId(box.shareId);
       if (roomThreadId === null) return null;
-      const { thread: room } = yield* orchestrator.getThreadRecords(roomThreadId, []);
-      if (!isBoxThread(room.guestShare ?? null, box.shareId, box.boxId, threadId)) return null;
-      shareId = box.shareId;
+      const roomShare = (yield* orchestrator.getThreadRecords(roomThreadId, [])).thread.guestShare;
+      if (roomShare == null || !isBoxThread(roomShare, box.shareId, box.boxId, threadId)) {
+        return null;
+      }
+      share = roomShare;
       boxId = box.boxId;
+      // Found by the message this server sent the guest's request as.
+      asked = share.messages.find((message) => message.sentAs === run.userMessageId);
     }
     const providers = yield* providerRegistry.getProviders;
     return {
-      shareId,
+      shareId: share.id,
       boxId,
-      artifactId: roomArtifactRequestOf(turnItems, shareId)?.noteId,
+      artifactId: roomArtifactRequestOf(turnItems, share.id)?.noteId,
       model: roomBoxModelName(run.modelSelection, providers),
+      prompt: roomBoxExcerpt(
+        asked?.text ?? roomRunPromptText(turnItems),
+        ROOM_BOX_PROMPT_MAX_LENGTH,
+      ),
+      askedBy: asked?.guestId,
     };
   });
 
   const forgetIgnored = (runId: RunId) => {
     if (ignored.size >= IGNORED_RUNS_LIMIT) ignored.clear();
     ignored.add(runId);
+  };
+
+  /** What a run's agent does, from its status, keeping what it was doing while it runs on. */
+  const workOf = (
+    status: OrchestrationV2Run["status"],
+    current: TrackedRun["work"] | undefined,
+  ): TrackedRun["work"] =>
+    WAITING_RUN.has(status)
+      ? "queued"
+      : current === undefined || current === "queued"
+        ? "thinking"
+        : current;
+
+  /** The reply so far, from its message or its turn item, whichever carries the text. */
+  const writing = (run: TrackedRun, text: string) => {
+    // A turn item whose text is its message's carries none of its own.
+    if (text.trim() === "") return false;
+    run.work = "writing";
+    run.preview = text
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(-ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH)
+      .replace(/^[\uDC00-\uDFFF]/, "");
+    if (run.artifactId !== undefined) run.draft = roomArtifactBody(text).body;
+    return true;
   };
 
   // Untraced: it sees every domain event of every thread, and most do nothing here.
@@ -557,13 +645,11 @@ const make = Effect.gen(function* () {
         if (box === null) return forgetIgnored(run.id);
         const entry: TrackedRun = {
           runId: run.id,
+          threadId: event.threadId,
           ...box,
           startedAt: DateTime.formatIso(run.startedAt ?? run.requestedAt),
-          phase: WAITING_RUN.has(run.status)
-            ? "queued"
-            : run.status === "waiting"
-              ? "approval"
-              : "thinking",
+          work: workOf(run.status, undefined),
+          waitingOn: new Set(),
           detail: undefined,
           sharedDetail: undefined,
           preview: undefined,
@@ -574,40 +660,51 @@ const make = Effect.gen(function* () {
         tracked.set(run.id, entry);
         return yield* publish(entry, false);
       }
-      const phase = WAITING_RUN.has(run.status)
-        ? "queued"
-        : run.status === "waiting"
-          ? "approval"
-          : known.phase === "queued" || known.phase === "approval"
-            ? "thinking"
-            : known.phase;
-      if (phase === known.phase) return;
-      known.phase = phase;
+      const work = workOf(run.status, known.work);
+      if (work === known.work) return;
+      known.work = work;
       return yield* show(known);
+    }
+    if (event.type === "runtime-request.updated") {
+      const request = event.payload;
+      if (request.kind === "dynamic_tool_call" || request.kind === "auth_refresh") return;
+      // A request names its run when its event does; otherwise it is its thread's running one.
+      const run =
+        (event.runId === undefined ? undefined : tracked.get(event.runId)) ??
+        [...tracked.values()].find(
+          (candidate) => candidate.threadId === event.threadId && candidate.work !== "queued",
+        );
+      if (run === undefined) return;
+      const waiting = run.waitingOn.size > 0;
+      if (request.status === "pending") run.waitingOn.add(request.id);
+      else run.waitingOn.delete(request.id);
+      if (waiting === run.waitingOn.size > 0) return;
+      // Waiting on the owner, and being answered, show at once.
+      run.publishedAt = yield* nowMillis;
+      return yield* publish(run, false);
+    }
+    if (event.type === "message.updated") {
+      const message = event.payload;
+      const run = message.runId === null ? undefined : tracked.get(message.runId);
+      if (run === undefined || message.role !== "assistant" || !writing(run, message.text)) return;
+      return yield* show(run);
     }
     if (event.type !== "turn-item.updated") return;
     const item = event.payload;
     const run = item.runId === null ? undefined : tracked.get(item.runId);
-    if (run === undefined || run.phase === "approval") return;
+    if (run === undefined) return;
     if (item.type === "assistant_message") {
-      const text = item.text;
-      run.phase = "writing";
-      run.preview = text
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(-ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH)
-        .replace(/^[\uDC00-\uDFFF]/, "");
-      if (run.artifactId !== undefined) run.draft = roomArtifactBody(text).body;
+      if (!writing(run, item.text)) return;
       return yield* show(run);
     }
     if (item.type === "reasoning") {
-      if (run.phase === "thinking") return;
-      run.phase = "thinking";
+      if (run.work === "thinking") return;
+      run.work = "thinking";
       return yield* show(run);
     }
     const tool = toolActivity(item);
     if (tool === null) return;
-    run.phase = "tool";
+    run.work = "tool";
     run.detail = tool.owner;
     run.sharedDetail = tool.shared;
     return yield* show(run);

@@ -7,6 +7,7 @@ import {
   ROOM_BOARD_MAX_THREADS,
   type RoomBoard,
   type RoomBoardChange,
+  type RoomBoardNote,
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
 import { describe, expect, it } from "vite-plus/test";
@@ -19,6 +20,7 @@ import {
   roomArtifactBody,
   roomArtifactRequestOf,
   roomBoardWithCards,
+  roomBoardCardIdentity,
   roomBoxRequestOf,
 } from "./roomBoard.ts";
 
@@ -215,6 +217,48 @@ describe("roomArtifactRequestOf", () => {
     });
     expect(roomBoxRequestOf([message({ records: [box({ shareId })] })])).toBeUndefined();
     expect(roomBoxRequestOf([message({ records: [record(shareId)] })])).toBeUndefined();
+  });
+});
+
+describe("roomBoardCardIdentity", () => {
+  const sam = GuestId.make("guest:sam");
+  const names = (guestId: GuestId | undefined) => (guestId === sam ? "Sam" : undefined);
+  const note = (fields: Partial<RoomBoardNote>): RoomBoardNote => ({
+    id: "n",
+    text: "Plan",
+    x: 0,
+    y: 0,
+    ...fields,
+  });
+
+  it("names a card and its author from the board, the same for everyone", () => {
+    expect(roomBoardCardIdentity(note({ guestId: sam }), names)).toEqual({
+      label: "Note from Sam",
+      author: "guest",
+      name: "Sam",
+    });
+    expect(roomBoardCardIdentity(note({ kind: "task" }), names)).toEqual({
+      label: "Task from the owner",
+      author: "owner",
+    });
+    expect(roomBoardCardIdentity(note({ pinnedTo: "message:1" }), () => "Will").label).toBe(
+      "Comment from Will on a reply",
+    );
+    // An artifact's content is its last writer's agent's, whoever added the card.
+    const filled = note({
+      kind: "artifact",
+      artifact: {
+        body: "# Plan",
+        guestId: sam,
+        turnId: "run:1",
+        updatedAt: "2026-11-12T00:00:00Z",
+      },
+    });
+    expect(roomBoardCardIdentity(filled, names)).toEqual({
+      label: 'Artifact "Plan"',
+      author: "guest_agent",
+      name: "Sam",
+    });
   });
 });
 

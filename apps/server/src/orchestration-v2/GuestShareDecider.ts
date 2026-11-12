@@ -39,6 +39,8 @@ import {
   ROOM_BOARD_FULL,
   applyRoomBoardChange,
   roomArtifactAfterFill,
+  roomBoardCardIdentity,
+  roomBoardNoteOfRef,
   roomBoardWithEdges,
   roomBoardWithoutCards,
   type RoomBoardScope,
@@ -243,6 +245,30 @@ const artifactOn = (share: ThreadGuestShare, noteId: string | undefined) =>
     ? undefined
     : share.board?.notes.find((note) => note.id === noteId && note.kind === "artifact");
 
+/**
+ * Names the people of a room for labels everyone reads: a guest by name, and the owner, with no
+ * id, by the name they set for guests, or none so the label says "the owner".
+ */
+export const roomPersonName =
+  (share: ThreadGuestShare, ownerName: string) =>
+  (guestId: GuestId | undefined): string | undefined =>
+    guestId === undefined
+      ? ownerName.trim() || undefined
+      : share.guests?.find((guest) => guest.id === guestId)?.name;
+
+/** The labels of the cards these arrow refs name on the share's board, as everyone reads them. */
+export const roomCardLabels = (
+  share: ThreadGuestShare,
+  ownerName: string,
+  refs: ReadonlyArray<string>,
+): ReadonlyArray<string> =>
+  refs.flatMap((ref) => {
+    const note = roomBoardNoteOfRef(share.board, ref);
+    return note === undefined
+      ? []
+      : [roomBoardCardIdentity(note, roomPersonName(share, ownerName)).label];
+  });
+
 /** The thread box with this id on the share's board, if it is still there. */
 export const roomBoxOn = (share: ThreadGuestShare, boxId: string | undefined) =>
   boxId === undefined
@@ -419,6 +445,9 @@ export function decideGuestShareCommand(input: {
             ...(command.direct === true ? { direct: true } : {}),
             ...(command.artifactId === undefined ? {} : { artifactId: command.artifactId }),
             ...(command.boxId === undefined ? {} : { boxId: command.boxId }),
+            ...(command.cards === undefined || command.cards.length === 0
+              ? {}
+              : { cards: command.cards }),
           },
         ]),
       };

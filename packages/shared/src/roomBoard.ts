@@ -19,6 +19,7 @@ import {
   type RoomArtifactContent,
   type RoomBoard,
   type RoomBoardChange,
+  type RoomBoardContextCard,
   type RoomBoardEdge,
   type RoomBoardNote,
   type RoomBoardSize,
@@ -26,6 +27,8 @@ import {
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+
+import { replaceComposerContextReferences } from "./composerContextReferences.ts";
 
 export const ROOM_BOARD_FULL = "This board has as many notes as it holds. Remove one first.";
 
@@ -340,6 +343,63 @@ export function roomCardLabelsOf(
         : [],
     )
     .slice(0, ROOM_BOX_CARD_LABELS_MAX);
+}
+
+/** What a run was asked, without the chips its cards and artifact left in the text. */
+export const roomRunPromptText = (items: ReadonlyArray<OrchestrationV2TurnItem>): string =>
+  replaceComposerContextReferences(
+    [...items]
+      .sort((left, right) => left.ordinal - right.ordinal)
+      .flatMap((item) => (item.type === "user_message" ? [item.text] : []))[0] ?? "",
+    () => "",
+  );
+
+/** The note an arrow or a card names (`note:<id>`), if the board has it. */
+export const roomBoardNoteOfRef = (board: RoomBoard | undefined, ref: string) =>
+  board?.notes.find((note) => roomBoardNoteRef(note.id) === ref);
+
+/**
+ * A card's label and who wrote it, from the board, so it reads the same to everyone: "Note from
+ * Sam", "Task from the owner", 'Artifact "Plan"'. `nameOf` names a guest, or with no id the
+ * owner; an artifact's content is its last writer's agent's.
+ */
+export function roomBoardCardIdentity(
+  note: RoomBoardNote,
+  nameOf: (guestId: GuestId | undefined) => string | undefined,
+): Pick<RoomBoardContextCard, "label" | "author" | "name"> {
+  const by = nameOf(note.guestId) ?? (note.guestId === undefined ? "the owner" : "a guest");
+  const title = note.text.trim().replace(/\s+/g, " ");
+  const label =
+    note.kind === "artifact"
+      ? title === ""
+        ? "Artifact"
+        : `Artifact "${title}"`
+      : note.kind === "thread"
+        ? title === ""
+          ? "Thread box"
+          : `Thread box "${title}"`
+        : note.kind === "task"
+          ? `Task from ${by}`
+          : note.kind === "link"
+            ? `Link from ${by}`
+            : note.pinnedTo === undefined
+              ? `Note from ${by}`
+              : `Comment from ${by} on a reply`;
+  const writer = note.kind === "artifact" && note.artifact !== undefined ? note.artifact : note;
+  const agent = writer !== note;
+  const guestName = writer.guestId === undefined ? undefined : nameOf(writer.guestId);
+  return {
+    label: label.slice(0, 200),
+    author:
+      writer.guestId === undefined
+        ? agent
+          ? "owner_agent"
+          : "owner"
+        : agent
+          ? "guest_agent"
+          : "guest",
+    ...(writer.guestId === undefined || guestName === undefined ? {} : { name: guestName }),
+  };
 }
 
 /** Text as a thread box or an artifact shows it: one paragraph of plain text, cut to `max`. */

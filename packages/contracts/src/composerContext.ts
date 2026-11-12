@@ -262,6 +262,11 @@ export const RoomBoardContextCard = Schema.Struct({
   /** The guest's name, for a guest or their agent. */
   name: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(GUEST_NAME_MAX_LENGTH))),
   text: BoundedString(ROOM_ARTIFACT_MAX_LENGTH),
+  /**
+   * The card as arrows name it (`note:<id>`). With it, the owner's server names the card and its
+   * author from its own board instead of taking the sender's words for them.
+   */
+  ref: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(170))),
 });
 export type RoomBoardContextCard = typeof RoomBoardContextCard.Type;
 

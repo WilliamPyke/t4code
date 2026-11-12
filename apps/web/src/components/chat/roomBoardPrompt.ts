@@ -22,7 +22,8 @@ import { getComposerPromptInjectionState, getComposerProviderState } from "./com
 /** A card as a prompt from the board carries it; see `BoardPromptCard`. */
 interface PromptCard {
   readonly ref: string;
-  readonly label: string;
+  /** As everyone reads it, since what is sent is kept and shown to the whole room. */
+  readonly sharedLabel: string;
   readonly text: string;
 }
 
@@ -52,7 +53,8 @@ export function boardContextCards(
             ? { author: "owner" as const }
             : { author: "guest" as const, ...named(note.guestId) };
     return {
-      label: card.label.slice(0, COMPOSER_CONTEXT_LABEL_MAX_CHARS),
+      ref: card.ref,
+      label: card.sharedLabel.slice(0, COMPOSER_CONTEXT_LABEL_MAX_CHARS),
       ...author,
       text: card.text,
     };

@@ -9,15 +9,23 @@ import { useBoxProgress } from "./roomBoardLive";
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
 
-/** The last few turns of a thread box: who asked what, with which cards, and the reply. */
+/**
+ * The last few turns of a thread box: who asked what, with which cards, and the reply. While a
+ * run is in flight, its prompt and who asked come last, before any reply has.
+ */
 export function BoxTurns({
+  boxId,
   turns,
   people,
 }: {
+  readonly boxId: string;
   readonly turns: ReadonlyArray<RoomBoxTurn>;
   readonly people: BoardPeople;
 }) {
-  if (turns.length === 0) return <p className="text-xs text-muted-foreground">No prompts yet.</p>;
+  const running = useBoxProgress(boxId);
+  if (turns.length === 0 && running === undefined) {
+    return <p className="text-xs text-muted-foreground">No prompts yet.</p>;
+  }
   return (
     <ol className="flex flex-col gap-2.5">
       {turns.map((turn) => (
@@ -39,6 +47,16 @@ export function BoxTurns({
           )}
         </li>
       ))}
+      {running?.prompt === undefined || running.prompt === "" ? null : (
+        <li className="flex flex-col gap-1 text-xs">
+          <span className="text-2xs font-medium text-muted-foreground">
+            {boardPersonName(people, running.askedBy ?? running.guestId)}
+          </span>
+          <p className="line-clamp-2 border-s-2 border-info/50 ps-2 [overflow-wrap:anywhere]">
+            {running.prompt}
+          </p>
+        </li>
+      )}
     </ol>
   );
 }
@@ -97,6 +115,7 @@ export function BoxRequests({
   people,
   onResolve,
   resolving,
+  model,
 }: {
   readonly requests: ReadonlyArray<ThreadGuestMessage>;
   readonly board: RoomBoard;
@@ -106,6 +125,8 @@ export function BoxRequests({
     | ((message: ThreadGuestMessage, decision: "send" | "dismiss") => void)
     | undefined;
   readonly resolving: ReadonlySet<string>;
+  /** Which model the owner's Send runs it on. */
+  readonly model?: ReactNode;
 }) {
   if (requests.length === 0) return null;
   return (
@@ -129,7 +150,10 @@ export function BoxRequests({
             {onResolve === undefined ? (
               <p className="text-2xs text-muted-foreground">Waiting for the owner</p>
             ) : (
-              <div className="flex justify-end gap-1">
+              <div className="flex items-center justify-end gap-1">
+                <span className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">
+                  {model}
+                </span>
                 <Button
                   size="micro"
                   variant="ghost-muted"

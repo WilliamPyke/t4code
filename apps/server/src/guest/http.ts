@@ -72,6 +72,9 @@ const FILE_HEADERS = {
 const decodeRedeem = Schema.decodeUnknownEffect(GuestRedeemRequest);
 const encodeRedeemResult = Schema.encodeSync(GuestRedeemResult);
 const decodeSubmit = Schema.decodeUnknownEffect(GuestSubmitRequest);
+const decodeCardRefs = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Array(Schema.String)),
+);
 /** Encodes thread data for a guest. It takes only what the service's redactor returned. */
 const encodeForGuest = <S extends Schema.Top>(schema: S) => {
   const encode = Schema.encodeEffect(schema);
@@ -239,7 +242,7 @@ const inviteRoute = HttpRouter.add(
 // The parser stops a request with too many parts or bytes before it reaches the disk; the
 // service checks the exact limits and types.
 const UPLOAD_LIMITS = Multipart.limitsServices({
-  maxParts: GUEST_MESSAGE_MAX_ATTACHMENTS + 5,
+  maxParts: GUEST_MESSAGE_MAX_ATTACHMENTS + 6,
   maxFileSize: GUEST_MESSAGE_MAX_ATTACHMENT_BYTES,
   maxTotalSize: GUEST_MESSAGE_MAX_ATTACHMENT_BYTES + 64 * 1024,
   // By default a JSON part is read as a field, which would drop a guest's `.json` file.
@@ -272,6 +275,13 @@ export const readSubmission = Effect.gen(function* () {
     text: parts.text ?? "",
     ...(parts.artifactId === undefined ? {} : { artifactId: parts.artifactId }),
     ...(parts.boxId === undefined ? {} : { boxId: parts.boxId }),
+    // Sent as one JSON field, so the arrows a card list names cost one part.
+    ...(typeof parts.cardRefs === "string"
+      ? Option.match(decodeCardRefs(parts.cardRefs), {
+          onNone: () => ({}),
+          onSome: (cardRefs) => ({ cardRefs }),
+        })
+      : {}),
   }).pipe(Effect.option);
   if (fields._tag === "None") return null;
   const files = parts.file;

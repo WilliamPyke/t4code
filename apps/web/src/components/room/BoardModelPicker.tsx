@@ -18,6 +18,7 @@ import { useEnvironmentProviders } from "~/state/environments";
 import { EMPTY_SERVER_PROVIDERS } from "~/state/server";
 
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
+import { getDisplayModelName } from "../chat/providerIconUtils";
 import { useApplyThreadModelPick } from "../chat/useApplyThreadModelPick";
 
 /** The model a thread's composer has picked and not sent with yet, if any. */
@@ -116,5 +117,38 @@ export function ThreadBoardModelPicker({
         void applyThreadModelPick(threadRef);
       }}
     />
+  );
+}
+
+/** A model's name as the picker shows it, or its id when this environment does not list it. */
+export function BoardModelName({
+  environmentId,
+  selection,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly selection: ModelSelection;
+}) {
+  const providers = useEnvironmentProviders().get(environmentId) ?? EMPTY_SERVER_PROVIDERS;
+  const model = providers
+    .find((provider) => provider.instanceId === selection.instanceId)
+    ?.models.find((candidate) => candidate.slug === selection.model);
+  return <>{model === undefined ? selection.model : getDisplayModelName(model)}</>;
+}
+
+/** The model a thread's next turn runs on: its composer's unsent pick, else the thread's own. */
+export function ThreadBoardModelName({
+  threadRef,
+  fallback,
+}: {
+  readonly threadRef: ScopedThreadRef;
+  readonly fallback: ModelSelection | null;
+}) {
+  const picked = useComposerDraftStore((store) =>
+    composerDraftPick(store.getComposerDraft(threadRef)),
+  );
+  const shell = useQuietThreadShell(threadRef);
+  const selection = picked ?? shell?.modelSelection ?? fallback;
+  return selection === null ? null : (
+    <BoardModelName environmentId={threadRef.environmentId} selection={selection} />
   );
 }

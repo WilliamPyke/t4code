@@ -3,17 +3,18 @@ import { type CSSProperties, type PointerEvent, type ReactNode, useRef, useState
 import { cn } from "~/lib/utils";
 
 const PANEL_WIDTH_KEY = "t3:room-board-panel-width";
-const DEFAULT_PANEL_WIDTH = 480;
-const MIN_PANEL_WIDTH = 360;
+// Until someone drags the split, the board keeps the larger side.
+const DEFAULT_PANEL_WIDTH = "clamp(320px, 38%, 520px)";
+const MIN_PANEL_WIDTH = 320;
 const MIN_BOARD_WIDTH = 360;
 const KEY_STEP = 32;
 
-function readPanelWidth(): number {
+function readPanelWidth(): number | null {
   try {
-    const stored = Number(localStorage.getItem(PANEL_WIDTH_KEY));
-    return Number.isFinite(stored) && stored >= MIN_PANEL_WIDTH ? stored : DEFAULT_PANEL_WIDTH;
+    const stored = Number(localStorage.getItem(PANEL_WIDTH_KEY) ?? "");
+    return Number.isFinite(stored) && stored >= MIN_PANEL_WIDTH ? stored : null;
   } catch {
-    return DEFAULT_PANEL_WIDTH;
+    return null;
   }
 }
 
@@ -39,6 +40,7 @@ export function BoardSplit({
 }) {
   const [width, setWidth] = useState(readPanelWidth);
   const rowRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLElement | null>(null);
   const drag = useRef<{ readonly x: number; readonly width: number } | null>(null);
   const clamp = (next: number) => {
     const room = (rowRef.current?.clientWidth ?? Number.POSITIVE_INFINITY) - MIN_BOARD_WIDTH;
@@ -48,10 +50,10 @@ export function BoardSplit({
     if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
     event.currentTarget.releasePointerCapture(event.pointerId);
     drag.current = null;
-    writePanelWidth(width);
+    if (width !== null) writePanelWidth(width);
   };
   return (
-    <div ref={rowRef} className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
+    <div ref={rowRef} className="relative flex min-h-0 min-w-0 flex-1 overflow-clip">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">{board}</div>
       {panel === null ? null : (
         <>
@@ -59,7 +61,7 @@ export function BoardSplit({
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize the conversation"
-            aria-valuenow={width}
+            aria-valuenow={width ?? undefined}
             tabIndex={0}
             className={cn(
               "w-1.5 shrink-0 cursor-col-resize touch-none border-s border-border bg-background outline-none hover:bg-primary/20 focus-visible:bg-primary/30",
@@ -69,7 +71,7 @@ export function BoardSplit({
               if (event.button !== 0) return;
               event.preventDefault();
               event.currentTarget.setPointerCapture(event.pointerId);
-              drag.current = { x: event.clientX, width };
+              drag.current = { x: event.clientX, width: panelRef.current?.offsetWidth ?? 0 };
             }}
             onPointerMove={(event) => {
               const start = drag.current;
@@ -81,18 +83,28 @@ export function BoardSplit({
             onKeyDown={(event) => {
               if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
               event.preventDefault();
-              const next = clamp(width + (event.key === "ArrowLeft" ? KEY_STEP : -KEY_STEP));
+              const current = panelRef.current?.offsetWidth ?? 0;
+              const next = clamp(current + (event.key === "ArrowLeft" ? KEY_STEP : -KEY_STEP));
               setWidth(next);
               writePanelWidth(next);
             }}
           />
           <aside
+            ref={panelRef}
             aria-label="Conversation"
             className={cn(
               "z-20 flex min-h-0 flex-col bg-background max-md:absolute max-md:inset-0 md:w-(--board-panel-width) md:shrink-0",
               !open && "hidden",
             )}
-            style={{ "--board-panel-width": `${width}px` } as CSSProperties}
+            style={
+              {
+                // A width kept from a wider window still leaves the board its minimum.
+                "--board-panel-width":
+                  width === null
+                    ? DEFAULT_PANEL_WIDTH
+                    : `min(${width}px, calc(100% - ${MIN_BOARD_WIDTH}px))`,
+              } as CSSProperties
+            }
           >
             {panel}
           </aside>

@@ -52,9 +52,11 @@ import {
   canPromptBoardBox,
   cursorSender,
   dropBoardEdit,
+  fitBoardView,
   followBoardView,
   formatBoardElapsed,
   isBoardHtmlArtifact,
+  panToShow,
   parseBoardLink,
   pinnedCommentSpot,
   placeBoardCards,
@@ -131,7 +133,7 @@ describe("placeBoardItem", () => {
     expect(taken.some((rect) => covers(at, artifact, rect))).toBe(false);
   });
 
-  it("keeps searching outward past nearby cards, and falls back to the least covered spot", () => {
+  it("keeps searching outward past nearby cards, and past the view when it has no room", () => {
     const view = { x: -200, y: -100, width: 900, height: 600 };
     const note = boardNewNoteSize(undefined);
     const middle = { x: 250, y: 200 };
@@ -139,12 +141,23 @@ describe("placeBoardItem", () => {
     const at = placeBoardItem(note, middle, [blocker], view);
     expect(covers(at, note, blocker)).toBe(false);
     expect(inside(at, note, view)).toBe(true);
-    // A view taken up whole still gets the item inside it, where it covers least.
+    // A view taken up whole puts the item just outside it, clear, rather than on a card.
     const wall = { x: -200, y: -100, width: 900, height: 600 };
-    const corner = { x: -200, y: -100, width: 700, height: 600 };
-    const crowded = placeBoardItem(note, middle, [wall, corner], view);
-    expect(inside(crowded, note, view)).toBe(true);
-    expect(crowded.x).toBeGreaterThan(500 - note.w);
+    const crowded = placeBoardItem(note, middle, [wall], view);
+    expect(covers(crowded, note, wall)).toBe(false);
+    expect(inside(crowded, note, view)).toBe(false);
+  });
+
+  it("places a thread box at its own size in a narrow view, clear of a note and the thread card", () => {
+    // A board narrowed by the conversation beside it: the thread's card and a resized note.
+    const view = { x: 0, y: 0, width: 760, height: 700 };
+    const thread = { x: 80, y: 72, width: 320, height: 420 };
+    const note = { x: 738, y: 100, width: 252, height: 160 };
+    const box = boardNewNoteSize("thread");
+    expect(box.w).toBeGreaterThan(boardNewNoteSize(undefined).w);
+    const at = placeBoardItem(box, { x: 380, y: 350 }, [thread, note], view);
+    expect(covers(at, box, thread)).toBe(false);
+    expect(covers(at, box, note)).toBe(false);
   });
 
   it("puts a card made from another beside it, to its right and clear of what is there", () => {
@@ -701,7 +714,7 @@ describe("boardPromptContext", () => {
       ),
       people,
     );
-    expect(context.cards).toEqual([
+    expect(context.cards.map(({ ref, label, text }) => ({ ref, label, text }))).toEqual([
       { ref: "note:a", label: "Note from You", text: "a" },
       { ref: "note:b", label: "Note from Sam", text: "b" },
       { ref: "note:c", label: "Note from You", text: "c" },
@@ -769,6 +782,22 @@ describe("boardPromptContext", () => {
       ["Comment from Owner on a reply", 'On the reply: "Use a 15 minute TTL"\nAgreed'],
       ['Artifact "Mockup"', "Mockup\n\n<!doctype html><p>Hi</p>"],
     ]);
+    // What is sent is kept and shown to everyone, so it names people as everyone reads them;
+    // the chip says what the card itself says.
+    expect(context.cards.map(({ sharedLabel, excerpt }) => [sharedLabel, excerpt])).toEqual([
+      ["Task from Sam", "Fix login"],
+      ["Link from the owner", "Spec"],
+      ["Comment from Sam on a reply", "Why?"],
+      ["Comment from the owner on a reply", "Agreed"],
+      ['Artifact "Mockup"', ""],
+    ]);
+    const named = boardPromptContext(
+      board([note("n", { text: "Ship it\non Friday" })], [arrow("note:n", "card:thread")]),
+      { ...people, ownerName: "Alex" },
+    );
+    expect(
+      named.cards.map(({ label, sharedLabel, excerpt }) => [label, sharedLabel, excerpt]),
+    ).toEqual([["Note from You", "Note from Alex", "Ship it"]]);
     expect(context.artifact?.id).toBe("empty");
     expect(context.artifactEdgeId).toBe("card:thread>note:empty");
   });
@@ -993,5 +1022,44 @@ describe("box progress", () => {
     expect(boardDraftIsPage("<!doc")).toBe(true);
     expect(boardDraftIsPage("\n  <html><body>")).toBe(true);
     expect(boardDraftIsPage("# Plan\n\n<b>bold</b>")).toBe(false);
+  });
+});
+
+describe("panToShow", () => {
+  const size = { width: 800, height: 600 };
+
+  it("leaves the view alone when the card is already in view, and pans once, least, when not", () => {
+    const view = { x: -100, y: 50, zoom: 1 };
+    expect(panToShow(view, { x: 200, y: 100, width: 300, height: 200 }, size)).toBe(view);
+    // Past the right edge: it moves left just enough, and not up or down.
+    expect(panToShow(view, { x: 700, y: 100, width: 300, height: 200 }, size)).toEqual({
+      x: -224,
+      y: 50,
+      zoom: 1,
+    });
+    // Above the top at half zoom: it moves down just enough.
+    const zoomed = { x: 0, y: 0, zoom: 0.5 };
+    expect(panToShow(zoomed, { x: 100, y: -200, width: 200, height: 200 }, size)).toEqual({
+      x: 0,
+      y: 124,
+      zoom: 0.5,
+    });
+    // Too wide to show whole: its start shows.
+    expect(panToShow(view, { x: 0, y: 100, width: 2_000, height: 100 }, size).x).toBe(24);
+  });
+
+  it("fits every card in the board's area at no more than full size", () => {
+    const rects = [
+      { x: 0, y: 0, width: 400, height: 300 },
+      { x: 1_200, y: 400, width: 400, height: 300 },
+    ];
+    const fit = fitBoardView(rects, size);
+    expect(fit.zoom).toBeCloseTo(720 / 1_600);
+    const left = fit.x;
+    const right = fit.x + 1_600 * fit.zoom;
+    expect(left).toBeGreaterThanOrEqual(39);
+    expect(800 - right).toBeGreaterThanOrEqual(39);
+    expect(fitBoardView([{ x: 10, y: 10, width: 100, height: 100 }], size).zoom).toBe(1);
+    expect(fitBoardView([], size)).toEqual(INITIAL_BOARD_VIEW);
   });
 });

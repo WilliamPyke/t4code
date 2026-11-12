@@ -3499,6 +3499,8 @@ const OrchestrationV2InternalCommand = Schema.Union([
     artifactId: ThreadGuestMessage.fields.artifactId,
     /** The guest's own thread box the message is for. */
     boxId: ThreadGuestMessage.fields.boxId,
+    /** The cards written into the text, as the server labelled them from its board. */
+    cards: ThreadGuestMessage.fields.cards,
   }),
   /** Shows a turn a guest ran on their own machine. It changes the share and nothing else. */
   Schema.Struct({

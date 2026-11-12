@@ -1,6 +1,7 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
 import {
+  GuestId,
   GuestShareId,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2TurnItem,
@@ -18,12 +19,14 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as RoomBoxes from "./RoomBoxes.ts";
 
 const shareId = GuestShareId.make("share:1");
 const roomThreadId = ThreadId.make("thread:room");
 const boxThreadId = ThreadId.make("thread:box");
 const strayThreadId = ThreadId.make("thread:stray");
+const sam = GuestId.make("guest:sam");
 
 const record = (kind: string, fields: object) => ({
   version: 1,
@@ -55,7 +58,18 @@ const threads: Record<string, object> = {
           { id: "art:a", text: "A", x: 0, y: 0, kind: "artifact" },
         ],
       },
-      messages: [],
+      // Sam's request, which the owner sent in the box's thread as `message:asked`.
+      messages: [
+        {
+          id: "guest-message:1",
+          text: "Make it dark",
+          status: "sent",
+          submittedAt: "1970-01-01T00:00:00.000Z",
+          guestId: sam,
+          boxId: "box:b",
+          sentAs: "message:asked",
+        },
+      ],
       boardThreads: { "box:b": boxThreadId },
     },
   },
@@ -70,6 +84,7 @@ const run = (id: string, threadId: ThreadId, status: string, type = "run.updated
     payload: {
       id,
       status,
+      userMessageId: id === "run:box" ? "message:asked" : `message:${id}`,
       requestedAt: DateTime.makeUnsafe(0),
       startedAt: null,
       modelSelection: { instanceId: "codex", model: "gpt-5.1-codex" },
@@ -80,6 +95,13 @@ const turnItem = (runId: string, fields: object) =>
     type: "turn-item.updated",
     threadId: roomThreadId,
     payload: { runId, ordinal: 2, status: "running", ...fields },
+  }) as unknown as OrchestrationV2DomainEvent;
+
+const request = (id: string, threadId: ThreadId, status: string) =>
+  ({
+    type: "runtime-request.updated",
+    threadId,
+    payload: { id, kind: "file_change", status },
   }) as unknown as OrchestrationV2DomainEvent;
 
 const layerWith = (events: Queue.Queue<OrchestrationV2DomainEvent>) =>
@@ -107,6 +129,7 @@ const layerWith = (events: Queue.Queue<OrchestrationV2DomainEvent>) =>
         ]),
       }),
     ),
+    Layer.provide(ServerSettings.layerTest({})),
     Layer.provide(NodeCrypto.layer),
   );
 
@@ -129,11 +152,19 @@ it.effect("shows each box's agent at work about once a second, and nothing once 
       yield* Queue.offerAll(events, [
         run("run:room", roomThreadId, "queued", "run.created"),
         run("run:room", roomThreadId, "running"),
-        turnItem("run:room", {
-          type: "assistant_message",
-          text: "# Plan\nDark mode",
-          streaming: true,
-        }),
+        // The reply streams on its message; its turn item carries no text of its own.
+        {
+          type: "message.updated",
+          threadId: roomThreadId,
+          payload: {
+            id: "message:reply",
+            runId: "run:room",
+            role: "assistant",
+            text: "# Plan\nDark mode",
+            streaming: true,
+          },
+        } as unknown as OrchestrationV2DomainEvent,
+        turnItem("run:room", { type: "assistant_message", text: "", textOmitted: true }),
         run("run:stray", strayThreadId, "running", "run.created"),
         run("run:box", boxThreadId, "running", "run.created"),
       ]);
@@ -145,6 +176,9 @@ it.effect("shows each box's agent at work about once a second, and nothing once 
           phase: "thinking",
           startedAt: "1970-01-01T00:00:00.000Z",
           model: "GPT-5.1 Codex",
+          // The guest's own words, whose request the owner sent.
+          prompt: "Make it dark",
+          askedBy: sam,
         },
         {
           boxId: "thread",
@@ -152,6 +186,7 @@ it.effect("shows each box's agent at work about once a second, and nothing once 
           phase: "queued",
           startedAt: "1970-01-01T00:00:00.000Z",
           model: "GPT-5.1 Codex",
+          prompt: "Go",
         },
       ]);
       yield* TestClock.adjust("1 second");
@@ -174,6 +209,16 @@ it.effect("shows each box's agent at work about once a second, and nothing once 
       const roomTool = yield* until((views) => of(views.owner, "thread")?.phase === "tool");
       assert.equal(of(roomTool.owner, "thread")?.detail, "mcp__vault__read");
       assert.equal(of(roomTool.guests, "thread")?.detail, "Using a tool");
+      // Waiting on the owner shows at once, over the tool, and goes once it is answered.
+      yield* Queue.offerAll(events, [
+        request("request:1", boxThreadId, "pending"),
+        turnItem("run:box", { type: "file_change", fileName: "a.ts" }),
+      ]);
+      const waiting = yield* until((views) => of(views.owner, "box:b")?.phase === "approval");
+      assert.notProperty(of(waiting.owner, "box:b"), "detail");
+      yield* Queue.offer(events, request("request:1", boxThreadId, "resolved"));
+      const answered = yield* until((views) => of(views.owner, "box:b")?.phase === "tool");
+      assert.equal(of(answered.owner, "box:b")?.detail, "Editing files");
       // Another share's room hears nothing of this one.
       assert.deepEqual(yield* until(() => true, GuestShareId.make("share:other")), {
         owner: [],

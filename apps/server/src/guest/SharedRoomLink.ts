@@ -28,11 +28,11 @@ import {
   type SharedThreadCatchUpResult,
   type SharedThreadRoom,
   type SharedThreadTakeArtifactResult,
+  type ThreadGuestMessage,
   SharedThreadJoinError,
   ThreadId,
   type ThreadRoomLink,
 } from "@t3tools/contracts";
-import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
 import {
   roomArtifactBody,
@@ -40,6 +40,7 @@ import {
   roomBoxExcerpt,
   roomBoxRequestOf,
   roomCardLabelsOf,
+  roomRunPromptText,
 } from "@t3tools/shared/roomBoard";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Context from "effect/Context";
@@ -178,15 +179,6 @@ function artifactOfRun(
   const { body, truncated } = roomArtifactBody(reply);
   return { noteId, body, ...(truncated ? { truncated } : {}) };
 }
-
-/** What a run was asked, without the chips its cards and artifact left in the text. */
-const promptTextOf = (items: ReadonlyArray<OrchestrationV2TurnItem>) =>
-  replaceComposerContextReferences(
-    items
-      .toSorted((left, right) => left.ordinal - right.ordinal)
-      .flatMap((item) => (item.type === "user_message" ? [item.text] : []))[0] ?? "",
-    () => "",
-  );
 
 /** The start of a run's prompt, as the room shows it while the run goes on. */
 function runPromptOf(items: ReadonlyArray<OrchestrationV2TurnItem>): string {
@@ -622,21 +614,21 @@ const make = Effect.gen(function* () {
   );
 
   /**
-   * What a finished run shows on the board: the start of what was asked (a guest's own words
-   * when it was their request), the cards that went with it, and the model that ran it.
+   * What a finished run shows on the board: the start of what was asked and the cards that went
+   * with it (a guest's own words and cards when it was their request), and the model that ran it.
    */
   const aboutRun = Effect.fn("SharedRoomLink.aboutRun")(function* (
     items: ReadonlyArray<OrchestrationV2TurnItem>,
     run: OrchestrationV2Run | undefined,
-    guestText: string | undefined,
+    asked: ThreadGuestMessage | undefined,
   ) {
-    const cards = roomCardLabelsOf(items);
+    const cards = asked === undefined ? roomCardLabelsOf(items) : (asked.cards ?? []);
     const model =
       run === undefined
         ? undefined
         : roomBoxModelName(run.modelSelection, yield* providerRegistry.getProviders);
     return {
-      prompt: roomBoxExcerpt(guestText ?? promptTextOf(items), ROOM_BOX_PROMPT_MAX_LENGTH),
+      prompt: roomBoxExcerpt(asked?.text ?? roomRunPromptText(items), ROOM_BOX_PROMPT_MAX_LENGTH),
       ...(cards.length === 0 ? {} : { cards: [...cards] }),
       ...(model === undefined || model === "" ? {} : { model }),
     };
@@ -685,7 +677,7 @@ const make = Effect.gen(function* () {
         turnId: runId,
         ...artifact,
         ...(asked?.guestId === undefined ? {} : { askedBy: asked.guestId }),
-        ...(yield* aboutRun(turnItems, run, asked?.text)),
+        ...(yield* aboutRun(turnItems, run, asked)),
         boxId: ROOM_BOARD_ROOM_BOX,
       });
     },
@@ -713,7 +705,7 @@ const make = Effect.gen(function* () {
         ? undefined
         : share.messages.find((message) => message.sentAs === run.userMessageId);
     const askedBy = asked?.guestId === undefined ? {} : { askedBy: asked.guestId };
-    const about = yield* aboutRun(turnItems, run, asked?.text);
+    const about = yield* aboutRun(turnItems, run, asked);
     yield* orchestrator.dispatch({
       type: "thread.room-box.turn",
       commandId: CommandId.make(`server:room-box:${runId}`),

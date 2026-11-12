@@ -209,6 +209,8 @@ async function postGuestMessage(
     readonly artifactId?: string | undefined;
     /** The thread box it was asked from, whose own conversation runs it. */
     readonly boxId?: string;
+    /** The board cards that went with it, so the server names them for everyone. */
+    readonly cardRefs?: ReadonlyArray<string>;
   } = {},
 ): Promise<string | null> {
   const form = new FormData();
@@ -216,6 +218,9 @@ async function postGuestMessage(
   form.append("text", text);
   if (board.artifactId !== undefined) form.append("artifactId", board.artifactId);
   if (board.boxId !== undefined) form.append("boxId", board.boxId);
+  if (board.cardRefs !== undefined && board.cardRefs.length > 0) {
+    form.append("cardRefs", JSON.stringify(board.cardRefs));
+  }
   for (const file of files) form.append("file", file, file.name);
   return guestShareRequest(endpoint, `${GUEST_ROUTE_PREFIX}/messages`, {
     init: { method: "POST", body: form },
@@ -374,6 +379,7 @@ function GuestThreadSession({
           ? "This prompt and its cards are too long. Remove a card or shorten the prompt."
           : await postGuestMessage(endpoint, text, [], {
               boxId,
+              cardRefs: prompt.cards.map((card) => card.ref),
               ...(prompt.artifactId === null ? {} : { artifactId: prompt.artifactId }),
             });
     if (failure !== null) {

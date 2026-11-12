@@ -70,6 +70,9 @@ export function BoardPromptBox({
                 <Tooltip>
                   <TooltipTrigger render={<span className="min-w-0 truncate" />}>
                     {card.label}
+                    {card.excerpt === "" ? null : (
+                      <span className="text-muted-foreground">: {card.excerpt}</span>
+                    )}
                   </TooltipTrigger>
                   <TooltipPopup side="top">
                     <p className="max-w-64 whitespace-pre-line [overflow-wrap:anywhere]">

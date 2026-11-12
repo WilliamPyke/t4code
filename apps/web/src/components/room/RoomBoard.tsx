@@ -36,6 +36,7 @@ import {
   MinusIcon,
   MousePointer2Icon,
   PlusIcon,
+  ScanIcon,
   StickyNoteIcon,
   Trash2Icon,
   XIcon,
@@ -53,6 +54,7 @@ import {
 } from "react";
 
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { observeResize } from "~/lib/observeResize";
 import { useStableCallback } from "~/hooks/useStableCallback";
 
 import { cn, randomUUID } from "~/lib/utils";
@@ -72,6 +74,7 @@ import {
   type BoardPresence,
   type BoardPrompt,
   type BoardRect,
+  type BoardSize,
   type BoardTarget,
   type BoardThreadBox,
   type BoardValue,
@@ -82,6 +85,7 @@ import {
   INITIAL_BOARD_VIEW,
   NO_BOARD_EDITS,
   besideBoardItem,
+  boardBounds,
   boardAgents,
   boardArtifactAuthor,
   boardArtifactWriting,
@@ -112,8 +116,10 @@ import {
   clampBoardSize,
   cursorSender,
   dropBoardEdit,
+  fitBoardView,
   followBoardView,
   panBoardBy,
+  panToShow,
   parseBoardLink,
   placeBoardCards,
   placeBoardItem,
@@ -129,7 +135,7 @@ import {
 import { RoomArtifactLive } from "./RoomBoardArtifact";
 import { BoardPromptBox } from "./RoomBoardPrompt";
 import { BoxProgress, BoxRequests, BoxTurns } from "./RoomBoardThreadBox";
-import { useRoomHasProgress, useRoomRunning } from "./roomBoardLive";
+import { useBoxProgress, useRoomHasProgress, useRoomRunning } from "./roomBoardLive";
 
 const guestCardId = (guest: ThreadGuest) => roomBoardGuestCard(guest.id);
 const agentCardId = (guest: ThreadGuest) => roomBoardAgentCard(guest.id);
@@ -273,6 +279,18 @@ function ResizeHandle({
 const THREAD_DROP = "thread";
 const OWN_AGENT_DROP = "own-agent";
 
+/** Where an item is drawn on the board and how big, in board pixels. */
+const drawnRect = (element: HTMLElement): BoardRect => ({
+  x: element.offsetLeft,
+  y: element.offsetTop,
+  width: element.offsetWidth,
+  height: element.offsetHeight,
+});
+
+/** Everything on a board at the size the browser drew it. */
+const drawnRectsIn = (surface: HTMLElement | null): Array<BoardRect> =>
+  [...(surface?.querySelectorAll<HTMLElement>("[data-board-item]") ?? [])].map(drawnRect);
+
 /** The value of a `data-*` attribute on whatever is under a point on the screen. */
 const dataAt = (x: number, y: number, key: "boardDrop" | "boardItem") =>
   document
@@ -357,7 +375,7 @@ export function RoomBoard({
   onPromptBox,
   renderBoxModel,
   onOpenConversation,
-  conversationBoxes = NO_BOXES,
+  renderRequestModel,
   onResolveRequest,
   resolvingRequests = NO_BOXES,
   ownerWritingArtifactId = null,
@@ -421,8 +439,8 @@ export function RoomBoard({
   readonly renderBoxModel?: ((boxId: string) => ReactNode) | undefined;
   /** Shows a box's conversation beside the board; the owner's. */
   readonly onOpenConversation?: ((boxId: string) => void) | undefined;
-  /** The boxes with a conversation to show yet. */
-  readonly conversationBoxes?: ReadonlySet<string>;
+  /** Which model a guest's waiting request on a box would run on, shown to the owner. */
+  readonly renderRequestModel?: ((boxId: string) => ReactNode) | undefined;
   /** Sends or dismisses a guest's request waiting on a box; the owner's. */
   readonly onResolveRequest?:
     | ((message: ThreadGuestMessage, decision: "send" | "dismiss") => void)
@@ -501,6 +519,26 @@ export function RoomBoard({
     };
     surface.addEventListener("wheel", onWheel, { passive: false });
     return () => surface.removeEventListener("wheel", onWheel);
+  }, []);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- follows the board's on-screen size, which a conversation opening beside it shrinks
+  useEffect(() => {
+    const surface = surfaceRef.current;
+    if (surface === null) return;
+    let last = { width: surface.clientWidth, height: surface.clientHeight };
+    return observeResize(surface, () => {
+      const size = { width: surface.clientWidth, height: surface.clientHeight };
+      const shrank = size.width < last.width || size.height < last.height;
+      last = size;
+      const bounds = boardBounds(drawnRectsIn(surface));
+      if (!shrank || bounds === null) return;
+      // Cards that all fit in what is left stay in view; more than that is the Fit button's.
+      setView((current) =>
+        bounds.width * current.zoom <= size.width - 48 &&
+        bounds.height * current.zoom <= size.height - 48
+          ? panToShow(current, bounds, size)
+          : current,
+      );
+    });
   }, []);
 
   const guests = room?.guests ?? [];
@@ -677,34 +715,32 @@ export function RoomBoard({
     shown.notes.filter((note) => note.kind === "artifact").length >= ROOM_BOARD_MAX_ARTIFACTS;
   const threadsFull =
     shown.notes.filter((note) => note.kind === "thread").length >= ROOM_BOARD_MAX_THREADS;
-  // Everything on the board at the size the browser drew it.
-  const drawnRects = (): Array<BoardRect> => {
-    const taken: Array<BoardRect> = [];
-    for (const item of surfaceRef.current?.querySelectorAll<HTMLElement>("[data-board-item]") ??
-      []) {
-      taken.push({
-        x: item.offsetLeft,
-        y: item.offsetTop,
-        width: item.offsetWidth,
-        height: item.offsetHeight,
-      });
-    }
-    return taken;
-  };
+  const drawnRects = () => drawnRectsIn(surfaceRef.current);
   const drawnItem = (ref: string) =>
     surfaceRef.current?.querySelector<HTMLElement>(`[data-board-item="${CSS.escape(ref)}"]`) ??
     null;
-  // A new card lands in view, clear of everything there at the size the browser drew it.
-  const freeSpot = (kind: RoomBoardNote["kind"]): BoardPoint => {
+  /** The part of the board that is on screen: the area beside any conversation, never under it. */
+  const surfaceSize = (): BoardSize | null => {
     const surface = surfaceRef.current;
+    return surface === null ? null : { width: surface.clientWidth, height: surface.clientHeight };
+  };
+  // Pans once, as little as it takes, and only when the rect is not already in view whole.
+  const reveal = (rect: BoardRect) => {
+    const size = surfaceSize();
+    if (size === null) return;
+    const next = panToShow(view, rect, size);
+    if (next === view) return;
+    setFollowing(null);
+    setView(next);
+  };
+  // A new card lands in view when there is room, clear of everything there at drawn sizes.
+  const freeSpot = (kind: RoomBoardNote["kind"]): BoardPoint => {
     const size = boardNewNoteSize(kind);
-    if (surface === null) return placeBoardItem(size, screenToBoard(view, { x: 300, y: 200 }), []);
-    const bounds = surface.getBoundingClientRect();
-    const corner = screenToBoard(view, { x: 0, y: 0 });
+    const area = surfaceSize() ?? { width: 600, height: 400 };
     const within = {
-      ...corner,
-      width: bounds.width / view.zoom,
-      height: bounds.height / view.zoom,
+      ...screenToBoard(view, { x: 0, y: 0 }),
+      width: area.width / view.zoom,
+      height: area.height / view.zoom,
     };
     return placeBoardItem(
       size,
@@ -715,17 +751,17 @@ export function RoomBoard({
   };
   const newNote = (fields: Pick<RoomBoardNote, "kind" | "url">, at: BoardPoint) => {
     const id = randomUUID();
-    send(
-      { kind: "note", id },
-      settleBoardValue({
-        id,
-        text: "",
-        ...at,
-        ...(viewer === null ? {} : { guestId: viewer }),
-        ...(fields.kind === undefined ? {} : { kind: fields.kind }),
-        ...(fields.url === undefined ? {} : { url: fields.url }),
-      }),
-    );
+    const value = settleBoardValue({
+      id,
+      text: "",
+      ...at,
+      ...(viewer === null ? {} : { guestId: viewer }),
+      ...(fields.kind === undefined ? {} : { kind: fields.kind }),
+      ...(fields.url === undefined ? {} : { url: fields.url }),
+    });
+    send({ kind: "note", id }, value);
+    const size = boardNewNoteSize(fields.kind);
+    reveal({ x: value.x, y: value.y, width: size.w, height: size.h });
     return id;
   };
   const addCard = (fields: Pick<RoomBoardNote, "kind" | "url">, wanted?: BoardPoint) => {
@@ -735,18 +771,11 @@ export function RoomBoard({
   /** Adds a card of `kind` beside an item, with a line between them in the direction given. */
   const addBeside = (ref: string, kind: "artifact" | "thread", direction: "from" | "to") => {
     const element = drawnItem(ref);
-    const box = boxes.get(ref);
-    if (!canEdit || full || (element === null && box === undefined)) return;
-    const rect =
-      element === null
-        ? { x: box!.x, y: box!.y, width: box!.width, height: 0 }
-        : {
-            x: element.offsetLeft,
-            y: element.offsetTop,
-            width: element.offsetWidth,
-            height: element.offsetHeight,
-          };
-    const id = newNote({ kind }, besideBoardItem(rect, boardNewNoteSize(kind), drawnRects()));
+    if (!canEdit || full || element === null) return;
+    const id = newNote(
+      { kind },
+      besideBoardItem(drawnRect(element), boardNewNoteSize(kind), drawnRects()),
+    );
     const line = randomUUID();
     const added = noteRef(id);
     send(
@@ -757,25 +786,27 @@ export function RoomBoard({
       boardEditKey({ kind: "note", id }),
     );
   };
-  // Centres an item in view and puts the caret in its prompt box.
+  // Brings an item into view if it is not, and puts the caret in its prompt box.
   const focusItem = (ref: string) => {
     const element = drawnItem(ref);
-    const bounds = surfaceRef.current?.getBoundingClientRect();
-    if (element === null || bounds === undefined) return;
-    setFollowing(null);
-    setView((current) => ({
-      ...current,
-      x: bounds.width / 2 - (element.offsetLeft + element.offsetWidth / 2) * current.zoom,
-      y: bounds.height / 2 - (element.offsetTop + element.offsetHeight / 2) * current.zoom,
-    }));
+    if (element === null) return;
+    reveal(drawnRect(element));
     element.querySelector<HTMLElement>("[data-box-prompt]")?.focus({ preventScroll: true });
+  };
+  const fitAll = () => {
+    const size = surfaceSize();
+    if (size === null) return;
+    setFollowing(null);
+    setView(fitBoardView(drawnRects(), size));
   };
   const attachAgentOf = (note: RoomBoardNote) => {
     if (note.kind !== "artifact" || cards !== undefined || room === null) return undefined;
     const existing = boardOwnBoxFor(shown, viewer, note.id);
-    if (existing !== null) return () => focusItem(boardBoxRef(existing));
+    if (existing !== null) {
+      return { label: "Show my thread", run: () => focusItem(boardBoxRef(existing)) };
+    }
     if (!canEdit || full || threadsFull) return undefined;
-    return () => addBeside(noteRef(note.id), "thread", "to");
+    return { label: "Attach my agent", run: () => addBeside(noteRef(note.id), "thread", "to") };
   };
   const addLink = (url: string, wanted?: BoardPoint) => addCard({ kind: "link", url }, wanted);
   // A URL pasted in an empty note makes that note a link card.
@@ -880,10 +911,9 @@ export function RoomBoard({
     const own = canPromptBoardBox(box, viewer);
     // A box rewrites one artifact; a second would draw a line that does nothing.
     const canAddArtifact = canEdit && !full && !artifactsFull && context?.artifact === null;
+    // Always offered to the owner: a box with no conversation yet says so in the panel.
     const conversation =
-      onOpenConversation !== undefined && conversationBoxes.has(box.id)
-        ? () => onOpenConversation(box.id)
-        : undefined;
+      onOpenConversation === undefined ? undefined : () => onOpenConversation(box.id);
     const prompt =
       onPromptBox === undefined || context === undefined || !own ? undefined : (
         <BoardPromptBox
@@ -901,7 +931,6 @@ export function RoomBoard({
       );
     const body = (
       <>
-        <p className="text-2xs text-muted-foreground">{boardBoxAgentLabel(box, people)}</p>
         {tail}
         <BoxProgress boxId={box.id} onOpenConversation={conversation} fallback={fallback} />
         <BoxRequests
@@ -910,6 +939,7 @@ export function RoomBoard({
           people={people}
           onResolve={onResolveRequest}
           resolving={resolvingRequests}
+          model={renderRequestModel?.(box.id)}
         />
         {canAddArtifact || (conversation !== undefined && box.id !== ROOM_BOARD_ROOM_BOX) ? (
           <div className="flex flex-wrap gap-1">
@@ -947,7 +977,10 @@ export function RoomBoard({
       ? null
       : boxParts(
           roomBox,
-          <ThreadMessages messages={messages} />,
+          <>
+            <p className="text-2xs text-muted-foreground">{boardBoxAgentLabel(roomBox, people)}</p>
+            <ThreadMessages messages={messages} />
+          </>,
           hasProgress ? undefined : needsApproval ? (
             <div className="flex flex-wrap items-center gap-2">
               <p role="status" className="min-w-0 flex-1 text-xs font-medium text-warning">
@@ -965,7 +998,7 @@ export function RoomBoard({
   const markerId = `board-arrow${useId().replace(/[^\w-]/g, "")}`;
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden overscroll-none">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-clip overscroll-none">
       <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
         <Button size="sm" variant="ghost" onClick={onBack ?? onOpenThread}>
           <ArrowLeftIcon />
@@ -1084,15 +1117,20 @@ export function RoomBoard({
         <Button size="icon-sm" variant="ghost" aria-label="Zoom in" onClick={() => zoomBy(1.2)}>
           <PlusIcon />
         </Button>
+        <Button size="sm" variant="ghost" onClick={fitAll}>
+          <ScanIcon />
+          Fit
+        </Button>
       </header>
       <div
         ref={surfaceRef}
         role="application"
         aria-label="Room board"
-        // Focusable so a link pasted on the board lands as a card.
+        // Focusable so a link pasted on the board lands as a card. Clipped, not hidden, so
+        // focusing a card at the edge cannot scroll the board out from under the pointer.
         tabIndex={0}
         className={cn(
-          "group/board relative min-h-0 flex-1 cursor-grab touch-none overflow-hidden bg-background outline-none active:cursor-grabbing",
+          "group/board relative min-h-0 flex-1 cursor-grab touch-none overflow-clip bg-background outline-none active:cursor-grabbing",
           following !== null && "transition-[background-position,background-size] duration-200",
         )}
         style={boardGridStyle(view)}
@@ -1339,7 +1377,7 @@ export function RoomBoard({
               note.kind === "thread" && cards === undefined
                 ? boxParts(
                     { id: note.id, guestId: note.guestId, title: note.text.trim() },
-                    <BoxTurns turns={note.thread?.turns ?? []} people={people} />,
+                    <BoxTurns boxId={note.id} turns={note.thread?.turns ?? []} people={people} />,
                   )
                 : undefined;
             return (
@@ -1655,7 +1693,7 @@ function BoardNote({
   readonly boxName: (boxId: string) => string;
   readonly onRestore: (() => Promise<boolean>) | undefined;
   /** Gives the viewer a thread box that rewrites this artifact, or shows the one they have. */
-  readonly onAttachAgent: (() => void) | undefined;
+  readonly onAttachAgent: { readonly label: string; readonly run: () => void } | undefined;
   /** A thread box's agent, conversation and prompt box. */
   readonly box:
     | { readonly label: string; readonly body: ReactNode; readonly footer: ReactNode }
@@ -1668,6 +1706,9 @@ function BoardNote({
   const artifact = note.kind === "artifact";
   const thread = note.kind === "thread";
   const titled = artifact || thread;
+  // Anyone may move or connect a thread box; only its person, or the owner, renames or removes it.
+  const canChange =
+    canEdit && (!thread || people.viewer === null || (note.guestId ?? null) === people.viewer);
   const size = boardNoteSize(note);
   const [quoteOpen, setQuoteOpen] = useState(false);
   return (
@@ -1754,7 +1795,7 @@ function BoardNote({
             <TooltipPopup side="top">Give to my agent, as a draft</TooltipPopup>
           </Tooltip>
         )}
-        {canEdit ? (
+        {canChange ? (
           <button
             type="button"
             aria-label={plain ? "Delete note" : "Delete card"}
@@ -1824,7 +1865,7 @@ function BoardNote({
                     : "Note"
           }
           value={note.text}
-          readOnly={!canEdit}
+          readOnly={!canChange}
           maxLength={ROOM_BOARD_NOTE_MAX_LENGTH}
           rows={titled ? 1 : note.kind === "link" ? 2 : note.kind === "task" ? 3 : 4}
           placeholder={
@@ -1835,13 +1876,16 @@ function BoardNote({
                 : artifact
                   ? "Name this artifact"
                   : thread
-                    ? "Name this thread"
+                    ? canChange
+                      ? "Name this thread"
+                      : "Untitled thread"
                     : "Write a note, or paste a link"
           }
           className={cn(
             "resize-none bg-transparent px-3 pb-3 text-sm leading-snug outline-none placeholder:text-placeholder",
             note.kind === "task" && note.done === true && "text-muted-foreground line-through",
             titled ? "shrink-0 pb-2 font-medium" : size !== undefined && "min-h-0 flex-1",
+            !canChange && "cursor-default",
           )}
           onPointerDown={stopPointer}
           onChange={(event) => onText(note, event.target.value)}
@@ -1896,10 +1940,10 @@ function BoardNote({
               size="micro"
               variant="outline"
               onPointerDown={stopPointer}
-              onClick={onAttachAgent}
+              onClick={onAttachAgent.run}
             >
               <BotIcon />
-              Attach my agent
+              {onAttachAgent.label}
             </Button>
           </div>
         ) : null}
@@ -2173,8 +2217,9 @@ function RoomCode({
 }
 
 function ThreadMessages({ messages }: { readonly messages: ReadonlyArray<BoardMessage> }) {
+  const running = useBoxProgress(ROOM_BOARD_ROOM_BOX) !== undefined;
   if (messages.length === 0) {
-    return <p className="text-xs text-muted-foreground">No messages yet.</p>;
+    return running ? null : <p className="text-xs text-muted-foreground">No messages yet.</p>;
   }
   return (
     <ol className="flex flex-col gap-2">
