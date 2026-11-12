@@ -77,7 +77,9 @@ const world = Effect.fn(function* (
         dispatch: (command: OrchestrationV2ServerCommand) =>
           command.type === "thread.room-link.set"
             ? Ref.set(link, command.roomLink).pipe(Effect.as({} as never))
-            : command.type === "thread.room-task.answer" && owner !== undefined
+            : (command.type === "thread.room-task.answer" ||
+                  command.type === "thread.room-artifact.fill") &&
+                owner !== undefined
               ? Queue.offer(answers, command).pipe(Effect.as({} as never))
               : Effect.die("Only the room link changes here"),
         getThreadRecords: (_threadId, _fields, filter) =>
@@ -521,6 +523,68 @@ it.effect("answers the owner's task only with a finished turn of theirs that was
         taskId: "task:1",
         turn: { id: "run:task", reply: "Fixed the expiry check." },
       });
+      assert.equal(yield* Queue.size(answers), 0);
+    }).pipe(Effect.provide(layer));
+  }),
+);
+
+it.effect("fills the owner's artifact card only with a finished turn of theirs sent for it", () =>
+  Effect.gen(function* () {
+    const shareId = GuestShareId.make("share:mine");
+    const fills = (share: string, guest?: object) => ({
+      version: 1,
+      ...(guest === undefined ? {} : { guest }),
+      records: [
+        {
+          version: 1,
+          contextId: "room-artifact_1",
+          kind: "room-artifact",
+          label: 'Artifact "Plan"',
+          shareId: share,
+          noteId: "note:plan",
+          title: "Plan",
+        },
+      ],
+    });
+    const page = "<!doctype html><html><body>Plan</body></html>";
+    const turn = (context: object, reply: string) => [
+      item(1, { type: "user_message", text: "Draw the plan", context }),
+      item(2, { type: "assistant_message", text: "Working on it." }),
+      item(3, { type: "assistant_message", text: reply }),
+    ];
+    const guest = { guestMessageId: "guest-message:1", name: "Sam", text: "Draw the plan" };
+    const runs: Record<string, ReadonlyArray<OrchestrationV2TurnItem>> = {
+      "run:cancelled": turn(fills(shareId), "Stopped."),
+      "run:failed": turn(fills(shareId), "Broke."),
+      "run:guest": turn(fills(shareId, guest), "A guest asked."),
+      "run:old-share": turn(fills("share:old"), "Old room."),
+      "run:artifact": turn(fills(shareId), ["Here it is:", "```html", page, "```"].join("\n")),
+    };
+    const settled = (id: string, status: string) =>
+      ({ type: "run.updated", threadId, payload: { id, status } }) as never;
+    const { answers, layer } = yield* world([], {
+      share: { id: shareId, board: { positions: {}, notes: [] } },
+      events: [
+        settled("run:cancelled", "cancelled"),
+        settled("run:failed", "failed"),
+        settled("run:guest", "completed"),
+        settled("run:old-share", "completed"),
+        settled("run:artifact", "completed"),
+      ],
+      itemsOf: (runId) => runs[runId] ?? [],
+    });
+    yield* Effect.gen(function* () {
+      yield* SharedRoomLink.SharedRoomLink;
+      // Runs are taken in order, so the first fill shows none came before it.
+      assert.deepEqual(yield* Queue.take(answers), {
+        type: "thread.room-artifact.fill",
+        commandId: "server:room-artifact:run:artifact",
+        threadId,
+        shareId,
+        noteId: "note:plan",
+        turnId: "run:artifact",
+        body: page,
+      } as never);
       assert.equal(yield* Queue.size(answers), 0);
     }).pipe(Effect.provide(layer));
   }),

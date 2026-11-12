@@ -13,6 +13,7 @@ import {
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
+  RoomArtifactContextRecord,
   ROOM_TASK_CONTEXT_KIND,
   ROOM_UPDATES_MAX_CHARS,
   RoomTaskContextPayload,
@@ -27,6 +28,7 @@ import {
   type ThreadRoomLink,
 } from "@t3tools/contracts";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
+import { roomArtifactBody } from "@t3tools/shared/roomBoard";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -55,6 +57,7 @@ const SETTLED_RUN = new Set(["completed", "interrupted", "failed", "cancelled", 
 const MAX_UPDATES_BYTES = 512 * 1024;
 const decodeUpdates = Schema.decodeUnknownEffect(Schema.toCodecJson(RoomUpdates));
 const decodeRoomTask = Schema.decodeUnknownOption(RoomTaskContextPayload);
+const isRoomArtifactRecord = Schema.is(RoomArtifactContextRecord);
 
 /** A room's update as this machine keeps it: no characters nobody can see, a one-line name. */
 const sanitizeUpdate = (update: RoomUpdate): ReadonlyArray<RoomUpdate> => {
@@ -102,20 +105,25 @@ const taskOfRun = (
     ? link.task.id
     : undefined;
 
+/** The last thing the agent said in a run, whole, or "" when it said nothing. */
+const replyOf = (items: ReadonlyArray<OrchestrationV2TurnItem>) =>
+  items
+    .toSorted((left, right) => left.ordinal - right.ordinal)
+    .flatMap((item) =>
+      item.type === "assistant_message" && !item.streaming ? [item.text.trim()] : [],
+    )
+    .findLast((text) => text !== "") ?? "";
+
 /** A finished run as the room shows it: the prompt and the last thing the agent said. */
 export function guestTurnOf(
   runId: RunId,
   items: ReadonlyArray<OrchestrationV2TurnItem>,
 ): GuestTurnRequest | null {
-  const ordered = items.toSorted((left, right) => left.ordinal - right.ordinal);
   const prompt =
-    ordered.flatMap((item) => (item.type === "user_message" ? [item.text.trim()] : []))[0] ?? "";
-  const reply =
-    ordered
-      .flatMap((item) =>
-        item.type === "assistant_message" && !item.streaming ? [item.text.trim()] : [],
-      )
-      .findLast((text) => text !== "") ?? "";
+    items
+      .toSorted((left, right) => left.ordinal - right.ordinal)
+      .flatMap((item) => (item.type === "user_message" ? [item.text.trim()] : []))[0] ?? "";
+  const reply = replyOf(items);
   if (reply === "") return null;
   const truncated =
     prompt.length > GUEST_TURN_PROMPT_MAX_LENGTH || reply.length > GUEST_TURN_REPLY_MAX_LENGTH;
@@ -146,6 +154,23 @@ function roomTaskOfRun(
   return undefined;
 }
 
+/**
+ * The artifact card of this share that one of a run's messages asked the owner's agent to fill.
+ * Only the owner's own send attaches one; a guest's message reaches the agent with no records.
+ */
+function roomArtifactOfRun(
+  items: ReadonlyArray<OrchestrationV2TurnItem>,
+  shareId: GuestShareId,
+): string | undefined {
+  for (const item of items) {
+    if (item.type !== "user_message" || item.context?.guest !== undefined) continue;
+    for (const record of item.context?.records ?? []) {
+      if (isRoomArtifactRecord(record) && record.shareId === shareId) return record.noteId;
+    }
+  }
+  return undefined;
+}
+
 /** The start of a run's prompt, as the room shows it while the run goes on. */
 function runPromptOf(items: ReadonlyArray<OrchestrationV2TurnItem>): string {
   const prompt =
@@ -159,7 +184,7 @@ function runPromptOf(items: ReadonlyArray<OrchestrationV2TurnItem>): string {
  * Keeps a thread joined from someone's room connected to it: the room sees each turn start and
  * gets it as text once it finishes, and never runs it. What the room said comes back only as text
  * the user attaches to a message of their own. On the owner's side, a finished turn of a thread
- * they share answers the task card they sent it for.
+ * they share answers the task card they sent it for, and fills the artifact card it was for.
  */
 export class SharedRoomLink extends Context.Service<
   SharedRoomLink,
@@ -487,8 +512,11 @@ const make = Effect.gen(function* () {
     ),
   );
 
-  /** Marks the task the owner sent a finished run for answered on the board of their room. */
-  const answerOwnTask = Effect.fn("SharedRoomLink.answerOwnTask")(
+  /**
+   * Shows a finished run of the owner's on the board of their room: it answers the task card it
+   * was sent for, and fills the artifact card it was asked to.
+   */
+  const answerOnOwnBoard = Effect.fn("SharedRoomLink.answerOnOwnBoard")(
     function* (threadId: ThreadId, runId: RunId) {
       const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
       const share = thread.guestShare ?? null;
@@ -498,17 +526,32 @@ const make = Effect.gen(function* () {
       });
       const taskId = roomTaskOfRun(turnItems, share.id);
       const turn = taskId === undefined ? null : guestTurnOf(runId, turnItems);
-      if (taskId === undefined || turn === null) return;
+      if (taskId !== undefined && turn !== null) {
+        yield* orchestrator.dispatch({
+          type: "thread.room-task.answer",
+          commandId: CommandId.make(`server:room-task:${runId}`),
+          threadId,
+          shareId: share.id,
+          taskId,
+          turn: { id: turn.id, reply: turn.reply },
+        });
+      }
+      const noteId = roomArtifactOfRun(turnItems, share.id);
+      const reply = noteId === undefined ? "" : replyOf(turnItems);
+      if (noteId === undefined || reply === "") return;
+      const { body, truncated } = roomArtifactBody(reply);
       yield* orchestrator.dispatch({
-        type: "thread.room-task.answer",
-        commandId: CommandId.make(`server:room-task:${runId}`),
+        type: "thread.room-artifact.fill",
+        commandId: CommandId.make(`server:room-artifact:${runId}`),
         threadId,
         shareId: share.id,
-        taskId,
-        turn: { id: turn.id, reply: turn.reply },
+        noteId,
+        turnId: runId,
+        body,
+        ...(truncated ? { truncated } : {}),
       });
     },
-    Effect.catch((cause) => Effect.logWarning("Could not answer a task on the board", { cause })),
+    Effect.catch((cause) => Effect.logWarning("Could not show a turn on the board", { cause })),
   );
 
   type Job = {
@@ -520,7 +563,7 @@ const make = Effect.gen(function* () {
     kind === "turn"
       ? publishRun(threadId, runId)
       : kind === "answer"
-        ? answerOwnTask(threadId, runId)
+        ? answerOnOwnBoard(threadId, runId)
         : publishActivity(threadId, runId, kind),
   );
   // Untraced: it sees every domain event of every thread, and most do nothing here.

@@ -475,9 +475,20 @@ describe("Teams", () => {
           refusal("board_rejected"),
         );
       }
-      expect(yield* refused("ann", note("comment", { pinnedTo: "message-1" }))).toMatchObject(
-        refusal("board_rejected"),
-      );
+      for (const fields of [{ pinnedTo: "message-1" }, { kind: "artifact" as const }]) {
+        expect(yield* refused("ann", note("other", fields))).toMatchObject(
+          refusal("board_rejected"),
+        );
+      }
+      // Cards and notes take sizes here as on a room's board.
+      const sized = yield* change("ann", {
+        type: "card.resize",
+        cardId: roomBoardGuestCard("ben"),
+        w: 320,
+        h: 240,
+      });
+      expect(sized.board?.sizes).toEqual({ [roomBoardGuestCard("ben")]: { w: 320, h: 240 } });
+      yield* change("ann", note("task", { size: { w: 200, h: 160 } }));
 
       for (let index = 1; index < ROOM_BOARD_MAX_NOTES; index++) {
         yield* change("ben", note(`note-${index}`));

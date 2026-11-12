@@ -10,7 +10,13 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import { GUEST_MESSAGE_MAX_LENGTH, GUEST_NAME_MAX_LENGTH } from "./guestShare.ts";
+import {
+  GUEST_MESSAGE_MAX_LENGTH,
+  GUEST_NAME_MAX_LENGTH,
+  ROOM_ARTIFACT_MAX_LENGTH,
+  ROOM_BOARD_NOTE_MAX_LENGTH,
+  RoomBoardNote,
+} from "./guestShare.ts";
 
 /** Image and file records reference `ChatAttachment` ids, never bytes. */
 
@@ -26,6 +32,8 @@ export const COMPOSER_CONTEXT_KINDS = [
   "thread",
   "environment",
   "room-updates",
+  "room-cards",
+  "room-artifact",
 ] as const;
 export type KnownComposerContextKind = (typeof COMPOSER_CONTEXT_KINDS)[number];
 
@@ -240,6 +248,48 @@ export const RoomUpdatesContextRecord = Schema.Struct({
 });
 export type RoomUpdatesContextRecord = typeof RoomUpdatesContextRecord.Type;
 
+const COMPOSER_CONTEXT_ROOM_CARDS_MAX = 60;
+
+/** One card from a room's board, as the sender attached it, with who wrote it. */
+export const RoomBoardContextCard = Schema.Struct({
+  /** As the board names the card, such as "Note from Sam" or 'Artifact "Plan"'. */
+  label: ContextLabel,
+  /** The room's owner, their agent (an artifact's content), or a guest. Absent when unknown. */
+  author: Schema.optional(Schema.Literals(["owner", "owner_agent", "guest"])),
+  /** The guest's name. */
+  name: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(GUEST_NAME_MAX_LENGTH))),
+  text: BoundedString(ROOM_ARTIFACT_MAX_LENGTH),
+});
+export type RoomBoardContextCard = typeof RoomBoardContextCard.Type;
+
+/**
+ * Cards the room's owner connected to the thread card on their board and sent with a message.
+ * The agent reads each as the words of the person who wrote it.
+ */
+export const RoomCardsContextRecord = Schema.Struct({
+  ...recordBase,
+  kind: Schema.Literal("room-cards"),
+  cards: Schema.Array(RoomBoardContextCard).check(
+    Schema.isMaxLength(COMPOSER_CONTEXT_ROOM_CARDS_MAX),
+  ),
+});
+export type RoomCardsContextRecord = typeof RoomCardsContextRecord.Type;
+
+/**
+ * The artifact card on the owner's board that the reply to this message fills. The agent is
+ * told so; the owner's server writes the reply into the card once the turn completes.
+ */
+export const RoomArtifactContextRecord = Schema.Struct({
+  ...recordBase,
+  kind: Schema.Literal("room-artifact"),
+  shareId: GuestShareId,
+  noteId: RoomBoardNote.fields.id,
+  title: BoundedString(ROOM_BOARD_NOTE_MAX_LENGTH),
+  /** What the artifact shows now, so the agent can revise it. */
+  current: Schema.optional(BoundedString(ROOM_ARTIFACT_MAX_LENGTH)),
+});
+export type RoomArtifactContextRecord = typeof RoomArtifactContextRecord.Type;
+
 const isJson = Schema.is(Schema.Json);
 
 /** Excludes known discriminators so malformed known records fail their own schema. */
@@ -272,6 +322,8 @@ export const KnownComposerContextRecord = Schema.Union([
   ThreadContextRecord,
   EnvironmentContextRecord,
   RoomUpdatesContextRecord,
+  RoomCardsContextRecord,
+  RoomArtifactContextRecord,
 ]);
 export type KnownComposerContextRecord = typeof KnownComposerContextRecord.Type;
 

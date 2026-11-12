@@ -1494,6 +1494,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "message" && row.message.role !== "system" && row.projectedItem ? (
         <RoomReplyComments
           messageId={row.message.id}
+          text={row.message.text}
           align={row.message.role === "user" ? "end" : "start"}
         />
       ) : null}

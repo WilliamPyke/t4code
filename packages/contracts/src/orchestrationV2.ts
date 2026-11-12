@@ -49,7 +49,9 @@ import {
   GuestShareTeam,
   GuestTeamMember,
   GuestTurnRequest,
+  RoomArtifactContent,
   RoomBoardChange,
+  RoomBoardNote,
   RoomTaskContextPayload,
   SharedThreadMessage,
   ThreadGuestShare,
@@ -3519,6 +3521,17 @@ const OrchestrationV2InternalCommand = Schema.Union([
     shareId: GuestShareId,
     taskId: RoomTaskContextPayload.fields.taskId,
     turn: Schema.Struct({ id: GuestTurnRequest.fields.id, reply: GuestTurnRequest.fields.reply }),
+  }),
+  /** Writes the owner's own turn into an artifact card. It changes the share and nothing else. */
+  Schema.Struct({
+    type: Schema.Literal("thread.room-artifact.fill"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    noteId: RoomBoardNote.fields.id,
+    turnId: RoomArtifactContent.fields.turnId,
+    body: RoomArtifactContent.fields.body,
+    truncated: RoomArtifactContent.fields.truncated,
   }),
   /** Connects a thread joined from a room to it, or with null ends that. */
   Schema.Struct({

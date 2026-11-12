@@ -1,4 +1,6 @@
 import {
+  ROOM_ARTIFACT_MAX_LENGTH,
+  ROOM_BOARD_MAX_ARTIFACTS,
   ROOM_BOARD_MAX_EDGES,
   ROOM_BOARD_MAX_NOTES,
   isRoomBoardUrl,
@@ -9,6 +11,7 @@ import {
   type RoomBoardChange,
   type RoomBoardEdge,
   type RoomBoardNote,
+  type RoomBoardSize,
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
 
@@ -35,26 +38,44 @@ export const roomBoardWithEdges = (
   keep: (edge: RoomBoardEdge) => boolean,
 ): RoomBoard => (board.edges === undefined ? board : { ...board, edges: board.edges.filter(keep) });
 
+/** The board with the places and sizes of only the cards `keep` says. */
+function roomBoardKeepingCards(board: RoomBoard, keep: (cardId: string) => boolean): RoomBoard {
+  const kept = {
+    ...board,
+    positions: Object.fromEntries(
+      Object.entries(board.positions).filter(([cardId]) => keep(cardId)),
+    ),
+  };
+  return board.sizes === undefined
+    ? kept
+    : {
+        ...kept,
+        sizes: Object.fromEntries(Object.entries(board.sizes).filter(([cardId]) => keep(cardId))),
+      };
+}
+
+const hasCardOutside = (board: RoomBoard, keep: (cardId: string) => boolean) =>
+  [...Object.keys(board.positions), ...Object.keys(board.sizes ?? {})].some(
+    (cardId) => !keep(cardId),
+  );
+
 /**
- * The board without the places and arrows of cards it no longer has. The same board when every
- * card is still there.
+ * The board without the places, sizes and arrows of cards it no longer has. The same board when
+ * every card is still there.
  */
 export function roomBoardWithCards(board: RoomBoard, hasCard: (cardId: string) => boolean) {
-  const gone = Object.keys(board.positions).filter((cardId) => !hasCard(cardId));
   const strayEdge = (edge: RoomBoardEdge) =>
     [edge.from, edge.to].some(
       (ref) => ref.startsWith(CARD_REF) && !hasCard(ref.slice(CARD_REF.length)),
     );
-  if (gone.length === 0 && board.edges?.some(strayEdge) !== true) return board;
-  return roomBoardWithEdges(
-    {
-      ...board,
-      positions: Object.fromEntries(
-        Object.entries(board.positions).filter(([cardId]) => hasCard(cardId)),
-      ),
-    },
-    (edge) => !strayEdge(edge),
-  );
+  if (!hasCardOutside(board, hasCard) && board.edges?.some(strayEdge) !== true) return board;
+  return roomBoardWithEdges(roomBoardKeepingCards(board, hasCard), (edge) => !strayEdge(edge));
+}
+
+/** The board without these cards' places and sizes; the same board when it has neither. */
+export function roomBoardWithoutCards(board: RoomBoard, cardIds: ReadonlyArray<string>) {
+  const keep = (cardId: string) => !cardIds.includes(cardId);
+  return hasCardOutside(board, keep) ? roomBoardKeepingCards(board, keep) : board;
 }
 
 type NotePut = Extract<RoomBoardChange, { type: "note.put" }>;
@@ -80,6 +101,7 @@ function putNote(
   if (change.assignee?.guestId !== undefined && !scope.hasPerson(change.assignee.guestId)) {
     return Result.fail("A task can only be assigned to someone in the room.");
   }
+  // An artifact's content and a task's answer come only from the owner's server, never a change.
   const base: RoomBoardNote =
     existing ??
     ({
@@ -91,10 +113,14 @@ function putNote(
       ...(kind === undefined ? {} : { kind }),
       ...(change.url === undefined ? {} : { url: change.url }),
       ...(change.pinnedTo === undefined ? {} : { pinnedTo: change.pinnedTo }),
+      ...(change.pinnedTo === undefined || change.quote === undefined
+        ? {}
+        : { quote: change.quote }),
     } satisfies RoomBoardNote);
-  const { done: _done, assignee: _assignee, ...rest } = base;
+  const { done: _done, assignee: _assignee, size: _size, ...rest } = base;
   const done = change.done ?? base.done === true;
   const assignee = change.assignee === undefined ? base.assignee : change.assignee;
+  const size = change.size ?? base.size;
   return Result.succeed({
     ...rest,
     text: change.text,
@@ -102,8 +128,12 @@ function putNote(
     y: change.y,
     ...(done ? { done } : {}),
     ...(assignee === undefined || assignee === null ? {} : { assignee }),
+    ...(size === undefined ? {} : { size }),
   });
 }
+
+const sameSize = (left: RoomBoardSize | undefined, right: RoomBoardSize | undefined) =>
+  left?.w === right?.w && left?.h === right?.h;
 
 const sameNote = (left: RoomBoardNote, right: RoomBoardNote) =>
   left.text === right.text &&
@@ -111,7 +141,8 @@ const sameNote = (left: RoomBoardNote, right: RoomBoardNote) =>
   left.y === right.y &&
   left.done === right.done &&
   left.assignee?.guestId === right.assignee?.guestId &&
-  (left.assignee === undefined) === (right.assignee === undefined);
+  (left.assignee === undefined) === (right.assignee === undefined) &&
+  sameSize(left.size, right.size);
 
 /**
  * The board after one change by `author` (null for the room's owner), the same board when the
@@ -134,10 +165,23 @@ export function applyRoomBoardChange(
         positions: { ...board.positions, [change.cardId]: { x: change.x, y: change.y } },
       });
     }
+    case "card.resize": {
+      if (!scope.hasCard(change.cardId)) return Result.fail("This card is not on the board.");
+      const size = { w: change.w, h: change.h };
+      if (sameSize(board.sizes?.[change.cardId], size)) return Result.succeed(board);
+      return Result.succeed({ ...board, sizes: { ...board.sizes, [change.cardId]: size } });
+    }
     case "note.put": {
       const existing = board.notes.find((note) => note.id === change.noteId);
       if (existing === undefined && board.notes.length >= ROOM_BOARD_MAX_NOTES) {
         return Result.fail(ROOM_BOARD_FULL);
+      }
+      if (
+        existing === undefined &&
+        change.kind === "artifact" &&
+        board.notes.filter((note) => note.kind === "artifact").length >= ROOM_BOARD_MAX_ARTIFACTS
+      ) {
+        return Result.fail("This board has as many artifacts as it holds. Remove one first.");
       }
       return Result.map(putNote(scope, author, existing, change), (note) => {
         if (existing === undefined) return { ...board, notes: [...board.notes, note] };
@@ -184,4 +228,43 @@ export function applyRoomBoardChange(
         ? Result.succeed(roomBoardWithEdges(board, (edge) => edge.id !== change.edgeId))
         : Result.succeed(board);
   }
+}
+
+const HTML_DOCUMENT = /^(?:<!doctype html|<html)/i;
+const HTML_FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})[ \t]*html(?:[ \t].*)?$/i;
+
+/** The first ```html block of a reply that holds a whole page, or null. */
+function htmlDocumentBlock(reply: string): string | null {
+  const lines = reply.split(/\r?\n/);
+  for (let start = 0; start < lines.length; start++) {
+    const fence = HTML_FENCE_OPEN.exec(lines[start] ?? "")?.[1];
+    if (fence === undefined) continue;
+    const close = new RegExp(`^ {0,3}\\${fence[0]}{${fence.length},}[ \t]*$`);
+    let end = start + 1;
+    while (end < lines.length && !close.test(lines[end] ?? "")) end++;
+    const content = lines
+      .slice(start + 1, end)
+      .join("\n")
+      .trim();
+    if (HTML_DOCUMENT.test(content)) return content;
+    start = end;
+  }
+  return null;
+}
+
+/**
+ * What an agent's reply puts in an artifact card: the page in its first ```html block that holds
+ * a whole document (starting `<!doctype html` or `<html`, which is how clients tell a page from
+ * markdown), or else the whole reply as markdown. Cut to what the board keeps.
+ */
+export function roomArtifactBody(reply: string): {
+  readonly body: string;
+  readonly truncated: boolean;
+} {
+  const full = htmlDocumentBlock(reply) ?? reply.trim();
+  if (full.length <= ROOM_ARTIFACT_MAX_LENGTH) return { body: full, truncated: false };
+  return {
+    body: full.slice(0, ROOM_ARTIFACT_MAX_LENGTH).replace(/[\uD800-\uDBFF]$/, ""),
+    truncated: true,
+  };
 }

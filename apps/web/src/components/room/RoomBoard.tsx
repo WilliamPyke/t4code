@@ -1,5 +1,6 @@
 import {
   type GuestId,
+  ROOM_BOARD_MAX_ARTIFACTS,
   ROOM_BOARD_MAX_EDGES,
   ROOM_BOARD_MAX_NOTES,
   ROOM_BOARD_NOTE_MAX_LENGTH,
@@ -8,6 +9,7 @@ import {
   type RoomBoardAssignee,
   type RoomBoardChange,
   type RoomBoardNote,
+  type RoomBoardSize,
   type RoomBoardViewport,
   type RoomCodeState,
   type RoomCursor,
@@ -18,6 +20,7 @@ import {
   roomBoardGuestCard,
 } from "@t3tools/contracts";
 import {
+  AppWindowIcon,
   ArrowLeftIcon,
   BotIcon,
   ExternalLinkIcon,
@@ -63,6 +66,7 @@ import {
   type BoardPeople,
   type BoardPoint,
   type BoardPresence,
+  type BoardPrompt,
   type BoardTarget,
   type BoardValue,
   type BoardView,
@@ -76,16 +80,19 @@ import {
   boardChangeOf,
   boardChangeQueue,
   boardConnector,
-  boardConnectorPath,
   boardCursorAt,
   boardCursorColor,
   boardEditKey,
   boardNoteBox,
   boardNoteMessage,
+  boardNoteQuote,
+  boardNoteSize,
   boardPersonKey,
   boardPersonName,
+  boardPromptContext,
   boardUrlIn,
   boardViewportOf,
+  clampBoardSize,
   cursorSender,
   dropBoardEdit,
   followBoardView,
@@ -101,6 +108,8 @@ import {
   settleBoardValue,
   zoomBoardAt,
 } from "./roomBoard.logic";
+import { RoomArtifactBody } from "./RoomBoardArtifact";
+import { BoardPromptBox } from "./RoomBoardPrompt";
 
 const guestCardId = (guest: ThreadGuest) => roomBoardGuestCard(guest.id);
 const agentCardId = (guest: ThreadGuest) => roomBoardAgentCard(guest.id);
@@ -110,6 +119,17 @@ const GRID = 22;
 // How far past the cards and notes the arrows' drawing area reaches.
 const EDGE_MARGIN = 400;
 const FOLLOW_NOTICE_MS = 4_000;
+
+/** What an arrow does: carries a card into a message from the thread, or takes its reply. */
+type EdgeRole = "plain" | "context" | "artifact";
+type EdgeStroke = EdgeRole | "selected";
+const EDGE_STROKE_COLORS: Readonly<Record<EdgeStroke, string>> = {
+  plain: "var(--color-muted-foreground)",
+  context: "var(--color-info)",
+  artifact: "var(--color-success)",
+  selected: "var(--color-primary)",
+};
+const EDGE_STROKES = Object.entries(EDGE_STROKE_COLORS);
 
 /**
  * Pointer handlers that report how far a held pointer moved, in screen pixels, and when it is
@@ -141,6 +161,72 @@ function dragHandlers(
 }
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
+
+/** Whether a wheel turned over a card's text or content can still scroll that, not the board. */
+function scrollsInside(event: WheelEvent): boolean {
+  const scroller =
+    event.target instanceof Element
+      ? event.target.closest<HTMLElement>("[data-board-scroll], textarea")
+      : null;
+  if (scroller === null) return false;
+  const { scrollTop, scrollLeft, scrollHeight, scrollWidth, clientHeight, clientWidth } = scroller;
+  return (
+    (event.deltaY > 0 && scrollTop + clientHeight < scrollHeight - 1) ||
+    (event.deltaY < 0 && scrollTop > 0) ||
+    (event.deltaX > 0 && scrollLeft + clientWidth < scrollWidth - 1) ||
+    (event.deltaX < 0 && scrollLeft > 0)
+  );
+}
+
+/**
+ * The corner a card or note is resized by. It reports the size the card had when it was taken
+ * and how far the pointer went since, in screen pixels, so the size never drifts from the pointer.
+ */
+function ResizeHandle({
+  onResize,
+  onEnd,
+}: {
+  readonly onResize: (from: RoomBoardSize, dx: number, dy: number) => void;
+  readonly onEnd: () => void;
+}) {
+  const start = useRef<{ readonly x: number; readonly y: number; size: RoomBoardSize } | null>(
+    null,
+  );
+  const release = (event: PointerEvent<HTMLElement>) => {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    start.current = null;
+    onEnd();
+  };
+  return (
+    <div
+      aria-hidden
+      className="absolute right-0 bottom-0 z-10 grid size-4 cursor-nwse-resize touch-none place-items-center opacity-0 transition-opacity group-hover/item:opacity-100"
+      onPointerDown={(event) => {
+        const box = event.currentTarget.parentElement;
+        if (event.button !== 0 || box === null) return;
+        // Neither the board nor the card under the corner moves.
+        event.stopPropagation();
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        start.current = {
+          x: event.clientX,
+          y: event.clientY,
+          size: { w: box.offsetWidth, h: box.offsetHeight },
+        };
+      }}
+      onPointerMove={(event) => {
+        const from = start.current;
+        if (from === null || !event.currentTarget.hasPointerCapture(event.pointerId)) return;
+        onResize(from.size, event.clientX - from.x, event.clientY - from.y);
+      }}
+      onPointerUp={release}
+      onPointerCancel={release}
+    >
+      <span className="size-1.5 rounded-br-xs border-e-2 border-b-2 border-muted-foreground" />
+    </div>
+  );
+}
 
 const THREAD_DROP = "thread";
 const OWN_AGENT_DROP = "own-agent";
@@ -225,6 +311,9 @@ export function RoomBoard({
   backLabel = "Thread",
   ownerAssignable = true,
   formerPeople = NO_FORMER_PEOPLE,
+  onPrompt,
+  promptPlaceholder,
+  canFillArtifacts = false,
 }: {
   readonly title: string;
   /** Null when the thread is not shared, so there is no room to arrange a board for. */
@@ -274,6 +363,11 @@ export function RoomBoard({
   readonly ownerAssignable?: boolean;
   /** People named on a note who can no longer be given one. */
   readonly formerPeople?: BoardPeople["guests"];
+  /** Sends a message from the thread's card and says whether it went. Absent: no prompt box. */
+  readonly onPrompt?: ((prompt: BoardPrompt) => Promise<boolean>) | undefined;
+  readonly promptPlaceholder?: string | undefined;
+  /** Whether a reply sent from the board may fill an artifact card. */
+  readonly canFillArtifacts?: boolean | undefined;
 }) {
   const board = room?.board ?? EMPTY_ROOM_BOARD;
   const [edits, setEdits] = useState(NO_BOARD_EDITS);
@@ -328,6 +422,7 @@ export function RoomBoard({
     const surface = surfaceRef.current;
     if (surface === null) return;
     const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey && scrollsInside(event)) return;
       event.preventDefault();
       const bounds = surface.getBoundingClientRect();
       const anchor = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
@@ -355,10 +450,26 @@ export function RoomBoard({
     ],
     shown.positions,
   );
+  const sizes = shown.sizes ?? {};
   const boxes = new Map<string, BoardBox>([
-    ...Object.entries(positions).map(([id, at]) => [cardRef(id), boardCardBox(at)] as const),
+    ...Object.entries(positions).map(
+      ([id, at]) => [cardRef(id), boardCardBox(at, sizes[id])] as const,
+    ),
     ...shown.notes.map((note) => [noteRef(note.id), boardNoteBox(note)] as const),
   ]);
+  const prompt =
+    onPrompt === undefined || cards !== undefined || room === null
+      ? null
+      : boardPromptContext(shown, people, messages);
+  const fillsArtifact = prompt !== null && canFillArtifacts;
+  const edgeRole = (id: string): EdgeRole =>
+    prompt === null
+      ? "plain"
+      : prompt.edgeIds.has(id)
+        ? "context"
+        : fillsArtifact && prompt.artifactEdgeId === id
+          ? "artifact"
+          : "plain";
   const send = (target: BoardTarget, value: BoardValue) => {
     if (onChange === undefined) return;
     held.current.delete(boardEditKey(target));
@@ -387,6 +498,15 @@ export function RoomBoard({
     const last = held.current.get(noteRef(note.id));
     return last !== undefined && "text" in last ? last : note;
   };
+  const sizedBy = (from: RoomBoardSize, dx: number, dy: number) =>
+    clampBoardSize({ w: from.w + dx / view.zoom, h: from.h + dy / view.zoom });
+  const resizeCard = (id: string, from: RoomBoardSize, dx: number, dy: number) => {
+    if (canEdit) hold({ kind: "size", id }, sizedBy(from, dx, dy));
+  };
+  const resizeNote = (note: RoomBoardNote, from: RoomBoardSize, dx: number, dy: number) => {
+    if (canEdit)
+      hold({ kind: "note", id: note.id }, { ...noteNow(note), size: sizedBy(from, dx, dy) });
+  };
   const dragNote = (
     note: RoomBoardNote,
     dx: number,
@@ -407,13 +527,14 @@ export function RoomBoard({
       ? undefined
       : () => onTakeTask(note);
   const messageOf = (note: RoomBoardNote) =>
-    onUseNote === undefined || boardNoteMessage(note).trim() === ""
+    onUseNote === undefined || note.kind === "artifact" || boardNoteMessage(note).trim() === ""
       ? undefined
       : () => onUseNote(boardNoteMessage(note));
   const giveOf = (note: RoomBoardNote) =>
     onGiveNote === undefined ||
     !canGive ||
     note.kind === "task" ||
+    note.kind === "artifact" ||
     boardNoteMessage(note).trim() === ""
       ? undefined
       : () => onGiveNote(note);
@@ -447,6 +568,8 @@ export function RoomBoard({
     setView((current) => zoomBoardAt(current, center, factor));
   };
   const full = shown.notes.length >= ROOM_BOARD_MAX_NOTES;
+  const artifactsFull =
+    shown.notes.filter((note) => note.kind === "artifact").length >= ROOM_BOARD_MAX_ARTIFACTS;
   const addCard = (fields: Pick<RoomBoardNote, "kind" | "url">, wanted?: BoardPoint) => {
     if (!canEdit || full) return;
     const bounds = surfaceRef.current?.getBoundingClientRect();
@@ -522,6 +645,9 @@ export function RoomBoard({
     send({ kind: "edge", id }, { id, from, to });
   };
   const link = canEdit ? { onStart: startLink, onMove: moveLink, onEnd: endLink } : undefined;
+  const resize: CardResize | undefined = canEdit
+    ? { onResize: resizeCard, onEnd: (id) => letGo({ kind: "size", id }) }
+    : undefined;
   const removeEdge = (id: string) => {
     setSelectedEdge(null);
     send({ kind: "edge", id }, null);
@@ -623,6 +749,17 @@ export function RoomBoard({
               <LinkIcon />
               Link
             </Button>
+            {cards === undefined ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!canEdit || full || artifactsFull}
+                onClick={() => addCard({ kind: "artifact" })}
+              >
+                <AppWindowIcon />
+                Artifact
+              </Button>
+            ) : null}
           </>
         ) : (
           <form
@@ -674,11 +811,21 @@ export function RoomBoard({
         // Focusable so a link pasted on the board lands as a card.
         tabIndex={0}
         className={cn(
-          "relative min-h-0 flex-1 cursor-grab touch-none overflow-hidden bg-background outline-none active:cursor-grabbing",
+          "group/board relative min-h-0 flex-1 cursor-grab touch-none overflow-hidden bg-background outline-none active:cursor-grabbing",
           following !== null && "transition-[background-position,background-size] duration-200",
         )}
         style={boardGridStyle(view)}
         {...pan}
+        // While a pointer is held on the board, artifact pages let it through; see RoomArtifactBody.
+        onPointerDownCapture={(event) => {
+          event.currentTarget.dataset.boardBusy = "";
+        }}
+        onPointerUpCapture={(event) => {
+          delete event.currentTarget.dataset.boardBusy;
+        }}
+        onPointerCancelCapture={(event) => {
+          delete event.currentTarget.dataset.boardBusy;
+        }}
         onPointerDown={(event) => {
           // A menu opened from a card is portalled elsewhere, but React still bubbles its events here.
           if (event.target instanceof Node && !event.currentTarget.contains(event.target)) return;
@@ -707,7 +854,7 @@ export function RoomBoard({
             height={edgeArea.height}
           >
             <defs>
-              {(["idle", "selected"] as const).map((state) => (
+              {EDGE_STROKES.map(([state, color]) => (
                 <marker
                   key={state}
                   id={`${markerId}-${state}`}
@@ -718,35 +865,33 @@ export function RoomBoard({
                   markerHeight="7"
                   orient="auto"
                 >
-                  <path
-                    d="M0 0 L10 5 L0 10 z"
-                    fill={
-                      state === "idle" ? "var(--color-muted-foreground)" : "var(--color-primary)"
-                    }
-                  />
+                  <path d="M0 0 L10 5 L0 10 z" fill={color} />
                 </marker>
               ))}
             </defs>
             <g transform={`translate(${-edgeArea.x} ${-edgeArea.y})`}>
-              {agents.map(({ guest }) => (
-                <path
-                  key={guest.id}
-                  d={boardConnectorPath(
-                    positions[guestCardId(guest)]!,
-                    positions[agentCardId(guest)]!,
-                  )}
-                  fill="none"
-                  stroke="var(--color-border)"
-                  strokeWidth="1.5"
-                  strokeDasharray="4 5"
-                />
-              ))}
+              {agents.map(({ guest }) => {
+                const from = boxes.get(cardRef(guestCardId(guest)));
+                const to = boxes.get(cardRef(agentCardId(guest)));
+                if (from === undefined || to === undefined) return null;
+                return (
+                  <path
+                    key={guest.id}
+                    d={boardConnector(from, to).path}
+                    fill="none"
+                    stroke="var(--color-border)"
+                    strokeWidth="1.5"
+                    strokeDasharray="4 5"
+                  />
+                );
+              })}
               {edges.map((edge) => {
                 const from = boxes.get(edge.from);
                 const to = boxes.get(edge.to);
                 if (from === undefined || to === undefined) return null;
                 const { path } = boardConnector(from, to);
                 const selected = selectedEdge === edge.id;
+                const state: EdgeStroke = selected ? "selected" : edgeRole(edge.id);
                 return (
                   <g key={edge.id}>
                     {canEdit ? (
@@ -764,9 +909,9 @@ export function RoomBoard({
                     <path
                       d={path}
                       fill="none"
-                      stroke={selected ? "var(--color-primary)" : "var(--color-muted-foreground)"}
-                      strokeWidth={selected ? 2 : 1.5}
-                      markerEnd={`url(#${markerId}-${selected ? "selected" : "idle"})`}
+                      stroke={EDGE_STROKE_COLORS[state]}
+                      strokeWidth={state === "plain" ? 1.5 : 2}
+                      markerEnd={`url(#${markerId}-${state})`}
                     />
                   </g>
                 );
@@ -791,7 +936,9 @@ export function RoomBoard({
               kind={card.kind}
               dashed={card.dashed === true}
               id={card.id}
+              size={sizes[card.id]}
               link={link}
+              resize={resize}
               onMove={dragBy}
               onDrop={letGo}
             >
@@ -804,11 +951,23 @@ export function RoomBoard({
               title={title}
               kind={agentWorking ? "agent working" : "thread"}
               id={ROOM_BOARD_THREAD_CARD}
+              size={sizes[ROOM_BOARD_THREAD_CARD]}
               dropTarget={onUseNote === undefined ? undefined : THREAD_DROP}
               highlighted={dropTarget === THREAD_DROP}
               link={link}
+              resize={resize}
               onMove={dragBy}
               onDrop={letGo}
+              footer={
+                prompt === null || onPrompt === undefined ? undefined : (
+                  <BoardPromptBox
+                    cards={prompt.cards}
+                    artifact={fillsArtifact ? prompt.artifact : null}
+                    placeholder={promptPlaceholder}
+                    onPrompt={onPrompt}
+                  />
+                )
+              }
             >
               <ThreadMessages messages={messages} />
               <RoomCode
@@ -834,10 +993,12 @@ export function RoomBoard({
                 kind={here ? "viewing now" : "away"}
                 dashed
                 id={id}
+                size={sizes[id]}
                 action={
                   here && guest.id !== viewer ? followButton(guest.id, guest.name) : undefined
                 }
                 link={link}
+                resize={resize}
                 onMove={dragBy}
                 onDrop={letGo}
               >
@@ -861,9 +1022,11 @@ export function RoomBoard({
                     : `${turns.length} turn${turns.length === 1 ? "" : "s"}`
                 }
                 id={id}
+                size={sizes[id]}
                 dropTarget={own ? OWN_AGENT_DROP : undefined}
                 highlighted={own && dropTarget === OWN_AGENT_DROP}
                 link={link}
+                resize={resize}
                 onMove={dragBy}
                 onDrop={letGo}
               >
@@ -897,6 +1060,8 @@ export function RoomBoard({
               ownerAssignable={ownerAssignable}
               canEdit={canEdit}
               link={link}
+              quote={boardNoteQuote(note, messages)}
+              onResize={canEdit ? resizeNote : undefined}
               onMove={dragNote}
               onDrop={dropNote}
               onBlur={letGo}
@@ -941,6 +1106,7 @@ export function RoomBoard({
           })}
           <BoardFollowContext value={follow}>{cursorLayer}</BoardFollowContext>
         </div>
+        {prompt === null ? null : <ArrowLegend fillsArtifact={fillsArtifact} />}
         {room === null ? (
           <p className="pointer-events-none absolute inset-x-0 bottom-6 text-center text-sm text-muted-foreground">
             Share this thread with guests and each person who joins gets a card here.
@@ -988,6 +1154,30 @@ interface LinkHandlers {
   readonly onEnd: (event: PointerEvent<HTMLElement>) => void;
 }
 
+/** Resizes a card by its id: while the corner is held, then once when it is let go. */
+interface CardResize {
+  readonly onResize: (id: string, from: RoomBoardSize, dx: number, dy: number) => void;
+  readonly onEnd: (id: string) => void;
+}
+
+/** What the coloured arrows do, said where people see them. */
+function ArrowLegend({ fillsArtifact }: { readonly fillsArtifact: boolean }) {
+  return (
+    <div className="pointer-events-none absolute bottom-3 left-3 flex flex-col gap-1 rounded-md border border-border bg-card/90 px-2 py-1.5 text-2xs text-muted-foreground">
+      <span className="flex items-center gap-1.5">
+        <span aria-hidden className="h-0.5 w-4 rounded-full bg-info" />
+        Arrow into the thread: that card goes with your message
+      </span>
+      {fillsArtifact ? (
+        <span className="flex items-center gap-1.5">
+          <span aria-hidden className="h-0.5 w-4 rounded-full bg-success" />
+          Arrow from the thread to an artifact: the reply fills it
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 function LinkHandle({ from, link }: { readonly from: string; readonly link: LinkHandlers }) {
   return (
     <Tooltip>
@@ -1016,6 +1206,8 @@ function BoardNote({
   ownerAssignable,
   canEdit,
   link,
+  quote,
+  onResize,
   onMove,
   onDrop,
   onBlur,
@@ -1035,6 +1227,11 @@ function BoardNote({
   readonly ownerAssignable: boolean;
   readonly canEdit: boolean;
   readonly link: LinkHandlers | undefined;
+  /** The start of the reply a comment is pinned to. */
+  readonly quote: string | undefined;
+  readonly onResize:
+    | ((note: RoomBoardNote, from: RoomBoardSize, dx: number, dy: number) => void)
+    | undefined;
   readonly onMove: (
     note: RoomBoardNote,
     dx: number,
@@ -1060,15 +1257,18 @@ function BoardNote({
   const author = boardPersonName(people, note.guestId);
   const parsed = note.url === undefined ? null : parseBoardLink(note.url);
   const plain = note.kind === undefined && note.pinnedTo === undefined;
+  const artifact = note.kind === "artifact";
+  const size = boardNoteSize(note);
   return (
     <div
       className={cn(
-        "group/item absolute flex w-48 flex-col rounded-sm border text-foreground shadow-lg",
+        "group/item absolute flex flex-col rounded-sm border text-foreground shadow-lg",
+        size === undefined && "w-48",
         note.kind === undefined
           ? "border-warning/40 bg-warning-surface"
           : "border-border bg-card text-card-foreground",
       )}
-      style={{ left: note.x, top: note.y }}
+      style={{ left: note.x, top: note.y, width: size?.w, height: size?.h }}
       data-board-item={noteRef(note.id)}
     >
       <div
@@ -1089,11 +1289,17 @@ function BoardNote({
           </span>
         ) : note.kind === "link" ? (
           <LinkIcon aria-hidden className="size-3 shrink-0 opacity-60" />
+        ) : artifact ? (
+          <AppWindowIcon aria-hidden className="size-3 shrink-0 opacity-60" />
         ) : note.pinnedTo !== undefined ? (
           <MessageSquareTextIcon aria-hidden className="size-3 shrink-0 opacity-60" />
         ) : null}
         <span className="min-w-0 flex-1 truncate text-2xs opacity-60">
-          {note.pinnedTo === undefined ? author : `${author} on a reply`}
+          {artifact
+            ? `Artifact from ${author}`
+            : note.pinnedTo === undefined
+              ? author
+              : `${author} on a reply`}
         </span>
         {onUse === undefined ? null : (
           <Tooltip>
@@ -1143,84 +1349,115 @@ function BoardNote({
           </button>
         ) : null}
       </div>
-      {parsed === null ? null : (
-        <div className="flex items-start gap-2 px-3 pb-1">
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-xs font-medium">{parsed.title}</p>
-            {parsed.detail === "" ? null : (
-              <p className="truncate text-2xs text-muted-foreground">{parsed.detail}</p>
+      <div className={cn("flex flex-col", size !== undefined && "min-h-0 flex-1 overflow-hidden")}>
+        {parsed === null ? null : (
+          <div className="flex items-start gap-2 px-3 pb-1">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs font-medium">{parsed.title}</p>
+              {parsed.detail === "" ? null : (
+                <p className="truncate text-2xs text-muted-foreground">{parsed.detail}</p>
+              )}
+            </div>
+            <Button
+              size="micro"
+              variant="outline"
+              onPointerDown={stopPointer}
+              render={<a href={parsed.href} target="_blank" rel="noreferrer noopener" />}
+            >
+              <ExternalLinkIcon />
+              Open
+            </Button>
+          </div>
+        )}
+        {quote === undefined ? null : (
+          <blockquote className="mx-3 mb-1.5 line-clamp-3 shrink-0 border-s-2 border-warning/60 ps-2 text-2xs italic opacity-70 [overflow-wrap:anywhere]">
+            {quote}
+          </blockquote>
+        )}
+        <textarea
+          aria-label={
+            note.kind === "task"
+              ? "Task"
+              : note.kind === "link"
+                ? "Caption"
+                : artifact
+                  ? "Artifact title"
+                  : "Note"
+          }
+          value={note.text}
+          readOnly={!canEdit}
+          maxLength={ROOM_BOARD_NOTE_MAX_LENGTH}
+          rows={artifact ? 1 : note.kind === "link" ? 2 : note.kind === "task" ? 3 : 4}
+          placeholder={
+            note.kind === "task"
+              ? "Write a task"
+              : note.kind === "link"
+                ? "Add a caption"
+                : artifact
+                  ? "Name this artifact"
+                  : "Write a note, or paste a link"
+          }
+          className={cn(
+            "resize-none bg-transparent px-3 pb-3 text-sm leading-snug outline-none placeholder:text-placeholder",
+            note.kind === "task" && note.done === true && "text-muted-foreground line-through",
+            artifact ? "shrink-0 pb-2 font-medium" : size !== undefined && "min-h-0 flex-1",
+          )}
+          onPointerDown={stopPointer}
+          onChange={(event) => onText(note, event.target.value)}
+          onKeyDown={(event) => {
+            if (artifact && event.key === "Enter") {
+              event.preventDefault();
+              event.currentTarget.blur();
+            }
+          }}
+          onBlur={() => onBlur(target)}
+          onPaste={(event) => {
+            if (!plain || note.text !== "" || onPasteLink === undefined) return;
+            const url = boardUrlIn(event.clipboardData.getData("text/plain"));
+            if (url === null) return;
+            event.preventDefault();
+            onPasteLink(note, url);
+          }}
+        />
+        {note.kind === "task" ? <TaskProgress note={note} people={people} worker={worker} /> : null}
+        {note.kind === "task" ? (
+          <div className="flex flex-wrap items-center gap-1 px-2 pb-2">
+            <AssigneeMenu
+              note={note}
+              people={people}
+              guests={guests}
+              ownerAssignable={ownerAssignable}
+              canEdit={canEdit}
+              onChange={onChange}
+            />
+            {onTake === undefined ? null : (
+              <Button size="micro" variant="outline" onPointerDown={stopPointer} onClick={onTake}>
+                Take it to my agent
+              </Button>
             )}
           </div>
-          <Button
-            size="micro"
-            variant="outline"
-            onPointerDown={stopPointer}
-            render={<a href={parsed.href} target="_blank" rel="noreferrer noopener" />}
-          >
-            <ExternalLinkIcon />
-            Open
-          </Button>
-        </div>
-      )}
-      <textarea
-        aria-label={note.kind === "task" ? "Task" : note.kind === "link" ? "Caption" : "Note"}
-        value={note.text}
-        readOnly={!canEdit}
-        maxLength={ROOM_BOARD_NOTE_MAX_LENGTH}
-        rows={note.kind === "link" ? 2 : note.kind === "task" ? 3 : 4}
-        placeholder={
-          note.kind === "task"
-            ? "Write a task"
-            : note.kind === "link"
-              ? "Add a caption"
-              : "Write a note, or paste a link"
-        }
-        className={cn(
-          "resize-none bg-transparent px-3 pb-3 text-sm leading-snug outline-none placeholder:text-placeholder",
-          note.kind === "task" && note.done === true && "text-muted-foreground line-through",
-        )}
-        onPointerDown={stopPointer}
-        onChange={(event) => onText(note, event.target.value)}
-        onBlur={() => onBlur(target)}
-        onPaste={(event) => {
-          if (!plain || note.text !== "" || onPasteLink === undefined) return;
-          const url = boardUrlIn(event.clipboardData.getData("text/plain"));
-          if (url === null) return;
-          event.preventDefault();
-          onPasteLink(note, url);
-        }}
-      />
-      {note.kind === "task" ? <TaskProgress note={note} people={people} worker={worker} /> : null}
-      {note.kind === "task" ? (
-        <div className="flex flex-wrap items-center gap-1 px-2 pb-2">
-          <AssigneeMenu
-            note={note}
-            people={people}
-            guests={guests}
-            ownerAssignable={ownerAssignable}
-            canEdit={canEdit}
-            onChange={onChange}
-          />
-          {onTake === undefined ? null : (
-            <Button size="micro" variant="outline" onPointerDown={stopPointer} onClick={onTake}>
-              Take it to my agent
+        ) : null}
+        {note.pinnedTo === undefined ? null : (
+          <div className="flex px-2 pb-2">
+            <Button
+              size="micro"
+              variant="outline"
+              onPointerDown={stopPointer}
+              onClick={() => note.pinnedTo !== undefined && onOpenReply(note.pinnedTo)}
+            >
+              Go to reply
             </Button>
-          )}
-        </div>
-      ) : null}
-      {note.pinnedTo === undefined ? null : (
-        <div className="flex px-2 pb-2">
-          <Button
-            size="micro"
-            variant="outline"
-            onPointerDown={stopPointer}
-            onClick={() => note.pinnedTo !== undefined && onOpenReply(note.pinnedTo)}
-          >
-            Go to reply
-          </Button>
-        </div>
-      )}
+          </div>
+        )}
+        {artifact ? <RoomArtifactBody artifact={note.artifact} /> : null}
+      </div>
       {link === undefined ? null : <LinkHandle from={noteRef(note.id)} link={link} />}
+      {onResize === undefined ? null : (
+        <ResizeHandle
+          onResize={(from, dx, dy) => onResize(note, from, dx, dy)}
+          onEnd={() => onBlur(target)}
+        />
+      )}
     </div>
   );
 }
@@ -1308,12 +1545,15 @@ function BoardCard({
   kind,
   dashed = false,
   id,
+  size,
   dropTarget,
   highlighted = false,
   action,
   link,
+  resize,
   onMove,
   onDrop,
+  footer,
   children,
 }: {
   readonly at: BoardPoint;
@@ -1321,13 +1561,18 @@ function BoardCard({
   readonly kind: string;
   readonly dashed?: boolean;
   readonly id: string;
+  /** Absent until someone resizes it: it is as tall as what it shows. */
+  readonly size: RoomBoardSize | undefined;
   /** What a note dropped here does, as `dataAt` reads it from the page. */
   readonly dropTarget?: string | undefined;
   readonly highlighted?: boolean;
   readonly action?: ReactNode;
   readonly link: LinkHandlers | undefined;
+  readonly resize: CardResize | undefined;
   readonly onMove: DragBy;
   readonly onDrop: (target: BoardTarget) => void;
+  /** Kept in view below the card's content when that scrolls. */
+  readonly footer?: ReactNode;
   readonly children: ReactNode;
 }) {
   const target = { kind: "card", id } as const;
@@ -1338,7 +1583,7 @@ function BoardCard({
         dashed && "border-dashed",
         highlighted && "ring-2 ring-primary",
       )}
-      style={{ left: at.x, top: at.y, width: BOARD_CARD_WIDTH }}
+      style={{ left: at.x, top: at.y, width: size?.w ?? BOARD_CARD_WIDTH, height: size?.h }}
       data-board-drop={dropTarget}
       data-board-item={cardRef(id)}
     >
@@ -1355,8 +1600,25 @@ function BoardCard({
           {kind}
         </span>
       </header>
-      <div className="flex flex-col gap-2 p-3">{children}</div>
+      <div
+        data-board-scroll={size === undefined ? undefined : ""}
+        className={cn(
+          "flex flex-col gap-2 p-3",
+          size !== undefined && "min-h-0 flex-1 overflow-y-auto",
+        )}
+      >
+        {children}
+      </div>
+      {footer === undefined ? null : (
+        <div className="shrink-0 border-t border-border px-3 pt-2 pb-3">{footer}</div>
+      )}
       {link === undefined ? null : <LinkHandle from={cardRef(id)} link={link} />}
+      {resize === undefined ? null : (
+        <ResizeHandle
+          onResize={(from, dx, dy) => resize.onResize(id, from, dx, dy)}
+          onEnd={() => resize.onEnd(id)}
+        />
+      )}
     </section>
   );
 }

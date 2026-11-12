@@ -126,6 +126,20 @@ const knownRecords: Record<(typeof COMPOSER_CONTEXT_KINDS)[number], Record<strin
     truncated: false,
     text: "Room owner:\n  Ship it today.",
   },
+  "room-cards": {
+    ...base,
+    kind: "room-cards",
+    label: "Board · 1 card",
+    cards: [{ label: "Note from Sam", author: "guest", name: "Sam", text: "Use the old cache." }],
+  },
+  "room-artifact": {
+    ...base,
+    kind: "room-artifact",
+    label: 'Artifact "Plan"',
+    shareId: "share-1",
+    noteId: "note-1",
+    title: "Plan",
+  },
 };
 
 describe("ComposerContextRecord", () => {

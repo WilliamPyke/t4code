@@ -12,7 +12,12 @@ import { cn, randomUUID } from "~/lib/utils";
 
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { type BoardPeople, boardPersonName, pinnedCommentSpot } from "./roomBoard.logic";
+import {
+  type BoardPeople,
+  boardPersonName,
+  boardReplyQuote,
+  pinnedCommentSpot,
+} from "./roomBoard.logic";
 
 /**
  * Which reply the board asked to see, until the timeline that has it scrolls to it, and which
@@ -84,9 +89,12 @@ export function RoomReplyCommentButton({ messageId }: { readonly messageId: stri
  */
 export function RoomReplyComments({
   messageId,
+  text,
   align,
 }: {
   readonly messageId: string;
+  /** The reply's text, which a new comment quotes the start of so the board shows what it is on. */
+  readonly text?: string | undefined;
   readonly align: "start" | "end";
 }) {
   const room = use(RoomReplyContext);
@@ -121,7 +129,9 @@ export function RoomReplyComments({
           )}
         </div>
       ))}
-      {writing && canComment(room) ? <CommentForm room={room} messageId={messageId} /> : null}
+      {writing && canComment(room) ? (
+        <CommentForm room={room} messageId={messageId} reply={text} />
+      ) : null}
     </div>
   );
 }
@@ -129,11 +139,13 @@ export function RoomReplyComments({
 function CommentForm({
   room,
   messageId,
+  reply,
 }: {
   readonly room: RoomReplyRoom & {
     readonly onChange: (change: RoomBoardChange) => Promise<boolean>;
   };
   readonly messageId: string;
+  readonly reply: string | undefined;
 }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -142,6 +154,7 @@ function CommentForm({
     if (trimmed === "" || busy) return;
     setBusy(true);
     const at = pinnedCommentSpot(room.board);
+    const quote = reply === undefined ? "" : boardReplyQuote(reply);
     const taken = await room.onChange({
       type: "note.put",
       noteId: randomUUID(),
@@ -149,6 +162,7 @@ function CommentForm({
       x: at.x,
       y: at.y,
       pinnedTo: messageId,
+      ...(quote === "" ? {} : { quote }),
     });
     setBusy(false);
     if (taken) commentOn(null);

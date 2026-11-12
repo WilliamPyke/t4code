@@ -5,6 +5,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
+  AuthOrchestrationOperateScope,
   type GuestShareId,
   type RoomBoardChange,
   type RoomBoardNote,
@@ -13,10 +14,10 @@ import {
   roomCodeStateOf,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
-import { randomUUID } from "~/lib/utils";
+import { newMessageId, randomUUID } from "~/lib/utils";
 import { deriveThreadAgentWorking } from "~/session-logic";
 import { useGitStackedAction, useSourceControlActionRunning } from "~/state/sourceControlActions";
 import {
@@ -27,9 +28,13 @@ import {
 } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
+import { useEnvironmentScope } from "~/state/session";
+import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { useOrchestrationCommand } from "~/state/use-orchestration-command";
 import { vcsEnvironment } from "~/state/vcs";
 
+import { boardContextCards, ownerBoardPromptMessage } from "../chat/roomBoardPrompt";
 import { takeRoomTaskToDraft } from "../chat/roomTaskDraft";
 import { resolveQuickAction } from "../GitActionsControl.logic";
 import { SidebarInset } from "../ui/sidebar";
@@ -40,6 +45,7 @@ import {
   BOARD_THREAD_MESSAGES,
   EMPTY_ROOM_BOARD,
   appendNoteToDraft,
+  type BoardPrompt,
   boardMessages,
 } from "./roomBoard.logic";
 
@@ -149,6 +155,44 @@ export function ThreadRoomBoard({ threadRef }: { readonly threadRef: ScopedThrea
     putInDraft(task.text);
     takeRoomTaskToDraft({ threadRef, shareId: share.id, taskId: task.id, text: task.text });
   };
+  const agentWorking = structure !== null && deriveThreadAgentWorking(structure);
+  const canSend = useEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope);
+  const startTurn = useOrchestrationCommand(threadEnvironment.startTurn, "send the message");
+  const sendingRef = useRef(false);
+  // The owner's own message on their own thread, sent as the composer sends one; while a turn
+  // runs it waits behind it, so the reply that fills an artifact is this message's.
+  const sendFromBoard = async (prompt: BoardPrompt) => {
+    if (share === null || shell === null || sendingRef.current) return false;
+    const message = ownerBoardPromptMessage({
+      text: prompt.text,
+      shareId: share.id,
+      board: share.board,
+      cards: boardContextCards(share.board, share.guests ?? NO_GUESTS, prompt.cards),
+      artifactId: prompt.artifactId,
+    });
+    if (message.text === "") return false;
+    sendingRef.current = true;
+    const result = await startTurn({
+      environmentId: threadRef.environmentId,
+      input: {
+        threadId: threadRef.threadId,
+        message: {
+          messageId: newMessageId(),
+          role: "user",
+          text: message.text,
+          ...(message.context === undefined ? {} : { context: message.context }),
+          attachments: [],
+        },
+        runtimeMode: shell.runtimeMode,
+        interactionMode: shell.interactionMode,
+        ...(agentWorking ? { dispatchMode: "queue" as const } : {}),
+        createdAt: new Date().toISOString(),
+      },
+    }).finally(() => {
+      sendingRef.current = false;
+    });
+    return result._tag === "Success";
+  };
   const thread = structure?.thread ?? null;
   const project = useProject(
     thread === null ? null : scopeProjectRef(threadRef.environmentId, thread.projectId),
@@ -202,7 +246,7 @@ export function ThreadRoomBoard({ threadRef }: { readonly threadRef: ScopedThrea
           items.map((projected) => projected.item),
           BOARD_THREAD_MESSAGES,
         )}
-        agentWorking={structure !== null && deriveThreadAgentWorking(structure)}
+        agentWorking={agentWorking}
         running={agents?.running ?? []}
         viewer={null}
         ownerName={undefined}
@@ -235,6 +279,9 @@ export function ThreadRoomBoard({ threadRef }: { readonly threadRef: ScopedThrea
         onTakeTask={takeTask}
         onOpenPullRequest={canOpenPullRequest ? () => void openPullRequest() : undefined}
         openingPullRequest={openingPullRequest}
+        onPrompt={share !== null && canSend ? sendFromBoard : undefined}
+        promptPlaceholder="Ask your agent"
+        canFillArtifacts
       />
     </SidebarInset>
   );

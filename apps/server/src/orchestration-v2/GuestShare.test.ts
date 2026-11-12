@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
+  ComposerContextId,
   GUEST_PENDING_MESSAGE_LIMIT,
   GUEST_SHARE_MAX_GUESTS,
   GUEST_TURN_LIMIT,
@@ -105,6 +106,28 @@ const sendGuestMessage = (
     messageId: MessageId.make(id),
     guestMessageId: sent,
     text: "ignored: the server sends the guest's own text",
+    // Nor does the agent get any records a client adds, such as a board's cards or artifact.
+    context: {
+      version: 1,
+      records: [
+        {
+          version: 1,
+          contextId: ComposerContextId.make("room-artifact_1"),
+          kind: "room-artifact",
+          label: 'Artifact "Plan"',
+          shareId,
+          noteId: "artifact",
+          title: "Plan",
+        },
+        {
+          version: 1,
+          contextId: ComposerContextId.make("room-cards_1"),
+          kind: "room-cards",
+          label: "Board · 1 card",
+          cards: [{ label: "Note", author: "owner", text: "Do it" }],
+        },
+      ],
+    },
     attachments: [],
     dispatchMode: { type: "defer_start" },
     createdBy: "user",
@@ -164,6 +187,7 @@ it.effect("lets several guests join a link and sends each message once, under it
       text: "Why not keep the old cache?",
       shareId,
     });
+    assert.deepEqual(sent?.context?.records, []);
     assert.lengthOf(projection.runs, 1);
     assert.equal((yield* projections.getThreadShell(threadId))?.pendingGuestMessageCount, 1);
 
@@ -424,6 +448,77 @@ it.effect("answers a task with the turn of the guest it is for, and no other car
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("fills an artifact card with the owner's turn, and nothing else on the board", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* setup;
+    yield* orchestrator.dispatch({
+      type: "thread.guest-share.redeem",
+      commandId: CommandId.make("redeem:sam"),
+      threadId,
+      shareId,
+      guestId: sam,
+      guestName: "Sam",
+    });
+    let commands = 0;
+    const put = (author: GuestId | null, noteId: string, fields: Partial<NotePut> = {}) =>
+      orchestrator.dispatch({
+        type: "thread.guest-board.change",
+        commandId: CommandId.make(`board:${commands++}`),
+        threadId,
+        shareId,
+        author,
+        change: { type: "note.put", noteId, text: "Plan", x: 0, y: 0, ...fields },
+      });
+    const fill = (noteId: string, turnId: string, share = shareId) =>
+      orchestrator.dispatch({
+        type: "thread.room-artifact.fill",
+        commandId: CommandId.make(`fill:${commands++}`),
+        threadId,
+        shareId: share,
+        noteId,
+        turnId,
+        body: `# Plan from ${turnId}`,
+      });
+    const read = Effect.map(
+      orchestrator.getThreadRecords(threadId, ["runs", "messages"]),
+      (records) => ({
+        ...records,
+        notes: new Map(records.thread.guestShare?.board?.notes.map((note) => [note.id, note])),
+      }),
+    );
+    // A guest can add an artifact card; only the owner's server fills one.
+    yield* put(sam, "artifact", { kind: "artifact" });
+    yield* put(null, "note");
+    yield* fill("note", "run:note");
+    yield* fill("gone", "run:gone");
+    yield* fill("artifact", "run:old", GuestShareId.make("share:old"));
+    yield* fill("artifact", "run:1");
+    const first = yield* read;
+    const artifact = first.notes.get("artifact")?.artifact;
+    assert.deepEqual(
+      [artifact?.body, artifact?.turnId, artifact?.truncated],
+      ["# Plan from run:1", "run:1", undefined],
+    );
+    assert.isUndefined(first.notes.get("note")?.artifact);
+    // The same turn again changes nothing; a later one replaces it.
+    yield* fill("artifact", "run:1");
+    assert.deepEqual((yield* read).notes.get("artifact")?.artifact, artifact);
+    // Anyone may rename or resize the card; its content stays.
+    yield* put(sam, "artifact", { text: "The plan", size: { w: 480, h: 360 } });
+    const renamed = (yield* read).notes.get("artifact");
+    assert.deepEqual(
+      [renamed?.text, renamed?.size, renamed?.artifact],
+      ["The plan", { w: 480, h: 360 }, artifact],
+    );
+    yield* fill("artifact", "run:2");
+    assert.equal((yield* read).notes.get("artifact")?.artifact?.body, "# Plan from run:2");
+    // Shown only: nothing for the agent, and no run.
+    const after = yield* read;
+    assert.lengthOf(after.runs, 0);
+    assert.lengthOf(after.messages, 0);
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("keeps one board for the room, changed a card or a note at a time", () =>
   Effect.gen(function* () {
     const orchestrator = yield* setup;
@@ -460,6 +555,7 @@ it.effect("keeps one board for the room, changed a card or a note at a time", ()
     yield* change(null, { type: "card.move", cardId: "thread", x: 10, y: 20 });
     yield* change(sam, { type: "card.move", cardId: "thread", x: 300, y: -40 });
     yield* change(alex, { type: "card.move", cardId: `agent:${sam}`, x: 5, y: 5 });
+    yield* change(alex, { type: "card.resize", cardId: `agent:${sam}`, w: 300, h: 200 });
     yield* change(sam, { type: "note.put", noteId: "note:sam", text: "Ship it", x: 1, y: 2 });
     yield* change(null, { type: "note.put", noteId: "note:owner", text: "Not yet", x: 3, y: 4 });
     // Anyone in the room can edit a note; it stays its author's.
@@ -477,6 +573,7 @@ it.effect("keeps one board for the room, changed a card or a note at a time", ()
     const arranged = yield* read;
     assert.deepEqual(arranged.board, {
       positions: { thread: { x: 300, y: -40 }, [`agent:${sam}`]: { x: 5, y: 5 } },
+      sizes: { [`agent:${sam}`]: { w: 300, h: 200 } },
       notes: [
         { id: "note:sam", text: "Ship it Friday", x: 9, y: 9, guestId: sam },
         { id: "note:owner", text: "Not yet", x: 3, y: 4 },
@@ -534,6 +631,7 @@ it.effect("keeps one board for the room, changed a card or a note at a time", ()
     });
     const after = (yield* read).board;
     assert.deepEqual(Object.keys(after?.positions ?? {}), ["thread"]);
+    assert.deepEqual(after?.sizes, {});
     assert.isFalse(after?.notes.some((note) => note.guestId === sam));
     assert.isTrue(yield* refused(change(sam, { type: "note.remove", noteId: "note:owner" })));
   }).pipe(Effect.provide(layerTest)),

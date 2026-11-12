@@ -1,14 +1,19 @@
 import {
+  ROOM_BOARD_MAX_CARD_SIZE,
   ROOM_BOARD_MAX_COORDINATE,
+  ROOM_BOARD_MIN_CARD_SIZE,
+  ROOM_BOARD_QUOTE_MAX_LENGTH,
   ROOM_BOARD_THREAD_CARD,
   isRoomBoardUrl,
   isRoomBranchName,
   roomBoardCardRef,
+  roomBoardNoteRef,
   type RoomAgentActivity,
   type RoomBoard,
   type RoomBoardChange,
   type RoomBoardEdge,
   type RoomBoardNote,
+  type RoomBoardSize,
   type RoomBoardViewport,
   type RoomCodeState,
 } from "@t3tools/contracts";
@@ -148,14 +153,36 @@ export interface BoardBox extends BoardPoint {
   readonly headerY: number;
 }
 
-export const boardCardBox = (at: BoardPoint): BoardBox => ({
-  ...at,
-  width: BOARD_CARD_WIDTH,
+/** How big an artifact card is until someone resizes it. */
+const BOARD_ARTIFACT_SIZE: RoomBoardSize = { w: 380, h: 320 };
+
+const boardLength = (value: number) =>
+  Math.round(Math.min(ROOM_BOARD_MAX_CARD_SIZE, Math.max(ROOM_BOARD_MIN_CARD_SIZE, value)));
+
+/** A size dragged to, at the whole pixels and within the bounds the room takes. */
+export const clampBoardSize = (size: RoomBoardSize): RoomBoardSize => ({
+  w: boardLength(size.w),
+  h: boardLength(size.h),
+});
+
+/** The size a note shows at, or undefined for one that grows with its text. */
+export const boardNoteSize = (
+  note: Pick<RoomBoardNote, "kind" | "size">,
+): RoomBoardSize | undefined =>
+  note.size ?? (note.kind === "artifact" ? BOARD_ARTIFACT_SIZE : undefined);
+
+export const boardCardBox = (at: BoardPoint, size?: RoomBoardSize): BoardBox => ({
+  x: at.x,
+  y: at.y,
+  width: size?.w ?? BOARD_CARD_WIDTH,
   headerY: 18,
 });
-export const boardNoteBox = (at: BoardPoint): BoardBox => ({
-  ...at,
-  width: NOTE_WIDTH,
+export const boardNoteBox = (
+  note: BoardPoint & Partial<Pick<RoomBoardNote, "kind" | "size">>,
+): BoardBox => ({
+  x: note.x,
+  y: note.y,
+  width: boardNoteSize(note)?.w ?? NOTE_WIDTH,
   headerY: 12,
 });
 
@@ -178,18 +205,17 @@ export function boardConnector(
   };
 }
 
-/** A curve from the header of one card to the header of another. */
-export const boardConnectorPath = (from: BoardPoint, to: BoardPoint): string =>
-  boardConnector(boardCardBox(from), boardCardBox(to)).path;
-
-/** A card, a note or an arrow on the board. */
+/** A card, a note or an arrow on the board, or how big a card is (`size`, by card id). */
 export interface BoardTarget {
-  readonly kind: "card" | "note" | "edge";
+  readonly kind: "card" | "note" | "edge" | "size";
   readonly id: string;
 }
 
-/** Where a card is, a note as it reads, an arrow, or null for a note or arrow taken off. */
-export type BoardValue = BoardPoint | RoomBoardNote | RoomBoardEdge | null;
+/**
+ * Where a card is, a note as it reads, an arrow, a card's size, or null for a note or arrow taken
+ * off.
+ */
+export type BoardValue = BoardPoint | RoomBoardNote | RoomBoardEdge | RoomBoardSize | null;
 
 /**
  * What this person did to one card, note or arrow, shown over the room's board so a drag does
@@ -209,17 +235,24 @@ export const NO_BOARD_EDITS: BoardEdits = {};
 /** A card's or note's key, which is also how an arrow names its ends. */
 export const boardEditKey = (target: BoardTarget) => `${target.kind}:${target.id}`;
 
-const roomCopy = (board: RoomBoard, target: BoardTarget): BoardValue | undefined =>
-  target.kind === "card"
-    ? board.positions[target.id]
-    : target.kind === "note"
-      ? board.notes.find((note) => note.id === target.id)
-      : board.edges?.find((edge) => edge.id === target.id);
+const roomCopy = (board: RoomBoard, target: BoardTarget): BoardValue | undefined => {
+  switch (target.kind) {
+    case "card":
+      return board.positions[target.id];
+    case "size":
+      return board.sizes?.[target.id];
+    case "note":
+      return board.notes.find((note) => note.id === target.id);
+    case "edge":
+      return board.edges?.find((edge) => edge.id === target.id);
+  }
+};
 
 /** What the room's copy and an edit are compared on, in whatever order the server wrote it. */
 const valueKey = (value: BoardValue | undefined): string => {
   if (value === undefined || value === null) return String(value);
   if ("from" in value) return `${value.from}>${value.to}`;
+  if ("w" in value) return `${value.w}x${value.h}`;
   if (!("text" in value)) return `${value.x},${value.y}`;
   return JSON.stringify([
     value.x,
@@ -227,6 +260,7 @@ const valueKey = (value: BoardValue | undefined): string => {
     value.text,
     value.done === true,
     value.assignee === undefined ? null : (value.assignee.guestId ?? ""),
+    value.size === undefined ? null : `${value.size.w}x${value.size.h}`,
   ]);
 };
 
@@ -295,9 +329,20 @@ const replaceById = <Item extends { readonly id: string }>(
 
 const CARD_REF = roomBoardCardRef("");
 
+/** A note as this person edits it, with what only the owner's server writes taken from the room. */
+const withServerFields = (note: RoomBoardNote, room: RoomBoardNote | undefined): RoomBoardNote => {
+  const { answer: _answer, artifact: _artifact, ...own } = note;
+  return {
+    ...own,
+    ...(room?.answer === undefined ? {} : { answer: room.answer }),
+    ...(room?.artifact === undefined ? {} : { artifact: room.artifact }),
+  };
+};
+
 /** The room's board with this person's own edits over it. A note taken off takes its arrows. */
 export function resolveBoard(board: RoomBoard, edits: BoardEdits): RoomBoard {
   const positions = { ...board.positions };
+  const sizes = { ...board.sizes };
   let notes = board.notes;
   let edges = board.edges ?? [];
   for (const edit of Object.values(edits)) {
@@ -305,13 +350,16 @@ export function resolveBoard(board: RoomBoard, edits: BoardEdits): RoomBoard {
     const { target, value } = edit;
     if (target.kind === "card") {
       if (value !== null && "x" in value) positions[target.id] = { x: value.x, y: value.y };
+    } else if (target.kind === "size") {
+      if (value !== null && "w" in value) sizes[target.id] = { w: value.w, h: value.h };
     } else if (target.kind === "edge") {
       if (value === null) edges = edges.filter((edge) => edge.id !== target.id);
       else if ("from" in value) edges = replaceById(edges, value);
     } else if (value === null) {
       notes = notes.filter((note) => note.id !== target.id);
     } else if ("text" in value) {
-      notes = replaceById(notes, value);
+      const room = board.notes.find((note) => note.id === target.id);
+      notes = replaceById(notes, withServerFields(value, room));
     }
   }
   const noteRefs = new Set(notes.map((note) => boardEditKey({ kind: "note", id: note.id })));
@@ -320,6 +368,7 @@ export function resolveBoard(board: RoomBoard, edits: BoardEdits): RoomBoard {
     positions,
     notes,
     edges: edges.filter((edge) => present(edge.from) && present(edge.to)),
+    sizes,
   };
 }
 
@@ -327,16 +376,23 @@ const coordinate = (value: number) =>
   Math.round(Math.min(ROOM_BOARD_MAX_COORDINATE, Math.max(-ROOM_BOARD_MAX_COORDINATE, value)));
 
 /** The value at the whole pixels the room keeps, so the server's copy equals what was let go. */
-export const settleBoardValue = <Value extends BoardValue>(value: Value): Value =>
-  value === null || !("x" in value)
-    ? value
-    : { ...value, x: coordinate(value.x), y: coordinate(value.y) };
+export const settleBoardValue = <Value extends BoardValue>(value: Value): Value => {
+  if (value === null) return value;
+  if ("w" in value) return { ...value, ...clampBoardSize(value) };
+  if (!("x" in value)) return value;
+  const at = { ...value, x: coordinate(value.x), y: coordinate(value.y) };
+  return "size" in at && at.size !== undefined ? { ...at, size: clampBoardSize(at.size) } : at;
+};
 
 /** The change that makes the room's copy of a card, note or arrow this value. */
 export function boardChangeOf(target: BoardTarget, value: BoardValue): RoomBoardChange {
   if (target.kind === "card") {
     const at = value !== null && "x" in value ? value : { x: 0, y: 0 };
     return { type: "card.move", cardId: target.id, x: at.x, y: at.y };
+  }
+  if (target.kind === "size") {
+    const size = clampBoardSize(value !== null && "w" in value ? value : BOARD_ARTIFACT_SIZE);
+    return { type: "card.resize", cardId: target.id, ...size };
   }
   if (target.kind === "edge") {
     return value === null || !("from" in value)
@@ -353,6 +409,8 @@ export function boardChangeOf(target: BoardTarget, value: BoardValue): RoomBoard
     ...(value.kind === undefined ? {} : { kind: value.kind }),
     ...(value.url === undefined ? {} : { url: value.url }),
     ...(value.pinnedTo === undefined ? {} : { pinnedTo: value.pinnedTo }),
+    ...(value.quote === undefined ? {} : { quote: value.quote }),
+    ...(value.size === undefined ? {} : { size: value.size }),
     ...(value.kind === "task"
       ? { done: value.done === true, assignee: value.assignee ?? null }
       : {}),
@@ -547,6 +605,24 @@ export function roomFetchCommand(branch: string): string | null {
   return `git fetch origin ${arg} && git switch ${arg}`;
 }
 
+/** A card an arrow connects to the thread's card, as a prompt from the board carries it. */
+export interface BoardPromptCard {
+  /** `note:<id>` as arrows name it. */
+  readonly ref: string;
+  /** For example "Note from Sam", "Task", "Comment on a reply", "Link", 'Artifact "Title"'. */
+  readonly label: string;
+  readonly text: string;
+}
+
+/** A message sent from the thread's card on the board. */
+export interface BoardPrompt {
+  readonly text: string;
+  /** The connected cards the sender left attached. */
+  readonly cards: ReadonlyArray<BoardPromptCard>;
+  /** The artifact note the thread card points to, when the sender may fill one. */
+  readonly artifactId: string | null;
+}
+
 /** A note added to a composer's draft as a paragraph of its own. */
 export function appendNoteToDraft(draft: string, note: string): string {
   const text = note.trim();
@@ -629,11 +705,20 @@ const decodeGuestContext = Schema.decodeUnknownOption(GuestContext);
 const EXCERPT_LENGTH = 280;
 const TABLE_RULE = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/;
 
+/** Text cut to `max` characters with the ellipsis, never splitting a surrogate pair. */
+const cutText = (text: string, max: number): string =>
+  text.length <= max
+    ? text
+    : `${text
+        .slice(0, max - 1)
+        .replace(/[\uD800-\uDBFF]$/, "")
+        .trimEnd()}…`;
+
 /**
  * A message as a card shows it: one run of plain text, without code blocks, heading and list
  * marks, table rules or emphasis marks. A message that is only a code block keeps its text.
  */
-function boardExcerpt(markdown: string): string {
+function boardExcerpt(markdown: string, max = EXCERPT_LENGTH): string {
   const lines: Array<string> = [];
   let fenced = false;
   for (const raw of markdown.split(/\r?\n/)) {
@@ -654,8 +739,22 @@ function boardExcerpt(markdown: string): string {
     lines.push(heading !== undefined && !/[.:!?]$/.test(line) ? `${line}:` : line);
   }
   const text = (lines.length === 0 ? markdown : lines.join(" ")).replace(/\s+/g, " ").trim();
-  return text.length > EXCERPT_LENGTH ? `${text.slice(0, EXCERPT_LENGTH).trimEnd()}…` : text;
+  return cutText(text, max);
 }
+
+/** The start of a reply, as a comment pinned to it quotes it. */
+export const boardReplyQuote = (reply: string): string =>
+  boardExcerpt(reply, ROOM_BOARD_QUOTE_MAX_LENGTH);
+
+/** What a comment quotes: what its author's client read, or the reply the thread's card shows. */
+export const boardNoteQuote = (
+  note: RoomBoardNote,
+  messages: ReadonlyArray<BoardMessage>,
+): string | undefined => {
+  if (note.pinnedTo === undefined) return undefined;
+  const quote = note.quote ?? messages.find((message) => message.id === note.pinnedTo)?.text;
+  return quote === undefined || quote.trim() === "" ? undefined : quote;
+};
 
 const textOf = (value: unknown) => (typeof value === "string" ? boardExcerpt(value) : "");
 
@@ -680,4 +779,102 @@ export function boardMessages(
     }
   }
   return messages.toReversed();
+}
+
+/** Whether an artifact is a whole HTML page, which the board shows as a page of its own. */
+export const isBoardHtmlArtifact = (body: string): boolean =>
+  /^(?:<!doctype html|<html)/i.test(body.trimStart());
+
+/** How many connected cards one message from the board carries. */
+export const BOARD_PROMPT_MAX_CARDS = 8;
+const PROMPT_ARTIFACT_LENGTH = 4_000;
+
+/** What the thread's card does with the arrows at it: what goes with a message, and where the reply goes. */
+export interface BoardPromptContext {
+  /** Every card with an arrow into the thread's card, and into those, nearest first. */
+  readonly cards: ReadonlyArray<BoardPromptCard>;
+  /** The arrows that carry them. */
+  readonly edgeIds: ReadonlySet<string>;
+  /** The artifact the thread's card points to, and the arrow that does. */
+  readonly artifact: RoomBoardNote | null;
+  readonly artifactEdgeId: string | null;
+}
+
+const isComment = (note: RoomBoardNote) => note.kind === undefined && note.pinnedTo !== undefined;
+
+/** A card as a message from the board carries it, or null for one with nothing written. */
+function boardPromptCard(
+  note: RoomBoardNote,
+  people: BoardPeople,
+  quote?: string,
+): BoardPromptCard | null {
+  const by = boardPersonName(people, note.guestId);
+  const text = note.text.trim();
+  const card = (label: string, body: string) =>
+    body.trim() === "" ? null : { ref: roomBoardNoteRef(note.id), label, text: body };
+  switch (note.kind) {
+    case "artifact": {
+      const body = cutText(note.artifact?.body.trim() ?? "", PROMPT_ARTIFACT_LENGTH);
+      return card(
+        text === "" ? "Artifact" : `Artifact "${text}"`,
+        [text, body].filter(Boolean).join("\n\n"),
+      );
+    }
+    case "task":
+      return text === ""
+        ? null
+        : card(`Task from ${by}`, `${text}\nStatus: ${note.done === true ? "done" : "not done"}`);
+    case "link":
+      return card(`Link from ${by}`, [note.url ?? "", text].filter(Boolean).join("\n"));
+    default:
+      if (text === "") return null;
+      if (!isComment(note)) return card(`Note from ${by}`, text);
+      return card(
+        `Comment from ${by} on a reply`,
+        quote === undefined ? text : `On the reply: "${quote}"\n${text}`,
+      );
+  }
+}
+
+/**
+ * The cards a message from the thread's card carries: each note with an arrow into it, and each
+ * note with an arrow into one of those, once each, nearest first and in the order the arrows were
+ * drawn. Plus the artifact the thread's card has an arrow to, first drawn first.
+ */
+export function boardPromptContext(
+  board: RoomBoard,
+  people: BoardPeople,
+  messages: ReadonlyArray<BoardMessage> = [],
+): BoardPromptContext {
+  const thread = roomBoardCardRef(ROOM_BOARD_THREAD_CARD);
+  const notes = new Map(board.notes.map((note) => [roomBoardNoteRef(note.id), note]));
+  const edges = board.edges ?? [];
+  const reached = new Set<string>();
+  const cards: Array<BoardPromptCard> = [];
+  let frontier = [thread];
+  while (frontier.length > 0 && reached.size < BOARD_PROMPT_MAX_CARDS) {
+    const next: Array<string> = [];
+    for (const edge of edges) {
+      const note = notes.get(edge.from);
+      if (!frontier.includes(edge.to) || note === undefined || reached.has(edge.from)) continue;
+      if (reached.size === BOARD_PROMPT_MAX_CARDS) break;
+      reached.add(edge.from);
+      next.push(edge.from);
+      const card = boardPromptCard(note, people, boardNoteQuote(note, messages));
+      if (card !== null) cards.push(card);
+    }
+    frontier = next;
+  }
+  const carried = (ref: string) => ref === thread || reached.has(ref);
+  const artifactEdge = edges.find(
+    (edge) => edge.from === thread && notes.get(edge.to)?.kind === "artifact",
+  );
+  return {
+    cards,
+    edgeIds: new Set(
+      edges.filter((edge) => reached.has(edge.from) && carried(edge.to)).map((edge) => edge.id),
+    ),
+    artifact: artifactEdge === undefined ? null : (notes.get(artifactEdge.to) ?? null),
+    artifactEdgeId: artifactEdge?.id ?? null,
+  };
 }

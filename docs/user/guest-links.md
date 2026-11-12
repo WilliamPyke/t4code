@@ -52,13 +52,42 @@ Besides notes, add a **Task**, which anyone can tick off and assign to someone i
 **Link**: type or paste an address, or paste one on the board or into an empty note. A link to a
 GitHub pull request, issue or file shows as its repository and number or path, and **Open**
 opens it in a new tab; T Code does not load the page. To draw an arrow, drag the dot on a card's
-edge onto another card; click an arrow to delete it.
+edge onto another card; click an arrow to delete it. Drag a card's bottom-right corner to resize
+it; everyone sees the new size.
 
 To turn a note into a message, drag it onto the thread's card or choose **Use as message** on it.
 Its text lands in your message box, after anything you had written, and the note stays on the
 board. Nothing is sent until you send it, and a guest's message still waits for the owner. A guest
 whose agent has a card on the board can instead drag a note onto **Your agent** or choose **Give
 to my agent**: it opens as a draft in their own T Code, as a task does below.
+
+### Prompt your agent from the board
+
+The thread's card has a message box. Cards with an arrow into the thread's card, and cards with an
+arrow into those, are listed under it; remove any you do not want to send. When you press Send,
+the listed cards go with your message, each with who wrote it.
+
+For the owner, that is a message on the shared thread, as if sent from its composer: it uses the
+thread's model and mode, and waits behind a turn that is running. The cards show as a **Board**
+chip on the message; open it to read exactly what your agent got. Your agent reads each card as
+the words of whoever wrote it, so a guest's note is background, not your instruction.
+
+For a guest, it is a guest message like any other. The cards are written into its text, so the
+owner reads all of it before choosing **Send**, unless the guest may
+[send without asking](#let-a-guest-send-without-asking).
+
+### Artifacts
+
+An **Artifact** is a card your agent writes into. Add one, give it a title, and draw an arrow from
+the thread's card to it. When the owner prompts from the board, the agent is told its reply fills
+that card, and the chip on the message says so. Once the turn finishes, the card shows the
+agent's final reply to everyone in the room: markdown as text, or, when the reply holds a whole
+HTML page in an `html` code block, the live page. Prompt again with the same arrow to revise it;
+the agent gets what the card shows now. An interrupted or failed turn leaves the card as it was.
+
+Anyone in the room can add, rename or delete an artifact, but only the owner's own message from
+the board fills one; a guest's message never does. A board holds up to 6 artifacts, each up to
+16,000 characters, and a longer reply is cut.
 
 ### Take a task to your agent
 
@@ -83,14 +112,15 @@ pull request, **Open pull request** on the thread's card pushes it and opens one
 git action does.
 
 To comment on a message, choose **Comment for the room** beside it in the shared thread. The
-comment shows under that message for everyone, and on the board as a note with **Go to reply**;
-delete it from either place.
+comment shows under that message for everyone, and on the board as a note with **Go to reply**
+and the start of the reply it is about; delete it from either place.
 
 The board belongs to the room. Guests open the same one with **Board** in the thread's header, and
 everyone sees a card land where it was dropped and a note once its author clicks away from it.
 Anyone in the room can move, edit or delete any card; each names who added it. A board holds up
-to 50 notes, tasks, links and comments of 280 characters, and 100 arrows. Agents never see the
-board, so use a message, not a note, for anything an agent should act on.
+to 50 notes, tasks, links, comments and artifacts of 280 characters, and 100 arrows. An agent
+sees a card only when someone [sends it from the board](#prompt-your-agent-from-the-board), and
+then only that person's own agent, or the owner's once the owner sends a guest's message.
 
 The board lasts as long as the link: stopping sharing or creating a new link starts an empty
 one, and removing a guest removes what they added and leaves their tasks unassigned. Someone who

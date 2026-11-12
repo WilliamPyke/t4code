@@ -76,6 +76,7 @@ import type { ExpandedImagePreview } from "../chat/ExpandedImagePreview";
 import { GuestMessageAttachments } from "../chat/GuestMessageAttachments";
 import { HostImageUrlContext } from "../chat/hostImageUrl";
 import { PierreEntryIcon } from "../chat/PierreEntryIcon";
+import { boardContextCards, guestBoardPromptText } from "../chat/roomBoardPrompt";
 import { GuestMessageName, guestBubbleClassName } from "../chat/guestMessageStyle";
 import { GuestTurnList } from "../chat/GuestTurnList";
 import { MessagesTimeline, type MessagesTimelineHistoryControls } from "../chat/MessagesTimeline";
@@ -91,6 +92,7 @@ import {
   type BoardPresence,
   EMPTY_ROOM_BOARD,
   appendNoteToDraft,
+  type BoardPrompt,
   boardMessages,
   boardNoteMessage,
 } from "../room/roomBoard.logic";
@@ -183,6 +185,27 @@ async function postBoardChange(
   } catch {
     return false;
   }
+}
+
+/**
+ * Sends the owner a message from this guest, which waits for them unless they let this guest's
+ * messages through. Resolves to what went wrong, or null.
+ */
+async function postGuestMessage(
+  endpoint: GuestShareEndpoint,
+  text: string,
+  files: ReadonlyArray<File>,
+): Promise<string | null> {
+  const form = new FormData();
+  form.append("shareId", endpoint.shareId);
+  form.append("text", text);
+  for (const file of files) form.append("file", file, file.name);
+  return guestShareRequest(endpoint, `${GUEST_ROUTE_PREFIX}/messages`, {
+    init: { method: "POST", body: form },
+  }).then(
+    (response) => (response.ok ? null : failureOf(response, "Something went wrong. Try again.")),
+    () => UNREACHABLE,
+  );
 }
 
 /** Shows the room where this guest's pointer is and what their board shows. A lost one is replaced soon. */
@@ -319,6 +342,27 @@ function GuestThreadSession({
     }
     void opened.then(reportOpenFailure);
   };
+  // A message for the owner to approve, like one from the composer. It never fills an artifact.
+  const messageOwner = async (prompt: BoardPrompt) => {
+    const text = guestBoardPromptText(
+      prompt.text,
+      boardContextCards(view.board, view.guests, prompt.cards),
+    );
+    const failure =
+      text === ""
+        ? "Write a message first."
+        : text.length > GUEST_MESSAGE_MAX_LENGTH
+          ? "This message and its cards are too long. Remove a card or shorten the message."
+          : await postGuestMessage(endpoint, text, []);
+    if (failure !== null) {
+      toastManager.add({
+        type: "error",
+        title: "Could not send the message",
+        description: failure,
+      });
+    }
+    return failure === null;
+  };
   // The same draft a task makes. The room answers only a task card, so a note answers nothing.
   const giveNote = (note: RoomBoardNote) =>
     void openOnMyMachine(endpoint, share.host, {
@@ -378,6 +422,9 @@ function GuestThreadSession({
           }}
           onChange={(change) => postBoardChange(endpoint, change)}
           onCursor={(presence) => postBoardCursor(endpoint, presence)}
+          onPrompt={messageOwner}
+          promptPlaceholder="Message the owner"
+          canFillArtifacts={false}
           onUseNote={(text) => {
             // Only a draft in the message box: the guest sends it, and the owner still approves it.
             flushSync(() => {
@@ -977,15 +1024,10 @@ function GuestComposer({
     if ((trimmed === "" && files.length === 0) || sending) return;
     setSending(true);
     const sentFiles = files;
-    const form = new FormData();
-    form.append("shareId", endpoint.shareId);
-    form.append("text", trimmed);
-    for (const staged of sentFiles) form.append("file", staged.file, staged.file.name);
-    const failure = await guestShareRequest(endpoint, `${GUEST_ROUTE_PREFIX}/messages`, {
-      init: { method: "POST", body: form },
-    }).then(
-      (response) => (response.ok ? null : failureOf(response, "Something went wrong. Try again.")),
-      () => UNREACHABLE,
+    const failure = await postGuestMessage(
+      endpoint,
+      trimmed,
+      sentFiles.map((staged) => staged.file),
     );
     setSending(false);
     setError(failure);

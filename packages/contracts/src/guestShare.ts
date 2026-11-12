@@ -236,9 +236,37 @@ export const RoomTaskAnswer = Schema.Struct({
 });
 export type RoomTaskAnswer = typeof RoomTaskAnswer.Type;
 
+export const ROOM_BOARD_MIN_CARD_SIZE = 120;
+export const ROOM_BOARD_MAX_CARD_SIZE = 1_600;
+const RoomBoardLength = Schema.Int.check(
+  Schema.isBetween({ minimum: ROOM_BOARD_MIN_CARD_SIZE, maximum: ROOM_BOARD_MAX_CARD_SIZE }),
+);
+/** How big someone made a card, in board pixels. */
+export const RoomBoardSize = Schema.Struct({ w: RoomBoardLength, h: RoomBoardLength });
+export type RoomBoardSize = typeof RoomBoardSize.Type;
+
+export const ROOM_BOARD_QUOTE_MAX_LENGTH = 280;
+export const ROOM_ARTIFACT_MAX_LENGTH = 16_000;
+export const ROOM_BOARD_MAX_ARTIFACTS = 6;
+
 /**
- * A card someone added to the board: a note, unless `kind` says it is a task or a link. A note
- * with `pinnedTo` is a comment on that message of the thread.
+ * What an agent wrote into an artifact card: markdown, or a whole HTML page. Only the owner's
+ * server writes it, from a turn its owner sent from the board with an arrow to the card.
+ */
+export const RoomArtifactContent = Schema.Struct({
+  body: Schema.String.check(Schema.isMaxLength(ROOM_ARTIFACT_MAX_LENGTH)),
+  /** The body was longer than the board keeps. */
+  truncated: Schema.optional(Schema.Boolean),
+  /** The turn that wrote it, as the machine that ran it named it. */
+  turnId: ThreadGuestTurn.fields.id,
+  updatedAt: IsoDateTime,
+});
+export type RoomArtifactContent = typeof RoomArtifactContent.Type;
+
+/**
+ * A card someone added to the board: a note, unless `kind` says it is a task, a link or an
+ * artifact. A note with `pinnedTo` is a comment on that message of the thread. An artifact's
+ * `text` is its title.
  */
 export const RoomBoardNote = Schema.Struct({
   /** The client that adds the note names it. */
@@ -247,7 +275,7 @@ export const RoomBoardNote = Schema.Struct({
   ...RoomBoardPoint.fields,
   /** The guest who added it. Absent on the owner's notes. */
   guestId: Schema.optional(GuestId),
-  kind: Schema.optional(Schema.Literals(["task", "link"])),
+  kind: Schema.optional(Schema.Literals(["task", "link", "artifact"])),
   /** A task that is done. */
   done: Schema.optional(Schema.Boolean),
   assignee: Schema.optional(RoomBoardAssignee),
@@ -257,6 +285,12 @@ export const RoomBoardNote = Schema.Struct({
   pinnedTo: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
   /** A task someone's agent answered. No board change sets it; it stays when the task changes. */
   answer: Schema.optional(RoomTaskAnswer),
+  /** The start of the reply a comment is pinned to, as its author's client read it. */
+  quote: Schema.optional(Schema.String.check(Schema.isMaxLength(ROOM_BOARD_QUOTE_MAX_LENGTH))),
+  /** Absent until someone resizes the card. */
+  size: Schema.optional(RoomBoardSize),
+  /** What an agent wrote into an artifact. No board change sets it. */
+  artifact: Schema.optional(RoomArtifactContent),
 });
 export type RoomBoardNote = typeof RoomBoardNote.Type;
 
@@ -275,13 +309,17 @@ export type RoomBoardEdge = typeof RoomBoardEdge.Type;
 
 /**
  * What the people in a room arranged on its board: where each card sits, their notes, and the
- * arrows between them. The room only shows it. It never starts a turn and never reaches an agent.
+ * arrows between them. Changing it never starts a turn. Cards reach an agent only in a message
+ * someone sends from it: the owner's own Send on their own thread, or a guest's message, which
+ * carries them as text and goes through the owner like any other.
  */
 export const RoomBoard = Schema.Struct({
   positions: Schema.Record(Schema.String, RoomBoardPoint),
   notes: Schema.Array(RoomBoardNote),
   /** Absent until someone draws an arrow, and from an older server. */
   edges: Schema.optional(Schema.Array(RoomBoardEdge)),
+  /** The size of each card someone resized, by card id. Notes carry their own. */
+  sizes: Schema.optional(Schema.Record(Schema.String, RoomBoardSize)),
 });
 export type RoomBoard = typeof RoomBoard.Type;
 
@@ -296,11 +334,16 @@ export const RoomBoardChange = Schema.Union([
     cardId: TrimmedNonEmptyString.check(Schema.isMaxLength(160)),
     ...RoomBoardPoint.fields,
   }),
+  /** Sizes a card. Notes are sized with `note.put`. */
+  Schema.Struct({
+    type: Schema.Literal("card.resize"),
+    cardId: TrimmedNonEmptyString.check(Schema.isMaxLength(160)),
+    ...RoomBoardSize.fields,
+  }),
   /**
-   * Adds the note, or replaces the text and place of the one with this id. `kind`, `url` and
-   * `pinnedTo` are taken when the note is added and kept after. A task's `done` and `assignee`
-   * stay as they were when absent, so an older client's edit keeps them; a null `assignee`
-   * clears it.
+   * Adds the note, or replaces the text and place of the one with this id. `kind`, `url`,
+   * `pinnedTo` and `quote` are kept from when it was added. Absent `size`, `done` and `assignee`
+   * stay as they were, so an older client's edit keeps them; a null `assignee` clears it.
    */
   Schema.Struct({
     type: Schema.Literal("note.put"),
@@ -310,6 +353,8 @@ export const RoomBoardChange = Schema.Union([
     kind: RoomBoardNote.fields.kind,
     url: RoomBoardNote.fields.url,
     pinnedTo: RoomBoardNote.fields.pinnedTo,
+    quote: RoomBoardNote.fields.quote,
+    size: RoomBoardNote.fields.size,
     done: RoomBoardNote.fields.done,
     assignee: Schema.optional(Schema.NullOr(RoomBoardAssignee)),
   }),

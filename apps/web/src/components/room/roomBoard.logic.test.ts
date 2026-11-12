@@ -1,9 +1,18 @@
-import { GuestId, ROOM_BOARD_MAX_COORDINATE, type RoomBoard } from "@t3tools/contracts";
+import {
+  GuestId,
+  ROOM_BOARD_MAX_CARD_SIZE,
+  ROOM_BOARD_MAX_COORDINATE,
+  ROOM_BOARD_MIN_CARD_SIZE,
+  ROOM_BOARD_QUOTE_MAX_LENGTH,
+  type RoomBoard,
+  type RoomBoardNote,
+} from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   BOARD_MAX_ZOOM,
   BOARD_MIN_ZOOM,
+  BOARD_PROMPT_MAX_CARDS,
   EMPTY_ROOM_BOARD,
   INITIAL_BOARD_VIEW,
   NO_BOARD_EDITS,
@@ -19,11 +28,14 @@ import {
   boardCursorColor,
   boardMessages,
   boardNoteBox,
+  boardPromptContext,
+  boardReplyQuote,
   boardUrlIn,
   boardViewportOf,
   cursorSender,
   dropBoardEdit,
   followBoardView,
+  isBoardHtmlArtifact,
   parseBoardLink,
   pinnedCommentSpot,
   placeBoardCards,
@@ -155,6 +167,53 @@ describe("resolveBoard", () => {
     expect(boardChangeOf(arrow, null)).toEqual({ type: "edge.remove", edgeId: "e" });
   });
 
+  it("resizes a card or a note while held, within the room's bounds, and sends it on release", () => {
+    const size = { kind: "size", id: "thread" } as const;
+    const held = putBoardEdit(room(0), NO_BOARD_EDITS, size, { w: 401.6, h: 90 }, true);
+    expect(resolveBoard(room(0), held).sizes?.thread).toEqual({ w: 401.6, h: 90 });
+    const dropped = settleBoardValue({ w: 401.6, h: 90 });
+    expect(dropped).toEqual({ w: 402, h: ROOM_BOARD_MIN_CARD_SIZE });
+    expect(boardChangeOf(size, { w: 99_999, h: 300 })).toEqual({
+      type: "card.resize",
+      cardId: "thread",
+      w: ROOM_BOARD_MAX_CARD_SIZE,
+      h: 300,
+    });
+    // The room taking it puts the edit away; a resize does not move the card.
+    const sent = putBoardEdit(room(0), held, size, dropped, false);
+    const resized: RoomBoard = { ...room(0), sizes: { thread: dropped } };
+    expect(resolveBoard(resized, sent).sizes?.thread).toEqual(dropped);
+    expect(resolveBoard(resized, sent).positions.thread).toEqual({ x: 0, y: 0 });
+
+    const note = { id: "n", text: "Ship", x: 0.4, y: 0, size: { w: 250.2, h: 3_000 } };
+    const settled = settleBoardValue(note);
+    expect(settled.size).toEqual({ w: 250, h: ROOM_BOARD_MAX_CARD_SIZE });
+    expect(boardChangeOf({ kind: "note", id: "n" }, settled)).toMatchObject({
+      type: "note.put",
+      x: 0,
+      size: { w: 250, h: ROOM_BOARD_MAX_CARD_SIZE },
+    });
+  });
+
+  it("keeps what the owner's server wrote into a note while this person edits it", () => {
+    const target = { kind: "note", id: "a" } as const;
+    const empty = { id: "a", text: "Plan", x: 0, y: 0, kind: "artifact" as const };
+    const typing = putBoardEdit(
+      { positions: {}, notes: [empty] },
+      NO_BOARD_EDITS,
+      target,
+      { ...empty, text: "Release plan" },
+      true,
+    );
+    const artifact = { body: "# Plan", turnId: "t1", updatedAt: "2026-11-12T00:00:00.000Z" };
+    const written: RoomBoard = { positions: {}, notes: [{ ...empty, artifact }] };
+    expect(resolveBoard(written, typing).notes[0]).toEqual({
+      ...empty,
+      text: "Release plan",
+      artifact,
+    });
+  });
+
   it("sends a task whole, so clearing its assignee reaches the room", () => {
     const task = { id: "t", text: "Fix login", x: 1, y: 2, kind: "task" as const };
     const target = { kind: "note", id: "t" } as const;
@@ -217,6 +276,12 @@ describe("boardConnector", () => {
     const back = boardConnector(note, card);
     expect(back.path.startsWith("M500 112 ")).toBe(true);
     expect(back.path.endsWith(" 320 18")).toBe(true);
+    // A resized card and an artifact, at their own widths.
+    const wide = boardConnector(boardCardBox({ x: 0, y: 0 }, { w: 450, h: 200 }), note);
+    expect(wide.path.startsWith("M450 18 ")).toBe(true);
+    const artifact = boardNoteBox({ x: 0, y: 0, kind: "artifact" });
+    expect(artifact.width).toBeGreaterThan(boardNoteBox({ x: 0, y: 0 }).width);
+    expect(boardConnector(artifact, note).path.startsWith(`M${artifact.width} 12 `)).toBe(true);
   });
 });
 
@@ -321,6 +386,17 @@ describe("boardMessages", () => {
     expect(
       boardMessages([{ id: "8", type: "assistant_message", text: "```sh\nls\n```" }], 1)[0]?.text,
     ).toBe("```sh ls ```");
+  });
+
+  it("quotes the start of a reply as plain text, within what the room keeps", () => {
+    expect(boardReplyQuote("## Done\n\n- Fixed **login**")).toBe("Done: Fixed login");
+    const quote = boardReplyQuote("word ".repeat(100));
+    expect(quote.length).toBeLessThanOrEqual(ROOM_BOARD_QUOTE_MAX_LENGTH);
+    expect(quote.endsWith("…")).toBe(true);
+    // A cut never leaves half of a surrogate pair.
+    const emoji = boardReplyQuote("\u{1F600}".repeat(200));
+    expect(emoji.length).toBeLessThanOrEqual(ROOM_BOARD_QUOTE_MAX_LENGTH);
+    expect(emoji.at(-2)).toBe("\uDE00");
   });
 });
 
@@ -465,5 +541,119 @@ describe("appendNoteToDraft", () => {
       "Look at login.\n\nCheck the cache",
     );
     expect(appendNoteToDraft("Keep", "  ")).toBe("Keep");
+  });
+});
+
+describe("boardPromptContext", () => {
+  const sam = GuestId.make("sam");
+  const people = { guests: [{ id: sam, name: "Sam" }], viewer: null };
+  const note = (id: string, fields: Partial<RoomBoardNote> = {}): RoomBoardNote => ({
+    id,
+    text: id,
+    x: 0,
+    y: 0,
+    ...fields,
+  });
+  const arrow = (from: string, to: string) => ({ id: `${from}>${to}`, from, to });
+  const board = (
+    notes: ReadonlyArray<RoomBoardNote>,
+    edges: ReadonlyArray<ReturnType<typeof arrow>>,
+  ): RoomBoard => ({ positions: {}, notes, edges });
+
+  it("gathers the cards pointing into the thread and into those, once each, nearest first", () => {
+    const context = boardPromptContext(
+      board(
+        [note("a"), note("b", { guestId: sam }), note("c"), note("d"), note("lone")],
+        [
+          arrow("note:c", "note:a"),
+          arrow("note:a", "card:thread"),
+          arrow("note:b", "card:thread"),
+          // A cycle, and a card that is not a note, add nothing more.
+          arrow("note:a", "note:c"),
+          arrow("note:a", "note:b"),
+          arrow("card:guest:sam", "card:thread"),
+          arrow("note:d", "note:lone"),
+          arrow("card:thread", "note:d"),
+        ],
+      ),
+      people,
+    );
+    expect(context.cards).toEqual([
+      { ref: "note:a", label: "Note from You", text: "a" },
+      { ref: "note:b", label: "Note from Sam", text: "b" },
+      { ref: "note:c", label: "Note from You", text: "c" },
+    ]);
+    expect([...context.edgeIds]).toEqual([
+      "note:c>note:a",
+      "note:a>card:thread",
+      "note:b>card:thread",
+      "note:a>note:c",
+      "note:a>note:b",
+    ]);
+    expect(context.artifact).toBeNull();
+  });
+
+  it("stops at the most cards one message carries, and leaves out cards with nothing written", () => {
+    const many = Array.from({ length: BOARD_PROMPT_MAX_CARDS + 3 }, (_, index) =>
+      note(`n${index}`),
+    );
+    const context = boardPromptContext(
+      board(
+        [...many, note("blank", { text: "  " })],
+        [
+          arrow("note:blank", "card:thread"),
+          ...many.map((each) => arrow(`note:${each.id}`, "card:thread")),
+        ],
+      ),
+      people,
+    );
+    expect(context.cards).toHaveLength(BOARD_PROMPT_MAX_CARDS - 1);
+    expect(context.cards[0]?.ref).toBe("note:n0");
+    expect(context.edgeIds.has("note:n9>card:thread")).toBe(false);
+  });
+
+  it("names each kind of card and who wrote it, and finds the artifact the thread points to", () => {
+    const artifact = {
+      body: "<!doctype html><p>Hi</p>",
+      turnId: "t",
+      updatedAt: "2026-11-12T00:00:00.000Z",
+    };
+    const context = boardPromptContext(
+      board(
+        [
+          note("task", { text: "Fix login", kind: "task", done: true, guestId: sam }),
+          note("link", { text: "Spec", kind: "link", url: "https://example.com/spec" }),
+          note("old", { text: "Why?", pinnedTo: "m1", guestId: sam }),
+          note("new", { text: "Agreed", pinnedTo: "m2", quote: "Use a 15 minute TTL" }),
+          note("page", { text: "Mockup", kind: "artifact", artifact }),
+          note("empty", { text: "Untitled", kind: "artifact" }),
+          note("other", { text: "", kind: "artifact" }),
+        ],
+        [
+          ...["task", "link", "old", "new", "page"].map((id) => arrow(`note:${id}`, "card:thread")),
+          arrow("card:thread", "note:task"),
+          arrow("card:thread", "note:empty"),
+          arrow("card:thread", "note:other"),
+        ],
+      ),
+      { ...people, viewer: sam },
+      [{ id: "m1", author: null, text: "The token TTL is 900s." }],
+    );
+    expect(context.cards.map(({ label, text }) => [label, text])).toEqual([
+      ["Task from You", "Fix login\nStatus: done"],
+      ["Link from Owner", "https://example.com/spec\nSpec"],
+      ["Comment from You on a reply", 'On the reply: "The token TTL is 900s."\nWhy?'],
+      ["Comment from Owner on a reply", 'On the reply: "Use a 15 minute TTL"\nAgreed'],
+      ['Artifact "Mockup"', "Mockup\n\n<!doctype html><p>Hi</p>"],
+    ]);
+    expect(context.artifact?.id).toBe("empty");
+    expect(context.artifactEdgeId).toBe("card:thread>note:empty");
+  });
+
+  it("shows an artifact as a page only when it is a whole HTML document", () => {
+    expect(isBoardHtmlArtifact("\n  <!DOCTYPE html><html></html>")).toBe(true);
+    expect(isBoardHtmlArtifact('<html lang="en"><body>Hi</body></html>')).toBe(true);
+    expect(isBoardHtmlArtifact("# Plan\n\n<html> is a tag")).toBe(false);
+    expect(isBoardHtmlArtifact("<div>Hi</div>")).toBe(false);
   });
 });

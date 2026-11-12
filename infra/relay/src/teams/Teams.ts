@@ -742,10 +742,12 @@ const make = Effect.gen(function* () {
     function* (input) {
       const { change } = input;
       yield* requireMember(input.teamId, input.userId);
-      // Comments pin to one thread's replies, and a task here is always for a named member.
+      // Comments pin to one thread's replies, no agent fills an artifact here, and a task here is
+      // always for a named member.
       if (
         change.type === "note.put" &&
         (change.pinnedTo !== undefined ||
+          change.kind === "artifact" ||
           (change.assignee !== undefined &&
             change.assignee !== null &&
             change.assignee.guestId === undefined))

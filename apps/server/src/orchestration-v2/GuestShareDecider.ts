@@ -12,6 +12,7 @@ import {
   roomBoardGuestCard,
   roomBoardNoteRef,
   roomTaskAnswerExcerpt,
+  type RoomArtifactContent,
   type RoomBoard,
   type RoomBoardNote,
   type GuestId,
@@ -28,6 +29,7 @@ import {
   ROOM_BOARD_FULL,
   applyRoomBoardChange,
   roomBoardWithEdges,
+  roomBoardWithoutCards,
   type RoomBoardScope,
 } from "@t3tools/shared/roomBoard";
 import * as DateTime from "effect/DateTime";
@@ -48,6 +50,7 @@ export type GuestShareCommand = Extract<
       | "thread.guest-turn.post"
       | "thread.guest-board.change"
       | "thread.room-task.answer"
+      | "thread.room-artifact.fill"
       | "thread.room-link.set";
   }
 >;
@@ -136,11 +139,10 @@ const roomScope = (share: ThreadGuestShare): RoomBoardScope => ({
  * were given are left with no one, and lose their agent's answers.
  */
 function boardWithoutGuest(board: RoomBoard, guestId: GuestId): RoomBoard {
-  const {
-    [roomBoardGuestCard(guestId)]: _guest,
-    [roomBoardAgentCard(guestId)]: _agent,
-    ...positions
-  } = board.positions;
+  const withoutCards = roomBoardWithoutCards(board, [
+    roomBoardGuestCard(guestId),
+    roomBoardAgentCard(guestId),
+  ]);
   const gone = new Set([
     roomBoardCardRef(roomBoardGuestCard(guestId)),
     roomBoardCardRef(roomBoardAgentCard(guestId)),
@@ -148,8 +150,7 @@ function boardWithoutGuest(board: RoomBoard, guestId: GuestId): RoomBoard {
   ]);
   return roomBoardWithEdges(
     {
-      ...board,
-      positions,
+      ...withoutCards,
       notes: board.notes.flatMap((note) => {
         if (note.guestId === guestId) return [];
         if (note.assignee?.guestId !== guestId && note.answer?.guestId !== guestId) return [note];
@@ -194,6 +195,21 @@ function boardWithTaskAnswered(
     answer: { ...person, excerpt: roomTaskAnswerExcerpt(turn.reply), turnId: turn.id },
   };
   return { ...board, notes: board.notes.map((note) => (note === task ? answered : note)) };
+}
+
+/**
+ * The board with an artifact card showing what the owner's agent replied. Only an artifact card
+ * takes it; any other id, or the same turn again, leaves the board as it was.
+ */
+function boardWithArtifactFilled(
+  board: RoomBoard,
+  noteId: string,
+  content: RoomArtifactContent,
+): RoomBoard {
+  const note = board.notes.find((candidate) => candidate.id === noteId);
+  if (note?.kind !== "artifact" || note.artifact?.turnId === content.turnId) return board;
+  const filled: RoomBoardNote = { ...note, artifact: content };
+  return { ...board, notes: board.notes.map((other) => (other === note ? filled : other)) };
 }
 
 const resolveMessage = (
@@ -457,6 +473,21 @@ export function decideGuestShareCommand(input: {
         return Result.succeed(thread);
       }
       const board = boardWithTaskAnswered(share.board, command.taskId, undefined, command.turn);
+      return Result.succeed(
+        board === share.board ? thread : { ...thread, guestShare: { ...share, board } },
+      );
+    }
+    // Like a task's answer: the owner's turn already ran, and the room only sees what it wrote.
+    case "thread.room-artifact.fill": {
+      if (share === null || share.id !== command.shareId || share.board === undefined) {
+        return Result.succeed(thread);
+      }
+      const board = boardWithArtifactFilled(share.board, command.noteId, {
+        body: command.body,
+        ...(command.truncated === true ? { truncated: true } : {}),
+        turnId: command.turnId,
+        updatedAt: DateTime.formatIso(now),
+      });
       return Result.succeed(
         board === share.board ? thread : { ...thread, guestShare: { ...share, board } },
       );
