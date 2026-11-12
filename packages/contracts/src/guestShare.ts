@@ -129,6 +129,56 @@ export const RoomBoardChange = Schema.Union([
 ]);
 export type RoomBoardChange = typeof RoomBoardChange.Type;
 
+/**
+ * Live room state, held in the owner's server's memory and never stored: which guests' agents
+ * are running a turn on their own machines, and where each person's pointer is on the board.
+ */
+export const GUEST_AGENT_PROMPT_MAX_LENGTH = 280;
+
+/** A guest's agent running a turn on their machine, with the start of the prompt it is on. */
+export const RoomAgentActivity = Schema.Struct({
+  guestId: GuestId,
+  prompt: Schema.String.check(Schema.isMaxLength(GUEST_AGENT_PROMPT_MAX_LENGTH)),
+});
+export type RoomAgentActivity = typeof RoomAgentActivity.Type;
+
+/** Someone's pointer on the board, in board pixels. Absent `guestId` is the owner's. */
+export const RoomCursor = Schema.Struct({
+  guestId: Schema.optional(GuestId),
+  ...RoomBoardPoint.fields,
+});
+export type RoomCursor = typeof RoomCursor.Type;
+
+/** The guests' agents running now, sent whenever that changes. */
+export const RoomAgentsEvent = Schema.Struct({
+  type: Schema.Literal("agents"),
+  running: Schema.Array(RoomAgentActivity),
+});
+export type RoomAgentsEvent = typeof RoomAgentsEvent.Type;
+
+/** Everyone else's pointers on the board, sent whenever one moves. Never the reader's own. */
+export const RoomCursorsEvent = Schema.Struct({
+  type: Schema.Literal("cursors"),
+  cursors: Schema.Array(RoomCursor),
+});
+export type RoomCursorsEvent = typeof RoomCursorsEvent.Type;
+
+/** The live room of the share the owner's board shows. */
+export const RoomLiveInput = Schema.Struct({ threadId: ThreadId, shareId: GuestShareId });
+export type RoomLiveInput = typeof RoomLiveInput.Type;
+
+/** Where the owner's pointer is on the board, or null once it left. */
+export const RoomCursorInput = Schema.Struct({
+  threadId: ThreadId,
+  shareId: GuestShareId,
+  at: Schema.NullOr(RoomBoardPoint),
+});
+export type RoomCursorInput = typeof RoomCursorInput.Type;
+
+/** A guest's pointer on the board, or null once it left. */
+export const GuestCursorRequest = Schema.Struct({ at: Schema.NullOr(RoomBoardPoint) });
+export type GuestCursorRequest = typeof GuestCursorRequest.Type;
+
 /** The GitHub account a guest signed in with. The id stays the same when the login changes. */
 export const GuestAccount = Schema.Struct({ login: TrimmedNonEmptyString, id: Schema.Number });
 export type GuestAccount = typeof GuestAccount.Type;
@@ -419,6 +469,17 @@ export const GuestTurnRequest = Schema.Struct({
 export type GuestTurnRequest = typeof GuestTurnRequest.Type;
 
 /**
+ * The guest's own T3 Code saying a turn started (`running`, with the prompt) or stopped without
+ * a turn to post (`idle`). Posting the finished turn also clears it.
+ */
+export const GuestAgentActivityRequest = Schema.Struct({
+  id: ThreadGuestTurn.fields.id,
+  state: Schema.Literals(["running", "idle"]),
+  prompt: Schema.optional(RoomAgentActivity.fields.prompt),
+});
+export type GuestAgentActivityRequest = typeof GuestAgentActivityRequest.Type;
+
+/**
  * One thing said in a room, as a thread joined from it reads it back. A guest's name is on the
  * guest's own messages and on their agent's replies.
  */
@@ -476,10 +537,14 @@ export const GUEST_HANDOFF_ROUTE = `${GUEST_ROUTE_PREFIX}/handoff`;
 export const GUEST_EXPORT_ROUTE = `${GUEST_ROUTE_PREFIX}/export`;
 /** A guest's own T3 Code posts a turn it ran here, with a bearer room token. */
 export const GUEST_ROOM_TURN_ROUTE = `${GUEST_ROUTE_PREFIX}/room/turns`;
+/** A guest's own T3 Code says a turn started or stopped here, with a bearer room token. */
+export const GUEST_ROOM_ACTIVITY_ROUTE = `${GUEST_ROUTE_PREFIX}/room/activity`;
 /** What happened in the room since `?after=<ISO time>`, for a bearer room token. */
 export const GUEST_ROOM_UPDATES_ROUTE = `${GUEST_ROUTE_PREFIX}/room/updates`;
 /** A guest's change to the room's board (POST), a `RoomBoardChange` as JSON: `?share=<id>`. */
 export const GUEST_BOARD_ROUTE = `${GUEST_ROUTE_PREFIX}/board`;
+/** Where a guest's pointer is on the room's board (POST), a `GuestCursorRequest`: `?share=<id>`. */
+export const GUEST_BOARD_CURSOR_ROUTE = `${GUEST_ROUTE_PREFIX}/board/cursor`;
 /** The guest page and guest routes name the share they mean with this query parameter. */
 export const GUEST_SHARE_PARAM = "share";
 /** On the hosted app, the guest page names the owner's host with this query parameter. */

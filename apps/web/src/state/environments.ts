@@ -7,7 +7,7 @@ import {
 import { Discovery } from "@t3tools/client-runtime/relay";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
-import { useState } from "react";
+import { Atom } from "effect/reactivity";
 
 import { environmentCatalog } from "../connection/catalog";
 import { guestSharesAtom } from "../guest/guestShares";
@@ -62,13 +62,22 @@ export function useEnvironments() {
  * Whether this person is here only as a guest: they joined a shared thread and have no
  * environment of their own, so nothing can start a thread or take a project.
  */
-export function useGuestOnly(): boolean {
-  const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
-  const joined = useAtomValue(guestSharesAtom).length > 0;
+const guestOnlyAtom = Atom.make((get) => {
+  const catalog = get(environmentCatalog.catalogValueAtom);
   // A guest whose link just ended is still only a guest until the page loads again.
-  const [wasGuest, setWasGuest] = useState(joined);
-  if (joined && !wasGuest) setWasGuest(true);
-  return catalog.isReady && catalog.entries.size === 0 && (joined || wasGuest);
+  const wasGuest = Option.getOrElse(get.self<boolean>(), () => false);
+  return (
+    catalog.isReady && catalog.entries.size === 0 && (wasGuest || get(guestSharesAtom).length > 0)
+  );
+}).pipe(Atom.keepAlive, Atom.withLabel("guest-only"));
+
+export function useGuestOnly(): boolean {
+  return useAtomValue(guestOnlyAtom);
+}
+
+/** {@link useGuestOnly} for handlers that run outside React. */
+export function readGuestOnly(): boolean {
+  return appAtomRegistry.get(guestOnlyAtom);
 }
 
 /** Provider statuses change on every push, so they live apart from the presentations. */

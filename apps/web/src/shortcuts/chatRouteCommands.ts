@@ -17,6 +17,7 @@ import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
 import { readProjects, readThreadShell } from "../state/entities";
+import { readGuestOnly } from "../state/environments";
 import { environmentPresentations } from "../state/presentation";
 import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
 import { readEnvironmentScope } from "../state/session";
@@ -102,6 +103,12 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
     });
   };
 
+  // A browser that only joined guest links has nowhere to start a thread.
+  const unlessGuestOnly =
+    (handler: CommandHandler): CommandHandler =>
+    (event) =>
+      readGuestOnly() ? false : handler(event);
+
   const previewCommand =
     (action: PreviewAction): CommandHandler =>
     (event) => {
@@ -112,8 +119,8 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
 
   return registerCommands(
     {
-      "chat.newLocal": startNewLocal,
-      "chat.newWithoutProject": (event) => {
+      "chat.newLocal": unlessGuestOnly(startNewLocal),
+      "chat.newWithoutProject": unlessGuestOnly((event) => {
         const { activeThread, activeDraftThread } = readThreadContext();
         const environmentId = scratch.scratchEnvironmentId(
           activeThread?.environmentId ?? activeDraftThread?.environmentId ?? null,
@@ -121,8 +128,8 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
         if (environmentId === null) return;
         claim(event);
         void scratch.startScratchThread(environmentId);
-      },
-      "chat.new": (event) => {
+      }),
+      "chat.new": unlessGuestOnly((event) => {
         const groups = readProjectGroups();
         if (
           !shouldCreateNewThreadInCurrentProject(
@@ -136,7 +143,7 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
           return;
         }
         startNewLocal(event);
-      },
+      }),
       "preview.toggle": (event) => {
         claim(event);
         const threadRef = readRouteThreadRef();

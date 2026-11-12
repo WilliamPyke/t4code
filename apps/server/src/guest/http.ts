@@ -1,5 +1,6 @@
 import {
   GUEST_ATTACHMENT_ROUTE,
+  GUEST_BOARD_CURSOR_ROUTE,
   GUEST_BOARD_ROUTE,
   GUEST_COMMAND_OUTPUT_ROUTE,
   GUEST_EXPORT_ROUTE,
@@ -8,6 +9,7 @@ import {
   GUEST_ITEM_ROUTE,
   GUEST_MEDIA_ROUTE,
   GUEST_RENDER_ROUTE,
+  GUEST_ROOM_ACTIVITY_ROUTE,
   GUEST_ROOM_TURN_ROUTE,
   GUEST_ROOM_UPDATES_ROUTE,
   GUEST_ROUTE_PREFIX,
@@ -20,6 +22,8 @@ import {
   GUEST_MESSAGE_MAX_ATTACHMENT_BYTES,
   GUEST_MESSAGE_MAX_ATTACHMENTS,
   GUEST_SHARE_TTL_MS,
+  GuestAgentActivityRequest,
+  GuestCursorRequest,
   GuestHandoff,
   GuestRedeemRequest,
   GuestRedeemResult,
@@ -374,6 +378,26 @@ const roomTurnRoute = HttpRouter.add(
   }),
 );
 
+const decodeActivity = Schema.decodeUnknownEffect(GuestAgentActivityRequest);
+
+// Posted by the guest's own T3 Code server when a turn starts or stops there.
+const roomActivityRoute = HttpRouter.add(
+  "POST",
+  GUEST_ROOM_ACTIVITY_ROUTE,
+  Effect.gen(function* () {
+    const token = yield* bearerToken;
+    const body = yield* readJson.pipe(Effect.flatMap(decodeActivity), Effect.option);
+    if (body._tag === "None") return yield* badRequest;
+    const guestShares = yield* GuestShareService;
+    return yield* guestShares
+      .postActivity(token, body.value)
+      .pipe(
+        Effect.as(HttpServerResponse.empty({ status: 204, headers: NO_STORE })),
+        Effect.catchTags({ GuestShareAccessError: errorResponse }),
+      );
+  }),
+);
+
 const encodeUpdates = encodeForGuest(Schema.toCodecJson(RoomUpdates));
 
 // Read by the guest's own T3 Code server when its user catches up.
@@ -412,6 +436,30 @@ const boardRoute = HttpRouter.add(
     const guestShares = yield* GuestShareService;
     return yield* guestShares
       .changeBoard({ session }, change.value)
+      .pipe(
+        Effect.as(HttpServerResponse.empty({ status: 204, headers: NO_STORE })),
+        Effect.catchTags({ GuestShareAccessError: errorResponse }),
+      );
+  }),
+);
+
+// A pointer position is a few bytes; anything bigger is not one.
+const CURSOR_MAX_BODY_BYTES = 256;
+const decodeCursor = Schema.decodeUnknownEffect(GuestCursorRequest);
+
+const boardCursorRoute = HttpRouter.add(
+  "POST",
+  GUEST_BOARD_CURSOR_ROUTE,
+  Effect.gen(function* () {
+    const session = yield* sessionToken;
+    const body = yield* readJsonWithin(CURSOR_MAX_BODY_BYTES).pipe(
+      Effect.flatMap(decodeCursor),
+      Effect.option,
+    );
+    if (body._tag === "None") return yield* badRequest;
+    const guestShares = yield* GuestShareService;
+    return yield* guestShares
+      .moveCursor({ session }, body.value.at)
       .pipe(
         Effect.as(HttpServerResponse.empty({ status: 204, headers: NO_STORE })),
         Effect.catchTags({ GuestShareAccessError: errorResponse }),
@@ -647,8 +695,10 @@ export const layer = Layer.mergeAll(
   handoffRoute,
   exportRoute,
   roomTurnRoute,
+  roomActivityRoute,
   roomUpdatesRoute,
   boardRoute,
+  boardCursorRoute,
   signInRoute,
   signInBeginRoute,
   signInCallbackRoute,

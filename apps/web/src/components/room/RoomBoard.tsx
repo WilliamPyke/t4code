@@ -3,19 +3,32 @@ import {
   ROOM_BOARD_MAX_NOTES,
   ROOM_BOARD_NOTE_MAX_LENGTH,
   ROOM_BOARD_THREAD_CARD,
+  type RoomAgentActivity,
   type RoomBoardChange,
   type RoomBoardNote,
+  type RoomCursor,
   type ThreadGuest,
   type ThreadGuestShare,
   roomBoardAgentCard,
   roomBoardGuestCard,
 } from "@t3tools/contracts";
-import { ArrowLeftIcon, MinusIcon, PlusIcon, StickyNoteIcon, XIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  MessageSquareShareIcon,
+  MinusIcon,
+  MousePointer2Icon,
+  PlusIcon,
+  StickyNoteIcon,
+  XIcon,
+} from "lucide-react";
 import { type PointerEvent, type ReactNode, useEffect, useRef, useState } from "react";
+
+import { useStableCallback } from "~/hooks/useStableCallback";
 
 import { cn, randomUUID } from "~/lib/utils";
 
 import { Button } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   BOARD_CARD_WIDTH,
   type BoardMessage,
@@ -26,9 +39,13 @@ import {
   EMPTY_ROOM_BOARD,
   INITIAL_BOARD_VIEW,
   NO_BOARD_EDITS,
+  boardAgents,
   boardChangeOf,
   boardConnectorPath,
+  boardCursorAt,
+  boardCursorColor,
   boardEditKey,
+  cursorSender,
   dropBoardEdit,
   panBoardBy,
   placeBoardCards,
@@ -48,7 +65,10 @@ const GRID = 22;
  * Pointer handlers that report how far a held pointer moved, in screen pixels, and when it is
  * let go.
  */
-function dragHandlers(onMove: (dx: number, dy: number) => void, onEnd?: () => void) {
+function dragHandlers(
+  onMove: (dx: number, dy: number, event: PointerEvent<HTMLElement>) => void,
+  onEnd?: () => void,
+) {
   const release = (event: PointerEvent<HTMLElement>) => {
     if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
     event.currentTarget.releasePointerCapture(event.pointerId);
@@ -63,12 +83,23 @@ function dragHandlers(onMove: (dx: number, dy: number) => void, onEnd?: () => vo
     },
     onPointerMove: (event: PointerEvent<HTMLElement>) => {
       if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-      onMove(event.movementX, event.movementY);
+      onMove(event.movementX, event.movementY, event);
     },
     onPointerUp: release,
     onPointerCancel: release,
   };
 }
+
+const THREAD_DROP = "thread";
+
+/** The drop target under a point on the screen, as its `data-board-drop` names it. */
+const dropTargetAt = (x: number, y: number) =>
+  document
+    .elementsFromPoint(x, y)
+    .find(
+      (element): element is HTMLElement =>
+        element instanceof HTMLElement && element.dataset.boardDrop !== undefined,
+    )?.dataset.boardDrop ?? null;
 
 /** What the board shows of a room: who joined, what they wait on, and what is arranged. */
 type BoardRoom = Pick<ThreadGuestShare, "guests" | "messages" | "turns" | "board">;
@@ -82,20 +113,35 @@ export function RoomBoard({
   room,
   online,
   messages,
+  agentWorking,
+  running,
   viewer,
+  cursorLayer,
   onOpenThread,
   onChange,
+  onCursor,
+  onUseNote,
 }: {
   readonly title: string;
   /** Null when the thread is not shared, so there is no room to arrange a board for. */
   readonly room: BoardRoom | null;
   readonly online: ReadonlyArray<GuestId>;
   readonly messages: ReadonlyArray<BoardMessage>;
+  /** The owner's agent is working on the thread right now. */
+  readonly agentWorking: boolean;
+  /** The guests' agents running a turn on their own machines now. */
+  readonly running: ReadonlyArray<RoomAgentActivity>;
   /** The guest looking at the board, or null for the owner. */
   readonly viewer: GuestId | null;
+  /** Everyone else's pointers, drawn in board space. A component of its own reads them. */
+  readonly cursorLayer: ReactNode;
   readonly onOpenThread: () => void;
   /** Sends one change to the room and says whether it was taken. Absent when they may not. */
   readonly onChange: ((change: RoomBoardChange) => Promise<boolean>) | undefined;
+  /** Shows the room where this person's pointer is on the board, or null once it left. */
+  readonly onCursor: ((at: BoardPoint | null) => void) | undefined;
+  /** Puts a note's text in this person's message box for the thread. It sends nothing. */
+  readonly onUseNote: ((text: string) => void) | undefined;
 }) {
   const board = room?.board ?? EMPTY_ROOM_BOARD;
   const [edits, setEdits] = useState(NO_BOARD_EDITS);
@@ -105,6 +151,19 @@ export function RoomBoard({
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const canEdit = room !== null && onChange !== undefined;
   const shown = resolveBoard(board, edits);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const sendCursor = useStableCallback((at: BoardPoint | null) => onCursor?.(at));
+  const [cursor] = useState(() => cursorSender(sendCursor));
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- takes this person's pointer off everyone else's board when the board closes
+  useEffect(() => () => cursor.leave(), [cursor]);
+  const trackCursor = (event: PointerEvent<HTMLElement>) => {
+    const bounds = surfaceRef.current?.getBoundingClientRect();
+    if (onCursor === undefined || bounds === undefined) return;
+    cursor.move(
+      boardCursorAt(view, { x: event.clientX - bounds.left, y: event.clientY - bounds.top }),
+    );
+  };
+  const pan = dragHandlers((dx, dy) => setView((current) => panBoardBy(current, dx, dy)));
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a wheel listener must be non-passive to stop the browser's own pinch zoom, which React's onWheel cannot be
   useEffect(() => {
@@ -125,11 +184,7 @@ export function RoomBoard({
   }, []);
 
   const guests = room?.guests ?? [];
-  // A guest's agent gets a card once it has posted a turn from their machine.
-  const agents = guests.flatMap((guest) => {
-    const turns = room?.turns?.filter((turn) => turn.guestId === guest.id) ?? [];
-    return turns.length === 0 ? [] : [{ guest, turns }];
-  });
+  const agents = boardAgents(guests, room?.turns ?? [], running);
   const positions = placeBoardCards(
     [
       ROOM_BOARD_THREAD_CARD,
@@ -159,6 +214,26 @@ export function RoomBoard({
     if (!canEdit) return;
     const at = held.current.get(boardEditKey(target)) ?? from;
     hold(target, { ...at, x: at.x + dx / view.zoom, y: at.y + dy / view.zoom });
+  };
+  const dragNote = (
+    note: RoomBoardNote,
+    dx: number,
+    dy: number,
+    event: PointerEvent<HTMLElement>,
+  ) => {
+    dragBy({ kind: "note", id: note.id }, note, dx, dy);
+    if (onUseNote !== undefined) setDropTarget(dropTargetAt(event.clientX, event.clientY));
+  };
+  // Dropped on the thread, a note becomes a draft and goes back where it was.
+  const dropNote = (note: RoomBoardNote) => {
+    const target = { kind: "note", id: note.id } as const;
+    const overThread = dropTarget === THREAD_DROP;
+    setDropTarget(null);
+    if (!overThread || onUseNote === undefined) return letGo(target);
+    const value = held.current.get(boardEditKey(target));
+    held.current.delete(boardEditKey(target));
+    if (value !== undefined) setEdits((current) => dropBoardEdit(current, target, value));
+    onUseNote(note.text);
   };
   const writeNote = (note: RoomBoardNote, text: string) => {
     const target = { kind: "note", id: note.id } as const;
@@ -232,7 +307,12 @@ export function RoomBoard({
         aria-label="Room board"
         className="relative min-h-0 flex-1 cursor-grab touch-none overflow-hidden bg-background active:cursor-grabbing"
         style={boardGridStyle(view)}
-        {...dragHandlers((dx, dy) => setView((current) => panBoardBy(current, dx, dy)))}
+        {...pan}
+        onPointerMove={(event) => {
+          pan.onPointerMove(event);
+          trackCursor(event);
+        }}
+        onPointerLeave={cursor.leave}
       >
         <div
           className="absolute top-0 left-0 origin-top-left"
@@ -261,8 +341,10 @@ export function RoomBoard({
           <BoardCard
             at={positions[ROOM_BOARD_THREAD_CARD]!}
             title={title}
-            kind="thread"
+            kind={agentWorking ? "agent working" : "thread"}
             id={ROOM_BOARD_THREAD_CARD}
+            dropTarget={onUseNote === undefined ? undefined : THREAD_DROP}
+            highlighted={dropTarget === THREAD_DROP}
             onMove={dragBy}
             onDrop={letGo}
           >
@@ -290,28 +372,40 @@ export function RoomBoard({
               </BoardCard>
             );
           })}
-          {agents.map(({ guest, turns }) => {
+          {agents.map(({ guest, turns, running: now }) => {
             const id = agentCardId(guest);
-            const latest = turns.at(-1)!;
+            const latest = turns.at(-1);
             return (
               <BoardCard
                 key={id}
                 at={positions[id]!}
                 title={`${guest.name}'s agent`}
-                kind={`${turns.length} turn${turns.length === 1 ? "" : "s"}`}
+                kind={
+                  now !== undefined
+                    ? "working"
+                    : `${turns.length} turn${turns.length === 1 ? "" : "s"}`
+                }
                 id={id}
                 onMove={dragBy}
                 onDrop={letGo}
               >
-                <p className="text-2xs text-muted-foreground">Ran on their machine</p>
-                {latest.prompt ? (
-                  <p className="line-clamp-2 border-s-2 border-guest/50 ps-2 text-xs text-muted-foreground [overflow-wrap:anywhere]">
-                    {latest.prompt}
+                <p className="text-2xs text-muted-foreground">Runs on their machine</p>
+                {now !== undefined ? (
+                  <p className="line-clamp-4 text-xs [overflow-wrap:anywhere]">
+                    {now.prompt === "" ? "Working" : `Working on: ${now.prompt}`}
                   </p>
+                ) : latest !== undefined ? (
+                  <>
+                    {latest.prompt ? (
+                      <p className="line-clamp-2 border-s-2 border-guest/50 ps-2 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                        {latest.prompt}
+                      </p>
+                    ) : null}
+                    <p className="line-clamp-6 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
+                      {latest.reply}
+                    </p>
+                  </>
                 ) : null}
-                <p className="line-clamp-6 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
-                  {latest.reply}
-                </p>
               </BoardCard>
             );
           })}
@@ -321,12 +415,19 @@ export function RoomBoard({
               note={note}
               author={noteAuthor(note)}
               canEdit={canEdit}
-              onMove={dragBy}
-              onDrop={letGo}
+              onMove={dragNote}
+              onDrop={dropNote}
+              onBlur={letGo}
               onText={writeNote}
               onDelete={send}
+              onUse={
+                onUseNote === undefined || note.text.trim() === ""
+                  ? undefined
+                  : () => onUseNote(note.text)
+              }
             />
           ))}
+          {cursorLayer}
         </div>
         {room === null ? (
           <p className="pointer-events-none absolute inset-x-0 bottom-6 text-center text-sm text-muted-foreground">
@@ -358,16 +459,25 @@ function BoardNote({
   canEdit,
   onMove,
   onDrop,
+  onBlur,
   onText,
   onDelete,
+  onUse,
 }: {
   readonly note: RoomBoardNote;
   readonly author: string;
   readonly canEdit: boolean;
-  readonly onMove: DragBy;
-  readonly onDrop: (target: BoardTarget) => void;
+  readonly onMove: (
+    note: RoomBoardNote,
+    dx: number,
+    dy: number,
+    event: PointerEvent<HTMLElement>,
+  ) => void;
+  readonly onDrop: (note: RoomBoardNote) => void;
+  readonly onBlur: (target: BoardTarget) => void;
   readonly onText: (note: RoomBoardNote, text: string) => void;
   readonly onDelete: (target: BoardTarget, value: null) => void;
+  readonly onUse: (() => void) | undefined;
 }) {
   const target = { kind: "note", id: note.id } as const;
   return (
@@ -378,11 +488,29 @@ function BoardNote({
       <div
         className="flex h-6 cursor-grab items-center gap-1 ps-3 active:cursor-grabbing"
         {...dragHandlers(
-          (dx, dy) => onMove(target, note, dx, dy),
-          () => onDrop(target),
+          (dx, dy, event) => onMove(note, dx, dy, event),
+          () => onDrop(note),
         )}
       >
         <span className="min-w-0 flex-1 truncate text-2xs opacity-60">{author}</span>
+        {onUse === undefined ? null : (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label="Use as message"
+                  className="grid size-6 place-items-center rounded-sm opacity-60 hover:opacity-100"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={onUse}
+                />
+              }
+            >
+              <MessageSquareShareIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">Use as message</TooltipPopup>
+          </Tooltip>
+        )}
         {canEdit ? (
           <button
             type="button"
@@ -405,7 +533,7 @@ function BoardNote({
         className="resize-none bg-transparent px-3 pb-3 text-sm leading-snug outline-none placeholder:text-placeholder"
         onPointerDown={(event) => event.stopPropagation()}
         onChange={(event) => onText(note, event.target.value)}
-        onBlur={() => onDrop(target)}
+        onBlur={() => onBlur(target)}
       />
     </div>
   );
@@ -417,6 +545,8 @@ function BoardCard({
   kind,
   dashed = false,
   id,
+  dropTarget,
+  highlighted = false,
   onMove,
   onDrop,
   children,
@@ -426,6 +556,9 @@ function BoardCard({
   readonly kind: string;
   readonly dashed?: boolean;
   readonly id: string;
+  /** What a note dropped here does, as `dropTargetAt` reads it from the page. */
+  readonly dropTarget?: string | undefined;
+  readonly highlighted?: boolean;
   readonly onMove: DragBy;
   readonly onDrop: (target: BoardTarget) => void;
   readonly children: ReactNode;
@@ -436,8 +569,10 @@ function BoardCard({
       className={cn(
         "absolute flex flex-col rounded-xl border border-border bg-card text-card-foreground shadow-lg",
         dashed && "border-dashed",
+        highlighted && "ring-2 ring-primary",
       )}
       style={{ left: at.x, top: at.y, width: BOARD_CARD_WIDTH }}
+      data-board-drop={dropTarget}
     >
       <header
         className="flex cursor-grab items-center gap-2 border-b border-border px-3 py-2 active:cursor-grabbing"
@@ -509,4 +644,41 @@ function GuestDetails({
       )}
     </>
   );
+}
+
+/** Everyone else's pointers, in board space, each named and in that person's colour. */
+export function RoomCursors({
+  cursors,
+  guests,
+  ownerName,
+}: {
+  readonly cursors: ReadonlyArray<RoomCursor>;
+  readonly guests: ReadonlyArray<ThreadGuest>;
+  /** What the owner's pointer is labelled; "Owner" when they set no name. */
+  readonly ownerName: string | undefined;
+}) {
+  return cursors.map((cursor) => {
+    const name =
+      cursor.guestId === undefined
+        ? (ownerName ?? "Owner")
+        : guests.find((guest) => guest.id === cursor.guestId)?.name;
+    if (name === undefined) return null;
+    const color = boardCursorColor(guests, cursor.guestId);
+    return (
+      <div
+        key={cursor.guestId ?? "owner"}
+        aria-hidden
+        className="pointer-events-none absolute top-0 left-0 flex items-start transition-transform duration-100 ease-linear"
+        style={{ transform: `translate(${cursor.x}px, ${cursor.y}px)`, color }}
+      >
+        <MousePointer2Icon className="size-4 fill-current" />
+        <span
+          className="mt-3 max-w-32 truncate rounded-sm px-1.5 py-0.5 text-2xs font-medium text-background"
+          style={{ backgroundColor: color }}
+        >
+          {name}
+        </span>
+      </div>
+    );
+  });
 }

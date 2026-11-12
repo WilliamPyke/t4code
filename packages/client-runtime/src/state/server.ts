@@ -1622,6 +1622,27 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.guestShareSubscribePresence,
       idleTtlMs: 0,
     }),
+    // Which guests' agents run a turn on their machines now. Mounted while the board is open.
+    guestRoomAgents: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:guest-share:room-agents",
+      tag: WS_METHODS.guestShareSubscribeRoomAgents,
+      idleTtlMs: 0,
+    }),
+    // The guests' pointers on the board. The owner's own shows to them only while this is read.
+    guestRoomCursors: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:guest-share:room-cursors",
+      tag: WS_METHODS.guestShareSubscribeRoomCursors,
+      idleTtlMs: 0,
+    }),
+    // Sends where the owner's pointer is on the board; a newer position replaces one not sent yet.
+    moveGuestRoomCursor: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:guest-share:move-cursor",
+      tag: WS_METHODS.guestShareMoveCursor,
+      concurrency: {
+        mode: "latest",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.shareId]),
+      },
+    }),
     // Off the config lane: answering a card must not queue behind settings
     // edits. One answer per card at a time.
     answerSecretRequest: createEnvironmentRpcCommand(runtime, {

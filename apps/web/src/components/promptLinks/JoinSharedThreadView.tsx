@@ -199,7 +199,7 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
           title={`Join "${preview.title}"?`}
           description={`${count}${preview.truncated ? " from the end of the thread" : ""} come with it. ${code} ${
             preview.live === true
-              ? "Each prompt you send in it and your agent's final reply are shown to everyone in the room; you can leave the room from the thread."
+              ? "Everyone in the room sees each prompt you send in it as your agent starts on it, and your agent's final reply when it finishes; you can leave the room from the thread."
               : "Nothing you do in it is sent back."
           }`}
         >

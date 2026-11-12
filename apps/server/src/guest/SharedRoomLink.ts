@@ -1,10 +1,14 @@
 import {
   CommandId,
+  GUEST_AGENT_PROMPT_MAX_LENGTH,
+  GUEST_ROOM_ACTIVITY_ROUTE,
   GUEST_ROOM_TURN_ROUTE,
   GUEST_ROOM_UPDATES_ROUTE,
   GUEST_TURN_PROMPT_MAX_LENGTH,
   GUEST_TURN_REPLY_MAX_LENGTH,
+  type GuestAgentActivityRequest,
   type GuestTurnRequest,
+  type OrchestrationV2DomainEvent,
   type OrchestrationV2TurnItem,
   ROOM_UPDATES_MAX_CHARS,
   type RoomUpdate,
@@ -36,6 +40,9 @@ import { forkParked } from "../serverActivation.ts";
 import { clip } from "./roomUpdates.ts";
 
 const REQUEST_TIMEOUT = Duration.seconds(20);
+// A turn still running is told again this often, well inside the room's 10 minute expiry.
+const ACTIVITY_REFRESH_MS = 3 * 60_000;
+const SETTLED_RUN = new Set(["completed", "interrupted", "failed", "cancelled", "rolled_back"]);
 // Well over the largest catch-up an honest room sends, so a declared size past it is refused unread.
 const MAX_UPDATES_BYTES = 512 * 1024;
 const decodeUpdates = Schema.decodeUnknownEffect(Schema.toCodecJson(RoomUpdates));
@@ -96,11 +103,20 @@ export function guestTurnOf(
   };
 }
 
+/** The start of a run's prompt, as the room shows it while the run goes on. */
+function runPromptOf(items: ReadonlyArray<OrchestrationV2TurnItem>): string {
+  const prompt =
+    items
+      .toSorted((left, right) => left.ordinal - right.ordinal)
+      .flatMap((item) => (item.type === "user_message" ? [item.text] : []))[0] ?? "";
+  return clip(prompt.replace(/\s+/g, " ").trim(), GUEST_AGENT_PROMPT_MAX_LENGTH);
+}
+
 /**
- * Keeps a thread joined from someone's room connected to it: each turn that finishes here is
- * posted there as text, for the room to read. The room never runs it and never hands it to the
- * owner's agent. What the room said comes back only when the user asks, as text for them to
- * attach to a message of their own: nothing from the room starts a turn here.
+ * Keeps a thread joined from someone's room connected to it: the room sees each turn here start,
+ * with its prompt, and gets it as text once it finishes. The room never runs it or hands it to
+ * the owner's agent. What the room said comes back only as text the user attaches to a message
+ * of their own: nothing from the room starts a turn here.
  */
 export class SharedRoomLink extends Context.Service<
   SharedRoomLink,
@@ -121,6 +137,15 @@ export class SharedRoomLink extends Context.Service<
     ) => Effect.Effect<SharedThreadCatchUpResult, SharedThreadJoinError>;
     /** Posts one finished run if its thread is connected. Never fails: the turn is local first. */
     readonly publishRun: (threadId: ThreadId, runId: RunId) => Effect.Effect<void>;
+    /**
+     * Tells the room a run started or still runs (`running`), or stopped without a turn to post
+     * (`idle`), if its thread is connected. Never fails.
+     */
+    readonly publishActivity: (
+      threadId: ThreadId,
+      runId: RunId,
+      state: GuestAgentActivityRequest["state"],
+    ) => Effect.Effect<void>;
     readonly drain: Effect.Effect<void>;
   }
 >()("t3/guest/SharedRoomLink") {}
@@ -132,6 +157,8 @@ const make = Effect.gen(function* () {
   const http = withoutRedirects(yield* HttpClient.HttpClient);
   // The last run posted per thread: a finished run is updated again when its checkpoint lands.
   const posted = new Map<ThreadId, RunId>();
+  // The run each connected thread told its room is running, and when it last said so.
+  const running = new Map<ThreadId, { readonly runId: RunId; at: number }>();
 
   const setLink = Effect.fn("SharedRoomLink.setLink")(function* (
     threadId: ThreadId,
@@ -147,10 +174,10 @@ const make = Effect.gen(function* () {
   });
 
   const forget = (threadId: ThreadId) =>
-    Effect.sync(() => posted.delete(threadId)).pipe(
-      Effect.andThen(secrets.remove(tokenSecretName(threadId))),
-      Effect.ignore,
-    );
+    Effect.sync(() => {
+      posted.delete(threadId);
+      running.delete(threadId);
+    }).pipe(Effect.andThen(secrets.remove(tokenSecretName(threadId))), Effect.ignore);
 
   const connect = Effect.fn("SharedRoomLink.connect")(
     function* (threadId: ThreadId, host: string, room: SharedThreadRoom, cursor?: string) {
@@ -266,27 +293,108 @@ const make = Effect.gen(function* () {
         .pipe(Effect.timeout(REQUEST_TIMEOUT));
       // The room ended or the owner removed this guest. Anything else may pass, so the link stays.
       if (response.status === 410) return yield* disconnect(threadId);
-      if (response.status >= 200 && response.status < 300) posted.set(threadId, runId);
-      else yield* Effect.logWarning("The room refused a turn", { status: response.status });
+      if (response.status >= 200 && response.status < 300) {
+        posted.set(threadId, runId);
+        // The room stops showing the run as running once it has the turn.
+        if (running.get(threadId)?.runId === runId) running.delete(threadId);
+      } else yield* Effect.logWarning("The room refused a turn", { status: response.status });
     },
     Effect.scoped,
     Effect.catch((cause) => Effect.logWarning("Could not post a turn to its room", { cause })),
   );
 
-  const worker = yield* makeDrainableWorker(
-    ({ threadId, runId }: { readonly threadId: ThreadId; readonly runId: RunId }) =>
-      publishRun(threadId, runId),
-  );
-  yield* forkParked(
-    Stream.runForEach(orchestrator.streamDomainEvents, (event) => {
-      if (event.type === "run.updated" && event.payload.status === "completed") {
-        return worker.enqueue({ threadId: event.threadId, runId: event.payload.id });
+  const publishActivity = Effect.fn("SharedRoomLink.publishActivity")(
+    function* (threadId: ThreadId, runId: RunId, state: GuestAgentActivityRequest["state"]) {
+      // Only a run the room was told about is cleared.
+      if (state === "idle" && running.get(threadId)?.runId !== runId) return;
+      const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+      const link = thread.roomLink ?? null;
+      if (link === null) return;
+      const url = sharedThreadRouteUrl(link.host, GUEST_ROOM_ACTIVITY_ROUTE);
+      const token = yield* secrets.get(tokenSecretName(threadId));
+      const now = DateTime.toEpochMillis(yield* DateTime.now);
+      if (url === null || Option.isNone(token) || now >= Date.parse(link.expiresAt)) {
+        return yield* disconnect(threadId);
       }
-      return event.type === "thread.deleted" ? forget(event.threadId) : Effect.void;
-    }),
+      const request: GuestAgentActivityRequest =
+        state === "idle"
+          ? { id: runId, state }
+          : {
+              id: runId,
+              state,
+              prompt: runPromptOf(
+                (yield* orchestrator.getThreadRecords(threadId, ["turnItems"], {
+                  turnItemRunIds: [runId],
+                })).turnItems,
+              ),
+            };
+      const response = yield* http
+        .execute(
+          HttpClientRequest.post(url).pipe(
+            HttpClientRequest.bearerToken(new TextDecoder().decode(token.value)),
+            HttpClientRequest.bodyJsonUnsafe(request),
+          ),
+        )
+        .pipe(Effect.timeout(REQUEST_TIMEOUT));
+      if (response.status === 410) return yield* disconnect(threadId);
+      if (response.status < 200 || response.status >= 300) {
+        return yield* Effect.logWarning("The room refused a turn's activity", {
+          status: response.status,
+        });
+      }
+      if (state === "idle") running.delete(threadId);
+      else running.set(threadId, { runId, at: now });
+    },
+    Effect.scoped,
+    Effect.catch((cause) =>
+      Effect.logWarning("Could not tell a room a turn started or stopped", { cause }),
+    ),
   );
 
-  return SharedRoomLink.of({ connect, leave, catchUp, publishRun, drain: worker.drain });
+  type Job = {
+    readonly kind: "turn" | GuestAgentActivityRequest["state"];
+    readonly threadId: ThreadId;
+    readonly runId: RunId;
+  };
+  const worker = yield* makeDrainableWorker(({ kind, threadId, runId }: Job) =>
+    kind === "turn" ? publishRun(threadId, runId) : publishActivity(threadId, runId, kind),
+  );
+  // Untraced: it sees every domain event of every thread, and most do nothing here.
+  const onEvent = Effect.fnUntraced(function* (event: OrchestrationV2DomainEvent) {
+    const { threadId } = event;
+    if (event.type === "thread.deleted") return yield* forget(threadId);
+    if (event.type === "run.updated") {
+      const { id: runId, status } = event.payload;
+      if (SETTLED_RUN.has(status)) {
+        if (status === "completed") yield* worker.enqueue({ kind: "turn", threadId, runId });
+        // After the turn, so a turn the room took has already cleared the run there.
+        return yield* worker.enqueue({ kind: "idle", threadId, runId });
+      }
+      if (
+        (status === "running" || status === "waiting") &&
+        running.get(threadId)?.runId !== runId
+      ) {
+        return yield* worker.enqueue({ kind: "running", threadId, runId });
+      }
+    }
+    const told = running.get(threadId);
+    if (told === undefined) return;
+    const now = DateTime.toEpochMillis(yield* DateTime.now);
+    if (now - told.at < ACTIVITY_REFRESH_MS) return;
+    // Marked now, so the events until the post lands do not each ask again.
+    told.at = now;
+    yield* worker.enqueue({ kind: "running", threadId, runId: told.runId });
+  });
+  yield* forkParked(Stream.runForEach(orchestrator.streamDomainEvents, onEvent));
+
+  return SharedRoomLink.of({
+    connect,
+    leave,
+    catchUp,
+    publishRun,
+    publishActivity,
+    drain: worker.drain,
+  });
 });
 
 export const layer = Layer.effect(SharedRoomLink, make);

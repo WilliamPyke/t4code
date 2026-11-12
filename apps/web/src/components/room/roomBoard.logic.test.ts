@@ -1,5 +1,5 @@
-import type { RoomBoard } from "@t3tools/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { GuestId, ROOM_BOARD_MAX_COORDINATE, type RoomBoard } from "@t3tools/contracts";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   BOARD_MAX_ZOOM,
@@ -7,8 +7,13 @@ import {
   EMPTY_ROOM_BOARD,
   INITIAL_BOARD_VIEW,
   NO_BOARD_EDITS,
+  appendNoteToDraft,
+  boardAgents,
   boardChangeOf,
+  boardCursorAt,
+  boardCursorColor,
   boardMessages,
+  cursorSender,
   dropBoardEdit,
   placeBoardCards,
   placeBoardNote,
@@ -158,5 +163,83 @@ describe("boardMessages", () => {
     expect(
       boardMessages([{ id: "8", type: "assistant_message", text: "```sh\nls\n```" }], 1)[0]?.text,
     ).toBe("```sh ls ```");
+  });
+});
+
+describe("boardCursorAt", () => {
+  it("puts a pointer at whole board pixels, inside the board, whatever the pan and zoom", () => {
+    expect(boardCursorAt({ x: -100, y: 20, zoom: 2 }, { x: 301, y: 120 })).toEqual({
+      x: 201,
+      y: 50,
+    });
+    expect(boardCursorAt({ x: 0, y: 0, zoom: 0.4 }, { x: 1e9, y: -1e9 })).toEqual({
+      x: ROOM_BOARD_MAX_COORDINATE,
+      y: -ROOM_BOARD_MAX_COORDINATE,
+    });
+  });
+});
+
+describe("cursorSender", () => {
+  it("sends at most every interval, ending on the latest, and nothing for a still pointer", () => {
+    using _timers = { [Symbol.dispose]: () => vi.useRealTimers() };
+    vi.useFakeTimers();
+    const sent: Array<{ x: number; y: number } | null> = [];
+    const cursor = cursorSender((at) => sent.push(at));
+    cursor.leave();
+    cursor.move({ x: 1, y: 1 });
+    cursor.move({ x: 2, y: 2 });
+    vi.advanceTimersByTime(0);
+    expect(sent).toEqual([{ x: 2, y: 2 }]);
+    cursor.move({ x: 3, y: 3 });
+    vi.advanceTimersByTime(40);
+    expect(sent).toHaveLength(1);
+    vi.advanceTimersByTime(40);
+    expect(sent.at(-1)).toEqual({ x: 3, y: 3 });
+    // Back where it was sent last: nothing new to say.
+    vi.advanceTimersByTime(200);
+    cursor.move({ x: 3, y: 3 });
+    vi.advanceTimersByTime(200);
+    expect(sent).toHaveLength(2);
+    // Leaving drops a move not sent yet, and is said once.
+    cursor.move({ x: 4, y: 4 });
+    cursor.leave();
+    cursor.leave();
+    vi.advanceTimersByTime(200);
+    expect(sent.slice(2)).toEqual([null]);
+  });
+});
+
+describe("boardCursorColor", () => {
+  it("gives the owner and each guest their own colour, the same on every board", () => {
+    const guests = [{ id: "a" }, { id: "b" }];
+    const colors = [undefined, "a", "b"].map((id) => boardCursorColor(guests, id));
+    expect(new Set(colors).size).toBe(3);
+    expect(boardCursorColor([{ id: "z" }, ...guests], "b")).not.toBe(colors[2]);
+    expect(boardCursorColor(guests, "b")).toBe(colors[2]);
+  });
+});
+
+describe("boardAgents", () => {
+  it("gives a guest's agent a card once it runs a turn or posted one", () => {
+    const [sam, eve, alex] = ["sam", "eve", "alex"].map((id) => ({ id: GuestId.make(id) }));
+    const agents = boardAgents(
+      [sam!, eve!, alex!],
+      [{ guestId: "sam" }],
+      [{ guestId: GuestId.make("eve"), prompt: "Fix login" }],
+    );
+    expect(agents.map(({ guest, turns, running }) => [guest.id, turns.length, running])).toEqual([
+      ["sam", 1, undefined],
+      ["eve", 0, { guestId: "eve", prompt: "Fix login" }],
+    ]);
+  });
+});
+
+describe("appendNoteToDraft", () => {
+  it("adds a note to a draft as its own paragraph, and an empty note adds nothing", () => {
+    expect(appendNoteToDraft("", " Check the cache ")).toBe("Check the cache");
+    expect(appendNoteToDraft("Look at login.\n", "Check the cache")).toBe(
+      "Look at login.\n\nCheck the cache",
+    );
+    expect(appendNoteToDraft("Keep", "  ")).toBe("Keep");
   });
 });

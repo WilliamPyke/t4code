@@ -28,6 +28,7 @@ import { useState } from "react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { ensureLocalApi } from "~/localApi";
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useQuietThreadProjection } from "~/state/entities";
@@ -73,6 +74,13 @@ function useThreadGuestShare(threadRef: ScopedThreadRef | null): ThreadGuestShar
   return useQuietThreadProjection(threadRef)?.projection.thread.guestShare ?? null;
 }
 
+/** Ending a link nobody joined loses nothing, so only a joined one asks first. */
+async function confirmEndingLink(share: ThreadGuestShare | null, message: string) {
+  const joined = share?.guests?.length ?? (share?.guestName ? 1 : 0);
+  if (joined === 0) return true;
+  return ensureLocalApi().dialogs.confirm(message, { variant: "destructive" });
+}
+
 export function GuestShareDialogHost() {
   const threadRef = useAtomValue(guestShareDialogThreadAtom);
   if (threadRef === null) return null;
@@ -115,6 +123,18 @@ function GuestShareDialog({
     activeShare.expiresAt.slice(0, 16) > nowMinute;
 
   const create = async (replace: boolean) => {
+    if (
+      replace &&
+      !(await confirmEndingLink(
+        activeShare,
+        [
+          "Replace the guest link?",
+          "Everyone on the current link loses access at once. A new link is made, and you need to send it again to everyone you want in the thread.",
+        ].join("\n"),
+      ))
+    ) {
+      return;
+    }
     setState({ status: "creating" });
     const result = await createGuestShare({
       environmentId: threadRef.environmentId,
@@ -257,6 +277,14 @@ export function GuestShareIndicator({ threadRef }: { readonly threadRef: ScopedT
         variant="ghost-muted"
         disabled={closing}
         onClick={async () => {
+          const confirmed = await confirmEndingLink(
+            share,
+            [
+              "Stop sharing this thread?",
+              "Everyone on the guest link loses access at once, and the link stops working.",
+            ].join("\n"),
+          );
+          if (!confirmed) return;
           setClosing(true);
           await closeGuestShare({
             environmentId: threadRef.environmentId,

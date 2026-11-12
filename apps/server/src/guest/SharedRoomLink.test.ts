@@ -321,3 +321,46 @@ it.effect("hands a thread's own agent the room's words as data, and starts nothi
     );
   }),
 );
+
+it.effect("shows the room a run while it runs, and clears only a run the room was shown", () =>
+  Effect.gen(function* () {
+    const { link, posts, layer } = yield* world([204, 204, 204, 204, 410]);
+    yield* Effect.gen(function* () {
+      const rooms = yield* SharedRoomLink.SharedRoomLink;
+      const [run1, run2, run3] = ["run:1", "run:2", "run:3"].map((id) => RunId.make(id)) as [
+        RunId,
+        RunId,
+        RunId,
+      ];
+      const activity = (run: RunId, state: "running" | "idle") =>
+        rooms.publishActivity(threadId, run, state);
+      yield* activity(run1, "running");
+      yield* rooms.connect(threadId, "sam.t3.test", room);
+      yield* activity(run1, "idle");
+      assert.lengthOf(yield* Ref.get(posts), 0);
+
+      yield* activity(run1, "running");
+      yield* activity(run1, "idle");
+      yield* activity(run1, "idle");
+      const url = "https://sam.t3.test/api/guest/room/activity";
+      const authorization = "Bearer room-token";
+      assert.deepEqual(yield* Ref.get(posts), [
+        {
+          url,
+          authorization,
+          turn: { id: "run:1", state: "running", prompt: "Why does login fail?" },
+        },
+        { url, authorization, turn: { id: "run:1", state: "idle" } },
+      ]);
+
+      // The room takes the finished turn as the run's end, so no stop follows it.
+      yield* activity(run2, "running");
+      yield* rooms.publishRun(threadId, run2);
+      yield* activity(run2, "idle");
+      assert.lengthOf(yield* Ref.get(posts), 4);
+
+      yield* activity(run3, "running");
+      assert.isNull(yield* Ref.get(link));
+    }).pipe(Effect.provide(layer));
+  }),
+);

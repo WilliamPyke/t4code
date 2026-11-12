@@ -126,6 +126,7 @@ function setup(): Disposable {
   const guestId = GuestId.make("guest-1");
   appAtomRegistry.set(guestRoomAtom(SHARE_ID), {
     online: [guestId],
+    running: [],
     view: {
       shareId: GuestShareId.make(SHARE_ID),
       title: "Thread",
@@ -141,7 +142,7 @@ function setup(): Disposable {
   return {
     [Symbol.dispose]: () => {
       forgetGuestShare(SHARE_ID);
-      appAtomRegistry.set(guestRoomAtom(SHARE_ID), { online: [], view: null });
+      appAtomRegistry.set(guestRoomAtom(SHARE_ID), { online: [], view: null, running: [] });
     },
   };
 }

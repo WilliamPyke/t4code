@@ -24,10 +24,16 @@ import {
   type GuestStreamEvent,
   type GuestSubmitRequest,
   type GuestTurnRequest,
+  type GuestAgentActivityRequest,
+  GUEST_AGENT_PROMPT_MAX_LENGTH,
   MessageId,
   providerAllowsDirectGuestSend,
   repositoryGroupingKeyOf,
+  type RoomAgentsEvent,
   type RoomBoardChange,
+  type RoomBoardPoint,
+  type RoomCursorsEvent,
+  type RoomLiveInput,
   type RoomUpdates,
   SHARED_THREAD_MAX_CHARS,
   SHARED_THREAD_MAX_MESSAGES,
@@ -95,7 +101,7 @@ import { type GuestRedactor, type GuestSafe, makeGuestRedactor } from "./guestRe
 import * as GuestLinkNames from "./GuestLinkNames.ts";
 import * as GuestSignIn from "./GuestSignIn.ts";
 import { guestShareView, guestThreadModel } from "./guestView.ts";
-import { roomUpdatesOf } from "./roomUpdates.ts";
+import { clip, roomUpdatesOf } from "./roomUpdates.ts";
 import {
   classifyGuestUploads,
   GUEST_UPLOAD_HEADER_BYTES,
@@ -123,6 +129,35 @@ const GUEST_TURN_RATE_WINDOW_MS = 60_000;
 const BOARD_CHANGE_RATE_LIMIT = 120;
 // Catch-ups one guest's machine can ask for in a minute. Each is a person pressing a button.
 const ROOM_UPDATES_RATE_LIMIT = 20;
+// Turn starts and stops one guest's machine can report in a minute.
+const AGENT_ACTIVITY_RATE_LIMIT = 30;
+// Pointer moves one guest can send in a second. Their page sends about 12.
+const CURSOR_RATE_LIMIT = 20;
+const CURSOR_RATE_WINDOW_MS = 1_000;
+// A guest's machine says again that a long turn still runs well before this; one that died stops.
+const AGENT_ACTIVITY_TTL_MS = 10 * 60_000;
+// A pointer nobody moved for this long is taken off the board.
+const CURSOR_TTL_MS = 60_000;
+// How soon an open room stream drops what expired when nothing else changed.
+const ROOM_LIVE_SWEEP_INTERVAL = Duration.seconds(5);
+// The owner's pointer, keyed apart from every guest id.
+const OWNER_CURSOR = "";
+
+interface Expiring {
+  readonly until: number;
+}
+/** A share's live room: running agents by guest, and pointers by guest id or `OWNER_CURSOR`. */
+interface RoomLive {
+  readonly agents: ReadonlyMap<
+    GuestId,
+    Expiring & { readonly id: string; readonly prompt: string }
+  >;
+  readonly cursors: ReadonlyMap<string, Expiring & RoomBoardPoint>;
+}
+const EMPTY_ROOM_LIVE: RoomLive = { agents: new Map(), cursors: new Map() };
+const unexpired = <K, V extends Expiring>(entries: ReadonlyMap<K, V>, now: number) =>
+  new Map([...entries].filter(([, entry]) => entry.until > now));
+const roomIsEmpty = (room: RoomLive) => room.agents.size === 0 && room.cursors.size === 0;
 
 const GUEST_ACCESS_MESSAGES = {
   ...GUEST_FAILURE,
@@ -272,6 +307,23 @@ export class GuestShareService extends Context.Service<
     readonly postTurn: (
       roomToken: string,
       request: GuestTurnRequest,
+    ) => Effect.Effect<void, GuestShareAccessError>;
+    /** Shows that a guest's agent started a turn on their machine, or stopped without one. */
+    readonly postActivity: (
+      roomToken: string,
+      request: GuestAgentActivityRequest,
+    ) => Effect.Effect<void, GuestShareAccessError>;
+    /** The guests' agents running now in a share's room, for the thread's owner. */
+    readonly roomAgents: (input: RoomLiveInput) => Stream.Stream<RoomAgentsEvent>;
+    /** Everyone's pointers on a share's board but the owner's, which shows while this is read. */
+    readonly roomCursors: (input: RoomLiveInput) => Stream.Stream<RoomCursorsEvent>;
+    /**
+     * Moves the owner's pointer on the board while they read the room's pointers, or a guest's
+     * while their page is open. Null takes it off.
+     */
+    readonly moveCursor: (
+      by: RoomLiveInput | { readonly session: string },
+      at: RoomBoardPoint | null,
     ) => Effect.Effect<void, GuestShareAccessError>;
     /** What the room said after `after`, for the guest's own machine. Changes nothing here. */
     readonly roomUpdates: (
@@ -886,6 +938,81 @@ const make = Effect.gen(function* () {
         online: ids === "" ? [] : ids.split("\n").map((id) => GuestId.make(id)),
       })),
     );
+  const isViewing = (threadId: ThreadId, guestId: GuestId) =>
+    Effect.map(
+      SubscriptionRef.get(viewing),
+      (current) => current.get(threadId)?.has(guestId) === true,
+    );
+
+  // Each share's live room, like `viewing`: in memory only, and every entry expires.
+  const live = yield* SubscriptionRef.make<ReadonlyMap<GuestShareId, RoomLive>>(new Map());
+  const changeRoom = (shareId: GuestShareId, change: (room: RoomLive, now: number) => RoomLive) =>
+    Effect.flatMap(DateTime.now, (at) => {
+      const now = DateTime.toEpochMillis(at);
+      return SubscriptionRef.update(live, (current) => {
+        const next = new Map<GuestShareId, RoomLive>();
+        for (const [id, room] of current) {
+          const kept = {
+            agents: unexpired(room.agents, now),
+            cursors: unexpired(room.cursors, now),
+          };
+          if (!roomIsEmpty(kept)) next.set(id, kept);
+        }
+        const room = change(next.get(shareId) ?? EMPTY_ROOM_LIVE, now);
+        if (roomIsEmpty(room)) next.delete(shareId);
+        else next.set(shareId, room);
+        return next;
+      });
+    });
+  const setCursor = (shareId: GuestShareId, key: string, at: RoomBoardPoint | null) =>
+    changeRoom(shareId, (room, now) => {
+      const cursors = new Map(room.cursors);
+      if (at === null) cursors.delete(key);
+      else cursors.set(key, { x: at.x, y: at.y, until: now + CURSOR_TTL_MS });
+      return { ...room, cursors };
+    });
+  const clearAgent = (shareId: GuestShareId, guestId: GuestId, id: string) =>
+    changeRoom(shareId, (room) => {
+      if (room.agents.get(guestId)?.id !== id) return room;
+      const agents = new Map(room.agents);
+      agents.delete(guestId);
+      return { ...room, agents };
+    });
+  /**
+   * A share's live room as it changes, and again every few seconds so what expired drops out
+   * with nothing else happening. `changesWith` keeps the ticks from repeating an event.
+   */
+  const roomEvents = <A>(shareId: GuestShareId, view: (room: RoomLive, now: number) => A) =>
+    Stream.merge(
+      SubscriptionRef.changes(live),
+      Stream.tick(ROOM_LIVE_SWEEP_INTERVAL).pipe(Stream.mapEffect(() => SubscriptionRef.get(live))),
+    ).pipe(
+      Stream.mapEffect((current) =>
+        Effect.map(DateTime.now, (at) =>
+          view(current.get(shareId) ?? EMPTY_ROOM_LIVE, DateTime.toEpochMillis(at)),
+        ),
+      ),
+      Stream.changesWith((left, right) => JSON.stringify(left) === JSON.stringify(right)),
+    );
+  const agentsOf = (shareId: GuestShareId) =>
+    roomEvents(shareId, (room, now): RoomAgentsEvent => ({
+      type: "agents",
+      running: [...room.agents]
+        .filter(([, agent]) => agent.until > now)
+        .map(([guestId, agent]) => ({ guestId, prompt: agent.prompt }))
+        .toSorted((left, right) => left.guestId.localeCompare(right.guestId)),
+    }));
+  /** Everyone's pointers but the reader's own. */
+  const cursorsOf = (shareId: GuestShareId, reader: string) =>
+    roomEvents(shareId, (room, now): RoomCursorsEvent => ({
+      type: "cursors",
+      cursors: [...room.cursors]
+        .filter(([key, cursor]) => key !== reader && cursor.until > now)
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([key, { x, y }]) =>
+          key === OWNER_CURSOR ? { x, y } : { guestId: GuestId.make(key), x, y },
+        ),
+    }));
 
   /**
    * The thread as the owner's thread subscription sends it: a bounded snapshot, then the same
@@ -990,6 +1117,18 @@ const make = Effect.gen(function* () {
           ),
           { haltStrategy: "left" },
         ),
+        Stream.merge(
+          agentsOf(share.id).pipe(
+            Stream.map((event) => openingRedactor.redact<GuestStreamEvent>(event)),
+          ),
+          { haltStrategy: "left" },
+        ),
+        Stream.merge(
+          cursorsOf(share.id, guestId ?? OWNER_CURSOR).pipe(
+            Stream.map((event) => openingRedactor.redact<GuestStreamEvent>(event)),
+          ),
+          { haltStrategy: "left" },
+        ),
       );
     const untilExpiry = Effect.sleep(
       Math.max(0, Date.parse(share.expiresAt) - DateTime.toEpochMillis(yield* DateTime.now)),
@@ -1046,7 +1185,15 @@ const make = Effect.gen(function* () {
             record.openStreams -= 1;
           }).pipe(
             Effect.andThen(
-              guestId === undefined ? Effect.void : countViewer(thread.id, guestId, -1),
+              guestId === undefined
+                ? Effect.void
+                : countViewer(thread.id, guestId, -1).pipe(
+                    // Their last page closed, so their pointer leaves the board with it.
+                    Effect.andThen(isViewing(thread.id, guestId)),
+                    Effect.flatMap((still) =>
+                      still ? Effect.void : setCursor(share.id, guestId, null),
+                    ),
+                  ),
             ),
           ),
       ).pipe(Effect.as(events)),
@@ -1149,13 +1296,13 @@ const make = Effect.gen(function* () {
 
   // When each guest's machine last asked, so one cannot flood the room. In memory: a restart
   // forgets at most a minute.
-  const rateLimit = (limit: number) => {
+  const rateLimit = (limit: number, windowMs = GUEST_TURN_RATE_WINDOW_MS) => {
     const requests = new Map<string, Array<number>>();
     return (key: string, now: number) => {
-      const recent = (requests.get(key) ?? []).filter((at) => now - at < GUEST_TURN_RATE_WINDOW_MS);
+      const recent = (requests.get(key) ?? []).filter((at) => now - at < windowMs);
       if (recent.length >= limit) return false;
       for (const [other, times] of requests) {
-        if (times.every((at) => now - at >= GUEST_TURN_RATE_WINDOW_MS)) requests.delete(other);
+        if (times.every((at) => now - at >= windowMs)) requests.delete(other);
       }
       requests.set(key, [...recent, now]);
       return true;
@@ -1164,6 +1311,8 @@ const make = Effect.gen(function* () {
   const allowTurnPost = rateLimit(GUEST_TURN_RATE_LIMIT);
   const allowUpdatesRead = rateLimit(ROOM_UPDATES_RATE_LIMIT);
   const allowBoardChange = rateLimit(BOARD_CHANGE_RATE_LIMIT);
+  const allowActivity = rateLimit(AGENT_ACTIVITY_RATE_LIMIT);
+  const allowCursorMove = rateLimit(CURSOR_RATE_LIMIT, CURSOR_RATE_WINDOW_MS);
 
   const postTurn = Effect.fn("GuestShareService.postTurn")(function* (
     token: string,
@@ -1186,7 +1335,94 @@ const make = Effect.gen(function* () {
       guestId,
       turn: { ...request, prompt, reply },
     });
+    yield* clearAgent(share.id, guestId, request.id);
     yield* analytics.record("feature.used", { feature: "guest_share.turn" });
+  });
+
+  const postActivity = Effect.fn("GuestShareService.postActivity")(function* (
+    token: string,
+    request: GuestAgentActivityRequest,
+  ) {
+    const { share, guestId } = yield* authorize(token, "room");
+    if (guestId === undefined) return yield* new GuestShareAccessError({ reason: "ended" });
+    if (!allowActivity(`${share.id}:${guestId}`, DateTime.toEpochMillis(yield* DateTime.now))) {
+      return yield* new GuestShareAccessError({ reason: "too_fast" });
+    }
+    if (request.state === "idle") return yield* clearAgent(share.id, guestId, request.id);
+    const prompt = clip(
+      sanitizeLinkedPrompt(request.prompt ?? "")
+        .text.replace(/\s+/g, " ")
+        .trim(),
+      GUEST_AGENT_PROMPT_MAX_LENGTH,
+    );
+    yield* changeRoom(share.id, (room, now) => ({
+      ...room,
+      agents: new Map(room.agents).set(guestId, {
+        id: request.id,
+        prompt,
+        until: now + AGENT_ACTIVITY_TTL_MS,
+      }),
+    }));
+  });
+
+  /** Whether the owner's thread still shares this share, for a read of its live room. */
+  const ownsRoom = (input: RoomLiveInput) =>
+    orchestrator.getThreadRecords(input.threadId, []).pipe(
+      Effect.map(({ thread }) => thread.guestShare?.id === input.shareId),
+      Effect.orElseSucceed(() => false),
+    );
+  const roomAgents = (input: RoomLiveInput) =>
+    Stream.unwrap(
+      Effect.map(ownsRoom(input), (owned) => (owned ? agentsOf(input.shareId) : Stream.empty)),
+    );
+  // Shares whose owner has the board open, counted per board: only then is their pointer shown.
+  const ownerBoards = new Map<GuestShareId, number>();
+  const roomCursors = (input: RoomLiveInput) =>
+    Stream.unwrap(
+      Effect.map(ownsRoom(input), (owned) =>
+        owned
+          ? Stream.unwrap(
+              Effect.acquireRelease(
+                Effect.sync(() => {
+                  ownerBoards.set(input.shareId, (ownerBoards.get(input.shareId) ?? 0) + 1);
+                }),
+                () =>
+                  Effect.suspend(() => {
+                    const left = (ownerBoards.get(input.shareId) ?? 1) - 1;
+                    if (left > 0) {
+                      ownerBoards.set(input.shareId, left);
+                      return Effect.void;
+                    }
+                    ownerBoards.delete(input.shareId);
+                    return setCursor(input.shareId, OWNER_CURSOR, null);
+                  }),
+              ).pipe(Effect.as(cursorsOf(input.shareId, OWNER_CURSOR))),
+            )
+          : Stream.empty,
+      ),
+    );
+
+  // Untraced: a pointer moves many times a second. Checked against the open board or page in
+  // memory, not the thread record: the page's stream ends when the guest loses access.
+  const moveCursor = Effect.fnUntraced(function* (
+    by: RoomLiveInput | { readonly session: string },
+    at: RoomBoardPoint | null,
+  ) {
+    if (!("session" in by)) {
+      if (!ownerBoards.has(by.shareId)) return yield* inactive;
+      return yield* setCursor(by.shareId, OWNER_CURSOR, at);
+    }
+    const claims = yield* verifySession(by.session);
+    if (Option.isNone(claims) || claims.value.kind !== "session") {
+      return yield* new GuestShareAccessError({ reason: "invalid" });
+    }
+    const { threadId, shareId, guestId } = claims.value;
+    if (guestId === undefined || !(yield* isViewing(threadId, guestId))) return yield* inactive;
+    const now = DateTime.toEpochMillis(yield* DateTime.now);
+    if (at !== null && !allowCursorMove(`${shareId}:${guestId}`, now)) {
+      return yield* new GuestShareAccessError({ reason: "too_fast" });
+    }
+    yield* setCursor(shareId, guestId, at);
   });
 
   const roomUpdates = Effect.fn("GuestShareService.roomUpdates")(function* (
@@ -1406,6 +1642,10 @@ const make = Effect.gen(function* () {
     handoff,
     exportThread,
     postTurn,
+    postActivity,
+    roomAgents,
+    roomCursors,
+    moveCursor,
     roomUpdates,
     changeBoard,
     render,

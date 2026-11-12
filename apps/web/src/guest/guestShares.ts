@@ -4,7 +4,15 @@ import {
 } from "@t3tools/client-runtime/connection";
 import { guestEnvironmentId } from "@t3tools/client-runtime/environment";
 import { GuestShareAccess, type GuestShareEndpoint } from "@t3tools/client-runtime/rpc";
-import { type GuestId, type GuestShareView, ThreadId } from "@t3tools/contracts";
+import {
+  type GuestId,
+  type GuestShareView,
+  type RoomAgentActivity,
+  type RoomAgentsEvent,
+  type RoomCursor,
+  type RoomCursorsEvent,
+  ThreadId,
+} from "@t3tools/contracts";
 import { guestHostZoneOf, isGuestHostAllowed } from "@t3tools/shared/guestLinks";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -86,12 +94,25 @@ interface GuestRoomState {
   readonly view: GuestShareView | null;
   /** The guests with the thread open now, this one included. */
   readonly online: ReadonlyArray<GuestId>;
+  /** The guests' agents running a turn on their own machines now. */
+  readonly running: ReadonlyArray<RoomAgentActivity>;
 }
-const EMPTY_ROOM: GuestRoomState = { view: null, online: [] };
+const EMPTY_ROOM: GuestRoomState = { view: null, online: [], running: [] };
 export const guestRoomAtom = Atom.family((shareId: string) =>
   Atom.make<GuestRoomState>(EMPTY_ROOM).pipe(
     Atom.keepAlive,
     Atom.withLabel(`guest-room:${shareId}`),
+  ),
+);
+
+/**
+ * Everyone else's pointers on the room's board. Apart from the room, so a pointer moving
+ * renders only the pointers.
+ */
+export const guestRoomCursorsAtom = Atom.family((shareId: string) =>
+  Atom.make<ReadonlyArray<RoomCursor>>([]).pipe(
+    Atom.keepAlive,
+    Atom.withLabel(`guest-room-cursors:${shareId}`),
   ),
 );
 
@@ -154,6 +175,19 @@ export const layerGuestShareAccess = Layer.succeed(
     ) {
       return Effect.sync(() => {
         appAtomRegistry.update(guestRoomAtom(shareId), (room) => ({ ...room, online }));
+      });
+    }),
+    // Untraced: pointers move many times a second.
+    live: Effect.fnUntraced(function* (shareId: string, event: RoomAgentsEvent | RoomCursorsEvent) {
+      yield* Effect.sync(() => {
+        if (event.type === "cursors") {
+          appAtomRegistry.set(guestRoomCursorsAtom(shareId), event.cursors);
+        } else {
+          appAtomRegistry.update(guestRoomAtom(shareId), (room) => ({
+            ...room,
+            running: event.running,
+          }));
+        }
       });
     }),
     ended: Effect.fn("GuestShareAccess.ended")(function (shareId: string) {

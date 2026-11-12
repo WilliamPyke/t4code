@@ -50,6 +50,7 @@ const host = (answer: (path: string) => Response = () => new Response(null, { st
   const ended: Array<string> = [];
   const titles: Array<string> = [];
   const online: Array<ReadonlyArray<string>> = [];
+  const live: Array<string> = [];
   const run = <A, E>(effect: Effect.Effect<A, E>) =>
     effect.pipe(
       Effect.provideService(GuestShareFetch, async (input, init) => {
@@ -67,10 +68,11 @@ const host = (answer: (path: string) => Response = () => new Response(null, { st
         share: () => Effect.succeedSome({ token: "guest-token", title: "Review me" }),
         viewed: (_shareId, view) => Effect.sync(() => void titles.push(view.title)),
         presence: (_shareId, guests) => Effect.sync(() => void online.push(guests)),
+        live: (_shareId, event) => Effect.sync(() => void live.push(event.type)),
         ended: (shareId) => Effect.sync(() => void ended.push(shareId)),
       }),
     );
-  return { sent, ended, titles, online, run };
+  return { sent, ended, titles, online, live, run };
 };
 
 /** Every failure of the guest client is a tagged error. */
@@ -177,6 +179,8 @@ it.effect("reads the thread from the share's stream, and forgets the share when 
       ? eventStream([
           { type: "view", view: VIEW },
           { type: "presence", online: ["guest-1"] },
+          { type: "agents", running: [{ guestId: "guest-1", prompt: "Fix login" }] },
+          { type: "cursors", cursors: [{ x: 1, y: 2 }] },
           { type: "thread", item: { kind: "synchronized" } },
           { type: "thread", item: { kind: "synchronized" } },
           { type: "from-a-newer-server" },
@@ -203,6 +207,7 @@ it.effect("reads the thread from the share's stream, and forgets the share when 
       ]);
       expect(owner.titles).toEqual(["Renamed"]);
       expect(owner.online).toEqual([["guest-1"]]);
+      expect(owner.live).toEqual(["agents", "cursors"]);
       expect(owner.ended).toEqual(["share-1"]);
       const closed = yield* Effect.flip(session.closed);
       expect(closed._tag).toBe("ConnectionBlockedError");

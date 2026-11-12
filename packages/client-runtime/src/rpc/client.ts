@@ -56,6 +56,8 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof ORCHESTRATION_V2_WS_METHODS.subscribeCommandOutput
   | typeof ORCHESTRATION_V2_WS_METHODS.subscribePromptSuggestion
   | typeof WS_METHODS.guestShareSubscribePresence
+  | typeof WS_METHODS.guestShareSubscribeRoomAgents
+  | typeof WS_METHODS.guestShareSubscribeRoomCursors
   | typeof ORCHESTRATION_V2_WS_METHODS.searchThreadStream
   | typeof WS_METHODS.subscribeAuthAccess
   | typeof WS_METHODS.subscribeServerConfig

@@ -11,6 +11,7 @@ import { createQuestionHistoryProjector } from "@t3tools/client-runtime/state/th
 import { shouldShowLoadEarlierControl } from "@t3tools/client-runtime/state/threads";
 import {
   GUEST_ATTACHMENT_ROUTE,
+  GUEST_BOARD_CURSOR_ROUTE,
   GUEST_BOARD_ROUTE,
   GUEST_HANDOFF_ROUTE,
   GUEST_MEDIA_ROUTE,
@@ -29,7 +30,9 @@ import {
   type GuestThreadModel,
   type OrchestrationV2ThreadProjection,
   type RoomBoardChange,
+  type RoomBoardPoint,
   type ScopedThreadRef,
+  type ThreadGuest,
   type ThreadGuestMessage,
   type ThreadGuestMessageStatus,
 } from "@t3tools/contracts";
@@ -43,12 +46,17 @@ import {
   useRef,
   useState,
   type ClipboardEvent,
+  type Dispatch,
   type KeyboardEvent,
   type ReactNode,
+  type RefObject,
+  type SetStateAction,
 } from "react";
+import { flushSync } from "react-dom";
 
 import {
   guestRoomAtom,
+  guestRoomCursorsAtom,
   guestShareEndpointOf,
   guestSharesAtom,
   type JoinedGuestShare,
@@ -59,7 +67,7 @@ import { useStableCallback } from "~/hooks/useStableCallback";
 import { configuredHostedAppUrl } from "~/hostedPairing";
 import { useTheme } from "~/hooks/useTheme";
 import { cn } from "~/lib/utils";
-import { deriveActiveWorkStartedAt, derivePhase } from "~/session-logic";
+import { deriveActiveWorkStartedAt, derivePhase, deriveThreadAgentWorking } from "~/session-logic";
 import { threadEnvironment, useEnvironmentThread } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { ComposerControl, ComposerControlIcon } from "../chat/ComposerControl";
@@ -75,8 +83,8 @@ import { getDisplayModelName, getTriggerDisplayModelName } from "../chat/provide
 import { ScrollToEndButton } from "../chat/TimelineOverlays";
 import type { TimelineRow } from "../chat/timelineRowContext";
 import { useTimelineFollow } from "../chat/useTimelineFollow";
-import { RoomBoard } from "../room/RoomBoard";
-import { BOARD_THREAD_MESSAGES, boardMessages } from "../room/roomBoard.logic";
+import { RoomBoard, RoomCursors } from "../room/RoomBoard";
+import { BOARD_THREAD_MESSAGES, appendNoteToDraft, boardMessages } from "../room/roomBoard.logic";
 import { Button } from "../ui/button";
 import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { GuestHtmlRender } from "./GuestHtmlRender";
@@ -167,6 +175,19 @@ async function postBoardChange(
   }
 }
 
+/** Shows the room where this guest's pointer is on the board. A lost one is replaced soon. */
+function postBoardCursor(endpoint: GuestShareEndpoint, at: RoomBoardPoint | null) {
+  void guestShareRequest(endpoint, GUEST_BOARD_CURSOR_ROUTE, {
+    init: {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ at }),
+      // The pointer leaving is sent even as the page goes away.
+      keepalive: at === null,
+    },
+  }).catch(() => {});
+}
+
 const STATUS_LABEL: Record<ThreadGuestMessageStatus, string> = {
   pending: "Waiting for approval",
   sent: "Sent",
@@ -223,7 +244,7 @@ function GuestThreadSession({
 }) {
   // Stable for the share: the timeline's file and item sources hang off it.
   const [endpoint] = useState(() => guestShareEndpointOf(share));
-  const { view, online } = useAtomValue(guestRoomAtom(share.shareId));
+  const { view, online, running } = useAtomValue(guestRoomAtom(share.shareId));
   // Mounting the thread opens the share's stream, which also says who is in the room.
   const thread = useEnvironmentThread(threadRef.environmentId, threadRef.threadId);
   const projection = Option.getOrNull(thread.data);
@@ -232,6 +253,9 @@ function GuestThreadSession({
     reportFailure: false,
   });
   const [boardOpen, setBoardOpen] = useState(false);
+  // Here, not in the composer, so a note from the board can land in it.
+  const [draft, setDraft] = useState("");
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const [awaitingRowIds, setAwaitingRowIds] = useState(readAwaitingRowIds);
   const awaiting = nextAwaitingRowIds(awaitingRowIds, view, projection?.visibleTurnItems ?? []);
   if (awaiting !== awaitingRowIds) setAwaitingRowIds(awaiting);
@@ -274,6 +298,9 @@ function GuestThreadSession({
           awaitingRowIds={awaitingRowIds}
           historyControls={historyControls}
           onOpenBoard={guestId === undefined ? undefined : () => setBoardOpen(true)}
+          draft={draft}
+          onDraftChange={setDraft}
+          composerRef={composerRef}
         />
       </div>
       {boardOpen && guestId !== undefined ? (
@@ -286,13 +313,47 @@ function GuestThreadSession({
             BOARD_THREAD_MESSAGES,
             "Owner",
           )}
+          agentWorking={deriveThreadAgentWorking(projection)}
+          running={running}
           viewer={guestId}
+          cursorLayer={
+            <GuestBoardCursors
+              shareId={share.shareId}
+              guests={view.guests}
+              ownerName={view.ownerName}
+            />
+          }
           onOpenThread={() => setBoardOpen(false)}
           onChange={(change) => postBoardChange(endpoint, change)}
+          onCursor={(at) => postBoardCursor(endpoint, at)}
+          onUseNote={(text) => {
+            // Only a draft in the message box: the guest sends it, and the owner still approves it.
+            flushSync(() => {
+              setDraft((current) =>
+                appendNoteToDraft(current, text).slice(0, GUEST_MESSAGE_MAX_LENGTH),
+              );
+              setBoardOpen(false);
+            });
+            composerRef.current?.focus();
+          }}
         />
       ) : null}
     </>
   );
+}
+
+/** Everyone else's pointers, read here so a pointer moving renders only this. */
+function GuestBoardCursors({
+  shareId,
+  guests,
+  ownerName,
+}: {
+  readonly shareId: string;
+  readonly guests: ReadonlyArray<ThreadGuest>;
+  readonly ownerName: string | undefined;
+}) {
+  const cursors = useAtomValue(guestRoomCursorsAtom(shareId));
+  return <RoomCursors cursors={cursors} guests={guests} ownerName={ownerName} />;
 }
 
 const NO_TURN_DIFFS: ReadonlyArray<never> = [];
@@ -313,6 +374,9 @@ function GuestThread({
   awaitingRowIds,
   historyControls,
   onOpenBoard,
+  draft,
+  onDraftChange,
+  composerRef,
 }: {
   readonly endpoint: GuestShareEndpoint;
   readonly host: string;
@@ -323,6 +387,9 @@ function GuestThread({
   readonly historyControls: MessagesTimelineHistoryControls | undefined;
   /** Absent for the one guest of a link made before several could join, who cannot sign a note. */
   readonly onOpenBoard: (() => void) | undefined;
+  readonly draft: string;
+  readonly onDraftChange: Dispatch<SetStateAction<string>>;
+  readonly composerRef: RefObject<HTMLTextAreaElement | null>;
 }) {
   // No ":" so the timeline finds no environment thread behind the key.
   const threadKey = `guest-${shareId}`;
@@ -499,6 +566,9 @@ function GuestThread({
           endpoint={endpoint}
           model={model}
           direct={direct}
+          text={draft}
+          onTextChange={onDraftChange}
+          textareaRef={composerRef}
           onSent={() => follow.scrollToEnd(true)}
         />
       </div>
@@ -777,16 +847,21 @@ function GuestComposer({
   endpoint,
   model,
   direct,
+  text,
+  onTextChange: setText,
+  textareaRef,
   onSent,
 }: {
   readonly endpoint: GuestShareEndpoint;
   readonly model: GuestThreadModel;
   /** The owner lets this guest's messages through without sending each one. */
   readonly direct: boolean;
+  readonly text: string;
+  readonly onTextChange: Dispatch<SetStateAction<string>>;
+  readonly textareaRef: RefObject<HTMLTextAreaElement | null>;
   /** The guest's own message comes into view even if they had scrolled up, as the owner's does. */
   readonly onSent: () => void;
 }): ReactNode {
-  const [text, setText] = useState("");
   const [files, setFiles] = useState<ReadonlyArray<StagedFile>>([]);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -896,6 +971,7 @@ function GuestComposer({
         </ul>
       ) : null}
       <textarea
+        ref={textareaRef}
         aria-label="Message"
         placeholder="Message"
         rows={2}

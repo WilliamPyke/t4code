@@ -80,6 +80,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.guestShareCreate]: AuthAccessWriteScope,
   // Changes what the guests on the link see, as dismissing one of their messages does.
   [WS_METHODS.guestShareChangeBoard]: AuthOrchestrationOperateScope,
+  [WS_METHODS.guestShareMoveCursor]: AuthOrchestrationOperateScope,
   [WS_METHODS.peerLinksLink]: AuthAccessWriteScope,
   [WS_METHODS.peerLinksUnlink]: AuthAccessWriteScope,
   // A link lets every agent here reach the other environment: Settings' bar.

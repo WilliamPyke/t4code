@@ -1,5 +1,6 @@
 import {
   ROOM_BOARD_MAX_COORDINATE,
+  type RoomAgentActivity,
   type RoomBoard,
   type RoomBoardChange,
   type RoomBoardNote,
@@ -243,6 +244,94 @@ export function boardChangeOf(target: BoardTarget, value: BoardValue): RoomBoard
   return value === null
     ? { type: "note.remove", noteId: target.id }
     : { type: "note.put", noteId: target.id, text: noteText(value) ?? "", x: value.x, y: value.y };
+}
+
+/** Where a pointer at `screen` is on the board, at the whole pixels the room takes. */
+export const boardCursorAt = (view: BoardView, screen: BoardPoint): BoardPoint =>
+  settleBoardValue(screenToBoard(view, screen));
+
+const CURSOR_SEND_INTERVAL_MS = 80;
+
+/**
+ * Sends a pointer's position at most every `CURSOR_SEND_INTERVAL_MS`, always ending on the
+ * latest, and nothing for a position already sent or a pointer that is not moving.
+ */
+export function cursorSender(send: (at: BoardPoint | null) => void) {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let next: BoardPoint | null = null;
+  let sent: BoardPoint | null = null;
+  let sentAt = Number.NEGATIVE_INFINITY;
+  const flush = () => {
+    timer = null;
+    if (next === null || (next.x === sent?.x && next.y === sent.y)) return;
+    sent = next;
+    sentAt = Date.now();
+    send(next);
+  };
+  return {
+    move: (at: BoardPoint) => {
+      next = at;
+      if (timer !== null) return;
+      timer = setTimeout(flush, Math.max(0, sentAt + CURSOR_SEND_INTERVAL_MS - Date.now()));
+    },
+    leave: () => {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+      next = null;
+      if (sent === null) return;
+      sent = null;
+      send(null);
+    },
+  };
+}
+
+// Semantic colours that read on the board in both themes; guests take them in join order.
+const GUEST_CURSOR_COLORS = [
+  "var(--color-guest)",
+  "var(--color-info)",
+  "var(--color-success)",
+  "var(--color-warning)",
+  "var(--color-update)",
+  "var(--color-destructive)",
+];
+
+/** One colour per person for as long as the link lasts: the owner's, or the guest's by join order. */
+export function boardCursorColor(
+  guests: ReadonlyArray<{ readonly id: string }>,
+  guestId: string | undefined,
+): string {
+  if (guestId === undefined) return "var(--color-primary)";
+  const index = Math.max(
+    0,
+    guests.findIndex((guest) => guest.id === guestId),
+  );
+  return GUEST_CURSOR_COLORS[index % GUEST_CURSOR_COLORS.length]!;
+}
+
+/**
+ * The guests whose agent has a card: once it posted a turn or runs one now, with its turns and
+ * what it runs.
+ */
+export function boardAgents<
+  Guest extends { readonly id: string },
+  Turn extends { readonly guestId: string },
+>(
+  guests: ReadonlyArray<Guest>,
+  turns: ReadonlyArray<Turn>,
+  running: ReadonlyArray<RoomAgentActivity>,
+) {
+  return guests.flatMap((guest) => {
+    const own = turns.filter((turn) => turn.guestId === guest.id);
+    const now = running.find((agent) => agent.guestId === guest.id);
+    return own.length === 0 && now === undefined ? [] : [{ guest, turns: own, running: now }];
+  });
+}
+
+/** A note added to a composer's draft as a paragraph of its own. */
+export function appendNoteToDraft(draft: string, note: string): string {
+  const text = note.trim();
+  if (text === "") return draft;
+  return draft.trim() === "" ? text : `${draft.trimEnd()}\n\n${text}`;
 }
 
 export interface BoardMessage {

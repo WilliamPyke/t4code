@@ -291,7 +291,7 @@ it.effect("lets each browser join an invite as its own guest until the owner sto
     const received = Array.from(yield* Stream.runCollect(events));
     assert.deepEqual(
       received
-        .filter((event) => event.type !== "presence")
+        .filter((event) => !["presence", "agents", "cursors"].includes(event.type))
         .map((event) => (event.type === "thread" ? event.item.kind : event.type)),
       ["view", "snapshot", "ended"],
     );
@@ -739,6 +739,169 @@ it.effect("lets a guest's own machine post its turns to the room, and nothing el
       "too_fast",
     );
   }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("shows the room a guest's agent while its turn runs, and never stores it", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const eve = yield* guestShares.redeem({ credential, name: "Eve" });
+    const token = (yield* guestShares.exportThread((yield* guestShares.handoff(sam.token)).token))
+      .room!.token;
+    const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+    const samId = thread.guestShare!.guests![0]!.id;
+    const room = { threadId, shareId: thread.guestShare!.id };
+
+    const owner = yield* Queue.unbounded<ReadonlyArray<unknown>>();
+    yield* Stream.runForEach(guestShares.roomAgents(room), (event) =>
+      Queue.offer(owner, event.running),
+    ).pipe(Effect.forkScoped);
+    const guest = yield* Queue.unbounded<ReadonlyArray<unknown>>();
+    yield* Stream.runForEach(yield* guestShares.stream(eve.token), (event) =>
+      event.type === "agents" ? Queue.offer(guest, event.running) : Effect.void,
+    ).pipe(Effect.forkScoped);
+    assert.deepEqual(yield* Queue.take(owner), []);
+    assert.deepEqual(yield* Queue.take(guest), []);
+
+    const running = (id: string) => ({
+      id,
+      state: "running" as const,
+      prompt: "Fix\n the​ login",
+    });
+    yield* guestShares.postActivity(token, running("run:1"));
+    const shown = [{ guestId: samId, prompt: "Fix the login" }];
+    assert.deepEqual(yield* Queue.take(owner), shown);
+    assert.deepEqual(yield* Queue.take(guest), shown);
+    // The finished turn clears it.
+    yield* guestShares.postTurn(token, { id: "run:1", prompt: "Fix the login", reply: "Done." });
+    assert.deepEqual(yield* Queue.take(owner), []);
+
+    // A turn that stops without one clears it too, but not a stop for an older turn.
+    yield* guestShares.postActivity(token, running("run:2"));
+    assert.deepEqual(yield* Queue.take(owner), shown);
+    yield* guestShares.postActivity(token, { id: "run:1", state: "idle" });
+    yield* guestShares.postActivity(token, { id: "run:2", state: "idle" });
+    assert.deepEqual(yield* Queue.take(owner), []);
+
+    // A machine that stops saying anything stops showing as running.
+    yield* guestShares.postActivity(token, running("run:3"));
+    assert.deepEqual(yield* Queue.take(owner), shown);
+    yield* TestClock.adjust("11 minutes");
+    assert.deepEqual(yield* Queue.take(owner), []);
+    // Nothing of it reached the thread record.
+    const after = (yield* orchestrator.getThreadRecords(threadId, [])).thread;
+    assert.deepEqual(
+      after.guestShare?.turns?.map((turn) => turn.id),
+      ["run:1"],
+    );
+
+    // A session is not a room token, and a removed guest's machine shows nothing.
+    assert.equal(
+      (yield* Effect.flip(guestShares.postActivity(sam.token, running("run:4")))).reason,
+      "invalid",
+    );
+    yield* orchestrator.dispatch({
+      type: "thread.guest.remove",
+      commandId: CommandId.make("remove-sam-activity"),
+      threadId,
+      guestId: samId,
+    });
+    assert.equal(
+      (yield* Effect.flip(guestShares.postActivity(token, running("run:4")))).reason,
+      "ended",
+    );
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("shows each person's pointer on the board to everyone else while they have it open", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const eve = yield* guestShares.redeem({ credential, name: "Eve" });
+    const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+    const [samId, eveId] = thread.guestShare!.guests!.map((guest) => guest.id) as [
+      GuestId,
+      GuestId,
+    ];
+    const room = { threadId, shareId: thread.guestShare!.id };
+    const at = (x: number) => ({ x, y: 1 });
+
+    // A guest's pointer counts only while their page is open, and the owner's only while they
+    // read the room's pointers.
+    assert.equal(
+      (yield* Effect.flip(guestShares.moveCursor({ session: sam.token }, at(1)))).reason,
+      "inactive",
+    );
+    assert.equal((yield* Effect.flip(guestShares.moveCursor(room, at(1)))).reason, "inactive");
+
+    const seenBy = <E extends { readonly type: string }>(events: Stream.Stream<E>) =>
+      Effect.gen(function* () {
+        const queue = yield* Queue.unbounded<ReadonlyArray<unknown>>();
+        const fiber = yield* Stream.runForEach(events, (event) =>
+          "cursors" in event && Array.isArray(event.cursors)
+            ? Queue.offer(queue, event.cursors)
+            : Effect.void,
+        ).pipe(Effect.forkScoped);
+        // The first event says the stream is open, and its page counted.
+        assert.deepEqual(yield* Queue.take(queue), []);
+        return { queue, fiber };
+      });
+    const { queue: owner } = yield* seenBy(guestShares.roomCursors(room));
+    const { fiber: samPage } = yield* seenBy(yield* guestShares.stream(sam.token));
+    const { queue: evePage, fiber: evePageOpen } = yield* seenBy(
+      yield* guestShares.stream(eve.token),
+    );
+    const sam10 = { guestId: samId, ...at(10) };
+    const sam12 = { guestId: samId, ...at(12) };
+    const eve30 = { guestId: eveId, ...at(30) };
+    const byGuest = (...cursors: ReadonlyArray<{ readonly guestId: string }>) =>
+      cursors.toSorted((left, right) => left.guestId.localeCompare(right.guestId));
+
+    yield* guestShares.moveCursor({ session: sam.token }, at(10));
+    assert.deepEqual(yield* Queue.take(owner), [sam10]);
+    assert.deepEqual(yield* Queue.take(evePage), [sam10]);
+    // Nobody is sent their own pointer.
+    yield* guestShares.moveCursor(room, at(20));
+    yield* guestShares.moveCursor({ session: eve.token }, at(30));
+    assert.deepEqual(yield* Queue.take(evePage), [at(20), sam10]);
+    assert.deepEqual(yield* Queue.take(owner), byGuest(sam10, eve30));
+
+    // Twenty moves a second from one guest; a pointer leaving is never refused.
+    for (let move = 1; move < 20; move++) {
+      yield* guestShares.moveCursor({ session: sam.token }, at(10));
+    }
+    assert.equal(
+      (yield* Effect.flip(guestShares.moveCursor({ session: sam.token }, at(11)))).reason,
+      "too_fast",
+    );
+    yield* guestShares.moveCursor({ session: sam.token }, null);
+    assert.deepEqual(yield* Queue.take(evePage), [at(20)]);
+    assert.deepEqual(yield* Queue.take(owner), [eve30]);
+
+    // Closing the page takes its pointer off at once, and a pointer left still expires.
+    yield* TestClock.adjust("2 seconds");
+    yield* guestShares.moveCursor({ session: sam.token }, at(12));
+    assert.deepEqual(yield* Queue.take(evePage), [at(20), sam12]);
+    assert.deepEqual(yield* Queue.take(owner), byGuest(sam12, eve30));
+    yield* Fiber.interrupt(samPage);
+    assert.deepEqual(yield* Queue.take(evePage), [at(20)]);
+    assert.deepEqual(yield* Queue.take(owner), [eve30]);
+    yield* TestClock.adjust("61 seconds");
+    assert.deepEqual(yield* Queue.take(owner), []);
+
+    // A guest the owner removes, or a link that ended, moves nothing.
+    yield* orchestrator.dispatch({
+      type: "thread.guest.remove",
+      commandId: CommandId.make("remove-eve-cursor"),
+      threadId,
+      guestId: eveId,
+    });
+    yield* Fiber.join(evePageOpen);
+    assert.equal(
+      (yield* Effect.flip(guestShares.moveCursor({ session: eve.token }, at(1)))).reason,
+      "inactive",
+    );
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
 
 it.effect("counts a guest joining and sending, without their name or text", () =>

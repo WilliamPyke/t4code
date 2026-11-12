@@ -31,14 +31,24 @@ right now.
 To invite someone later, choose **Share with guests** again and **Show link**: it is the same link.
 
 Choose **Stop sharing** to end the link for everyone at once. Archiving the thread, choosing
-**Replace link**, or unlinking the machine from T3 Connect also ends it. You can send or dismiss guest messages
-from the mobile app.
+**Replace link**, or unlinking the machine from T3 Connect also ends it. If anyone has joined, T3 Code asks
+you to confirm before it stops sharing or replaces the link. You can send or dismiss guest
+messages from the mobile app.
 
 ## See the room as a board
 
 On web, choose **Board** in a shared thread's header. The thread and each guest appear as cards
-you can drag, with what each guest has waiting for you, and you can add notes. Scroll to move,
-and hold Ctrl or Cmd while scrolling to zoom.
+you can drag, with what each guest has waiting for you, and you can add notes. The thread's card
+says when your agent is working, and a guest's agent gets a card as soon as it starts a turn
+[on their machine](#your-turns-show-in-the-room). Scroll to move, and hold Ctrl or Cmd while
+scrolling to zoom.
+
+Everyone with the board open sees the others' pointers on it, each with its owner's name. Yours
+shows only while your pointer is over the board.
+
+To turn a note into a message, drag it onto the thread's card or choose **Use as message** on it.
+Its text lands in your message box, after anything you had written, and the note stays on the
+board. Nothing is sent until you send it, and a guest's message still waits for the owner.
 
 The board belongs to the room. Guests open the same one with **Board** in the thread's header, and
 everyone sees a card land where it was dropped and a note once its author clicks away from it.
@@ -110,16 +120,19 @@ branch or a pull request.
 
 ### Your turns show in the room
 
-The thread stays connected to the room it came from. Each time a turn finishes in it, T3 Code
-sends the prompt and your agent's final reply to the owner's machine, which shows them to the owner
-and every guest as your agent's, for example **Sam's agent**. T3 Code tells you this before you
+The thread stays connected to the room it came from. When a turn starts in it, T3 Code tells the
+owner's machine your agent is working and on what prompt; when the turn finishes, it sends the
+prompt and your agent's final reply. The owner and every guest see them as your agent's, for
+example **Sam's agent**. T3 Code tells you this before you
 join, and the thread header says **Your turns show in the room** while it is on. Choose **Leave
 room** there to stop; your thread keeps working as a plain copy, and what the room already shows
 stays until the owner stops sharing.
 
 Only that text goes back: no files, command output, reasoning, or diffs. A long prompt or reply is
 shortened, and the room keeps the 10 most recent turns from all guests. A turn you interrupt, or
-one that fails, is not sent. The connection ends on its own when the link expires, the owner stops
+one that fails, is not sent, and the room stops showing your agent as working. The room forgets
+that your agent is working, and the prompt it showed, once the turn ends or your machine stops
+saying so for 10 minutes; neither is kept. The connection ends on its own when the link expires, the owner stops
 sharing, or the owner removes you.
 
 For the owner: a guest's turn is only shown. It never starts a turn on your thread and your agent

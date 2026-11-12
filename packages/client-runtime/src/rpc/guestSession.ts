@@ -20,6 +20,8 @@ import {
   type OrchestrationV2ThreadStreamItem,
   ProjectId,
   ProviderInstanceId,
+  type RoomAgentsEvent,
+  type RoomCursorsEvent,
   type ServerConfig,
   type ServerConfigStreamEvent,
   WS_METHODS,
@@ -64,6 +66,11 @@ export class GuestShareAccess extends Context.Reference<{
   readonly share: (shareId: string) => Effect.Effect<Option.Option<JoinedGuestShare>>;
   readonly viewed: (shareId: string, view: GuestShareView) => Effect.Effect<void>;
   readonly presence: (shareId: string, online: ReadonlyArray<GuestId>) => Effect.Effect<void>;
+  /** Whose agents run now, or where everyone else's pointer is on the board. */
+  readonly live: (
+    shareId: string,
+    event: RoomAgentsEvent | RoomCursorsEvent,
+  ) => Effect.Effect<void>;
   /** The share ended, or this guest was removed. The platform forgets it. */
   readonly ended: (shareId: string) => Effect.Effect<void>;
 }>("@t3tools/client-runtime/rpc/guestSession/GuestShareAccess", {
@@ -71,6 +78,7 @@ export class GuestShareAccess extends Context.Reference<{
     share: () => Effect.succeedNone,
     viewed: () => Effect.void,
     presence: () => Effect.void,
+    live: () => Effect.void,
     ended: () => Effect.void,
   }),
 }) {}
@@ -525,6 +533,16 @@ export const connectGuestSession = Effect.fn("GuestSession.connect")(function* (
                 [
                   access
                     .presence(target.shareId, event.online)
+                    .pipe(Effect.as<ReadonlyArray<OrchestrationV2ThreadStreamItem>>([])),
+                ],
+              ] as const;
+            case "agents":
+            case "cursors":
+              return [
+                synchronized,
+                [
+                  access
+                    .live(target.shareId, event)
                     .pipe(Effect.as<ReadonlyArray<OrchestrationV2ThreadStreamItem>>([])),
                 ],
               ] as const;

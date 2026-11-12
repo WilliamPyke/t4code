@@ -6,6 +6,7 @@ import * as commandPalette from "../commandPaletteBus";
 import * as settings from "../hooks/useSettings";
 import * as threadActions from "../lib/chatThreadActions";
 import * as entities from "../state/entities";
+import * as environments from "../state/environments";
 import type { Project } from "../types";
 import { installChatRouteCommands } from "./chatRouteCommands";
 import * as dispatcher from "./dispatcher";
@@ -60,4 +61,33 @@ describe("new thread commands", () => {
       expect(startLocal).toHaveBeenCalledOnce();
     }
   });
+
+  it.each(["chat.new", "chat.newLocal"] as const)(
+    "%s leaves the key alone in a guest-only browser",
+    (command) => {
+      using _guestOnly = vi.spyOn(environments, "readGuestOnly").mockReturnValue(true);
+      using _projects = vi.spyOn(entities, "readProjects").mockReturnValue([]);
+      using openPicker = vi
+        .spyOn(commandPalette, "openCommandPalette")
+        .mockImplementation(() => {});
+      using startLocal = vi
+        .spyOn(threadActions, "startNewThreadFromContext")
+        .mockResolvedValue(false);
+      using register = vi.spyOn(dispatcher, "registerCommands").mockReturnValue(() => {});
+      const router = { state: { matches: [] } } as unknown as AnyRouter;
+      using stack = new DisposableStack();
+      stack.defer(installChatRouteCommands(router));
+      const commands = register.mock.calls[0]![0];
+      const event = {
+        preventDefault: vi.fn(),
+        stopPropagation: vi.fn(),
+      } as unknown as KeyboardEvent;
+
+      expect(commands[command]!(event)).toBe(false);
+
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(openPicker).not.toHaveBeenCalled();
+      expect(startLocal).not.toHaveBeenCalled();
+    },
+  );
 });

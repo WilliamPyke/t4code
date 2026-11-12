@@ -173,8 +173,12 @@ import {
   GuestShareCreateError,
   GuestShareCreateInput,
   GuestShareCreateResult,
+  RoomAgentsEvent,
   RoomBoardChangeError,
   RoomBoardChangeInput,
+  RoomCursorInput,
+  RoomCursorsEvent,
+  RoomLiveInput,
 } from "./guestShare.ts";
 import {
   SharedThreadJoinError,
@@ -572,6 +576,9 @@ export const WS_METHODS = {
   guestShareCreate: "guestShare.create",
   guestShareSubscribePresence: "guestShare.subscribePresence",
   guestShareChangeBoard: "guestShare.changeBoard",
+  guestShareSubscribeRoomAgents: "guestShare.subscribeRoomAgents",
+  guestShareSubscribeRoomCursors: "guestShare.subscribeRoomCursors",
+  guestShareMoveCursor: "guestShare.moveCursor",
   sharedThreadPreview: "sharedThread.preview",
   sharedThreadJoin: "sharedThread.join",
   sharedThreadLeave: "sharedThread.leave",
@@ -2043,6 +2050,25 @@ const WsGuestShareSubscribePresenceRpc = Rpc.make(WS_METHODS.guestShareSubscribe
   stream: true,
 });
 
+const WsGuestShareSubscribeRoomAgentsRpc = Rpc.make(WS_METHODS.guestShareSubscribeRoomAgents, {
+  payload: RoomLiveInput,
+  success: RoomAgentsEvent,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const WsGuestShareSubscribeRoomCursorsRpc = Rpc.make(WS_METHODS.guestShareSubscribeRoomCursors, {
+  payload: RoomLiveInput,
+  success: RoomCursorsEvent,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const WsGuestShareMoveCursorRpc = Rpc.make(WS_METHODS.guestShareMoveCursor, {
+  payload: RoomCursorInput,
+  error: EnvironmentAuthorizationError,
+});
+
 const WsSharedThreadPreviewRpc = Rpc.make(WS_METHODS.sharedThreadPreview, {
   payload: SharedThreadSource,
   success: SharedThreadPreview,
@@ -2123,6 +2149,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsGuestShareCreateRpc,
   WsGuestShareSubscribePresenceRpc,
   WsGuestShareChangeBoardRpc,
+  WsGuestShareSubscribeRoomAgentsRpc,
+  WsGuestShareSubscribeRoomCursorsRpc,
+  WsGuestShareMoveCursorRpc,
   WsSharedThreadPreviewRpc,
   WsSharedThreadJoinRpc,
   WsSharedThreadLeaveRpc,

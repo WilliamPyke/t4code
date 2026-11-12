@@ -1,7 +1,14 @@
 import * as Schema from "effect/Schema";
 
 import { GuestId, GuestShareId, IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { RoomBoard, ThreadGuest, ThreadGuestMessage, ThreadGuestTurn } from "./guestShare.ts";
+import {
+  RoomAgentsEvent,
+  RoomBoard,
+  RoomCursorsEvent,
+  ThreadGuest,
+  ThreadGuestMessage,
+  ThreadGuestTurn,
+} from "./guestShare.ts";
 import { OrchestrationV2ThreadStreamItem } from "./orchestrationV2.ts";
 import { ProviderDriverKind } from "./providerInstance.ts";
 
@@ -55,6 +62,10 @@ export const GuestStreamEvent = Schema.Union([
   Schema.Struct({ type: Schema.Literal("thread"), item: OrchestrationV2ThreadStreamItem }),
   /** The guests with the page open, sent when the stream opens and whenever that changes. */
   Schema.Struct({ type: Schema.Literal("presence"), online: Schema.Array(GuestId) }),
+  // A client decodes each event on its own and skips one it does not know, so an older one
+  // ignores these.
+  RoomAgentsEvent,
+  RoomCursorsEvent,
   Schema.Struct({ type: Schema.Literal("ended") }),
 ]);
 export type GuestStreamEvent = typeof GuestStreamEvent.Type;
