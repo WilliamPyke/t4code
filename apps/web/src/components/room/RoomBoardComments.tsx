@@ -5,7 +5,14 @@ import {
 } from "@t3tools/contracts";
 import { isRoomCardOwnedBy } from "@t3tools/shared/roomBoard";
 import { ArrowUpIcon, CircleCheckIcon, RotateCcwIcon, Trash2Icon, XIcon } from "lucide-react";
-import { type PointerEvent, type ReactNode, useLayoutEffect, useRef, useState } from "react";
+import {
+  type PointerEvent,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
@@ -234,9 +241,14 @@ export function CommentThreadPanel({
   readonly onClose: () => void;
 }) {
   const boardNow = useBoardNow();
-  // The board's clock ticks only while a run is in flight; otherwise times read from opening.
-  const [openedAt] = useState(Date.now);
-  const now = Math.max(boardNow, openedAt);
+  // The board's clock ticks only while a run is in flight, so the one open thread keeps its own.
+  const [openNow, setOpenNow] = useState(Date.now);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a wall-clock tick so "2m ago" stays true while the thread is open
+  useEffect(() => {
+    const timer = window.setInterval(() => setOpenNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const now = Math.max(boardNow, openNow);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const replies = note.replies ?? [];
@@ -253,6 +265,11 @@ export function CommentThreadPanel({
     return observeResize(board, measure);
   }, []);
   const spot = area === null ? null : boardCommentPanelSpot(pin, area);
+  const placed = spot !== null;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the field cannot take focus while the panel is hidden for measuring, so it is focused once placed
+  useLayoutEffect(() => {
+    if (placed) panel.current?.querySelector("textarea")?.focus();
+  }, [placed]);
   const send = async () => {
     const body = text.trim();
     if (body === "" || sending) return;
@@ -351,7 +368,6 @@ export function CommentThreadPanel({
           <Textarea
             size="sm"
             rows={1}
-            autoFocus
             aria-label={draft ? "Comment" : "Reply"}
             placeholder={draft ? "Add a comment" : "Reply"}
             value={text}
@@ -364,6 +380,11 @@ export function CommentThreadPanel({
               void send();
             }}
           />
+          {text.length < ROOM_BOARD_NOTE_MAX_LENGTH - 40 ? null : (
+            <span className="shrink-0 pb-1.5 text-2xs text-muted-foreground tabular-nums">
+              {text.length}/{ROOM_BOARD_NOTE_MAX_LENGTH}
+            </span>
+          )}
           <Button
             type="submit"
             size="icon-sm"
