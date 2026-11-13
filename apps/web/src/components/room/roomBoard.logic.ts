@@ -971,6 +971,23 @@ export interface BoardPeople {
   readonly ownerName?: string | undefined;
 }
 
+/**
+ * Everyone the board can name: who is in the room, then people from earlier links and anyone
+ * else who left, under the name they had. Only the first are in the room.
+ */
+export function boardPeopleOf(
+  guests: BoardPeople["guests"],
+  board: Pick<RoomBoard, "people"> | undefined,
+  formerPeople: BoardPeople["guests"],
+): BoardPeople["guests"] {
+  const earlier = board?.people?.map((person) => ({ id: person.guestId, name: person.name }));
+  return earlier === undefined || earlier.length === 0
+    ? formerPeople.length === 0
+      ? guests
+      : [...guests, ...formerPeople]
+    : [...guests, ...earlier, ...formerPeople];
+}
+
 /** What the board calls someone: "You", the owner's name or "Owner", or a guest's name. */
 export function boardPersonName(people: BoardPeople, guestId: string | undefined): string {
   if ((guestId ?? null) === people.viewer) return "You";

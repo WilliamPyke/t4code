@@ -58,6 +58,7 @@ import {
   SharedThreadMessage,
   ThreadGuestMessage,
   ThreadGuestShare,
+  ThreadRoomBoard,
   ThreadRoomLink,
 } from "./guestShare.ts";
 import { StoredThreadTags, ThreadTag } from "./threadTags.ts";
@@ -502,6 +503,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   lastSnoozeWakeAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
   guestShare: Schema.optional(Schema.NullOr(ThreadGuestShare)),
+  /** The room's board while the thread is not shared; the next share takes it. */
+  roomBoard: Schema.optional(Schema.NullOr(ThreadRoomBoard)),
   /** Set while this thread, joined from someone's room, shows its turns there. */
   roomLink: Schema.optional(Schema.NullOr(ThreadRoomLink)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -2150,6 +2153,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   pendingRuntimeRequest: Schema.NullOr(OrchestrationV2PendingRuntimeRequestSummary),
   /** Guest messages waiting for the owner to send or dismiss. Absent from older servers. */
   pendingGuestMessageCount: Schema.optional(NonNegativeInt),
+  /** The thread has a guest link or a team share, even an expired one, so it has a board. */
+  guestShared: Schema.optional(Schema.Boolean),
   latestVisibleMessage: Schema.NullOr(OrchestrationV2LatestVisibleMessageSummary),
   latestUserMessageAt: Schema.NullOr(Schema.DateTimeUtc),
   /** Excludes wakes and agent messages that advance latestUserMessageAt through the user role. */
@@ -3002,6 +3007,12 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
   }),
+  /** Removes every card, arrow and comment thread from the thread's board, shared or kept. */
+  Schema.Struct({
+    type: Schema.Literal("thread.room-board.clear"),
+    commandId: CommandId,
+    threadId: ThreadId,
+  }),
   Schema.Struct({
     type: Schema.Literal("thread.guest-message.dismiss"),
     commandId: CommandId,
@@ -3464,6 +3475,14 @@ const OrchestrationV2InternalCommand = Schema.Union([
     host: TrimmedNonEmptyString,
     expiresAt: IsoDateTime,
     team: Schema.optional(GuestShareTeam),
+  }),
+  /** Moves the end of a guest link people can still join, keeping everyone on it. */
+  Schema.Struct({
+    type: Schema.Literal("thread.guest-share.extend"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    expiresAt: IsoDateTime,
   }),
   Schema.Struct({
     type: Schema.Literal("thread.guest-share.redeem"),

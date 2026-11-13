@@ -7,7 +7,9 @@ import {
 import {
   AuthOrchestrationOperateScope,
   type ChatAttachment,
+  GUEST_SHARE_LIFETIME_DAYS,
   GUEST_SHARE_MAX_GUESTS,
+  type GuestShareLifetimeDays,
   guestContributorFor,
   guestMessageAuthorName,
   type GuestId,
@@ -15,7 +17,6 @@ import {
   guestShareStatusLabel,
   type ModelSelection,
   providerAllowsDirectGuestSend,
-  ROOM_BOARD_ROOM_BOX,
   type ScopedThreadRef,
   type SharedThreadCatchUpResult,
   type ThreadGuest,
@@ -60,6 +61,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import {
   Menu,
   MenuCheckboxItem,
@@ -75,6 +77,7 @@ import { type ChatFileAttachment, isImageAttachment } from "../../types";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { GuestMessageAttachments } from "./GuestMessageAttachments";
 import { GuestMessageName, guestBubbleClassName } from "./guestMessageStyle";
+import { roomBoardLocation } from "../room/roomBoardNavigation";
 import { GuestTurnList } from "./GuestTurnList";
 import { guestShareDialogThreadAtom } from "./guestShareDialogState";
 import { guestMessageArtifactTitle, guestMessageBoxTitle } from "./roomBoardPrompt";
@@ -109,6 +112,22 @@ type CreateState =
   | { readonly status: "shared"; readonly teamName: string }
   | { readonly status: "failed"; readonly message: string };
 
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+const lifetimeLabel = (days: GuestShareLifetimeDays) => (days === 1 ? "1 day" : `${days} days`);
+const cardCount = (count: number) => (count === 1 ? "1 card" : `${count} cards`);
+
+/** "Ends in 6 days", or in hours once it has less than a day left. */
+function linkEndsLabel(expiresAt: string, nowMs: number): string {
+  const left = Date.parse(expiresAt) - nowMs;
+  if (left >= DAY_MS) {
+    const days = Math.floor(left / DAY_MS);
+    return `Ends in ${days} ${days === 1 ? "day" : "days"}`;
+  }
+  const hours = Math.floor(left / HOUR_MS);
+  return hours >= 1 ? `Ends in ${hours} ${hours === 1 ? "hour" : "hours"}` : "Ends within the hour";
+}
+
 function GuestShareDialog({
   threadRef,
   onClose,
@@ -116,21 +135,71 @@ function GuestShareDialog({
   readonly threadRef: ScopedThreadRef;
   readonly onClose: () => void;
 }) {
-  const activeShare = useThreadGuestShare(threadRef);
+  const thread = useQuietThreadProjection(threadRef)?.projection.thread;
+  const activeShare = thread?.guestShare ?? null;
+  const board = activeShare?.board ?? thread?.roomBoard?.board ?? null;
   const canCreate = useAtomValue(
     serverEnvironment.createGuestShare.permissionAtom(threadRef.environmentId),
   );
   const createGuestShare = useAtomCommand(serverEnvironment.createGuestShare, {
     reportFailure: false,
   });
+  const clearRoomBoard = useOrchestrationCommand(threadEnvironment.clearRoomBoard, {
+    label: "clear room board",
+  });
   const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "guest link" });
   const [state, setState] = useState<CreateState>({ status: "idle" });
+  const [days, setDays] = useState<GuestShareLifetimeDays>(GUEST_SHARE_LIFETIME_DAYS[0]);
 
   const nowMinute = useNowMinute();
+  const nowMs = Date.parse(`${nowMinute}:00.000Z`);
   const live = activeShare !== null && activeShare.expiresAt.slice(0, 16) > nowMinute;
   const sharedTeam = live ? (activeShare.team ?? null) : null;
   const joinable = live && sharedTeam === null && activeShare.joinsClosed !== true;
+  const endsSoon = joinable && Date.parse(activeShare.expiresAt) - nowMs < DAY_MS;
+  // Extending only ever makes a link last longer.
+  const extendChoices = joinable
+    ? GUEST_SHARE_LIFETIME_DAYS.filter(
+        (choice) => nowMs + choice * DAY_MS > Date.parse(activeShare.expiresAt) + HOUR_MS,
+      )
+    : [];
   const { teams } = useTeams();
+
+  const clearBoard = async () => {
+    const confirmed = await ensureLocalApi().dialogs.confirm(
+      [
+        "Clear the board?",
+        "Every card, arrow and comment thread on it is removed for everyone. This cannot be undone.",
+      ].join("\n"),
+      { variant: "destructive" },
+    );
+    if (!confirmed) return;
+    await clearRoomBoard({
+      environmentId: threadRef.environmentId,
+      input: { threadId: threadRef.threadId },
+    });
+  };
+
+  const extend = async (to: GuestShareLifetimeDays) => {
+    setState({ status: "creating" });
+    const result = await createGuestShare({
+      environmentId: threadRef.environmentId,
+      input: { threadId: threadRef.threadId, extend: true, days: to },
+    });
+    if (result._tag === "Success") {
+      setState({ status: "created", url: result.value.shortUrl ?? result.value.url });
+      return;
+    }
+    if (isAtomCommandInterrupted(result)) {
+      setState({ status: "idle" });
+      return;
+    }
+    const error = squashAtomCommandFailure(result);
+    setState({
+      status: "failed",
+      message: error instanceof Error ? error.message : "Could not extend the guest link.",
+    });
+  };
 
   const create = async (
     replace: boolean,
@@ -149,7 +218,7 @@ function GuestShareDialog({
             ].join("\n")
           : [
               sharedTeam !== null ? "Make a guest link instead?" : "Replace the guest link?",
-              "Everyone on the current link loses access at once. A new link is made, and you need to send it again to everyone you want in the thread.",
+              "Everyone on the current link loses access at once. A new link is made, and you need to send it again to everyone you want in the thread. The board stays as it is.",
             ].join("\n"),
       ))
     ) {
@@ -161,7 +230,7 @@ function GuestShareDialog({
       input: {
         threadId: threadRef.threadId,
         replace: replace || ending,
-        ...(team === undefined ? {} : { teamId: team.id }),
+        ...(team === undefined ? { days } : { teamId: team.id }),
       },
     });
     if (result._tag === "Success") {
@@ -224,11 +293,78 @@ function GuestShareDialog({
             <p className="text-muted-foreground text-sm">
               {joinable
                 ? "This thread already has a link. Show it to invite more people, or replace it to end it for everyone who has it."
-                : activeShare !== null
+                : activeShare !== null && live
                   ? "No one new can join with the current link. A new link ends it."
-                  : `Up to ${GUEST_SHARE_MAX_GUESTS} people can join with the link. It expires in 24 hours.`}
+                  : `Up to ${GUEST_SHARE_MAX_GUESTS} people can join with the link.`}
             </p>
           )}
+          {state.status !== "shared" && sharedTeam === null ? (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              {joinable ? (
+                <span className={endsSoon ? "text-warning" : "text-muted-foreground"}>
+                  {linkEndsLabel(activeShare.expiresAt, nowMs)}
+                  {endsSoon ? ". Extend it to keep everyone on it." : "."}
+                </span>
+              ) : state.status === "created" ? null : (
+                <>
+                  <span className="text-muted-foreground">Lasts</span>
+                  <ToggleGroup
+                    aria-label="How long the link lasts"
+                    value={[String(days)]}
+                    onValueChange={(next) => {
+                      const chosen = GUEST_SHARE_LIFETIME_DAYS.find(
+                        (choice) => String(choice) === next[0],
+                      );
+                      if (chosen !== undefined) setDays(chosen);
+                    }}
+                  >
+                    {GUEST_SHARE_LIFETIME_DAYS.map((choice) => (
+                      <Toggle key={choice} value={String(choice)}>
+                        {lifetimeLabel(choice)}
+                      </Toggle>
+                    ))}
+                  </ToggleGroup>
+                </>
+              )}
+              {extendChoices.length > 0 ? (
+                <Menu>
+                  <MenuTrigger
+                    render={
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={!canCreate || state.status === "creating"}
+                      />
+                    }
+                  >
+                    Extend link
+                  </MenuTrigger>
+                  <MenuPopup align="start">
+                    <MenuGroup>
+                      <MenuGroupLabel>Lasts from now</MenuGroupLabel>
+                      {extendChoices.map((choice) => (
+                        <MenuItem key={choice} onClick={() => void extend(choice)}>
+                          {lifetimeLabel(choice)}
+                        </MenuItem>
+                      ))}
+                    </MenuGroup>
+                  </MenuPopup>
+                </Menu>
+              ) : null}
+            </div>
+          ) : null}
+          {board !== null && board.notes.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="text-muted-foreground">
+                {activeShare === null
+                  ? `The board from the last link has ${cardCount(board.notes.length)}. Sharing again brings it back.`
+                  : `The board has ${cardCount(board.notes.length)}. It stays when the link changes.`}
+              </span>
+              <Button size="xs" variant="outline" onClick={() => void clearBoard()}>
+                Clear board
+              </Button>
+            </div>
+          ) : null}
           {state.status === "failed" ? (
             <p role="alert" className="text-destructive text-xs">
               {state.message}
@@ -321,17 +457,7 @@ export function GuestShareIndicator({ threadRef }: { readonly threadRef: ScopedT
       <Button
         size="xs"
         variant="ghost-muted"
-        onClick={() =>
-          void navigate({
-            to: "/board/$roomEnvironmentId/$roomThreadId",
-            params: {
-              roomEnvironmentId: threadRef.environmentId,
-              roomThreadId: threadRef.threadId,
-            },
-            // Side by side: the thread opens beside the board.
-            search: { chat: ROOM_BOARD_ROOM_BOX },
-          })
-        }
+        onClick={() => void navigate(roomBoardLocation(threadRef))}
       >
         Board
       </Button>
@@ -345,8 +471,8 @@ export function GuestShareIndicator({ threadRef }: { readonly threadRef: ScopedT
             [
               "Stop sharing this thread?",
               share.team === undefined
-                ? "Everyone on the guest link loses access at once, and the link stops working."
-                : `Everyone in it loses access at once, and ${share.team.name} no longer lists it.`,
+                ? "Everyone on the guest link loses access at once, and the link stops working. The board is kept for when you share again."
+                : `Everyone in it loses access at once, and ${share.team.name} no longer lists it. The board is kept for when you share again.`,
             ].join("\n"),
           );
           if (!confirmed) return;

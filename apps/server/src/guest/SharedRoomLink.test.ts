@@ -74,7 +74,11 @@ interface OwnerThread {
  * thread is one this machine shares instead, and the tasks its turns answer are kept.
  */
 const world = Effect.fn(function* (
-  statuses: ReadonlyArray<number | { readonly status: number; readonly body: unknown }>,
+  statuses: ReadonlyArray<
+    | number
+    | { readonly status: number; readonly body: unknown }
+    | { readonly status: number; readonly headers: Record<string, string> }
+  >,
   owner?: OwnerThread,
   joinedItemsOf?: (runId: string) => ReadonlyArray<OrchestrationV2TurnItem>,
 ) {
@@ -220,10 +224,12 @@ const world = Effect.fn(function* (
               request,
               typeof next === "number"
                 ? new Response(null, { status: next })
-                : new Response(JSON.stringify(next.body), {
-                    status: next.status,
-                    headers: { "content-type": "application/json" },
-                  }),
+                : "headers" in next
+                  ? new Response(null, { status: next.status, headers: next.headers })
+                  : new Response(JSON.stringify(next.body), {
+                      status: next.status,
+                      headers: { "content-type": "application/json" },
+                    }),
             );
           }),
         ),
@@ -295,22 +301,39 @@ it.effect("posts each finished run of a connected thread to its room once", () =
   }),
 );
 
-it.effect("stops posting when the room expires or the user leaves it", () =>
-  Effect.gen(function* () {
-    const { link, posts, layer } = yield* world([]);
-    yield* Effect.gen(function* () {
-      const rooms = yield* SharedRoomLink.SharedRoomLink;
-      yield* rooms.connect(threadId, "sam.t3.test", room);
-      yield* rooms.leave(threadId);
-      assert.isNull(yield* Ref.get(link));
+it.effect(
+  "stops posting when the room ends or the user leaves it, and not when it is extended",
+  () =>
+    Effect.gen(function* () {
+      const extendedTo = "1970-01-09T00:00:00.000Z";
+      const { link, posts, layer } = yield* world([
+        { status: 204, headers: { "t3-room-expires-at": extendedTo } },
+        204,
+        { status: 204, headers: { "t3-room-expires-at": "1970-01-01T12:00:00.000Z" } },
+      ]);
+      yield* Effect.gen(function* () {
+        const rooms = yield* SharedRoomLink.SharedRoomLink;
+        yield* rooms.connect(threadId, "sam.t3.test", room);
+        yield* rooms.leave(threadId);
+        assert.isNull(yield* Ref.get(link));
 
-      yield* rooms.connect(threadId, "sam.t3.test", room);
-      yield* TestClock.adjust("25 hours");
-      yield* rooms.publishRun(threadId, RunId.make("run:1"));
-      assert.isNull(yield* Ref.get(link));
-      assert.lengthOf(yield* Ref.get(posts), 0);
-    }).pipe(Effect.provide(layer));
-  }),
+        // The owner extended the link: the room says so, and the thread keeps posting past the
+        // end it joined with.
+        yield* rooms.connect(threadId, "sam.t3.test", room);
+        yield* rooms.publishRun(threadId, RunId.make("run:1"));
+        assert.equal((yield* Ref.get(link))?.expiresAt, extendedTo);
+        yield* TestClock.adjust("25 hours");
+        yield* rooms.publishRun(threadId, RunId.make("run:2"));
+        assert.isNotNull(yield* Ref.get(link));
+
+        // Past the end it knows, it asks once, and a room that was not extended ends the link.
+        yield* TestClock.adjust("8 days");
+        yield* rooms.publishRun(threadId, RunId.make("run:3"));
+        assert.isNull(yield* Ref.get(link));
+        yield* rooms.publishRun(threadId, RunId.make("run:4"));
+        assert.lengthOf(yield* Ref.get(posts), 3);
+      }).pipe(Effect.provide(layer));
+    }),
 );
 
 it.effect("catches up on what the room said without starting anything here", () =>

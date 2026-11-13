@@ -4,7 +4,7 @@ import {
   CommandId,
   GUEST_HANDOFF_TTL_MS,
   GUEST_NAME_MAX_LENGTH,
-  GUEST_SHARE_TTL_MS,
+  guestShareLifetimeMs,
   type GuestHandoff,
   GuestMessageId,
   GuestShareCreateError,
@@ -380,16 +380,22 @@ export class GuestShareService extends Context.Service<
     readonly exportThread: (
       handoffToken: string,
     ) => Effect.Effect<GuestSafe<SharedThreadExport>, GuestShareAccessError>;
-    /** Records a turn the guest ran on their own machine, for the room to see. */
+    /**
+     * Records a turn the guest ran on their own machine, for the room to see. Returns when the
+     * share ends now, which moves when the owner extends the link.
+     */
     readonly postTurn: (
       roomToken: string,
       request: GuestTurnRequest,
-    ) => Effect.Effect<void, GuestShareAccessError>;
-    /** Shows that a guest's agent started a turn on their machine, or stopped without one. */
+    ) => Effect.Effect<string, GuestShareAccessError>;
+    /**
+     * Shows that a guest's agent started a turn on their machine, or stopped without one. Returns
+     * when the share ends now.
+     */
     readonly postActivity: (
       roomToken: string,
       request: GuestAgentActivityRequest,
-    ) => Effect.Effect<void, GuestShareAccessError>;
+    ) => Effect.Effect<string, GuestShareAccessError>;
     /** The guests' agents running now in a share's room, for the thread's owner. */
     readonly roomAgents: (input: RoomLiveInput) => Stream.Stream<RoomAgentsEvent>;
     /** Everyone's pointers on a share's board but the owner's, which shows while this is read. */
@@ -665,8 +671,11 @@ const make = Effect.gen(function* () {
   ) {
     const credential = yield* signInvite(share.id);
     const url = buildGuestLink({ host, credential, hostedAppUrl });
-    // Members open a team share from the team's page; its bare link lets no one in.
-    if (hostedAppUrl === null || share.team !== undefined) return { url, share };
+    // Members open a team share from the team's page; its bare link lets no one in. The relay
+    // keeps a name for as long as the link first lasted, so an extended one goes out in full.
+    if (hostedAppUrl === null || share.team !== undefined || share.extended === true) {
+      return { url, share };
+    }
     const name = yield* linkNames.register({ host, credential, expiresAt: share.expiresAt });
     return name === null
       ? { url, share }
@@ -701,6 +710,8 @@ const make = Effect.gen(function* () {
           }),
         ),
       );
+    const lifetimeMs =
+      input.teamId === undefined ? guestShareLifetimeMs(input.days) : TEAM_SHARE_TTL_MS;
     // A link is returned again only to the same audience: a guest link, or the same team.
     if (
       input.replace !== true &&
@@ -714,14 +725,33 @@ const make = Effect.gen(function* () {
       if (current.team !== undefined) {
         yield* listOnTeam(current.team.id, current.id, current.expiresAt);
       }
-      return yield* linkFor(host, current);
+      const extendTo = DateTime.toEpochMillis(now) + lifetimeMs;
+      if (
+        input.extend !== true ||
+        current.team !== undefined ||
+        extendTo <= Date.parse(current.expiresAt)
+      ) {
+        return yield* linkFor(host, current);
+      }
+      yield* orchestrator
+        .dispatch({
+          type: "thread.guest-share.extend",
+          commandId: yield* commandId("extend"),
+          threadId: input.threadId,
+          shareId: current.id,
+          expiresAt: DateTime.formatIso(DateTime.makeUnsafe(extendTo)),
+        })
+        .pipe(Effect.mapError(() => new GuestShareCreateError({ reason: "changed" })));
+      const extended = yield* orchestrator
+        .getThreadRecords(input.threadId, [])
+        .pipe(Effect.mapError(() => new GuestShareCreateError({ reason: "read_failed" })));
+      if (extended.thread.guestShare?.id !== current.id) {
+        return yield* new GuestShareCreateError({ reason: "changed" });
+      }
+      return yield* linkFor(host, extended.thread.guestShare);
     }
     const shareId = GuestShareId.make(base64UrlEncode(yield* random.randomBytes(SHARE_ID_BYTES)));
-    const expiresAt = DateTime.formatIso(
-      DateTime.add(now, {
-        milliseconds: input.teamId === undefined ? GUEST_SHARE_TTL_MS : TEAM_SHARE_TTL_MS,
-      }),
-    );
+    const expiresAt = DateTime.formatIso(DateTime.add(now, { milliseconds: lifetimeMs }));
     let team: GuestShareTeam | undefined;
     if (input.teamId !== undefined) {
       const teamName = yield* listOnTeam(input.teamId, shareId, expiresAt);
@@ -1424,9 +1454,22 @@ const make = Effect.gen(function* () {
           { haltStrategy: "left" },
         ),
       );
-    const untilExpiry = Effect.sleep(
-      Math.max(0, Date.parse(share.expiresAt) - DateTime.toEpochMillis(yield* DateTime.now)),
-    );
+    // The owner can extend the link while the page is open, so its end is read again once reached.
+    const untilExpiry = Effect.gen(function* () {
+      let endsAt = Date.parse(share.expiresAt);
+      while (true) {
+        yield* Effect.sleep(Math.max(0, endsAt - DateTime.toEpochMillis(yield* DateTime.now)));
+        const current = yield* orchestrator
+          .getThreadRecords(snapshot.projection.thread.id, [])
+          .pipe(
+            Effect.map(({ thread }) => thread.guestShare ?? null),
+            Effect.orElseSucceed(() => null),
+          );
+        const extendedTo = current?.id === share.id ? Date.parse(current.expiresAt) : endsAt;
+        if (extendedTo <= endsAt) return;
+        endsAt = extendedTo;
+      }
+    });
     const openingSnapshot = buildBoundedThreadStreamSnapshot({
       snapshotSequence: snapshot.snapshotSequence,
       projection: snapshot.projection,
@@ -1699,6 +1742,7 @@ const make = Effect.gen(function* () {
     });
     yield* clearAgent(share.id, guestId, request.id);
     yield* analytics.record("feature.used", { feature: "guest_share.turn" });
+    return share.expiresAt;
   });
 
   const postActivity = Effect.fn("GuestShareService.postActivity")(function* (
@@ -1722,7 +1766,10 @@ const make = Effect.gen(function* () {
     if (!allowActivity(`${share.id}:${guestId}`, DateTime.toEpochMillis(yield* DateTime.now))) {
       return yield* new GuestShareAccessError({ reason: "too_fast" });
     }
-    if (request.state === "idle") return yield* clearAgent(share.id, guestId, request.id);
+    if (request.state === "idle") {
+      yield* clearAgent(share.id, guestId, request.id);
+      return share.expiresAt;
+    }
     const prompt = oneLine(request.prompt ?? "", GUEST_AGENT_PROMPT_MAX_LENGTH);
     // A run in the guest's own thread box shows on the box, with what its agent is doing.
     const box = roomBoxOn(share, request.boxId);
@@ -1740,7 +1787,7 @@ const make = Effect.gen(function* () {
       const model = oneLine(request.model ?? "", 120);
       const boxPrompt = oneLine(request.prompt ?? "", ROOM_BOX_PROMPT_MAX_LENGTH);
       const key = guestBoxRunKey(guestId, request.id);
-      return yield* changeRoom(share.id, (room, now) => ({
+      yield* changeRoom(share.id, (room, now) => ({
         ...room,
         boxes: new Map(room.boxes).set(key, {
           boxId: box.id,
@@ -1757,6 +1804,7 @@ const make = Effect.gen(function* () {
           until: now + AGENT_ACTIVITY_TTL_MS,
         }),
       }));
+      return share.expiresAt;
     }
     yield* changeRoom(share.id, (room, now) => ({
       ...room,
@@ -1769,6 +1817,7 @@ const make = Effect.gen(function* () {
         until: now + AGENT_ACTIVITY_TTL_MS,
       }),
     }));
+    return share.expiresAt;
   });
 
   /** Whether the owner's thread still shares this share, for a read of its live room. */

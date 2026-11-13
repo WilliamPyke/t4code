@@ -68,6 +68,7 @@ import {
   LinkIcon,
   MessageSquareIcon,
   PaletteIcon,
+  PanelsTopLeftIcon,
   RotateCcwIcon,
   SettingsIcon,
   MonitorIcon,
@@ -250,6 +251,7 @@ import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
 import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
 import { openGuestShareDialog } from "./chat/guestShareDialogState";
+import { roomBoardLocation } from "./room/roomBoardNavigation";
 import { openUseInAnotherApp } from "./mcp/UseInAnotherAppDialog";
 import { openNewTeamDialog } from "./teams/NewTeamDialog";
 import { useTeams } from "../teams/teams";
@@ -1451,6 +1453,47 @@ function OpenCommandPaletteDialog(props: {
       run: async () => {
         openGuestShareDialog(threadRef);
       },
+    });
+  }
+
+  if (activeThread?.guestShared === true) {
+    const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
+    actionItems.push({
+      kind: "action",
+      value: "action:open-board",
+      searchTerms: ["board", "room", "guests", "canvas", "cards"],
+      title: "Open board",
+      icon: <PanelsTopLeftIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate(roomBoardLocation(threadRef));
+      },
+    });
+  }
+  const sharedThreads = threads.filter((thread) => thread.guestShared === true);
+  if (sharedThreads.length > 0) {
+    actionItems.push({
+      kind: "submenu",
+      value: "action:open-board-of",
+      searchTerms: ["board", "room", "shared threads", "guests"],
+      title: "Open board of...",
+      icon: <PanelsTopLeftIcon className={ITEM_ICON_CLASS} />,
+      addonIcon: <PanelsTopLeftIcon className={ADDON_ICON_CLASS} />,
+      groups: [
+        {
+          value: "shared-threads",
+          label: "Shared threads",
+          items: sharedThreads.map((thread) => ({
+            kind: "action" as const,
+            value: `action:open-board:${thread.environmentId}:${thread.id}`,
+            searchTerms: [thread.title, "board"],
+            title: thread.title || "Untitled thread",
+            icon: <PanelsTopLeftIcon className={ITEM_ICON_CLASS} />,
+            run: async () => {
+              await navigate(roomBoardLocation(scopeThreadRef(thread.environmentId, thread.id)));
+            },
+          })),
+        },
+      ],
     });
   }
 

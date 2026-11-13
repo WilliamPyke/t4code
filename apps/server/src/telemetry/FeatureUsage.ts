@@ -45,6 +45,7 @@ const COMMAND_FEATURES: {
   "queued-message.promote-to-steer": () => ({ feature: "queue.steer" }),
   "queued-run.edit": () => ({ feature: "queue.edit" }),
   "thread.guest-share.close": () => ({ feature: "guest_share.close" }),
+  "thread.room-board.clear": () => ({ feature: "room_board.clear" }),
   "thread.guest-message.dismiss": () => ({ feature: "guest_message.dismiss" }),
   "thread.guest.remove": () => ({ feature: "guest.remove" }),
   "thread.guest.trust": (command) => use("guest.trust", command.trusted ? "on" : "off"),

@@ -3,6 +3,7 @@ import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 
 import { ThreadRoomBoard } from "../components/room/ThreadRoomBoard";
+import { rememberRoomBoardChat } from "../components/room/roomBoardNavigation";
 
 // The params are not named environmentId/threadId: the _chat layout shows the thread for those.
 function RoomBoardRoute() {
@@ -18,9 +19,10 @@ function RoomBoardRoute() {
       key={`${roomEnvironmentId}:${roomThreadId}`}
       threadRef={threadRef}
       chat={chat ?? null}
-      onChat={(next) =>
-        void navigate({ search: next === null ? {} : { chat: next }, replace: true })
-      }
+      onChat={(next) => {
+        rememberRoomBoardChat(threadRef, next);
+        void navigate({ search: next === null ? {} : { chat: next }, replace: true });
+      }}
     />
   );
 }

@@ -1265,6 +1265,267 @@ it.effect("keeps tasks, links, comments and arrows on the board, checked by the 
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("keeps the board across links, with what departed guests added named and nobody's", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* setup;
+    let commands = 0;
+    const next = (label: string) => CommandId.make(`${label}:${commands++}`);
+    const join = (share: GuestShareId, guestId: GuestId, guestName: string) =>
+      orchestrator.dispatch({
+        type: "thread.guest-share.redeem",
+        commandId: next("redeem"),
+        threadId,
+        shareId: share,
+        guestId,
+        guestName,
+      });
+    const change = (share: GuestShareId, author: GuestId | null, change: RoomBoardChange) =>
+      orchestrator.dispatch({
+        type: "thread.guest-board.change",
+        commandId: next("board"),
+        threadId,
+        shareId: share,
+        author,
+        change,
+      });
+    const open = (share: GuestShareId) =>
+      Effect.flatMap(DateTime.now, (now) =>
+        orchestrator.dispatch({
+          type: "thread.guest-share.open",
+          commandId: next("open"),
+          threadId,
+          shareId: share,
+          host: "env.t3.test",
+          expiresAt: DateTime.formatIso(DateTime.add(now, { hours: 24 })),
+        }),
+      );
+    const thread = Effect.map(orchestrator.getThreadRecords(threadId, []), (r) => r.thread);
+    const refused = (command: ReturnType<typeof change>) =>
+      Effect.map(Effect.exit(command), Exit.isFailure);
+
+    yield* join(shareId, sam, "Sam");
+    yield* join(shareId, alex, "Alex");
+    yield* change(shareId, sam, { type: "note.put", noteId: "sam", text: "Ship", x: 1, y: 2 });
+    yield* change(shareId, null, { type: "note.put", noteId: "owner", text: "Wait", x: 3, y: 4 });
+    yield* change(shareId, sam, { type: "note.react", noteId: "owner", emoji: "👍" });
+    yield* change(shareId, alex, {
+      type: "note.put",
+      noteId: "talk",
+      text: "Why?",
+      x: 5,
+      y: 6,
+      kind: "comment",
+    });
+    yield* change(shareId, sam, {
+      type: "comment.reply",
+      noteId: "talk",
+      replyId: "r1",
+      text: "Because",
+    });
+    yield* change(shareId, sam, { type: "card.move", cardId: `guest:${sam}`, x: 7, y: 8 });
+    yield* change(shareId, null, {
+      type: "edge.put",
+      edgeId: "e1",
+      from: `card:guest:${sam}`,
+      to: "note:owner",
+    });
+    yield* change(shareId, alex, {
+      type: "note.put",
+      noteId: "alex-box",
+      text: "Alex's box",
+      x: 0,
+      y: 0,
+      kind: "thread",
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.room-box.link",
+      commandId: next("link"),
+      threadId,
+      shareId,
+      boxId: "owner-box",
+      boxThreadId: ThreadId.make("thread:owner-box"),
+      box: { text: "Mine", x: 0, y: 0 },
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.room-box.link",
+      commandId: next("link"),
+      threadId,
+      shareId,
+      boxId: "alex-box",
+      boxThreadId: ThreadId.make("thread:alex-box"),
+    });
+
+    // Replacing the link: the new share has the board, and the old guests are gone from it.
+    const second = GuestShareId.make("share:two");
+    yield* open(second);
+    const replaced = (yield* thread).guestShare!;
+    assert.deepEqual(
+      replaced.board?.notes.map((note) => note.id),
+      ["sam", "owner", "talk", "alex-box", "owner-box"],
+    );
+    assert.deepEqual(replaced.board?.people, [
+      { guestId: sam, name: "Sam" },
+      { guestId: alex, name: "Alex" },
+    ]);
+    assert.isUndefined(replaced.board?.positions[`guest:${sam}`]);
+    assert.deepEqual(replaced.board?.edges, []);
+    // Only the owner's box keeps its thread: a departed guest's box takes no more prompts.
+    assert.deepEqual(replaced.boardThreads, { "owner-box": ThreadId.make("thread:owner-box") });
+
+    // Someone new, even under the same name, owns nothing that Sam added.
+    const newSam = GuestId.make("guest:new-sam");
+    yield* join(second, newSam, "Sam");
+    assert.isTrue(yield* refused(change(second, newSam, { type: "note.remove", noteId: "sam" })));
+    assert.isTrue(
+      yield* refused(
+        change(second, newSam, { type: "comment.reply.remove", noteId: "talk", replyId: "r1" }),
+      ),
+    );
+    assert.isTrue(
+      yield* refused(
+        change(second, newSam, {
+          type: "note.put",
+          noteId: "talk",
+          text: "Mine now",
+          x: 5,
+          y: 6,
+        }),
+      ),
+    );
+    // A departed guest is not in the room: a task cannot go to them.
+    assert.isTrue(
+      yield* refused(
+        change(second, null, {
+          type: "note.put",
+          noteId: "task",
+          text: "Do it",
+          x: 0,
+          y: 0,
+          kind: "task",
+          assignee: { guestId: sam },
+        }),
+      ),
+    );
+    yield* change(second, null, { type: "note.remove", noteId: "sam" });
+
+    // Stopping sharing keeps the board on the thread, and sharing again brings it back.
+    yield* orchestrator.dispatch({
+      type: "thread.guest-share.close",
+      commandId: next("close"),
+      threadId,
+    });
+    const stopped = yield* thread;
+    assert.isNull(stopped.guestShare ?? null);
+    assert.deepEqual(
+      stopped.roomBoard?.board.notes.map((note) => note.id),
+      ["owner", "talk", "alex-box", "owner-box"],
+    );
+    // The second link's Sam left nothing, so only the first link's people are named.
+    assert.deepEqual(
+      stopped.roomBoard?.board.people?.map((person) => person.guestId),
+      [sam, alex],
+    );
+    const third = GuestShareId.make("share:three");
+    yield* open(third);
+    const reopened = yield* thread;
+    assert.isNull(reopened.roomBoard ?? null);
+    assert.deepEqual(
+      reopened.guestShare?.board?.notes.map((note) => note.id),
+      ["owner", "talk", "alex-box", "owner-box"],
+    );
+    assert.deepEqual(reopened.guestShare?.boardThreads, {
+      "owner-box": ThreadId.make("thread:owner-box"),
+    });
+
+    // Clearing empties the board, and clearing an empty one is no error.
+    yield* orchestrator.dispatch({
+      type: "thread.room-board.clear",
+      commandId: next("clear"),
+      threadId,
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.room-board.clear",
+      commandId: next("clear"),
+      threadId,
+    });
+    const cleared = (yield* thread).guestShare;
+    assert.isUndefined(cleared?.board);
+    assert.isUndefined(cleared?.boardThreads);
+    assert.strictEqual(cleared?.id, third);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("keeps a board through archiving, and clears one kept while not shared", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* setup;
+    yield* orchestrator.dispatch({
+      type: "thread.guest-board.change",
+      commandId: CommandId.make("board:archive"),
+      threadId,
+      shareId,
+      author: null,
+      change: { type: "note.put", noteId: "kept", text: "Kept", x: 0, y: 0 },
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.archive",
+      commandId: CommandId.make("archive:board"),
+      threadId,
+    });
+    const archived = (yield* orchestrator.getThreadRecords(threadId, [])).thread;
+    assert.deepEqual(
+      archived.roomBoard?.board.notes.map((note) => note.id),
+      ["kept"],
+    );
+    yield* orchestrator.dispatch({
+      type: "thread.room-board.clear",
+      commandId: CommandId.make("clear:kept"),
+      threadId,
+    });
+    assert.isNull((yield* orchestrator.getThreadRecords(threadId, [])).thread.roomBoard ?? null);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it("extends a guest link that is still open, only to a later end", () => {
+  const now = DateTime.makeUnsafe("2026-11-12T00:00:00.000Z");
+  const share = {
+    id: shareId,
+    host: "env.t3.test",
+    createdAt: "2026-11-11T12:00:00.000Z",
+    expiresAt: "2026-11-12T12:00:00.000Z",
+    guestName: null,
+    guests: [{ id: sam, name: "Sam", joinedAt: "2026-11-11T12:00:00.000Z" }],
+    messages: [],
+  };
+  const extend = (guestShare: object, expiresAt: string, at = now) =>
+    decideGuestShareCommand({
+      thread: { guestShare } as unknown as OrchestrationV2AppThread,
+      now: at,
+      command: {
+        type: "thread.guest-share.extend",
+        commandId: CommandId.make("extend"),
+        threadId,
+        shareId,
+        expiresAt,
+      },
+    });
+  const later = "2026-11-19T00:00:00.000Z";
+  const extended = extend(share, later);
+  assert.isTrue(Result.isSuccess(extended));
+  if (Result.isSuccess(extended)) {
+    assert.strictEqual(extended.success.guestShare?.expiresAt, later);
+    assert.isTrue(extended.success.guestShare?.extended);
+    // Everyone on it stays.
+    assert.deepEqual(extended.success.guestShare?.guests, share.guests);
+  }
+  assert.isTrue(Result.isFailure(extend(share, "2026-11-12T06:00:00.000Z")));
+  assert.isTrue(
+    Result.isFailure(extend(share, later, DateTime.makeUnsafe("2026-11-12T12:00:00.000Z"))),
+  );
+  assert.isTrue(Result.isFailure(extend({ ...share, joinsClosed: true }, later)));
+  assert.isTrue(Result.isFailure(extend({ ...share, team: { id: "t", name: "Team" } }, later)));
+  assert.isTrue(Result.isFailure(extend({ ...share, id: "share:other" }, later)));
+});
+
 it("caps the arrows on a board", () => {
   const notes = Array.from({ length: ROOM_BOARD_MAX_EDGES + 1 }, (_, index) => ({
     id: `n${index}`,

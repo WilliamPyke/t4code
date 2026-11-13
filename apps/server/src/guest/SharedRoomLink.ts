@@ -4,6 +4,7 @@ import {
   GUEST_AGENT_PROMPT_MAX_LENGTH,
   GUEST_ROOM_ACTIVITY_ROUTE,
   GUEST_ROOM_ARTIFACT_ROUTE,
+  GUEST_ROOM_EXPIRES_HEADER,
   GUEST_ROOM_TURN_ROUTE,
   GUEST_ROOM_UPDATES_ROUTE,
   GUEST_TURN_PROMPT_MAX_LENGTH,
@@ -375,6 +376,34 @@ const make = Effect.gen(function* () {
   });
 
   const disconnect = (threadId: ThreadId) => leave(threadId).pipe(Effect.ignore);
+
+  /**
+   * Moves the thread's room end on to when the owner's server says the room ends now, which an
+   * extended link makes later. Returns the end the thread has after, in epoch milliseconds.
+   */
+  const learnRoomEnd = Effect.fn("SharedRoomLink.learnRoomEnd")(function* (
+    threadId: ThreadId,
+    known: ThreadRoomLink,
+    header: string | undefined,
+  ) {
+    const told = header === undefined ? Option.none() : DateTime.make(header);
+    const knownEnd = Date.parse(known.expiresAt);
+    if (Option.isNone(told) || DateTime.toEpochMillis(told.value) <= knownEnd) return knownEnd;
+    const end = told.value;
+    // Read again: a catch-up may have moved the link's cursor since `known` was read.
+    return yield* orchestrator.getThreadRecords(threadId, []).pipe(
+      Effect.flatMap(({ thread }) =>
+        thread.roomLink == null
+          ? Effect.succeed(knownEnd)
+          : setLink(threadId, { ...thread.roomLink, expiresAt: DateTime.formatIso(end) }).pipe(
+              Effect.as(DateTime.toEpochMillis(end)),
+            ),
+      ),
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not move a room's end", { cause }).pipe(Effect.as(knownEnd)),
+      ),
+    );
+  });
 
   const fail = (reason: SharedThreadJoinError["reason"]) => new SharedThreadJoinError({ reason });
 
@@ -796,9 +825,9 @@ const make = Effect.gen(function* () {
       const url = sharedThreadRouteUrl(link.host, GUEST_ROOM_TURN_ROUTE);
       const token = yield* secrets.get(tokenSecretName(threadId));
       const now = DateTime.toEpochMillis(yield* DateTime.now);
-      if (url === null || Option.isNone(token) || now >= Date.parse(link.expiresAt)) {
-        return yield* disconnect(threadId);
-      }
+      // Past its end the room is asked once anyway, since the owner may have extended the link.
+      const pastEnd = now >= Date.parse(link.expiresAt);
+      if (url === null || Option.isNone(token)) return yield* disconnect(threadId);
       const { turnItems, about, artifactId, box } = yield* runFacts(threadId, thread, link, runId);
       const turn = guestTurnOf(runId, turnItems);
       if (turn === null) return;
@@ -820,15 +849,26 @@ const make = Effect.gen(function* () {
             HttpClientRequest.bodyJsonUnsafe(request),
           ),
         )
-        .pipe(Effect.timeout(REQUEST_TIMEOUT));
-      // The room ended or the owner removed this guest. Anything else may pass, so the link stays.
-      if (response.status === 410) return yield* disconnect(threadId);
-      if (response.status >= 200 && response.status < 300) {
+        .pipe(
+          Effect.timeout(REQUEST_TIMEOUT),
+          Effect.tapError(() => (pastEnd ? disconnect(threadId) : Effect.void)),
+        );
+      const delivered = response.status >= 200 && response.status < 300;
+      // The room ended or the owner removed this guest. Anything else may pass, so the link stays,
+      // unless the room was due to end and did not answer that it was extended.
+      if (response.status === 410 || (pastEnd && !delivered)) return yield* disconnect(threadId);
+      if (delivered) {
+        const end = yield* learnRoomEnd(
+          threadId,
+          link,
+          response.headers[GUEST_ROOM_EXPIRES_HEADER],
+        );
         posted.set(threadId, runId);
         if (about.taskId !== undefined) yield* finishTask(threadId, about.taskId);
         // The room stops showing the run as running once it has the turn.
         if (running.get(threadId)?.runId === runId) running.delete(threadId);
         boxRuns.delete(runId);
+        if (end <= now) yield* disconnect(threadId);
       } else yield* Effect.logWarning("The room refused a turn", { status: response.status });
     },
     Effect.scoped,
@@ -845,9 +885,8 @@ const make = Effect.gen(function* () {
       const url = sharedThreadRouteUrl(link.host, GUEST_ROOM_ACTIVITY_ROUTE);
       const token = yield* secrets.get(tokenSecretName(threadId));
       const now = DateTime.toEpochMillis(yield* DateTime.now);
-      if (url === null || Option.isNone(token) || now >= Date.parse(link.expiresAt)) {
-        return yield* disconnect(threadId);
-      }
+      const pastEnd = now >= Date.parse(link.expiresAt);
+      if (url === null || Option.isNone(token)) return yield* disconnect(threadId);
       const live = boxRuns.get(runId);
       const request: GuestAgentActivityRequest =
         state === "idle"
@@ -909,12 +948,19 @@ const make = Effect.gen(function* () {
               if (tracked !== undefined) tracked.telling = false;
             }),
           ),
+          Effect.tapError(() => (pastEnd ? disconnect(threadId) : Effect.void)),
         );
-      if (response.status === 410) return yield* disconnect(threadId);
-      if (response.status < 200 || response.status >= 300) {
+      const delivered = response.status >= 200 && response.status < 300;
+      if (response.status === 410 || (pastEnd && !delivered)) return yield* disconnect(threadId);
+      if (!delivered) {
         return yield* Effect.logWarning("The room refused a turn's activity", {
           status: response.status,
         });
+      }
+      if (
+        (yield* learnRoomEnd(threadId, link, response.headers[GUEST_ROOM_EXPIRES_HEADER])) <= now
+      ) {
+        return yield* disconnect(threadId);
       }
       if (state === "idle") {
         running.delete(threadId);

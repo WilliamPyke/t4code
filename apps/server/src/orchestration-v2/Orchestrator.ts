@@ -139,6 +139,7 @@ import {
   withoutGuestAttribution,
   decideGuestShareCommand,
   type GuestShareCommand,
+  threadWithoutGuestShare,
 } from "./GuestShareDecider.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import { withCommandMetrics } from "../observability/Metrics.ts";
@@ -564,8 +565,10 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.unarchive":
     case "thread.delete":
     case "thread.guest-share.open":
+    case "thread.guest-share.extend":
     case "thread.guest-share.redeem":
     case "thread.guest-share.close":
+    case "thread.room-board.clear":
     case "thread.guest-message.submit":
     case "thread.guest-message.dismiss":
     case "thread.guest.trust":
@@ -3855,9 +3858,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         case "thread.archive":
           return {
             ...thread,
+            ...threadWithoutGuestShare(thread),
             archivedAt: now,
             titleRegeneration: null,
-            guestShare: null,
             pullRequests: thread.pullRequests?.map((link) => withPullRequestWatch(link, undefined)),
             updatedAt: now,
           };
@@ -13631,8 +13634,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         yield* dispatchPullRequestWatchSync(command, events, effects);
         break;
       case "thread.guest-share.open":
+      case "thread.guest-share.extend":
       case "thread.guest-share.redeem":
       case "thread.guest-share.close":
+      case "thread.room-board.clear":
       case "thread.guest-message.submit":
       case "thread.guest-message.dismiss":
       case "thread.guest.trust":
@@ -14005,6 +14010,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.type === "subagent.stop" ||
           // Closing a share again, or after it ended, is not an error.
           command.type === "thread.guest-share.close" ||
+          // Or clearing a board that has nothing on it.
+          command.type === "thread.room-board.clear" ||
           // So is a guest's turn posted twice, or leaving a room already left.
           command.type === "thread.guest-turn.post" ||
           // And a board change that leaves the board as it was.

@@ -705,6 +705,58 @@ it.effect("opens links on a configured hosted app, and returns a guest who signs
   }).pipe(Effect.provide(layerHostedApp)),
 );
 
+it.effect("makes a link last as long as the owner chose, and extends it for everyone on it", () =>
+  Effect.gen(function* () {
+    const linkThread = ThreadId.make("thread:guest-share-lifetime");
+    const { guestShares, credential } = yield* shareThreadFor(
+      linkThread,
+      null,
+      "https://app.t3.test/guest?host=env.t3.test#",
+    );
+    const start = DateTime.toEpochMillis(yield* DateTime.now);
+    const endsIn = (share: { readonly expiresAt: string }) =>
+      (Date.parse(share.expiresAt) - start) / (24 * 60 * 60 * 1000);
+    const week = yield* guestShares.create({ threadId: linkThread, replace: true, days: 7 });
+    assert.equal(endsIn(week.share), 7);
+    assert.isDefined(week.shortUrl);
+    const weekCredential = week.url.slice(week.url.indexOf("#") + 1);
+    assert.notEqual(weekCredential, credential);
+
+    const sam = yield* guestShares.redeem({ credential: weekCredential, name: "Sam" });
+    const room = (yield* guestShares.exportThread((yield* guestShares.handoff(sam.token)).token))
+      .room!;
+    const pageEnded = yield* Ref.make(false);
+    const page = yield* Stream.runForEach(yield* guestShares.stream(sam.token), (event) =>
+      event.type === "ended" ? Ref.set(pageEnded, true) : Effect.void,
+    ).pipe(Effect.forkChild);
+    // A shorter end leaves the link as it is.
+    const unchanged = yield* guestShares.create({ threadId: linkThread, extend: true, days: 1 });
+    assert.equal(unchanged.share.expiresAt, week.share.expiresAt);
+
+    const month = yield* guestShares.create({ threadId: linkThread, extend: true, days: 30 });
+    assert.equal(month.share.id, week.share.id);
+    assert.equal(endsIn(month.share), 30);
+    // The relay keeps the readable name only until the link first ended, so it goes out in full.
+    assert.isUndefined(month.shortUrl);
+    assert.equal(month.url, week.url);
+
+    // Sam joined before it was extended, and stays on it past the old end, page open and all.
+    yield* TestClock.adjust("8 days");
+    yield* guestShares.check(sam.token);
+    assert.isFalse(yield* Ref.get(pageEnded));
+    const end = yield* guestShares.postTurn(room.token, {
+      id: "run:late",
+      prompt: "Still here?",
+      reply: "Yes.",
+    });
+    assert.equal(end, month.share.expiresAt);
+    yield* TestClock.adjust("23 days");
+    assert.equal((yield* Effect.flip(guestShares.check(sam.token))).reason, "inactive");
+    yield* Fiber.join(page);
+    assert.isTrue(yield* Ref.get(pageEnded));
+  }).pipe(Effect.provide(layerHostedApp)),
+);
+
 it.effect("hands a guest a short-lived token that only reads the thread's export", () =>
   Effect.gen(function* () {
     const { orchestrator, guestShares, credential } = yield* shareThread;

@@ -68,6 +68,8 @@ import {
   boardNewestReplyAt,
   boardNoteBox,
   boardOwnBoxFor,
+  boardPeopleOf,
+  boardPersonName,
   boardPanelMaxWidth,
   boardPinScale,
   boardProgressLine,
@@ -717,6 +719,25 @@ describe("cursorSender", () => {
     cursor.close();
     cursor.close();
     expect(sent.slice(3)).toEqual([{ at: null, view: null }]);
+  });
+});
+
+describe("boardPeopleOf", () => {
+  it("names people from an earlier link as they were, apart from who is in the room", () => {
+    const board = {
+      people: [{ guestId: GuestId.make("old-sam"), name: "Sam" }],
+    };
+    const guests = [{ id: "new-sam", name: "Sam" }];
+    const people = {
+      guests: boardPeopleOf(guests, board, [{ id: "left", name: "Lee" }]),
+      viewer: "new-sam",
+    };
+    // The new Sam is the viewer; the earlier Sam is someone else, named as they were.
+    expect(boardPersonName(people, "new-sam")).toBe("You");
+    expect(boardPersonName(people, "old-sam")).toBe("Sam");
+    expect(boardPersonName(people, "left")).toBe("Lee");
+    expect(boardPersonName(people, "unknown")).toBe("Guest");
+    expect(boardPeopleOf(guests, undefined, [])).toBe(guests);
   });
 });
 

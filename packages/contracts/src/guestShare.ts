@@ -17,7 +17,6 @@ import {
  * messages the owner must send or dismiss. The thread projection holds this public state; the
  * credentials are derived from the share id with a server key and never stored.
  */
-export const GUEST_SHARE_TTL_MS = 24 * 60 * 60 * 1000;
 /** How many people one link lets in. */
 export const GUEST_SHARE_MAX_GUESTS = 8;
 /**
@@ -483,6 +482,13 @@ export type RoomBoardEdge = typeof RoomBoardEdge.Type;
  * someone sends from it: the owner's own Send on their own thread, or a guest's message, which
  * carries them as text and goes through the owner like any other.
  */
+/** Someone from an earlier link whose cards, replies or reactions are still on the board. */
+export const RoomBoardPastPerson = Schema.Struct({
+  guestId: GuestId,
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(GUEST_NAME_MAX_LENGTH)),
+});
+export type RoomBoardPastPerson = typeof RoomBoardPastPerson.Type;
+
 export const RoomBoard = Schema.Struct({
   positions: Schema.Record(Schema.String, RoomBoardPoint),
   notes: Schema.Array(RoomBoardNote),
@@ -490,6 +496,11 @@ export const RoomBoard = Schema.Struct({
   edges: Schema.optional(Schema.Array(RoomBoardEdge)),
   /** The size of each card someone resized, by card id. Notes carry their own. */
   sizes: Schema.optional(Schema.Record(Schema.String, RoomBoardSize)),
+  /**
+   * People of earlier links, named as they were when their link ended. They are no longer in the
+   * room, so what they added is nobody's: only the owner can remove it. No board change sets it.
+   */
+  people: Schema.optional(Schema.Array(RoomBoardPastPerson)),
 });
 export type RoomBoard = typeof RoomBoard.Type;
 
@@ -791,8 +802,24 @@ export const ThreadGuestShare = Schema.Struct({
    * guest never receives it.
    */
   boardThreads: Schema.optional(Schema.Record(Schema.String, ThreadId)),
+  /**
+   * The owner moved `expiresAt` on since the link was made. The relay keeps a readable name for
+   * as long as the link first lasted, so an extended link is given out in its long form.
+   */
+  extended: Schema.optional(Schema.Literal(true)),
 });
 export type ThreadGuestShare = typeof ThreadGuestShare.Type;
+
+/**
+ * A room's board while its thread is not shared, kept for the next link. The next share takes
+ * it, so a board outlasts every link it was on.
+ */
+export const ThreadRoomBoard = Schema.Struct({
+  board: RoomBoard,
+  /** The owner's own thread behind each of their thread boxes, as `ThreadGuestShare` has it. */
+  boardThreads: Schema.optional(Schema.Record(Schema.String, ThreadId)),
+});
+export type ThreadRoomBoard = typeof ThreadRoomBoard.Type;
 
 type GuestRoster = Pick<ThreadGuestShare, "guests" | "guestName">;
 
@@ -832,10 +859,25 @@ export type GuestPresence = typeof GuestPresence.Type;
 export const GuestPresenceInput = Schema.Struct({ threadId: ThreadId });
 export type GuestPresenceInput = typeof GuestPresenceInput.Type;
 
+/** How many days a guest link can last. The first is the default. */
+export const GUEST_SHARE_LIFETIME_DAYS = [1, 7, 30] as const;
+export const GuestShareLifetimeDays = Schema.Literals(GUEST_SHARE_LIFETIME_DAYS);
+export type GuestShareLifetimeDays = typeof GuestShareLifetimeDays.Type;
+const DAY_MS = 24 * 60 * 60 * 1000;
+export const guestShareLifetimeMs = (days: GuestShareLifetimeDays | undefined): number =>
+  (days ?? GUEST_SHARE_LIFETIME_DAYS[0]) * DAY_MS;
+
 export const GuestShareCreateInput = Schema.Struct({
   threadId: ThreadId,
   /** Ends a link people can still join with and makes a new one, instead of returning it. */
   replace: Schema.optional(Schema.Boolean),
+  /** How long a new guest link lasts, or with `extend` how long from now the current one does. */
+  days: Schema.optional(GuestShareLifetimeDays),
+  /**
+   * Keeps the guest link people can still join with, and makes it last `days` from now, so
+   * everyone on it stays. Without such a link a new one is made.
+   */
+  extend: Schema.optional(Schema.Boolean),
   /** Shares to this team instead of making a guest link. Needs T Connect and membership. */
   teamId: Schema.optional(TrimmedNonEmptyString),
 });
@@ -1177,6 +1219,11 @@ export const GUEST_EXPORT_ROUTE = `${GUEST_ROUTE_PREFIX}/export`;
 export const GUEST_ROOM_TURN_ROUTE = `${GUEST_ROUTE_PREFIX}/room/turns`;
 /** A guest's own T Code says a turn started or stopped here, with a bearer room token. */
 export const GUEST_ROOM_ACTIVITY_ROUTE = `${GUEST_ROUTE_PREFIX}/room/activity`;
+/**
+ * On the answer to a posted turn or activity: when the room ends now, as an ISO time. The owner
+ * can extend a link, so the guest's machine moves its own end to this.
+ */
+export const GUEST_ROOM_EXPIRES_HEADER = "t3-room-expires-at";
 /** What happened in the room since `?after=<ISO time>`, for a bearer room token. */
 export const GUEST_ROOM_UPDATES_ROUTE = `${GUEST_ROUTE_PREFIX}/room/updates`;
 /** One artifact card of the room's board, `?note=<id>`, as a `RoomArtifactRead`, for a room token. */

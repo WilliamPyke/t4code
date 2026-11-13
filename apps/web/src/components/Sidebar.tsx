@@ -165,6 +165,7 @@ import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
 import { openGuestShareDialog } from "./chat/guestShareDialogState";
+import { roomBoardLocation } from "./room/roomBoardNavigation";
 import {
   buildThreadRouteParams,
   resolveActiveThreadRouteRef,
@@ -2650,6 +2651,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               canShareWithGuest: appAtomRegistry.get(
                 canShareWithGuestAtom(threadRef.environmentId),
               ),
+              guestShared: thread.guestShared === true,
               canTurnIntoProject: canTurnThreadIntoProject(threadRef),
               supports: {
                 settlement: configLoaded,
@@ -2774,6 +2776,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             return;
           case "share-guest":
             openGuestShareDialog(threadRef);
+            return;
+          case "open-board":
+            void router.navigate(roomBoardLocation(threadRef));
             return;
           case "regenerate-title": {
             if (isRegeneratingTitle) return;

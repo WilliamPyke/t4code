@@ -21,6 +21,7 @@ import {
   type InterruptThreadTurnInput,
   type UpdateThreadMetadataInput,
   archiveThread,
+  clearRoomBoard,
   closeGuestShare,
   removeGuest,
   setGuestTrust,
@@ -136,6 +137,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     closeGuestShare: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:close-guest-share",
       execute: closeGuestShare,
+      scheduler,
+      concurrency,
+    }),
+    clearRoomBoard: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:clear-room-board",
+      execute: clearRoomBoard,
       scheduler,
       concurrency,
     }),

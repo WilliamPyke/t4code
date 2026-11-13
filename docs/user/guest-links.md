@@ -15,8 +15,9 @@ expired work again when you turn it back on.
 
 1. Right-click the thread in the sidebar and choose **Share with guests**. It is also in the thread
    menu and the command palette.
-2. Copy the link and send it to the people you want in the thread. Anyone who has the link can join
-   until 8 people have, so send it only to them. It expires after 24 hours. Each person picks a
+2. Choose how long the link lasts: 1 day, 7 days or 30 days. Copy the link and send it to the
+   people you want in the thread. Anyone who has the link can join until 8 people have, so send it
+   only to them. Each person picks a
    name no one else on the link uses, and opening the link again in the same browser takes them
    back to the thread. The link opens in the hosted T Code app when your server is
    [set up for one](#where-the-link-opens), and on your machine's T Connect address otherwise.
@@ -29,6 +30,10 @@ The thread header names who has joined. On web, click the names to see who has t
 right now.
 
 To invite someone later, choose **Share with guests** again and **Show link**: it is the same link.
+The dialog says when the link ends, and warns once it has less than a day left. **Extend link**
+makes it last 1, 7 or 30 days from now, and everyone on it stays. An extended link is given out
+in full: a [short readable link](#where-the-link-opens) you sent earlier still works until the
+link's first end, but not after it.
 
 Choose **Stop sharing** to end the link for everyone at once. Archiving the thread, choosing
 **Replace link**, or unlinking the machine from T Connect also ends it. If anyone has joined, T Code asks
@@ -220,10 +225,23 @@ artifacts and thread boxes of 280 characters, and 100 lines. An agent sees a car
 prompts, and then only that person's own agent, or the owner's once the owner sends a guest's
 message.
 
-The board lasts as long as the link: stopping sharing or creating a new link starts an empty
-one, and removing a guest removes what they added and leaves their tasks unassigned. Someone who
-continued the thread on their own machine has the board in their own T Code: **Board** in the
-joined thread's header opens it, and their own boxes run on that machine.
+The board belongs to the thread, not to the link. Replacing the link, making a new one after it
+expired, stopping sharing and archiving the thread all keep it: the next link opens on the same cards, lines, comment
+threads and artifacts. Its guests have to join again, as new people. What people from an earlier
+link added stays under the name they had, but it is nobody's now, so only the owner can delete it,
+and a task cannot be given to them. Their own thread boxes stay as cards showing their last turns,
+and no one can prompt them; the owner's boxes keep their threads. To start over, choose **Clear
+board** in the **Share with guests** dialog, which removes every card, line and comment thread for
+everyone, including from a board kept while the thread is not shared. Removing a guest is
+different: it removes what they added and leaves their tasks unassigned.
+
+Besides **Board** in the header, a shared thread's sidebar row has a board button, its right-click
+menu has **Open board**, and the command palette has **Open board** for the current thread and
+**Open board of...** for any shared one. The board opens with the conversation beside it as you
+last left it on that device.
+
+Someone who continued the thread on their own machine has the board in their own T Code: **Board**
+in the joined thread's header opens it, and their own boxes run on that machine.
 
 ## Remove a guest
 
@@ -313,7 +331,8 @@ shortened, and the room keeps the 10 most recent turns from all guests. A turn y
 one that fails, is not sent, and the room stops showing your agent as working. The room forgets
 that your agent is working, and the prompt it showed, once the turn ends or your machine stops
 saying so for 10 minutes; neither is kept. The connection ends on its own when the link expires, the owner stops
-sharing, or the owner removes you.
+sharing, or the owner removes you. If the owner extends the link, your machine learns the new end
+the next time it posts to the room.
 
 For the owner: a guest's turn is only shown. It never starts a turn on your thread and your agent
 never receives it, so nothing a guest runs is billed to you or counted as your prompt. To act on

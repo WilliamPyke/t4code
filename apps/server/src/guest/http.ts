@@ -11,6 +11,7 @@ import {
   GUEST_RENDER_ROUTE,
   GUEST_ROOM_ACTIVITY_ROUTE,
   GUEST_ROOM_ARTIFACT_ROUTE,
+  GUEST_ROOM_EXPIRES_HEADER,
   GUEST_ROOM_TURN_ROUTE,
   GUEST_ROOM_UPDATES_ROUTE,
   GUEST_ROUTE_PREFIX,
@@ -22,7 +23,6 @@ import {
   GUEST_SIGN_IN_TTL_MS,
   GUEST_MESSAGE_MAX_ATTACHMENT_BYTES,
   GUEST_MESSAGE_MAX_ATTACHMENTS,
-  GUEST_SHARE_TTL_MS,
   GuestAgentActivityRequest,
   GuestCursorRequest,
   GuestHandoff,
@@ -62,6 +62,8 @@ import { GuestShareAccessError, GuestShareService } from "./GuestShareService.ts
 // Cloudflare closes idle streams after about 100 seconds.
 const HEARTBEAT_INTERVAL = Duration.seconds(20);
 const NO_STORE = { "cache-control": "no-store" };
+// The share ends the session, and the owner can extend a link after someone joined it.
+const SESSION_COOKIE_MAX_AGE = Duration.days(365);
 // A file never runs as a page on this origin, whatever its bytes.
 const FILE_HEADERS = {
   ...NO_STORE,
@@ -211,7 +213,7 @@ const redeemRoute = HttpRouter.add(
             secure: true,
             sameSite: "strict",
             path: GUEST_ROUTE_PREFIX,
-            maxAge: Duration.millis(GUEST_SHARE_TTL_MS),
+            maxAge: SESSION_COOKIE_MAX_AGE,
           }),
         ),
       ),
@@ -374,6 +376,12 @@ const exportRoute = HttpRouter.add(
 const TURN_MAX_BODY_BYTES = 256 * 1024;
 const decodeTurn = Schema.decodeUnknownEffect(GuestTurnRequest);
 
+const roomPosted = (expiresAt: string) =>
+  HttpServerResponse.empty({
+    status: 204,
+    headers: { ...NO_STORE, [GUEST_ROOM_EXPIRES_HEADER]: expiresAt },
+  });
+
 // Posted by the guest's own T3 Code server, like the export: a bearer, not a cookie.
 const roomTurnRoute = HttpRouter.add(
   "POST",
@@ -388,10 +396,7 @@ const roomTurnRoute = HttpRouter.add(
     const guestShares = yield* GuestShareService;
     return yield* guestShares
       .postTurn(token, body.value)
-      .pipe(
-        Effect.as(HttpServerResponse.empty({ status: 204, headers: NO_STORE })),
-        Effect.catchTags({ GuestShareAccessError: errorResponse }),
-      );
+      .pipe(Effect.map(roomPosted), Effect.catchTags({ GuestShareAccessError: errorResponse }));
   }),
 );
 
@@ -408,10 +413,7 @@ const roomActivityRoute = HttpRouter.add(
     const guestShares = yield* GuestShareService;
     return yield* guestShares
       .postActivity(token, body.value)
-      .pipe(
-        Effect.as(HttpServerResponse.empty({ status: 204, headers: NO_STORE })),
-        Effect.catchTags({ GuestShareAccessError: errorResponse }),
-      );
+      .pipe(Effect.map(roomPosted), Effect.catchTags({ GuestShareAccessError: errorResponse }));
   }),
 );
 

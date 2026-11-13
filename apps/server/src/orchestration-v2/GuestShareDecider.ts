@@ -33,6 +33,7 @@ import {
   type ThreadGuestMessage,
   type ThreadGuestShare,
   type ThreadId,
+  type ThreadRoomBoard,
 } from "@t3tools/contracts";
 import {
   formatComposerContextReference,
@@ -60,8 +61,10 @@ export type GuestShareCommand = Extract<
   {
     readonly type:
       | "thread.guest-share.open"
+      | "thread.guest-share.extend"
       | "thread.guest-share.redeem"
       | "thread.guest-share.close"
+      | "thread.room-board.clear"
       | "thread.guest-message.submit"
       | "thread.guest-message.dismiss"
       | "thread.guest.trust"
@@ -313,7 +316,68 @@ export const roomPersonName =
   (guestId: GuestId | undefined): string | undefined =>
     guestId === undefined
       ? ownerName.trim().slice(0, GUEST_NAME_MAX_LENGTH).trim() || undefined
-      : share.guests?.find((guest) => guest.id === guestId)?.name;
+      : (share.guests?.find((guest) => guest.id === guestId)?.name ??
+        share.board?.people?.find((person) => person.guestId === guestId)?.name);
+
+/** Every guest the board names: on a card, a task, an artifact, a box's turns, a reply or a reaction. */
+function boardGuestIds(board: RoomBoard): ReadonlySet<GuestId | undefined> {
+  return new Set(
+    board.notes.flatMap((note) => [
+      note.guestId,
+      note.assignee?.guestId,
+      note.answer?.guestId,
+      note.artifact?.guestId,
+      note.artifact?.askedBy,
+      note.artifact?.previous?.guestId,
+      note.artifact?.previous?.askedBy,
+      ...(note.thread?.turns.flatMap((turn) => [turn.guestId, turn.askedBy]) ?? []),
+      ...(note.replies?.map((reply) => reply.guestId) ?? []),
+      ...(note.reactions?.map((reaction) => reaction.guestId) ?? []),
+    ]),
+  );
+}
+
+/**
+ * The board as it outlives a share. Its guests leave the room: their own cards go, and what they
+ * added stays under the name they had, as nobody's. Only the owner's thread boxes keep a thread.
+ */
+function roomBoardAfterShare(share: ThreadGuestShare): ThreadRoomBoard | null {
+  const board = share.board;
+  if (board === undefined) return null;
+  const guests = share.guests ?? [];
+  const cards = guests.flatMap((guest) => [
+    roomBoardGuestCard(guest.id),
+    roomBoardAgentCard(guest.id),
+  ]);
+  const gone = new Set(cards.map(roomBoardCardRef));
+  const { people: _earlier, ...withoutCards } = roomBoardWithEdges(
+    roomBoardWithoutCards(board, cards),
+    (edge) => !gone.has(edge.from) && !gone.has(edge.to),
+  );
+  const named = new Map((board.people ?? []).map((person) => [person.guestId, person.name]));
+  for (const guest of guests) named.set(guest.id, guest.name);
+  const onBoard = boardGuestIds(withoutCards);
+  const people = [...named]
+    .filter(([guestId]) => onBoard.has(guestId))
+    .map(([guestId, name]) => ({ guestId, name }));
+  const ownersBoxes = Object.entries(share.boardThreads ?? {}).filter(([boxId]) => {
+    const box = roomBoxOn(share, boxId);
+    return box !== undefined && box.guestId === undefined;
+  });
+  return {
+    board: people.length === 0 ? withoutCards : { ...withoutCards, people },
+    ...(ownersBoxes.length === 0 ? {} : { boardThreads: Object.fromEntries(ownersBoxes) }),
+  };
+}
+
+/** The thread with its share ended, and the share's board kept for the next one. */
+export function threadWithoutGuestShare(
+  thread: OrchestrationV2AppThread,
+): OrchestrationV2AppThread {
+  const share = thread.guestShare ?? null;
+  const kept = share === null ? null : roomBoardAfterShare(share);
+  return { ...thread, guestShare: null, ...(kept === null ? {} : { roomBoard: kept }) };
+}
 
 /** The labels of the cards these arrow refs name on the share's board, as everyone reads them. */
 export const roomCardLabels = (
@@ -397,21 +461,62 @@ export function decideGuestShareCommand(input: {
     Result.succeed({ ...thread, guestShare, updatedAt: now });
 
   switch (command.type) {
+    // A new share takes the board of the one it replaces, or the one kept since the last ended.
     case "thread.guest-share.open": {
       if (thread.archivedAt !== null) return Result.fail("Archived threads cannot be shared.");
-      return withShare({
-        id: command.shareId,
-        host: command.host,
-        createdAt: DateTime.formatIso(now),
-        expiresAt: command.expiresAt,
-        guestName: null,
-        guests: [],
-        messages: [],
-        ...(command.team === undefined ? {} : { team: command.team }),
+      const { roomBoard: kept, ...unshared } = threadWithoutGuestShare(thread);
+      return Result.succeed({
+        ...unshared,
+        ...(kept === undefined ? {} : { roomBoard: null }),
+        guestShare: {
+          id: command.shareId,
+          host: command.host,
+          createdAt: DateTime.formatIso(now),
+          expiresAt: command.expiresAt,
+          guestName: null,
+          guests: [],
+          messages: [],
+          ...(command.team === undefined ? {} : { team: command.team }),
+          ...(kept === undefined || kept === null
+            ? {}
+            : {
+                board: kept.board,
+                ...(kept.boardThreads === undefined ? {} : { boardThreads: kept.boardThreads }),
+              }),
+        },
+        updatedAt: now,
       });
     }
+    case "thread.guest-share.extend": {
+      if (
+        share === null ||
+        share.id !== command.shareId ||
+        share.team !== undefined ||
+        share.joinsClosed === true ||
+        isExpired(share, now)
+      ) {
+        return Result.fail(GUEST_FAILURE.inactive);
+      }
+      if (Date.parse(command.expiresAt) <= Date.parse(share.expiresAt)) {
+        return Result.fail("A link can only be made to last longer.");
+      }
+      return withShare({ ...share, expiresAt: command.expiresAt, extended: true });
+    }
     case "thread.guest-share.close":
-      return share === null ? Result.succeed(thread) : withShare(null);
+      return share === null
+        ? Result.succeed(thread)
+        : Result.succeed({ ...threadWithoutGuestShare(thread), updatedAt: now });
+    // Only the board goes: the share and its guests stay, and the threads behind its boxes stay
+    // the owner's, unlinked.
+    case "thread.room-board.clear": {
+      if (share?.board !== undefined) {
+        const { board: _board, boardThreads: _threads, ...cleared } = share;
+        return Result.succeed({ ...thread, guestShare: cleared });
+      }
+      return (thread.roomBoard ?? null) === null
+        ? Result.succeed(thread)
+        : Result.succeed({ ...thread, roomBoard: null });
+    }
     case "thread.guest-share.redeem": {
       if (share === null || share.id !== command.shareId || isExpired(share, now)) {
         return Result.fail(GUEST_FAILURE.inactive);

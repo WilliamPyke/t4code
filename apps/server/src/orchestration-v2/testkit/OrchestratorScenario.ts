@@ -140,6 +140,7 @@ function commandThreadIds(command: OrchestrationV2Command): ReadonlyArray<Thread
     case "thread.unarchive":
     case "thread.delete":
     case "thread.guest-share.close":
+    case "thread.room-board.clear":
     case "thread.guest-message.dismiss":
     case "thread.guest.trust":
     case "thread.guest.remove":

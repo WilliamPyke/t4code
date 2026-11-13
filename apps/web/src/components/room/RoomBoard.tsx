@@ -135,6 +135,7 @@ import {
   boardNoteQuote,
   boardNoteSize,
   boardOwnBoxFor,
+  boardPeopleOf,
   boardPersonKey,
   boardPersonName,
   boardPinScale,
@@ -703,7 +704,11 @@ export function RoomBoard({
   }, [fitFirst]);
 
   const guests = room?.guests ?? [];
-  const people: BoardPeople = { guests: [...guests, ...formerPeople], viewer, ownerName };
+  const people: BoardPeople = {
+    guests: boardPeopleOf(guests, room?.board, formerPeople),
+    viewer,
+    ownerName,
+  };
   const guestCards = cards === undefined ? guests : [];
   const agents = cards === undefined ? boardAgents(guests, room?.turns ?? [], running) : [];
   const canGive = onGiveNote !== undefined && agents.some(({ guest }) => guest.id === viewer);

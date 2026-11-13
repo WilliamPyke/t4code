@@ -421,7 +421,8 @@ function simpleThreadCommand(
     | "thread.settle"
     | "thread.pin"
     | "thread.unpin"
-    | "thread.guest-share.close",
+    | "thread.guest-share.close"
+    | "thread.room-board.clear",
   input: ThreadCommandInput,
 ) {
   return allocateCommandId(input).pipe(
@@ -445,6 +446,13 @@ export const closeGuestShare = Effect.fn("EnvironmentCommands.closeGuestShare")(
   input: CloseGuestShareInput,
 ) {
   return yield* simpleThreadCommand("thread.guest-share.close", input);
+});
+
+/** Removes every card, arrow and comment thread from a thread's board, shared or kept. */
+export const clearRoomBoard = Effect.fn("EnvironmentCommands.clearRoomBoard")(function* (
+  input: ThreadCommandInput,
+) {
+  return yield* simpleThreadCommand("thread.room-board.clear", input);
 });
 
 export interface SetGuestTrustInput extends ThreadCommandInput {
