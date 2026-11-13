@@ -90,6 +90,7 @@ export const GUEST_FAILURE = {
   artifactGone: "This artifact is no longer on the board.",
   boxGone: "This thread box is no longer on the board.",
   boxNotYours: "This thread box is someone else's. Only your own takes your messages.",
+  threadOnBoard: "This thread is already on the board.",
 } as const;
 
 const isExpired = (share: ThreadGuestShare, now: DateTime.Utc) =>
@@ -548,6 +549,34 @@ export function decideGuestShareCommand(input: {
           ...thread,
           guestShare: Object.keys(kept).length === 0 ? rest : { ...rest, boardThreads: kept },
         });
+      }
+      if (command.box !== undefined) {
+        const { turn, ...at } = command.box;
+        const boxThreadId = command.boxThreadId;
+        if (share.board?.notes.some((note) => note.id === command.boxId) === true) {
+          return Result.fail("A card with this id is already on the board.");
+        }
+        // One box per thread, so a run always shows on one box.
+        if (Object.values(threads).includes(boxThreadId)) {
+          return Result.fail(GUEST_FAILURE.threadOnBoard);
+        }
+        return Result.map(
+          applyRoomBoardChange(
+            share.board ?? EMPTY_ROOM_BOARD,
+            roomScope(share),
+            null,
+            { type: "note.put", noteId: command.boxId, kind: "thread", ...at },
+            DateTime.formatIso(now),
+          ),
+          (added) => ({
+            ...thread,
+            guestShare: {
+              ...share,
+              board: turn === undefined ? added : boardWithBoxTurn(added, command.boxId, turn),
+              boardThreads: { ...threads, [command.boxId]: boxThreadId },
+            },
+          }),
+        );
       }
       // A guest's box runs here too while its requests come through the owner.
       if (roomBoxOn(share, command.boxId) === undefined) return Result.fail(GUEST_FAILURE.boxGone);

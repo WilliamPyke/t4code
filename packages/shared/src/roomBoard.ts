@@ -445,6 +445,15 @@ export const roomRunPromptText = (items: ReadonlyArray<OrchestrationV2TurnItem>)
     () => "",
   );
 
+/** The last thing the agent said in a run, whole, or "" when it said nothing. */
+export const roomRunReplyText = (items: ReadonlyArray<OrchestrationV2TurnItem>): string =>
+  [...items]
+    .sort((left, right) => left.ordinal - right.ordinal)
+    .flatMap((item) =>
+      item.type === "assistant_message" && !item.streaming ? [item.text.trim()] : [],
+    )
+    .findLast((text) => text !== "") ?? "";
+
 /** The note an arrow or a card names (`note:<id>`), if the board has it. */
 export const roomBoardNoteOfRef = (board: RoomBoard | undefined, ref: string) =>
   board?.notes.find((note) => roomBoardNoteRef(note.id) === ref);

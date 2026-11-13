@@ -33,6 +33,7 @@ import {
   boardBoxAgentLabel,
   boardBoxName,
   boardBoxRequests,
+  boardThreadBoxTitle,
   boardGuestWaiting,
   boardCardBox,
   boardChangeOf,
@@ -1077,6 +1078,14 @@ describe("thread boxes", () => {
     expect(boardBoxName({ id: "b2", guestId: sam, title: "" }, { guests, viewer: null })).toBe(
       "Sam's thread",
     );
+  });
+
+  it.each([
+    ["Fix  the\nlogin ", "Fix the login"],
+    ["   ", "Board thread"],
+    ["a".repeat(81), `${"a".repeat(79)}…`],
+  ])("titles a box added for the thread %j as %j", (threadTitle, title) => {
+    expect(boardThreadBoxTitle(threadTitle)).toBe(title);
   });
 
   it("finds the requests waiting on each box, and none from the room thread's composer", () => {

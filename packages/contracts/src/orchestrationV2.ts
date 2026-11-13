@@ -3549,7 +3549,8 @@ const OrchestrationV2InternalCommand = Schema.Union([
   }),
   /**
    * Records the owner's thread behind one of their thread boxes, or with null forgets it. It
-   * changes the share and nothing else.
+   * changes the share and nothing else. With `box`, the box is added with the link, so an existing
+   * thread never lands on the board half linked; `turn` is its thread's last finished turn.
    */
   Schema.Struct({
     type: Schema.Literal("thread.room-box.link"),
@@ -3558,6 +3559,14 @@ const OrchestrationV2InternalCommand = Schema.Union([
     shareId: GuestShareId,
     boxId: RoomBoardNote.fields.id,
     boxThreadId: Schema.NullOr(ThreadId),
+    box: Schema.optional(
+      Schema.Struct({
+        text: RoomBoardNote.fields.text,
+        x: RoomBoardNote.fields.x,
+        y: RoomBoardNote.fields.y,
+        turn: Schema.optional(RoomBoxTurn),
+      }),
+    ),
   }),
   /** Shows a finished turn of a thread box's own thread on the box. It changes the share only. */
   Schema.Struct({

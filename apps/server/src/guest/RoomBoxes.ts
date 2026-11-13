@@ -12,15 +12,20 @@ import {
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
+  ROOM_BOARD_MAX_NOTES,
+  ROOM_BOARD_MAX_THREADS,
   ROOM_BOARD_ROOM_BOX,
   ROOM_BOX_PROGRESS_DETAIL_MAX_LENGTH,
   ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH,
+  type RoomBoxAddThreadInput,
   RoomBoxError,
   type RoomBoxProgress,
   type RoomBoxPromptInput,
   type RoomBoxPromptResult,
   type RoomBoardContextCard,
   ROOM_BOX_PROMPT_MAX_LENGTH,
+  ROOM_BOX_REPLY_MAX_LENGTH,
+  type RoomBoxTurn,
   type RunId,
   type ServerProvider,
   ThreadId,
@@ -39,7 +44,9 @@ import {
   roomBoardNoteOfRef,
   roomBoxExcerpt,
   roomBoxRequestOf,
+  roomCardLabelsOf,
   roomRunPromptText,
+  roomRunReplyText,
 } from "@t3tools/shared/roomBoard";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -189,6 +196,13 @@ interface BoxMessage {
   readonly title: string;
 }
 
+/** A box's thread as its room's share records it. */
+interface RoomBoxOfThread {
+  readonly roomThreadId: ThreadId;
+  readonly share: ThreadGuestShare;
+  readonly boxId: string;
+}
+
 /**
  * Thread boxes on the board of a thread the owner shares. Each box is a conversation of its own
  * on the owner's machine, made the first time it is prompted; the room thread's card is the room
@@ -201,6 +215,19 @@ export class RoomBoxes extends Context.Service<
     readonly prompt: (
       input: RoomBoxPromptInput,
     ) => Effect.Effect<RoomBoxPromptResult, RoomBoxError>;
+    /**
+     * The owner puts one of their existing threads on the board as a new box, linked to it in the
+     * same change, showing its last finished turn. Its runs show on the box from then on.
+     */
+    readonly addThread: (input: RoomBoxAddThreadInput) => Effect.Effect<void, RoomBoxError>;
+    /**
+     * The box a thread is behind, as its room's share records it, with that share and its room
+     * thread; null when it is no box's. Only that thread's runs write to the box.
+     */
+    readonly boxOfThread: (
+      threadId: ThreadId,
+      items: ReadonlyArray<OrchestrationV2TurnItem>,
+    ) => Effect.Effect<RoomBoxOfThread | null, Orchestrator.OrchestratorV2Error>;
     /**
      * The owner sends a guest's waiting message: in the guest's own box when it names one still
      * on the board, else in the room thread, with text this server builds.
@@ -249,6 +276,39 @@ const make = Effect.gen(function* () {
       Effect.map(({ thread }) => thread.deletedAt === null && thread.archivedAt === null),
       Effect.orElseSucceed(() => false),
     );
+
+  /**
+   * The room thread whose share records each box's thread, read once here and kept from the
+   * shares' changes, so a run finds its box without a scan. A hint only: `boxOfThread` checks the
+   * share still records it, so an entry left behind finds nothing.
+   */
+  const boxRooms = new Map(
+    (yield* orchestrator
+      .listRoomBoxThreads()
+      .pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Could not read which threads are behind thread boxes", { cause }).pipe(
+            Effect.as([]),
+          ),
+        ),
+      )).map(({ roomThreadId, boxThreadId }) => [boxThreadId, roomThreadId] as const),
+  );
+
+  const boxOfThread = Effect.fn("RoomBoxes.boxOfThread")(function* (
+    threadId: ThreadId,
+    items: ReadonlyArray<OrchestrationV2TurnItem>,
+  ) {
+    // A message sent from the board names its room, for a link this server has not seen yet.
+    const named = boxRooms.has(threadId) ? undefined : roomBoxRequestOf(items);
+    const roomThreadId =
+      boxRooms.get(threadId) ??
+      (named === undefined ? null : yield* orchestrator.findGuestShareThreadId(named.shareId));
+    if (roomThreadId === null) return null;
+    const share =
+      (yield* orchestrator.getThreadRecords(roomThreadId, [])).thread.guestShare ?? null;
+    const boxId = share === null ? undefined : boxIdOfThread(share, threadId);
+    return share === null || boxId === undefined ? null : { roomThreadId, share, boxId };
+  });
 
   const dispatchMessage = (
     threadId: ThreadId,
@@ -431,6 +491,85 @@ const make = Effect.gen(function* () {
     return { boxThreadId };
   });
 
+  /** A thread's last turn as its box shows it, when its last run finished and said something. */
+  const lastTurnOf = Effect.fn("RoomBoxes.lastTurnOf")(
+    function* (threadId: ThreadId) {
+      const runId = (yield* orchestrator.getThreadShell(threadId))?.latestRunId ?? null;
+      if (runId === null) return undefined;
+      const { turnItems, runs } = yield* orchestrator.getThreadRecords(
+        threadId,
+        ["turnItems", "runs"],
+        { turnItemRunIds: [runId], runIds: [runId] },
+      );
+      const run = runs.find((candidate) => candidate.id === runId);
+      const reply = roomRunReplyText(turnItems);
+      if (run?.status !== "completed" || reply === "") return undefined;
+      const cards = roomCardLabelsOf(turnItems);
+      const model = roomBoxModelName(run.modelSelection, yield* providerRegistry.getProviders);
+      const turn: RoomBoxTurn = {
+        id: run.id,
+        prompt: roomBoxExcerpt(roomRunPromptText(turnItems), ROOM_BOX_PROMPT_MAX_LENGTH),
+        ...(cards.length === 0 ? {} : { cards: [...cards] }),
+        ...(model === "" ? {} : { model }),
+        reply: roomBoxExcerpt(reply, ROOM_BOX_REPLY_MAX_LENGTH),
+        at: DateTime.formatIso(run.completedAt ?? (yield* DateTime.now)),
+      };
+      return turn;
+    },
+    // The box starts empty instead.
+    Effect.catch((cause) =>
+      Effect.logWarning("Could not read a thread's last turn", { cause }).pipe(
+        Effect.as(undefined),
+      ),
+    ),
+  );
+
+  const addThread = Effect.fn("RoomBoxes.addThread")(function* (input: RoomBoxAddThreadInput) {
+    const { thread: room, share } = yield* readRoom(input.threadId);
+    if (Object.values(share.boardThreads ?? {}).includes(input.boxThreadId)) {
+      return yield* fail("already_on_board");
+    }
+    const notes = share.board?.notes ?? [];
+    if (
+      notes.length >= ROOM_BOARD_MAX_NOTES ||
+      notes.filter((note) => note.kind === "thread").length >= ROOM_BOARD_MAX_THREADS
+    ) {
+      return yield* fail("board_full");
+    }
+    const { thread } = yield* orchestrator
+      .getThreadRecords(input.boxThreadId, [])
+      .pipe(Effect.mapError(() => fail("thread_unavailable")));
+    const elsewhere = yield* boxOfThread(thread.id, []).pipe(Effect.mapError(() => fail("failed")));
+    // A shared thread, one in someone's room, or another board's box shows its turns to a room.
+    if (
+      thread.id === room.id ||
+      thread.deletedAt !== null ||
+      thread.archivedAt !== null ||
+      thread.guestShare != null ||
+      thread.roomLink != null ||
+      elsewhere !== null
+    ) {
+      return yield* fail("thread_unavailable");
+    }
+    const turn = yield* lastTurnOf(thread.id);
+    yield* orchestrator
+      .dispatch({
+        type: "thread.room-box.link",
+        commandId: yield* commandIdOf("add"),
+        threadId: room.id,
+        shareId: share.id,
+        boxId: input.boxId,
+        boxThreadId: thread.id,
+        box: {
+          text: boxTitle(clip(thread.title.replace(/\s+/g, " ").trim(), BOX_TITLE_MAX_LENGTH), ""),
+          x: input.x,
+          y: input.y,
+          ...(turn === undefined ? {} : { turn }),
+        },
+      })
+      .pipe(Effect.mapError(() => fail("failed")));
+  });
+
   /** The send a guest's message always had: the owner's Send on the room thread. */
   const sendInRoom = (
     roomThreadId: ThreadId,
@@ -575,15 +714,9 @@ const make = Effect.gen(function* () {
         ?.guestMessageId;
       asked = share.messages.find((message) => message.id === guestMessageId);
     } else {
-      const box = roomBoxRequestOf(turnItems);
-      if (box === undefined) return null;
-      const roomThreadId = yield* orchestrator.findGuestShareThreadId(box.shareId);
-      if (roomThreadId === null) return null;
-      const roomShare = (yield* orchestrator.getThreadRecords(roomThreadId, [])).thread.guestShare;
-      if (roomShare == null || !isBoxThread(roomShare, box.shareId, box.boxId, threadId)) {
-        return null;
-      }
-      share = roomShare;
+      const box = yield* boxOfThread(threadId, turnItems);
+      if (box === null) return null;
+      share = box.share;
       boxId = box.boxId;
       // Found by the message this server sent the guest's request as.
       asked = share.messages.find((message) => message.sentAs === run.userMessageId);
@@ -632,8 +765,25 @@ const make = Effect.gen(function* () {
     return true;
   };
 
+  /** Keeps the index to a room's share as it changes. */
+  const noteBoardThreads = (roomThreadId: ThreadId, share: ThreadGuestShare | null) => {
+    let linked = false;
+    for (const [boxThreadId, room] of boxRooms) {
+      if (room === roomThreadId) boxRooms.delete(boxThreadId);
+    }
+    for (const boxThreadId of Object.values(share?.boardThreads ?? {})) {
+      linked ||= !boxRooms.has(boxThreadId);
+      boxRooms.set(boxThreadId, roomThreadId);
+    }
+    // A thread just put on the board may be running already, in a run passed over as no box's.
+    if (linked) ignored.clear();
+  };
+
   // Untraced: it sees every domain event of every thread, and most do nothing here.
   const onEvent = Effect.fnUntraced(function* (event: OrchestrationV2DomainEvent) {
+    if (event.type === "thread.guest-share-updated") {
+      return noteBoardThreads(event.threadId, event.payload.guestShare ?? null);
+    }
     if (event.type === "run.created" || event.type === "run.updated") {
       const run = event.payload;
       const known = tracked.get(run.id);
@@ -762,19 +912,20 @@ const make = Effect.gen(function* () {
       .pipe(Effect.mapError(() => fail("not_pending")));
   });
 
-  return RoomBoxes.of({ prompt, sendGuestMessage, resolveGuestMessage, progress });
+  return RoomBoxes.of({
+    prompt,
+    addThread,
+    boxOfThread,
+    sendGuestMessage,
+    resolveGuestMessage,
+    progress,
+  });
 });
 
-/** Whether a thread is the one the share recorded for this box: only its runs write to the box. */
-export const isBoxThread = (
-  share: ThreadGuestShare | null,
-  shareId: GuestShareId,
-  boxId: string,
-  threadId: ThreadId,
-): boolean =>
-  share !== null &&
-  share.id === shareId &&
-  roomBoxOn(share, boxId) !== undefined &&
-  share.boardThreads?.[boxId] === threadId;
+/** The box on the share's board whose recorded thread this is: only its runs write to the box. */
+const boxIdOfThread = (share: ThreadGuestShare, threadId: ThreadId): string | undefined =>
+  Object.entries(share.boardThreads ?? {}).find(
+    ([boxId, boxThreadId]) => boxThreadId === threadId && roomBoxOn(share, boxId) !== undefined,
+  )?.[0];
 
 export const layer = Layer.effect(RoomBoxes, make);

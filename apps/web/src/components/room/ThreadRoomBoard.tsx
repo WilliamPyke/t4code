@@ -54,6 +54,7 @@ import { Button } from "../ui/button";
 import { SidebarInset } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
 import { BoardChatPanel } from "./BoardChatPanel";
+import { BoardThreadPicker } from "./BoardThreadPicker";
 import {
   BoardModelName,
   BoardModelPicker,
@@ -68,6 +69,7 @@ import {
   BOARD_THREAD_MESSAGES,
   EMPTY_ROOM_BOARD,
   appendNoteToDraft,
+  type BoardPoint,
   type BoardPrompt,
   boardMessages,
 } from "./roomBoard.logic";
@@ -210,6 +212,15 @@ export function ThreadRoomBoard({
   );
   const promptRoomBox = useAtomCommand(serverEnvironment.promptRoomBox, "send the prompt");
   const boardThreads = share?.boardThreads ?? NO_BOARD_THREADS;
+  const canAddThread = useAtomValue(
+    serverEnvironment.addRoomBoxThread.permissionAtom(threadRef.environmentId),
+  );
+  const addRoomBoxThread = useAtomCommand(
+    serverEnvironment.addRoomBoxThread,
+    "add the thread to the board",
+  );
+  // Where the box goes once the owner picks which of their threads it is.
+  const [addingAt, setAddingAt] = useState<BoardPoint | null>(null);
   // What the room thread's composer would send with now; a new box starts from it.
   const roomPick = useComposerDraftStore((store) =>
     composerDraftPick(store.getComposerDraft(threadRef)),
@@ -397,6 +408,7 @@ export function ThreadRoomBoard({
               onOpenPullRequest={canOpenPullRequest ? () => void openPullRequest() : undefined}
               openingPullRequest={openingPullRequest}
               onPromptBox={share !== null && canPrompt ? promptBox : undefined}
+              onAddThread={share !== null && canAddThread ? setAddingAt : undefined}
               renderBoxModel={renderBoxModel}
               onOpenConversation={openPanel}
               renderRequestModel={renderRequestModel}
@@ -420,6 +432,24 @@ export function ThreadRoomBoard({
             )
           }
         />
+        {addingAt === null ? null : (
+          <BoardThreadPicker
+            environmentId={threadRef.environmentId}
+            excluded={new Set([threadRef.threadId, ...Object.values(boardThreads)])}
+            onPick={(picked) =>
+              addRoomBoxThread({
+                environmentId: threadRef.environmentId,
+                input: {
+                  threadId: threadRef.threadId,
+                  boxId: randomUUID(),
+                  boxThreadId: picked.id,
+                  ...addingAt,
+                },
+              }).then((result) => result._tag === "Success")
+            }
+            onClose={() => setAddingAt(null)}
+          />
+        )}
       </RoomLiveContext>
     </SidebarInset>
   );

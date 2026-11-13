@@ -544,6 +544,11 @@ export interface ProjectionStoreV2Shape {
   readonly findGuestShareThreadId: (
     shareId: GuestShareId,
   ) => Effect.Effect<ThreadId | null, ProjectionStoreV2Error>;
+  /** Every thread a share records behind one of its thread boxes, with its room thread. */
+  readonly listRoomBoxThreads: () => Effect.Effect<
+    ReadonlyArray<{ readonly roomThreadId: ThreadId; readonly boxThreadId: ThreadId }>,
+    ProjectionStoreV2Error
+  >;
   readonly getThread: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2AppThread, ProjectionStoreV2Error>;
@@ -7354,6 +7359,19 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       return rows[0] === undefined ? null : ThreadId.make(rows[0].thread_id);
     }, Effect.mapError(shellSnapshotReadError));
 
+    const listRoomBoxThreads = Effect.fn("ProjectionStore.listRoomBoxThreads")(function* () {
+      const rows = yield* sql<{ readonly room_thread_id: string; readonly box_thread_id: string }>`
+        SELECT thread.thread_id AS room_thread_id, box.value AS box_thread_id
+        FROM orchestration_v2_projection_threads AS thread,
+          json_each(thread.payload_json, '$.guestShare.boardThreads') AS box
+        WHERE thread.deleted_at IS NULL
+      `;
+      return rows.map((row) => ({
+        roomThreadId: ThreadId.make(row.room_thread_id),
+        boxThreadId: ThreadId.make(row.box_thread_id),
+      }));
+    }, Effect.mapError(shellSnapshotReadError));
+
     const listOlderSettledThreads: ProjectionStoreV2Shape["listOlderSettledThreads"] = Effect.fn(
       "ProjectionStore.listOlderSettledThreads",
     )(function* ({ before, projectIds, limit }) {
@@ -7505,6 +7523,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       listOlderSettledThreads: readOnReader(listOlderSettledThreads),
       getThreadShell: readOnReader(getThreadShell),
       findGuestShareThreadId: readOnReader(findGuestShareThreadId),
+      listRoomBoxThreads: readOnReader(listRoomBoxThreads),
       getThread: readOnReader(getThread),
       getSettlementCandidates: readOnReader(getSettlementCandidates),
       getThreadsWithPullRequests: readOnReader(getThreadsWithPullRequests),

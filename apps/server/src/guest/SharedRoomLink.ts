@@ -32,6 +32,7 @@ import {
   type RunId,
   type SharedThreadCatchUpResult,
   type SharedThreadFindRoomResult,
+  type SharedThreadLinkBoxInput,
   type SharedThreadPromptBoxInput,
   type SharedThreadPromptBoxResult,
   type SharedThreadRoom,
@@ -51,9 +52,9 @@ import {
   roomArtifactBody,
   roomArtifactRequestOf,
   roomBoxExcerpt,
-  roomBoxRequestOf,
   roomCardLabelsOf,
   roomRunPromptText,
+  roomRunReplyText,
 } from "@t3tools/shared/roomBoard";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Context from "effect/Context";
@@ -76,7 +77,7 @@ import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { forkParked } from "../serverActivation.ts";
-import { isBoxThread, roomBoxModelName, toolActivity } from "./RoomBoxes.ts";
+import * as RoomBoxes from "./RoomBoxes.ts";
 import { clip } from "./roomUpdates.ts";
 
 const REQUEST_TIMEOUT = Duration.seconds(20);
@@ -159,15 +160,6 @@ const taskOfRun = (
     ? link.task.id
     : undefined;
 
-/** The last thing the agent said in a run, whole, or "" when it said nothing. */
-const replyOf = (items: ReadonlyArray<OrchestrationV2TurnItem>) =>
-  items
-    .toSorted((left, right) => left.ordinal - right.ordinal)
-    .flatMap((item) =>
-      item.type === "assistant_message" && !item.streaming ? [item.text.trim()] : [],
-    )
-    .findLast((text) => text !== "") ?? "";
-
 /** A finished run as the room shows it: the prompt and the last thing the agent said. */
 export function guestTurnOf(
   runId: RunId,
@@ -177,7 +169,7 @@ export function guestTurnOf(
     items
       .toSorted((left, right) => left.ordinal - right.ordinal)
       .flatMap((item) => (item.type === "user_message" ? [item.text.trim()] : []))[0] ?? "";
-  const reply = replyOf(items);
+  const reply = roomRunReplyText(items);
   if (reply === "") return null;
   const truncated =
     prompt.length > GUEST_TURN_PROMPT_MAX_LENGTH || reply.length > GUEST_TURN_REPLY_MAX_LENGTH;
@@ -213,7 +205,7 @@ function artifactOfRun(
   noteId: string | undefined,
   items: ReadonlyArray<OrchestrationV2TurnItem>,
 ): NonNullable<GuestTurnRequest["artifact"]> | undefined {
-  const reply = noteId === undefined ? "" : replyOf(items);
+  const reply = noteId === undefined ? "" : roomRunReplyText(items);
   if (noteId === undefined || reply === "") return undefined;
   const { body, truncated } = roomArtifactBody(reply);
   return { noteId, body, ...(truncated ? { truncated } : {}) };
@@ -276,6 +268,14 @@ export class SharedRoomLink extends Context.Service<
     readonly promptBox: (
       input: SharedThreadPromptBoxInput,
     ) => Effect.Effect<SharedThreadPromptBoxResult, SharedThreadJoinError>;
+    /**
+     * Makes one of the user's threads here the thread behind their own new box on a room's board,
+     * beside the thread joined from that room. Its turns show on the box from then on, starting
+     * with its last finished one.
+     */
+    readonly linkBox: (
+      input: SharedThreadLinkBoxInput,
+    ) => Effect.Effect<void, SharedThreadJoinError>;
     /** The thread joined from a room here, and the threads behind the user's boxes there. */
     readonly findRoom: (
       host: string,
@@ -305,6 +305,7 @@ const make = Effect.gen(function* () {
   const git = yield* GitWorkflow.GitWorkflowService;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const launches = yield* ThreadLaunch.ThreadLaunchService;
+  const roomBoxes = yield* RoomBoxes.RoomBoxes;
   // One box gets one thread, however many prompts reach it at once.
   const boxThreads = yield* Semaphore.make(1);
   // The last run posted per thread: a finished run is updated again when its checkpoint lands.
@@ -721,7 +722,7 @@ const make = Effect.gen(function* () {
     const model =
       link.boxId === undefined || run === undefined
         ? ""
-        : roomBoxModelName(run.modelSelection, yield* providerRegistry.getProviders);
+        : RoomBoxes.roomBoxModelName(run.modelSelection, yield* providerRegistry.getProviders);
     return {
       turnItems,
       artifactId,
@@ -907,7 +908,7 @@ const make = Effect.gen(function* () {
     const model =
       run === undefined
         ? undefined
-        : roomBoxModelName(run.modelSelection, yield* providerRegistry.getProviders);
+        : RoomBoxes.roomBoxModelName(run.modelSelection, yield* providerRegistry.getProviders);
     return {
       prompt: roomBoxExcerpt(asked?.text ?? roomRunPromptText(items), ROOM_BOX_PROMPT_MAX_LENGTH),
       ...(cards.length === 0 ? {} : { cards: [...cards] }),
@@ -971,14 +972,10 @@ const make = Effect.gen(function* () {
     turnItems: ReadonlyArray<OrchestrationV2TurnItem>,
     run: OrchestrationV2Run | undefined,
   ) {
-    const box = roomBoxRequestOf(turnItems);
-    if (box === undefined) return;
-    const roomThreadId = yield* orchestrator.findGuestShareThreadId(box.shareId);
-    if (roomThreadId === null) return;
-    const { thread: room } = yield* orchestrator.getThreadRecords(roomThreadId, []);
-    const share = room.guestShare ?? null;
-    if (share === null || !isBoxThread(share, box.shareId, box.boxId, threadId)) return;
-    const reply = replyOf(turnItems);
+    const box = yield* roomBoxes.boxOfThread(threadId, turnItems);
+    if (box === null) return;
+    const { roomThreadId, share } = box;
+    const reply = roomRunReplyText(turnItems);
     if (reply === "") return;
     // The guest's request the owner sent, found by the message this server sent it as.
     const asked =
@@ -1028,6 +1025,67 @@ const make = Effect.gen(function* () {
         ? answerOnOwnBoard(threadId, runId)
         : publishActivity(threadId, runId, kind),
   );
+  const linkBox = Effect.fn("SharedRoomLink.linkBox")(function* (input: SharedThreadLinkBoxInput) {
+    const joined = yield* findJoined(input.host, input.shareId);
+    if (joined === null) return yield* fail("room_ended");
+    const outcome = yield* boxThreads
+      .withPermits(1)(
+        Effect.gen(function* () {
+          const { thread: room } = yield* orchestrator.getThreadRecords(joined.threadId, []);
+          const link = room.roomLink ?? null;
+          const token = yield* secrets.get(tokenSecretName(joined.threadId));
+          if (link === null || Option.isNone(token)) return "room_ended" as const;
+          const thread = yield* orchestrator.getThreadRecords(input.threadId, []).pipe(
+            Effect.map((records) => records.thread),
+            Effect.orElseSucceed(() => null),
+          );
+          // A thread in a room already, the joined one or a box's among them, shows it its turns.
+          if (
+            thread === null ||
+            thread.deletedAt !== null ||
+            thread.archivedAt !== null ||
+            thread.roomLink != null ||
+            thread.id === joined.threadId ||
+            Object.values(link.boxes ?? {}).includes(thread.id)
+          ) {
+            return "unavailable" as const;
+          }
+          yield* secrets.set(tokenSecretName(thread.id), token.value);
+          yield* setLink(thread.id, {
+            host: link.host,
+            expiresAt: link.expiresAt,
+            ...(link.shareId === undefined ? {} : { shareId: link.shareId }),
+            boxId: input.boxId,
+          });
+          yield* setLink(joined.threadId, {
+            ...link,
+            boxes: { ...link.boxes, [input.boxId]: thread.id },
+          });
+          return "linked" as const;
+        }),
+      )
+      .pipe(
+        Effect.tapError((cause) =>
+          Effect.logWarning("Could not link a box's thread here", { cause }),
+        ),
+        Effect.mapError(() => fail("launch_failed")),
+      );
+    if (outcome === "room_ended") return yield* fail("room_ended");
+    if (outcome === "unavailable") return yield* fail("thread_unavailable");
+    // So the box does not start empty: its thread's last turn, once that run has finished.
+    const latest = yield* orchestrator.getThreadShell(input.threadId).pipe(
+      Effect.map((shell) => shell?.latestRunId ?? null),
+      Effect.orElseSucceed(() => null),
+    );
+    if (latest === null) return;
+    const { runs } = yield* orchestrator
+      .getThreadRecords(input.threadId, ["runs"], { runIds: [latest] })
+      .pipe(Effect.orElseSucceed(() => ({ runs: [] })));
+    if (runs.find((run) => run.id === latest)?.status === "completed") {
+      yield* worker.enqueue({ kind: "turn", threadId: input.threadId, runId: latest });
+    }
+  });
+
   /** Notes what a box thread's event says its agent does. Returns whether that changed. */
   const noteBoxProgress = (live: BoxRun, event: OrchestrationV2DomainEvent): boolean => {
     const write = (text: string) => {
@@ -1056,7 +1114,7 @@ const make = Effect.gen(function* () {
       live.work = "thinking";
       return true;
     }
-    const tool = toolActivity(item);
+    const tool = RoomBoxes.toolActivity(item);
     if (tool === null || (live.work === "tool" && live.detail === tool.shared)) return false;
     live.work = "tool";
     live.detail = tool.shared;
@@ -1109,6 +1167,7 @@ const make = Effect.gen(function* () {
     takeArtifact,
     findRoom,
     promptBox,
+    linkBox,
     publishRun,
     publishActivity,
     drain: worker.drain,

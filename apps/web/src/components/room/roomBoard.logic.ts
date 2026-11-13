@@ -1377,6 +1377,17 @@ export function boardBoxAgentLabel(
     : `${possessive} agent`;
 }
 
+const BOX_TITLE_MAX_LENGTH = 80;
+
+/** The title a thread box takes from the thread it is added for: one line, cut short. */
+export function boardThreadBoxTitle(threadTitle: string): string {
+  const title = threadTitle.replace(/\s+/g, " ").trim();
+  if (title === "") return "Board thread";
+  return title.length <= BOX_TITLE_MAX_LENGTH
+    ? title
+    : `${title.slice(0, BOX_TITLE_MAX_LENGTH - 1).replace(/[\uD800-\uDBFF]$/, "")}…`;
+}
+
 /** A box as other cards name it: `Your thread "Pricing"`, or `Sam's thread`. */
 export function boardBoxName(box: BoardThreadBox, people: BoardPeople): string {
   const person = boardPersonName(people, box.guestId);

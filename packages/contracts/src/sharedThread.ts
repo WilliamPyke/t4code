@@ -101,6 +101,18 @@ export type SharedThreadPromptBoxInput = typeof SharedThreadPromptBoxInput.Type;
 export const SharedThreadPromptBoxResult = Schema.Struct({ threadId: Schema.NullOr(ThreadId) });
 export type SharedThreadPromptBoxResult = typeof SharedThreadPromptBoxResult.Type;
 
+/**
+ * Makes one of the user's existing threads on this machine the thread behind their own new thread
+ * box on a room's board, which their app already added there. Its turns show on the box from then.
+ */
+export const SharedThreadLinkBoxInput = Schema.Struct({
+  host: TrimmedNonEmptyString,
+  shareId: GuestShareId,
+  boxId: RoomBoardNote.fields.id,
+  threadId: ThreadId,
+});
+export type SharedThreadLinkBoxInput = typeof SharedThreadLinkBoxInput.Type;
+
 /** A room as its link names it, to find what this machine has of it. */
 export const SharedThreadFindRoomInput = Schema.Struct({
   host: TrimmedNonEmptyString,
@@ -186,6 +198,8 @@ const SHARED_THREAD_JOIN_MESSAGES = {
   not_in_room: "This thread is not connected to a room.",
   room_ended: "The room has ended, or you are no longer in it.",
   too_fast: "The room was asked too often. Try again in a minute.",
+  thread_unavailable:
+    "This thread cannot go on the board. It may be archived or deleted, or in a room already.",
 } as const;
 
 export class SharedThreadJoinError extends Schema.TaggedError<SharedThreadJoinError>()(
@@ -201,6 +215,7 @@ export class SharedThreadJoinError extends Schema.TaggedError<SharedThreadJoinEr
       "not_in_room",
       "room_ended",
       "too_fast",
+      "thread_unavailable",
     ]),
   },
 ) {

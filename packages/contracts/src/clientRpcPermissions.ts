@@ -81,6 +81,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   // Makes this server call the room's machine for a card the user then sends to their agent.
   [WS_METHODS.sharedThreadTakeArtifact]: AuthOrchestrationOperateScope,
   [WS_METHODS.sharedThreadPromptBox]: AuthOrchestrationOperateScope,
+  // Changes what the room is shown of one of this machine's threads.
+  [WS_METHODS.sharedThreadLinkBox]: AuthOrchestrationOperateScope,
   [WS_METHODS.sharedThreadFindRoom]: AuthOrchestrationOperateScope,
   // A guest link hands thread access to someone outside, like a pairing link.
   [WS_METHODS.guestShareCreate]: AuthAccessWriteScope,
@@ -89,6 +91,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.guestShareMoveCursor]: AuthOrchestrationOperateScope,
   // Both start a turn on this environment's agent, as sending a message does.
   [WS_METHODS.guestSharePromptBox]: AuthOrchestrationOperateScope,
+  // Shows one of the owner's threads to the room from then on.
+  [WS_METHODS.guestShareAddBoxThread]: AuthOrchestrationOperateScope,
   [WS_METHODS.guestShareResolveMessage]: AuthOrchestrationOperateScope,
   [WS_METHODS.peerLinksLink]: AuthAccessWriteScope,
   [WS_METHODS.peerLinksUnlink]: AuthAccessWriteScope,

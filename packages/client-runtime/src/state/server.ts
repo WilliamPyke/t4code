@@ -1602,6 +1602,11 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:guest-share:prompt-box",
       tag: WS_METHODS.guestSharePromptBox,
     }),
+    // Puts one of the owner's existing threads on a shared thread's board as a thread box.
+    addRoomBoxThread: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:guest-share:add-box-thread",
+      tag: WS_METHODS.guestShareAddBoxThread,
+    }),
     // What a shared thread's link would bring to this environment, read before joining.
     previewSharedThread: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:shared-thread:preview",
@@ -1635,6 +1640,11 @@ export function createServerEnvironmentAtoms<R, E>(
     promptSharedRoomBox: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:shared-thread:prompt-box",
       tag: WS_METHODS.sharedThreadPromptBox,
+    }),
+    // Makes one of this machine's threads the thread behind the user's own new box on a room's board.
+    linkSharedRoomBox: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:shared-thread:link-box",
+      tag: WS_METHODS.sharedThreadLinkBox,
     }),
     // What this machine has of a room: the thread joined from it and its thread boxes' threads.
     findSharedRoom: createEnvironmentRpcCommand(runtime, {

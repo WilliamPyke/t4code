@@ -38,6 +38,8 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as RoomBoxes from "./RoomBoxes.ts";
 import * as SharedRoomLink from "./SharedRoomLink.ts";
 
 const threadId = ThreadId.make("thread:joined");
@@ -77,6 +79,8 @@ const world = Effect.fn(function* (
   joinedItemsOf?: (runId: string) => ReadonlyArray<OrchestrationV2TurnItem>,
 ) {
   const link = yield* Ref.make<ThreadRoomLink | null>(null);
+  // Other threads on this machine, as they differ from a plain one; null when there is none.
+  const here = yield* Ref.make<ReadonlyMap<string, object | null>>(new Map());
   const replies = yield* Ref.make(statuses);
   const posts = yield* Ref.make<ReadonlyArray<unknown>>([]);
   const requestedAt = yield* Ref.make(0);
@@ -89,6 +93,8 @@ const world = Effect.fn(function* (
     ReadonlyArray<Extract<OrchestrationV2ServerCommand, { type: "message.dispatch" }>>
   >([]);
   const layer = SharedRoomLink.layer.pipe(
+    Layer.provide(RoomBoxes.layer),
+    Layer.provide(ServerSettings.layerTest({})),
     Layer.provide(
       Layer.mock(ThreadLaunch.ThreadLaunchService)({
         launch: (input) =>
@@ -118,18 +124,38 @@ const world = Effect.fn(function* (
                   owner !== undefined
                 ? Queue.offer(answers, command).pipe(Effect.as({} as never))
                 : Effect.die("Only the room link changes here"),
+        listRoomBoxThreads: () =>
+          Effect.succeed(
+            [...(owner?.rooms ?? [])].flatMap(([roomThreadId, share]) =>
+              Object.values(share.boardThreads ?? {}).map((boxThreadId) => ({
+                roomThreadId: ThreadId.make(roomThreadId),
+                boxThreadId,
+              })),
+            ),
+          ),
+        // Every thread here last ran `run:last`.
+        getThreadShell: () => Effect.succeed({ latestRunId: "run:last" } as never),
         findGuestShareThreadId: (shareId) =>
           Effect.succeed(
             ([...(owner?.rooms ?? [])].find(([, share]) => share.id === shareId)?.[0] ??
               null) as never,
           ),
         getThreadRecords: (readThreadId, _fields, filter) =>
-          Effect.all([Ref.get(link), Ref.get(requestedAt), Ref.get(boxLinks)]).pipe(
+          Effect.all([Ref.get(link), Ref.get(requestedAt), Ref.get(boxLinks), Ref.get(here)]).pipe(
+            Effect.filterOrFail(
+              ([, , , others]) => others.get(readThreadId) !== null,
+              () => ({ _tag: "OrchestratorProjectionError" }) as never,
+            ),
             Effect.map(
-              ([joinedLink, at, links]) =>
+              ([joinedLink, at, links, others]) =>
                 ({
                   thread: {
-                    roomLink: links.has(readThreadId) ? links.get(readThreadId) : joinedLink,
+                    id: readThreadId,
+                    roomLink: links.has(readThreadId)
+                      ? links.get(readThreadId)
+                      : others.has(readThreadId)
+                        ? null
+                        : joinedLink,
                     guestShare: owner?.rooms?.get(readThreadId) ?? owner?.share ?? null,
                     projectId: "project:joined",
                     worktreePath: null,
@@ -137,12 +163,14 @@ const world = Effect.fn(function* (
                     deletedAt: null,
                     archivedAt: null,
                     modelSelection: { instanceId: "codex", model: "gpt-5.1-codex" },
+                    ...others.get(readThreadId),
                   } as unknown as OrchestrationV2AppThread,
                   turnItems: (owner?.itemsOf ?? joinedItemsOf ?? (() => items))(
                     filter?.turnItemRunIds?.[0] ?? "",
                   ),
                   runs: (filter?.runIds ?? []).map((id) => ({
                     id,
+                    status: "completed",
                     requestedAt: DateTime.makeUnsafe(at),
                     userMessageId: owner?.userMessageOf?.(id) ?? `message:${id}`,
                     modelSelection: { instanceId: "codex", model: "gpt-5.1-codex" },
@@ -204,7 +232,7 @@ const world = Effect.fn(function* (
     Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-shared-room-" })),
     Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
-  return { link, posts, layer, requestedAt, status, answers, boxLinks, launched, sent };
+  return { link, here, posts, layer, requestedAt, status, answers, boxLinks, launched, sent };
 });
 
 it("shows the room a run's prompt and its last reply, cut to what the room keeps", () => {
@@ -728,13 +756,17 @@ it.effect(
       ];
       const runs: Record<string, ReadonlyArray<OrchestrationV2TurnItem>> = {
         "run:cancelled": turn(context(shareId, "box:plan"), "Stopped."),
-        // Names a box whose thread is another one, so this thread cannot write to it.
-        "run:unregistered": turn(context(shareId, "box:other"), "Not mine."),
-        "run:old-share": turn(context("share:old", "box:plan"), "Old room."),
+        // Says it is the box's, from a thread the share never recorded for it.
+        "run:stray": turn(context(shareId, "box:plan"), "Not mine."),
+        // The owner's own message in the box's thread, with nothing of the board.
+        "run:own": [
+          item(1, { type: "user_message", text: "Fix the login" }),
+          item(2, { type: "assistant_message", text: "Fixed." }),
+        ],
         "run:asked": turn(context(shareId, "box:plan"), "# Dark plan"),
       };
-      const settled = (id: string, status: string) =>
-        ({ type: "run.updated", threadId, payload: { id, status } }) as never;
+      const settled = (id: string, status: string, from: string = threadId) =>
+        ({ type: "run.updated", threadId: from, payload: { id, status } }) as never;
       const note = (id: string, kind: string) => ({ id, text: "Plan", x: 0, y: 0, kind });
       const { answers, layer } = yield* world([], {
         share: null,
@@ -770,15 +802,24 @@ it.effect(
         userMessageOf: (runId) => (runId === "run:asked" ? "message:asked" : `message:${runId}`),
         events: [
           settled("run:cancelled", "cancelled"),
-          settled("run:unregistered", "completed"),
-          settled("run:old-share", "completed"),
+          settled("run:stray", "completed", "thread:stray"),
+          settled("run:own", "completed"),
           settled("run:asked", "completed"),
         ],
         itemsOf: (runId) => runs[runId] ?? [],
       });
       yield* Effect.gen(function* () {
         yield* SharedRoomLink.SharedRoomLink;
-        // Runs are taken in order, so the first command shows none came before it.
+        // Runs are taken in order, so the first command shows none came before it. A turn run
+        // from the thread itself shows on its box, and fills no artifact it was not sent for.
+        const own = yield* Queue.take(answers);
+        assert.deepInclude(own, { type: "thread.room-box.turn", boxId: "box:plan" } as never);
+        assert.deepInclude((own as { turn: object }).turn, {
+          id: "run:own",
+          prompt: "Fix the login",
+          reply: "Fixed.",
+          model: "GPT-5.1 Codex",
+        });
         const shown = yield* Queue.take(answers);
         assert.deepInclude(shown, {
           type: "thread.room-box.turn",
@@ -989,6 +1030,80 @@ it.effect(
           second?.context?.records.map((record) => record.kind),
           ["room-cards"],
         );
+      }).pipe(Effect.provide(layer));
+    }),
+);
+
+it.effect(
+  "links one of the user's threads here to their new box, and refuses one that cannot be",
+  () =>
+    Effect.gen(function* () {
+      const shareId = GuestShareId.make("share:room");
+      const mine = ThreadId.make("thread:mine");
+      const { link, here, posts, layer, boxLinks } = yield* world([204]);
+      yield* Effect.gen(function* () {
+        const rooms = yield* SharedRoomLink.SharedRoomLink;
+        const linkBox = (boxId: string, linked: string) =>
+          rooms.linkBox({
+            host: "sam.t3.test",
+            shareId,
+            boxId,
+            threadId: ThreadId.make(linked),
+          });
+        const reason = (boxId: string, linked: string) =>
+          linkBox(boxId, linked).pipe(
+            Effect.as("linked"),
+            Effect.catch((error) => Effect.succeed(error.reason)),
+          );
+        // No thread here joined the room.
+        assert.equal(yield* reason("box:2", mine), "room_ended");
+        yield* rooms.connect(threadId, "sam.t3.test", { ...room, shareId });
+        yield* Ref.set(
+          here,
+          new Map<string, object | null>([
+            [mine, {}],
+            ["thread:archived", { archivedAt: DateTime.makeUnsafe(0) }],
+            ["thread:deleted", { deletedAt: DateTime.makeUnsafe(0) }],
+            ["thread:other-room", { roomLink: { host: "eve.t3.test" } }],
+            ["thread:gone", null],
+          ]),
+        );
+        assert.deepEqual(
+          yield* Effect.forEach(
+            [threadId, "thread:archived", "thread:deleted", "thread:other-room", "thread:gone"],
+            (linked) => reason("box:2", linked),
+          ),
+          Array.from({ length: 5 }, () => "thread_unavailable"),
+        );
+        assert.isUndefined((yield* Ref.get(link))?.boxes);
+
+        yield* linkBox("box:2", mine);
+        // Connected to the room as the box, beside the joined thread, which records it.
+        assert.deepEqual((yield* Ref.get(boxLinks)).get(mine), {
+          host: "sam.t3.test",
+          expiresAt: room.expiresAt,
+          shareId,
+          boxId: "box:2",
+        });
+        assert.deepEqual(yield* rooms.findRoom("sam.t3.test", shareId), {
+          threadId,
+          boxes: { "box:2": mine },
+        });
+        // Its last finished turn goes to the box with the room's token, so the box is not empty.
+        yield* rooms.drain;
+        const [posted] = (yield* Ref.get(posts)) as ReadonlyArray<{
+          authorization: string;
+          turn: object;
+        }>;
+        assert.equal(posted?.authorization, "Bearer room-token");
+        assert.deepInclude(posted?.turn, {
+          id: "run:last",
+          prompt: "Why does login fail?",
+          reply: "It expires early.",
+          boxId: "box:2",
+        });
+        // Once in the room, it cannot go on a second box.
+        assert.equal(yield* reason("box:3", mine), "thread_unavailable");
       }).pipe(Effect.provide(layer));
     }),
 );

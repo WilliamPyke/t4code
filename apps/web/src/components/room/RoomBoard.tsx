@@ -27,6 +27,7 @@ import {
   AppWindowIcon,
   ArrowLeftIcon,
   BotIcon,
+  ChevronDownIcon,
   CircleCheckIcon,
   ExternalLinkIcon,
   GitBranchIcon,
@@ -411,6 +412,7 @@ export function RoomBoard({
   ownerAssignable = true,
   formerPeople = NO_FORMER_PEOPLE,
   onPromptBox,
+  onAddThread,
   renderBoxModel,
   onOpenConversation,
   conversationBoxIds,
@@ -475,6 +477,11 @@ export function RoomBoard({
    * no prompt boxes.
    */
   readonly onPromptBox?: ((boxId: string, prompt: BoardPrompt) => Promise<boolean>) | undefined;
+  /**
+   * Offers to put one of the viewer's own threads on the board as a thread box, at a free spot.
+   * Absent: the Thread button adds only new thread boxes.
+   */
+  readonly onAddThread?: ((at: BoardPoint) => void) | undefined;
   /** Which model the viewer's own box runs, and the way to change it. */
   readonly renderBoxModel?: ((boxId: string) => ReactNode) | undefined;
   /** Opens a box's conversation: beside the board for the owner, their own thread for a guest. */
@@ -1221,7 +1228,7 @@ export function RoomBoard({
         )}
         {linkDraft === null ? (
           <>
-            {cards === undefined ? (
+            {cards !== undefined ? null : onAddThread === undefined ? (
               <Button
                 size="sm"
                 variant="outline"
@@ -1231,7 +1238,24 @@ export function RoomBoard({
                 <MessagesSquareIcon />
                 <ToolLabel>Thread</ToolLabel>
               </Button>
-            ) : null}
+            ) : (
+              <Menu>
+                <MenuTrigger
+                  disabled={!canEdit || full || threadsFull}
+                  render={<Button size="sm" variant="outline" />}
+                >
+                  <MessagesSquareIcon />
+                  <ToolLabel>Thread</ToolLabel>
+                  <ChevronDownIcon />
+                </MenuTrigger>
+                <MenuPopup align="start">
+                  <MenuItem onClick={() => addCard({ kind: "thread" })}>New thread box</MenuItem>
+                  <MenuItem onClick={() => onAddThread(freeSpot("thread"))}>
+                    Add one of your threads…
+                  </MenuItem>
+                </MenuPopup>
+              </Menu>
+            )}
             <Button
               size="sm"
               variant="outline"

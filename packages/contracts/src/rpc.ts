@@ -191,6 +191,7 @@ import {
   SharedThreadSource,
   SharedThreadFindRoomInput,
   SharedThreadFindRoomResult,
+  SharedThreadLinkBoxInput,
   SharedThreadPromptBoxInput,
   SharedThreadPromptBoxResult,
   SharedThreadTakeArtifactInput,
@@ -200,6 +201,7 @@ import {
 } from "./sharedThread.ts";
 import {
   GuestMessageResolveInput,
+  RoomBoxAddThreadInput,
   RoomBoxError,
   RoomBoxPromptInput,
   RoomBoxPromptResult,
@@ -594,6 +596,7 @@ export const WS_METHODS = {
   guestShareSubscribeRoomCursors: "guestShare.subscribeRoomCursors",
   guestShareMoveCursor: "guestShare.moveCursor",
   guestSharePromptBox: "guestShare.promptBox",
+  guestShareAddBoxThread: "guestShare.addBoxThread",
   guestShareResolveMessage: "guestShare.resolveMessage",
   sharedThreadPreview: "sharedThread.preview",
   sharedThreadJoin: "sharedThread.join",
@@ -602,6 +605,7 @@ export const WS_METHODS = {
   sharedThreadTakeTask: "sharedThread.takeTask",
   sharedThreadTakeArtifact: "sharedThread.takeArtifact",
   sharedThreadPromptBox: "sharedThread.promptBox",
+  sharedThreadLinkBox: "sharedThread.linkBox",
   sharedThreadFindRoom: "sharedThread.findRoom",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
@@ -2130,6 +2134,11 @@ const WsSharedThreadPromptBoxRpc = Rpc.make(WS_METHODS.sharedThreadPromptBox, {
   error: Schema.Union([SharedThreadJoinError, EnvironmentAuthorizationError]),
 });
 
+const WsSharedThreadLinkBoxRpc = Rpc.make(WS_METHODS.sharedThreadLinkBox, {
+  payload: SharedThreadLinkBoxInput,
+  error: Schema.Union([SharedThreadJoinError, EnvironmentAuthorizationError]),
+});
+
 const WsSharedThreadFindRoomRpc = Rpc.make(WS_METHODS.sharedThreadFindRoom, {
   payload: SharedThreadFindRoomInput,
   success: SharedThreadFindRoomResult,
@@ -2150,6 +2159,11 @@ const WsGuestShareChangeBoardRpc = Rpc.make(WS_METHODS.guestShareChangeBoard, {
 const WsGuestSharePromptBoxRpc = Rpc.make(WS_METHODS.guestSharePromptBox, {
   payload: RoomBoxPromptInput,
   success: RoomBoxPromptResult,
+  error: Schema.Union([RoomBoxError, EnvironmentAuthorizationError]),
+});
+
+const WsGuestShareAddBoxThreadRpc = Rpc.make(WS_METHODS.guestShareAddBoxThread, {
+  payload: RoomBoxAddThreadInput,
   error: Schema.Union([RoomBoxError, EnvironmentAuthorizationError]),
 });
 
@@ -2205,6 +2219,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsGuestShareSubscribePresenceRpc,
   WsGuestShareChangeBoardRpc,
   WsGuestSharePromptBoxRpc,
+  WsGuestShareAddBoxThreadRpc,
   WsGuestShareResolveMessageRpc,
   WsGuestShareSubscribeRoomAgentsRpc,
   WsGuestShareSubscribeRoomCursorsRpc,
@@ -2216,6 +2231,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSharedThreadTakeTaskRpc,
   WsSharedThreadTakeArtifactRpc,
   WsSharedThreadPromptBoxRpc,
+  WsSharedThreadLinkBoxRpc,
   WsSharedThreadFindRoomRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,

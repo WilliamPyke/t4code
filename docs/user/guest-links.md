@@ -90,10 +90,22 @@ another there.
 Only the person who added a box can prompt it. The box's message box says where the prompt goes
 before you send it.
 
+To bring a thread you already have onto the board, open the toolbar's **Thread** menu and choose
+**Add one of your threads**, then pick it. The owner picks from the threads on their machine; a
+guest can do this once a machine of theirs is in the room, and picks from that machine's threads.
+The box takes the thread's name and shows its last finished turn. From then on the room sees that
+thread the way it sees any box: the start of each prompt, the cards that went with it, the model,
+what the agent is doing, and the start of its reply. That includes turns you run in the thread
+itself, from its own message box, not only prompts sent from the board. An artifact is filled only
+by a prompt sent from the board with a line to it. A thread can be on one board at a time, and a
+shared thread or one joined from someone's room cannot be added.
+
 While a box's agent works, everyone sees what it is doing: waiting its turn, thinking, using a
 tool, writing its reply, or waiting for whoever runs it to approve something. An artifact a box
 fills shows the reply as it is written, a few seconds behind for a box on a guest's machine.
-Removing a box leaves its thread where it is. A board holds up to 12 thread boxes.
+Removing a box leaves its thread where it is. If you archive or delete a box's thread, the box's
+next prompt starts a new thread for it. A board holds up to 12
+thread boxes.
 
 ### Comment threads
 

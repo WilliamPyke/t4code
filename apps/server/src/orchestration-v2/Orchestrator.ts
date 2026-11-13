@@ -480,6 +480,10 @@ export interface OrchestratorV2Shape {
   readonly findGuestShareThreadId: (
     shareId: GuestShareId,
   ) => Effect.Effect<ThreadId | null, OrchestratorV2Error>;
+  readonly listRoomBoxThreads: () => Effect.Effect<
+    ReadonlyArray<{ readonly roomThreadId: ThreadId; readonly boxThreadId: ThreadId }>,
+    OrchestratorV2Error
+  >;
   /** Titles of the given threads that exist, archived ones included. */
   readonly getThreadLinkMetadata: (
     threadIds: ReadonlyArray<ThreadId>,
@@ -14689,6 +14693,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return projectionStore
         .findGuestShareThreadId(shareId)
         .pipe(Effect.mapError(shellProjectionError));
+    }),
+    listRoomBoxThreads: Effect.fn("OrchestratorV2.listRoomBoxThreads")(function () {
+      return projectionStore.listRoomBoxThreads().pipe(Effect.mapError(shellProjectionError));
     }),
     getThreadLinkMetadata: Effect.fn("OrchestratorV2.getThreadLinkMetadata")(function (threadIds) {
       return projectionStore

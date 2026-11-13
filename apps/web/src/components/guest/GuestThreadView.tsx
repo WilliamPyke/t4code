@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { guestEnvironmentId, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { type GuestShareEndpoint, guestShareRequest } from "@t3tools/client-runtime/rpc";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -76,7 +77,7 @@ import { useNowMinute } from "~/hooks/useNowMinute";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { configuredHostedAppUrl } from "~/hostedPairing";
 import { useTheme } from "~/hooks/useTheme";
-import { cn } from "~/lib/utils";
+import { cn, randomUUID } from "~/lib/utils";
 import { deriveActiveWorkStartedAt, derivePhase, deriveThreadAgentWorking } from "~/session-logic";
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { useEnvironmentProviders } from "~/state/environments";
@@ -105,6 +106,7 @@ import type { TimelineRow } from "../chat/timelineRowContext";
 import { useTimelineFollow } from "../chat/useTimelineFollow";
 import { composerDraftPick } from "../room/BoardModelPicker";
 import { BoardSplit } from "../room/BoardSplit";
+import { BoardThreadPicker } from "../room/BoardThreadPicker";
 import { RoomBoard, RoomCursors } from "../room/RoomBoard";
 import { RoomReplyProvider, revealRoomReply } from "../room/RoomReplyComments";
 import {
@@ -112,9 +114,11 @@ import {
   type BoardPresence,
   EMPTY_ROOM_BOARD,
   appendNoteToDraft,
+  type BoardPoint,
   type BoardPrompt,
   boardMessages,
   boardNoteMessage,
+  boardThreadBoxTitle,
 } from "../room/roomBoard.logic";
 import { RoomLiveContext, type RoomLiveStore, createRoomLiveStore } from "../room/roomBoardLive";
 import { Button } from "../ui/button";
@@ -336,6 +340,11 @@ function GuestThreadSession({
   const promptOwnBox = useAtomCommand(serverEnvironment.promptSharedRoomBox, {
     reportFailure: false,
   });
+  const linkOwnBox = useAtomCommand(serverEnvironment.linkSharedRoomBox, {
+    reportFailure: false,
+  });
+  // Where the box goes once the guest picks which of their threads it is.
+  const [addingAt, setAddingAt] = useState<BoardPoint | null>(null);
   // A box with no thread yet has no composer to keep its model pick, so the board keeps it.
   const [boxPicks, setBoxPicks] = useState<Readonly<Record<string, ModelSelection>>>({});
   const [awaitingRowIds, setAwaitingRowIds] = useState(readAwaitingRowIds);
@@ -436,6 +445,50 @@ function GuestThreadSession({
       description:
         result._tag === "Success"
           ? "Your machine is no longer in this room. Choose Continue on my machine again."
+          : messageOfFailure(squashAtomCommandFailure(result)),
+    });
+    return false;
+  };
+  /**
+   * Puts one of the guest's threads on their machine in this room on the board as their own box:
+   * the box goes on the room's board first, and comes off again when their machine cannot take it.
+   */
+  const addOwnThread = async (
+    own: OwnRoomMachine,
+    thread: EnvironmentThreadShell,
+    at: BoardPoint,
+  ) => {
+    const boxId = randomUUID();
+    const added = await postBoardChange(endpoint, {
+      type: "note.put",
+      noteId: boxId,
+      text: boardThreadBoxTitle(thread.title),
+      ...at,
+      kind: "thread",
+    });
+    const result = added
+      ? await linkOwnBox({
+          environmentId: own.environmentId,
+          input: {
+            host: share.host,
+            shareId: GuestShareId.make(share.shareId),
+            boxId,
+            threadId: thread.id,
+          },
+        })
+      : null;
+    if (result?._tag === "Success") {
+      setBoxThread(own.environmentId, boxId, thread.id);
+      return true;
+    }
+    if (added) void postBoardChange(endpoint, { type: "note.remove", noteId: boxId });
+    if (result !== null && isAtomCommandInterrupted(result)) return false;
+    toastManager.add({
+      type: "error",
+      title: "Could not add the thread to the board",
+      description:
+        result === null
+          ? "The board did not take it. It may be full."
           : messageOfFailure(squashAtomCommandFailure(result)),
     });
     return false;
@@ -541,6 +594,7 @@ function GuestThreadSession({
             onChange={(change) => postBoardChange(endpoint, change)}
             onCursor={(presence) => postBoardCursor(endpoint, presence)}
             onPromptBox={promptBox}
+            onAddThread={machine == null ? undefined : setAddingAt}
             renderBoxModel={(boxId) =>
               machine == null ? (
                 <span className="truncate text-2xs text-muted-foreground">
@@ -593,6 +647,14 @@ function GuestThreadSession({
           />
         }
       />
+      {machine == null || addingAt === null ? null : (
+        <BoardThreadPicker
+          environmentId={machine.environmentId}
+          excluded={new Set([machine.threadId, ...Object.values(machine.boxes)])}
+          onPick={(picked) => addOwnThread(machine, picked, addingAt)}
+          onClose={() => setAddingAt(null)}
+        />
+      )}
     </RoomLiveContext>
   );
 }

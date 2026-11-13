@@ -4,7 +4,9 @@ import {
   GuestId,
   GuestShareId,
   type OrchestrationV2DomainEvent,
+  type OrchestrationV2ServerCommand,
   type OrchestrationV2TurnItem,
+  ROOM_BOARD_MAX_THREADS,
   type RoomBoxProgress,
   ThreadId,
 } from "@t3tools/contracts";
@@ -13,6 +15,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -25,6 +28,7 @@ import * as RoomBoxes from "./RoomBoxes.ts";
 const shareId = GuestShareId.make("share:1");
 const roomThreadId = ThreadId.make("thread:room");
 const boxThreadId = ThreadId.make("thread:box");
+const lateThreadId = ThreadId.make("thread:late");
 const strayThreadId = ThreadId.make("thread:stray");
 const sam = GuestId.make("guest:sam");
 
@@ -35,47 +39,86 @@ const record = (kind: string, fields: object) => ({
   label: kind,
   ...fields,
 });
-const asked = (records: ReadonlyArray<object>) =>
+const asked = (records: ReadonlyArray<object>, text = "Go") =>
   [
-    { type: "user_message", ordinal: 1, text: "Go", context: { version: 1, records } },
+    { type: "user_message", ordinal: 1, text, context: { version: 1, records } },
   ] as unknown as ReadonlyArray<OrchestrationV2TurnItem>;
 const boxRecord = record("room-box", { payload: { shareId, boxId: "box:b" } });
 const itemsByRun: Record<string, ReadonlyArray<OrchestrationV2TurnItem>> = {
   "run:room": asked([record("room-artifact", { shareId, noteId: "art:a", title: "A" })]),
-  "run:box": asked([boxRecord]),
+  // Sent from the box's thread itself, so it carries no word of the board.
+  "run:box": asked([]),
+  "run:late": asked([], "Late"),
   // Says it is the box's, from a thread the share never recorded for it.
   "run:stray": asked([boxRecord]),
+  "run:last": [
+    ...asked([], "Fix the login"),
+    { type: "assistant_message", ordinal: 2, text: "**Fixed** it.", streaming: false },
+  ] as unknown as ReadonlyArray<OrchestrationV2TurnItem>,
 };
+const thread = (id: string, fields: object = {}) => ({
+  id,
+  title: id,
+  guestShare: null,
+  roomLink: null,
+  deletedAt: null,
+  archivedAt: null,
+  ...fields,
+});
+const box = (id: string) => ({ id, text: id, x: 0, y: 0, kind: "thread" });
+const roomShare = {
+  id: shareId,
+  board: {
+    positions: {},
+    notes: [
+      box("box:b"),
+      box("box:late"),
+      { id: "art:a", text: "A", x: 0, y: 0, kind: "artifact" },
+    ],
+  },
+  // Sam's request, which the owner sent in the box's thread as `message:asked`.
+  messages: [
+    {
+      id: "guest-message:1",
+      text: "Make it dark",
+      status: "sent",
+      submittedAt: "1970-01-01T00:00:00.000Z",
+      guestId: sam,
+      boxId: "box:b",
+      sentAs: "message:asked",
+    },
+  ],
+  boardThreads: { "box:b": boxThreadId, "box:late": lateThreadId },
+};
+const otherShareId = GuestShareId.make("share:other");
 const threads: Record<string, object> = {
-  [roomThreadId]: {
-    id: roomThreadId,
+  [roomThreadId]: thread(roomThreadId, { guestShare: roomShare }),
+  [boxThreadId]: thread(boxThreadId),
+  [lateThreadId]: thread(lateThreadId),
+  [strayThreadId]: thread(strayThreadId),
+  "thread:mine": thread("thread:mine", { title: "Fix   the login" }),
+  "thread:archived": thread("thread:archived", { archivedAt: DateTime.makeUnsafe(0) }),
+  "thread:deleted": thread("thread:deleted", { deletedAt: DateTime.makeUnsafe(0) }),
+  "thread:joined": thread("thread:joined", { roomLink: { host: "a.t3.test" } }),
+  // Another room of the owner's, whose board has as many thread boxes as it holds.
+  "thread:full": thread("thread:full", {
     guestShare: {
-      id: shareId,
+      id: otherShareId,
       board: {
         positions: {},
-        notes: [
-          { id: "box:b", text: "B", x: 0, y: 0, kind: "thread" },
-          { id: "art:a", text: "A", x: 0, y: 0, kind: "artifact" },
-        ],
+        notes: Array.from({ length: ROOM_BOARD_MAX_THREADS }, (_, index) => box(`box:${index}`)),
       },
-      // Sam's request, which the owner sent in the box's thread as `message:asked`.
-      messages: [
-        {
-          id: "guest-message:1",
-          text: "Make it dark",
-          status: "sent",
-          submittedAt: "1970-01-01T00:00:00.000Z",
-          guestId: sam,
-          boxId: "box:b",
-          sentAs: "message:asked",
-        },
-      ],
-      boardThreads: { "box:b": boxThreadId },
+      messages: [],
+      boardThreads: { "box:0": "thread:other-box" },
     },
-  },
-  [boxThreadId]: { id: boxThreadId, guestShare: null },
-  [strayThreadId]: { id: strayThreadId, guestShare: null },
+  }),
+  "thread:other-box": thread("thread:other-box"),
 };
+// What a restart reads: the late box's thread is linked only after it.
+const linkedAtStart = [
+  { roomThreadId, boxThreadId },
+  { roomThreadId: ThreadId.make("thread:full"), boxThreadId: ThreadId.make("thread:other-box") },
+];
 
 const run = (id: string, threadId: ThreadId, status: string, type = "run.updated") =>
   ({
@@ -104,17 +147,37 @@ const request = (id: string, threadId: ThreadId, status: string) =>
     payload: { id, kind: "file_change", status },
   }) as unknown as OrchestrationV2DomainEvent;
 
-const layerWith = (events: Queue.Queue<OrchestrationV2DomainEvent>) =>
+const layerWith = (
+  events: Queue.Queue<OrchestrationV2DomainEvent>,
+  dispatched?: Ref.Ref<ReadonlyArray<OrchestrationV2ServerCommand>>,
+) =>
   RoomBoxes.layer.pipe(
     Layer.provide(
       Layer.mock(Orchestrator.OrchestratorV2)({
         streamDomainEvents: Stream.fromQueue(events),
+        listRoomBoxThreads: () => Effect.succeed(linkedAtStart),
         findGuestShareThreadId: (id) => Effect.succeed(id === shareId ? roomThreadId : null),
+        getThreadShell: (threadId) =>
+          Effect.succeed(
+            (threadId === "thread:mine" ? { latestRunId: "run:last" } : null) as never,
+          ),
         getThreadRecords: (threadId, _fields, filter) =>
-          Effect.succeed({
-            thread: threads[threadId],
-            turnItems: itemsByRun[filter?.turnItemRunIds?.[0] ?? ""] ?? [],
-          } as never),
+          threads[threadId] === undefined
+            ? Effect.fail({ _tag: "OrchestratorProjectionError" } as never)
+            : Effect.succeed({
+                thread: threads[threadId],
+                turnItems: itemsByRun[filter?.turnItemRunIds?.[0] ?? ""] ?? [],
+                runs: (filter?.runIds ?? []).map((id) => ({
+                  id,
+                  status: "completed",
+                  completedAt: DateTime.makeUnsafe(60_000),
+                  modelSelection: { instanceId: "codex", model: "gpt-5.1-codex" },
+                })),
+              } as never),
+        dispatch: (command: OrchestrationV2ServerCommand) =>
+          dispatched === undefined
+            ? Effect.die("Nothing is dispatched here")
+            : Ref.update(dispatched, (seen) => [...seen, command]).pipe(Effect.as({} as never)),
       }),
     ),
     Layer.provide(Layer.mock(ThreadLaunch.ThreadLaunchService)({})),
@@ -225,11 +288,96 @@ it.effect("shows each box's agent at work about once a second, and nothing once 
         guests: [],
       });
 
+      // A thread linked since the server started is its box's once its share says so.
+      yield* Queue.offerAll(events, [
+        {
+          type: "thread.guest-share-updated",
+          threadId: roomThreadId,
+          payload: threads[roomThreadId],
+        } as unknown as OrchestrationV2DomainEvent,
+        run("run:late", lateThreadId, "running", "run.created"),
+      ]);
+      const late = yield* until((views) => of(views.owner, "box:late") !== undefined);
+      assert.deepInclude(of(late.owner, "box:late"), { phase: "thinking", prompt: "Late" });
+
       yield* Queue.offerAll(events, [
         run("run:room", roomThreadId, "completed"),
         run("run:box", boxThreadId, "interrupted"),
+        run("run:late", lateThreadId, "completed"),
       ]);
       yield* until((views) => views.owner.length === 0 && views.guests.length === 0);
     }).pipe(Effect.provide(layerWith(events)));
+  }),
+);
+
+it.effect("puts an existing thread on the board as a box, linked in the same change", () =>
+  Effect.gen(function* () {
+    const events = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
+    const dispatched = yield* Ref.make<ReadonlyArray<OrchestrationV2ServerCommand>>([]);
+    yield* Effect.gen(function* () {
+      const boxes = yield* RoomBoxes.RoomBoxes;
+      const add = (boxThread: string, room: string = roomThreadId) =>
+        boxes.addThread({
+          threadId: ThreadId.make(room),
+          boxId: "box:new",
+          boxThreadId: ThreadId.make(boxThread),
+          x: 10,
+          y: 20,
+        });
+      const refusal = (boxThread: string, room?: string) =>
+        add(boxThread, room).pipe(
+          Effect.as("added"),
+          Effect.catch((error) => Effect.succeed(error.reason)),
+        );
+      assert.deepEqual(
+        yield* Effect.all([
+          refusal(roomThreadId),
+          refusal("thread:archived"),
+          refusal("thread:deleted"),
+          refusal("thread:missing"),
+          // Shared, joined from someone's room, or another board's box.
+          refusal("thread:full"),
+          refusal("thread:joined"),
+          refusal("thread:other-box"),
+          refusal(boxThreadId),
+          refusal("thread:mine", "thread:full"),
+        ]),
+        [
+          "thread_unavailable",
+          "thread_unavailable",
+          "thread_unavailable",
+          "thread_unavailable",
+          "thread_unavailable",
+          "thread_unavailable",
+          "thread_unavailable",
+          "already_on_board",
+          "board_full",
+        ],
+      );
+      assert.lengthOf(yield* Ref.get(dispatched), 0);
+
+      yield* add("thread:mine");
+      const [linked] = yield* Ref.get(dispatched);
+      assert.deepInclude(linked, {
+        type: "thread.room-box.link",
+        threadId: roomThreadId,
+        shareId,
+        boxId: "box:new",
+        boxThreadId: "thread:mine",
+      } as never);
+      // Named for its thread, and showing the last turn it finished.
+      assert.deepEqual((linked as { box: unknown }).box, {
+        text: "Fix the login",
+        x: 10,
+        y: 20,
+        turn: {
+          id: "run:last",
+          prompt: "Fix the login",
+          model: "GPT-5.1 Codex",
+          reply: "Fixed it.",
+          at: "1970-01-01T00:01:00.000Z",
+        },
+      });
+    }).pipe(Effect.provide(layerWith(events, dispatched)));
   }),
 );

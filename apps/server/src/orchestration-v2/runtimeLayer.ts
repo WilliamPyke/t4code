@@ -374,13 +374,18 @@ export const layer = Layer.mergeAll(
   layerLegacyV1ThreadImporterProvided,
 );
 
-const layerSharedRoomLinkProvided = SharedRoomLink.layer.pipe(
-  Layer.provide(
-    Layer.mergeAll(layerOrchestratorProvided, layerProjectService, layerThreadLaunchProvided),
-  ),
-);
 const layerRoomBoxesProvided = RoomBoxes.layer.pipe(
   Layer.provide(Layer.merge(layerOrchestratorProvided, layerThreadLaunchProvided)),
+);
+const layerSharedRoomLinkProvided = SharedRoomLink.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      layerOrchestratorProvided,
+      layerProjectService,
+      layerThreadLaunchProvided,
+      layerRoomBoxesProvided,
+    ),
+  ),
 );
 
 export const layerProduction = Layer.mergeAll(

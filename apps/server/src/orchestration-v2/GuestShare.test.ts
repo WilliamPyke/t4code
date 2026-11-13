@@ -650,6 +650,42 @@ it.effect("shows a thread box's last turns, and keeps the owner's box threads ap
     assert.isUndefined((yield* share).boardThreads);
     yield* link("box", null);
 
+    // An existing thread lands as a new box and its link at once, showing its last turn.
+    const add = (boxId: string, boxThreadId: string) =>
+      orchestrator.dispatch({
+        type: "thread.room-box.link",
+        commandId: next("add"),
+        threadId,
+        shareId,
+        boxId,
+        boxThreadId: ThreadId.make(boxThreadId),
+        box: {
+          text: "Existing",
+          x: 1,
+          y: 2,
+          turn: { id: "run:old", prompt: "Old", reply: "Done", at: "2026-11-12T00:00:00.000Z" },
+        },
+      });
+    yield* add("existing", "thread:existing");
+    assert.deepInclude(
+      (yield* share).board?.notes.find((note) => note.id === "existing"),
+      {
+        kind: "thread",
+        text: "Existing",
+        x: 1,
+        y: 2,
+      },
+    );
+    assert.deepEqual(yield* turnsOf("existing"), ["run:old"]);
+    assert.deepEqual((yield* share).boardThreads, {
+      existing: ThreadId.make("thread:existing"),
+    });
+    // Not the same thread on a second box, and not over a card already there.
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(add("again", "thread:existing"))));
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(add("note", "thread:other"))));
+    yield* change({ type: "note.remove", noteId: "existing" });
+    assert.isUndefined((yield* share).boardThreads);
+
     // A guest's request for their box is marked sent as the message it went as, and put back
     // to waiting only if that send failed.
     yield* orchestrator.dispatch({
