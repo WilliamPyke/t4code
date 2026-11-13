@@ -41,6 +41,7 @@ import {
 } from "@t3tools/shared/composerContextReferences";
 import {
   EMPTY_ROOM_BOARD,
+  ROOM_AGENT_REPLY_ID_PREFIX,
   ROOM_BOARD_FULL,
   applyRoomBoardChange,
   roomArtifactAfterFill,
@@ -270,7 +271,7 @@ function boardWithCommentAnswer(
 ): RoomBoard {
   const note = board.notes.find((candidate) => candidate.id === noteId);
   const replies = note?.replies ?? [];
-  const id = `agent:${answer.agent.turnId}`.slice(0, 64);
+  const id = `${ROOM_AGENT_REPLY_ID_PREFIX}${answer.agent.turnId}`.slice(0, 64);
   if (
     note?.kind !== "comment" ||
     answer.text.trim() === "" ||

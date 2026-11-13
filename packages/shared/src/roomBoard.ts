@@ -37,6 +37,9 @@ export const ROOM_COMMENT_THREAD_FULL = `A comment thread holds ${ROOM_BOARD_MAX
 
 export const EMPTY_ROOM_BOARD: RoomBoard = { positions: {}, notes: [] };
 
+/** Starts the id of every reply an agent's run wrote. No reply a client sends may use it. */
+export const ROOM_AGENT_REPLY_ID_PREFIX = "agent:";
+
 /** What a board is about: the cards it has, and the people a task can be for. */
 export interface RoomBoardScope {
   /** Only these cards, so the positions and arrows cannot grow without bound. */
@@ -319,6 +322,10 @@ export function applyRoomBoardChange(
       const note = board.notes.find((candidate) => candidate.id === change.noteId);
       if (note?.kind !== "comment") return Result.fail("This comment thread is not on the board.");
       const replies = note.replies ?? [];
+      // An agent's answer is named after its run; a client that took the name would keep it out.
+      if (change.replyId.startsWith(ROOM_AGENT_REPLY_ID_PREFIX)) {
+        return Result.fail("This reply's id is reserved.");
+      }
       if (replies.some((reply) => reply.id === change.replyId)) return Result.succeed(board);
       const text = change.text.trim();
       if (text === "") return Result.fail("A reply needs some text.");

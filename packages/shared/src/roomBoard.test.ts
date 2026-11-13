@@ -228,6 +228,10 @@ describe("applyRoomBoardChange", () => {
       guestId: sam,
       at,
     });
+    // Nor can a client take the id an agent's answer will have, which would keep it out.
+    expect(Result.isFailure(applyRoomBoardChange(both, scope, sam, reply("agent:run:9"), at))).toBe(
+      true,
+    );
     // Agents' answers, by whose agent: Eve's, and the owner's.
     const answered: RoomBoard = {
       ...both,
