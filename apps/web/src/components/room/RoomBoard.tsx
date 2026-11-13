@@ -106,6 +106,8 @@ import {
   NO_BOARD_EDITS,
   besideBoardItem,
   boardBounds,
+  boardDragItems,
+  boardTakenRects,
   boardAgents,
   boardArtifactAuthor,
   boardArtifactWriting,
@@ -174,7 +176,7 @@ import {
 import { RoomArtifactLive } from "./RoomBoardArtifact";
 import { CommentPin, CommentThreadPanel } from "./RoomBoardComments";
 import { useCommentUnread } from "./roomCommentSeen";
-import { NoteColorPicker, noteColorClassName } from "./RoomNoteColor";
+import { NoteColorPicker, noteColorClassName, useLastNoteColor } from "./RoomNoteColor";
 import { BoardHistoryButtons } from "./RoomBoardHistory";
 import { AddReaction, ReactionChips } from "./RoomBoardReactions";
 import {
@@ -187,11 +189,21 @@ import {
 } from "./RoomBoardSelection";
 import { BoardPromptBox } from "./RoomBoardPrompt";
 import { BoxProgress, BoxRequests, BoxTurns } from "./RoomBoardThreadBox";
-import { useBoxProgress, useRoomHasProgress, useRoomRunning } from "./roomBoardLive";
+import {
+  RoomLiveContext,
+  boardLiveRect,
+  boardLiveStyle,
+  useBoardLiveDrag,
+  useBoxProgress,
+  useRoomHasProgress,
+  useRoomRunning,
+} from "./roomBoardLive";
 
 const guestCardId = (guest: ThreadGuest) => roomBoardGuestCard(guest.id);
 const agentCardId = (guest: ThreadGuest) => roomBoardAgentCard(guest.id);
 const cardRef = (id: string) => boardEditKey({ kind: "card", id });
+const NEXT_GUEST_CARD = "next-guest";
+const NEXT_AGENT_CARD = "next-agent";
 const noteRef = (id: string) => boardEditKey({ kind: "note", id });
 const GRID = 22;
 // How far past the cards and notes the arrows' drawing area reaches.
@@ -211,6 +223,10 @@ const EDGE_STROKE_COLORS: Readonly<Record<EdgeStroke, string>> = {
 };
 const EDGE_STROKES = Object.entries(EDGE_STROKE_COLORS);
 
+/** Whether an event's target is drawn inside the element handling it, not in a portal from it. */
+const isInside = (event: { readonly target: EventTarget; readonly currentTarget: Element }) =>
+  event.target instanceof Node && event.currentTarget.contains(event.target);
+
 /**
  * Pointer handlers that report how far a held pointer moved, in screen pixels, and when it is
  * let go.
@@ -226,7 +242,9 @@ function dragHandlers(
   };
   return {
     onPointerDown: (event: PointerEvent<HTMLElement>) => {
-      if (event.button !== 0) return;
+      // A menu, popover or dialog opened from here is portalled elsewhere, but React still
+      // bubbles its presses here, and capturing them would steal their clicks.
+      if (event.button !== 0 || !isInside(event)) return;
       // The board under a card must not start panning too.
       event.stopPropagation();
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -245,6 +263,16 @@ const stopPointer = (event: PointerEvent) => event.stopPropagation();
 /** A toolbar button's words, read out but not shown while the board is too narrow for them. */
 const ToolLabel = ({ children }: { readonly children: ReactNode }) => (
   <span className="sr-only @5xl/board:not-sr-only">{children}</span>
+);
+
+// Every count of resolved threads a board can hold fits in the room this one takes.
+const RESOLVED_WIDEST_COUNT = Number("8".repeat(String(ROOM_BOARD_MAX_NOTES).length));
+
+const ResolvedCount = ({ count }: { readonly count: number }) => (
+  <span className="tabular-nums">
+    <span className="hidden @5xl/board:inline">Resolved ({count})</span>
+    <span className="@5xl/board:hidden">{count}</span>
+  </span>
 );
 
 /** Whether a wheel turned over a card's text or content can still scroll that, not the board. */
@@ -409,7 +437,20 @@ interface Linking {
   readonly from: string;
   readonly box: BoardBox;
   readonly to: BoardPoint;
+  /** Where on screen the grip was pressed. */
+  readonly press: BoardPoint;
 }
+
+// How far a grip may move under a press that is still a click, in screen pixels.
+const CLICK_SLOP = 4;
+
+const edgeAt = (x: number, y: number) =>
+  document
+    .elementsFromPoint(x, y)
+    .find(
+      (element): element is SVGElement =>
+        element instanceof SVGElement && element.dataset.boardEdge !== undefined,
+    )?.dataset.boardEdge ?? null;
 
 /**
  * A shared thread laid out as a board: the thread boxes everyone added, each its own
@@ -594,7 +635,7 @@ export function RoomBoard({
   >(null);
   const [showResolved, setShowResolved] = useState(false);
   // The colour this viewer last gave a note, which their new notes take.
-  const [noteColor, setNoteColor] = useState<RoomBoardNoteColor | undefined>(undefined);
+  const [noteColor, setNoteColor] = useLastNoteColor();
   const [selection, setSelection] = useState<ReadonlySet<string>>(NO_SELECTION);
   const marquee = useBoardMarquee((rect) => {
     const area = boardAreaOf(surfaceRef.current);
@@ -712,16 +753,24 @@ export function RoomBoard({
   const guestCards = cards === undefined ? guests : [];
   const agents = cards === undefined ? boardAgents(guests, room?.turns ?? [], running) : [];
   const canGive = onGiveNote !== undefined && agents.some(({ guest }) => guest.id === viewer);
-  const positions = placeBoardCards(
-    cards?.map((card) => card.id) ?? [
-      ROOM_BOARD_THREAD_CARD,
-      ...guests.map(guestCardId),
-      ...agents.map(({ guest }) => agentCardId(guest)),
-    ],
-    shown.positions,
-    undefined,
-    shown.sizes,
-  );
+  const cardIds = cards?.map((card) => card.id) ?? [
+    ROOM_BOARD_THREAD_CARD,
+    ...guests.map(guestCardId),
+    ...agents.map(({ guest }) => agentCardId(guest)),
+  ];
+  // Cards the board will add on its own grid: each guest's agent once it runs, and whoever joins
+  // next with theirs. New cards keep clear of their slots.
+  const upcomingCardIds =
+    cards === undefined
+      ? [
+          ...guests
+            .filter((guest) => !agents.some((agent) => agent.guest.id === guest.id))
+            .map(agentCardId),
+          NEXT_GUEST_CARD,
+          NEXT_AGENT_CARD,
+        ]
+      : [];
+  const positions = placeBoardCards(cardIds, shown.positions, undefined, shown.sizes);
   const sizes = shown.sizes ?? {};
   // What someone else took off the board leaves the selection.
   const selectedItems = boardSelectionItems(shown, positions, selection);
@@ -861,11 +910,24 @@ export function RoomBoard({
     const value = held.current.get(boardEditKey(target));
     if (value !== undefined) send(target, settleBoardValue(value), after);
   };
-  // A selection dragged together lands together: one change for each card in it.
-  const dropItem = (target: BoardTarget) => {
-    if (!inGroup(target)) return letGo(target);
-    for (const item of selectedItems) letGo(item.target);
+  // Everyone else sees a drag as it goes, with this person's pointer, and where it landed.
+  const sendDrag = () => {
+    if (pointing) cursor.drag(boardDragItems(held.current, gestureFrom.current));
   };
+  const release = (go: () => void) => {
+    const dragged = boardDragItems(held.current, gestureFrom.current);
+    go();
+    if (!pointing || dragged.length === 0) return;
+    const still = boardDragItems(held.current, gestureFrom.current);
+    if (still.length > 0) cursor.drag(still);
+    else cursor.land(dragged);
+  };
+  // A selection dragged together lands together: one change for each card in it.
+  const dropItem = (target: BoardTarget) =>
+    release(() => {
+      if (!inGroup(target)) return letGo(target);
+      for (const item of selectedItems) letGo(item.target);
+    });
   const dragBy = (target: BoardTarget, from: BoardPoint, dx: number, dy: number) => {
     if (!canEdit) return;
     if (inGroup(target)) {
@@ -876,11 +938,12 @@ export function RoomBoard({
       for (const item of boardGroupMove(now, dx / view.zoom, dy / view.zoom)) {
         hold(item.target, item.value);
       }
-      return;
+      return sendDrag();
     }
     const last = held.current.get(boardEditKey(target));
     const at = last !== undefined && "x" in last ? last : from;
     hold(target, { ...at, x: at.x + dx / view.zoom, y: at.y + dy / view.zoom });
+    sendDrag();
   };
   const noteNow = (note: RoomBoardNote): RoomBoardNote => {
     const last = held.current.get(noteRef(note.id));
@@ -890,17 +953,21 @@ export function RoomBoard({
     clampBoardSize({ w: from.width + dx / view.zoom, h: from.height + dy / view.zoom });
   const resizeCard = (id: string, corner: BoardCorner, from: BoardRect, dx: number, dy: number) => {
     if (!canEdit) return;
-    if (corner === "right") return hold({ kind: "size", id }, sizedBy(from, dx, dy));
-    const next = resizeBoardFromLeft(from, dx / view.zoom, dy / view.zoom);
-    hold({ kind: "size", id }, next.size);
-    hold({ kind: "card", id }, { x: next.x, y: next.y });
+    if (corner === "right") hold({ kind: "size", id }, sizedBy(from, dx, dy));
+    else {
+      const next = resizeBoardFromLeft(from, dx / view.zoom, dy / view.zoom);
+      hold({ kind: "size", id }, next.size);
+      hold({ kind: "card", id }, { x: next.x, y: next.y });
+    }
+    sendDrag();
   };
   // A card's size and place are two changes; one queue sends them in order.
-  const endCardResize = (id: string, corner: BoardCorner) => {
-    const queue = boardEditKey({ kind: "size", id });
-    letGo({ kind: "size", id });
-    if (corner === "left") letGo({ kind: "card", id }, queue);
-  };
+  const endCardResize = (id: string, corner: BoardCorner) =>
+    release(() => {
+      const queue = boardEditKey({ kind: "size", id });
+      letGo({ kind: "size", id });
+      if (corner === "left") letGo({ kind: "card", id }, queue);
+    });
   const resizeNote = (
     note: RoomBoardNote,
     corner: BoardCorner,
@@ -911,10 +978,12 @@ export function RoomBoard({
     if (!canEdit) return;
     const now = noteNow(note);
     if (corner === "right") {
-      return hold({ kind: "note", id: note.id }, { ...now, size: sizedBy(from, dx, dy) });
+      hold({ kind: "note", id: note.id }, { ...now, size: sizedBy(from, dx, dy) });
+    } else {
+      const next = resizeBoardFromLeft(from, dx / view.zoom, dy / view.zoom);
+      hold({ kind: "note", id: note.id }, { ...now, x: next.x, size: next.size });
     }
-    const next = resizeBoardFromLeft(from, dx / view.zoom, dy / view.zoom);
-    hold({ kind: "note", id: note.id }, { ...now, x: next.x, size: next.size });
+    sendDrag();
   };
   const dragNote = (
     note: RoomBoardNote,
@@ -971,6 +1040,8 @@ export function RoomBoard({
     held.current.delete(boardEditKey(target));
     gestureFrom.current.delete(boardEditKey(target));
     if (value !== undefined) setEdits((current) => dropBoardEdit(current, target, value));
+    // It goes back where it was: nobody else is told it landed.
+    sendDrag();
     hand();
   };
   const writeNote = (note: RoomBoardNote, text: string) =>
@@ -1005,6 +1076,15 @@ export function RoomBoard({
   const threadsFull =
     shown.notes.filter((note) => note.kind === "thread").length >= ROOM_BOARD_MAX_THREADS;
   const drawnRects = () => drawnRectsIn(surfaceRef.current);
+  const takenRects = () =>
+    boardTakenRects(
+      [...(surfaceRef.current?.querySelectorAll<HTMLElement>("[data-board-item]") ?? [])].map(
+        (element) => ({ ref: element.dataset.boardItem ?? "", rect: drawnRect(element) }),
+      ),
+      shown,
+      cardIds,
+      upcomingCardIds,
+    );
   const drawnItem = (ref: string) =>
     surfaceRef.current?.querySelector<HTMLElement>(`[data-board-item="${CSS.escape(ref)}"]`) ??
     null;
@@ -1028,7 +1108,7 @@ export function RoomBoard({
     return placeBoardItem(
       size,
       { x: within.x + within.width / 2, y: within.y + within.height / 2 },
-      drawnRects(),
+      takenRects(),
       within,
     );
   };
@@ -1041,7 +1121,7 @@ export function RoomBoard({
       ...(viewer === null ? {} : { guestId: viewer }),
       ...(fields.kind === undefined ? {} : { kind: fields.kind }),
       ...(fields.url === undefined ? {} : { url: fields.url }),
-      ...(fields.kind !== undefined || noteColor === undefined ? {} : { color: noteColor }),
+      ...(fields.kind !== undefined || noteColor === null ? {} : { color: noteColor }),
     });
     send({ kind: "note", id }, value);
     const size = boardNewNoteSize(fields.kind);
@@ -1062,7 +1142,7 @@ export function RoomBoard({
       besideBoardItem(
         drawnRect(element),
         boardNewNoteSize(kind),
-        drawnRects(),
+        takenRects(),
         area === null ? undefined : visibleBoardRect(view, area),
       ),
     );
@@ -1127,7 +1207,7 @@ export function RoomBoard({
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
     setSelectedEdge(null);
-    setLinking({ from, box, to: at });
+    setLinking({ from, box, to: at, press: { x: event.clientX, y: event.clientY } });
   };
   const moveLink = (event: PointerEvent<HTMLElement>) => {
     const at = pointerOnBoard(event);
@@ -1139,6 +1219,14 @@ export function RoomBoard({
     event.currentTarget.releasePointerCapture(event.pointerId);
     const from = linking?.from;
     setLinking(null);
+    // A grip sits on the end of any line drawn from it, so a click there is the line's.
+    if (
+      linking !== null &&
+      Math.hypot(event.clientX - linking.press.x, event.clientY - linking.press.y) < CLICK_SLOP
+    ) {
+      setSelectedEdge(edgeAt(event.clientX, event.clientY));
+      return;
+    }
     const to = dataAt(event.clientX, event.clientY, "boardItem");
     if (from === undefined || to === null || to === from || edges.length >= ROOM_BOARD_MAX_EDGES) {
       return;
@@ -1172,7 +1260,7 @@ export function RoomBoard({
   };
   const dragPin = (note: RoomBoardNote, dx: number, dy: number) =>
     dragBy({ kind: "note", id: note.id }, note, dx, dy);
-  const dropPin = (note: RoomBoardNote) => letGo({ kind: "note", id: note.id });
+  const dropPin = (note: RoomBoardNote) => release(() => letGo({ kind: "note", id: note.id }));
   const togglePin = (note: RoomBoardNote) => {
     setDraftComment(null);
     setOpenComment((open) => (open === note.id ? null : note.id));
@@ -1500,7 +1588,14 @@ export function RoomBoard({
                 </MenuTrigger>
                 <MenuPopup align="start">
                   <MenuItem onClick={() => addCard({ kind: "thread" })}>New thread box</MenuItem>
-                  <MenuItem onClick={() => onAddThread(freeSpot("thread"))}>
+                  <MenuItem
+                    onClick={() => {
+                      const at = freeSpot("thread");
+                      const size = boardNewNoteSize("thread");
+                      reveal({ ...at, width: size.w, height: size.h }, true);
+                      onAddThread(at);
+                    }}
+                  >
                     Add one of your threads…
                   </MenuItem>
                 </MenuPopup>
@@ -1557,21 +1652,34 @@ export function RoomBoard({
               </Button>
             ) : null}
             {cards === undefined ? (
-              // Its place is kept while there is nothing resolved, so the tools never move.
-              <span className={cn("flex", resolvedComments === 0 && "invisible")}>
-                <Button
-                  size="sm"
-                  variant={showResolved ? "secondary" : "ghost"}
-                  aria-pressed={showResolved}
-                  aria-label={`Resolved (${resolvedComments})`}
-                  aria-hidden={resolvedComments === 0 || undefined}
-                  tabIndex={resolvedComments === 0 ? -1 : undefined}
-                  onClick={() => setShowResolved((shown) => !shown)}
+              // As wide as its widest count, and kept while nothing is resolved, so the tools
+              // never move.
+              <span className="grid">
+                <span aria-hidden className="invisible col-start-1 row-start-1 flex">
+                  <Button size="sm" variant="ghost" tabIndex={-1}>
+                    <CircleCheckIcon />
+                    <ResolvedCount count={RESOLVED_WIDEST_COUNT} />
+                  </Button>
+                </span>
+                <span
+                  className={cn(
+                    "col-start-1 row-start-1 flex",
+                    resolvedComments === 0 && "invisible",
+                  )}
                 >
-                  <CircleCheckIcon />
-                  <span className="hidden @5xl/board:inline">Resolved ({resolvedComments})</span>
-                  <span className="@5xl/board:hidden">{resolvedComments}</span>
-                </Button>
+                  <Button
+                    size="sm"
+                    variant={showResolved ? "secondary" : "ghost"}
+                    aria-pressed={showResolved}
+                    aria-label={`Resolved (${resolvedComments})`}
+                    aria-hidden={resolvedComments === 0 || undefined}
+                    tabIndex={resolvedComments === 0 ? -1 : undefined}
+                    onClick={() => setShowResolved((shown) => !shown)}
+                  >
+                    <CircleCheckIcon />
+                    <ResolvedCount count={resolvedComments} />
+                  </Button>
+                </span>
               </span>
             ) : null}
           </>
@@ -1665,6 +1773,13 @@ export function RoomBoard({
             toggleSelected(ref);
           }
         }}
+        onMouseDownCapture={(event) => {
+          // A Shift press that selects cards or draws a marquee would also extend the page's text
+          // selection, which then makes the next drag a native one. Text fields keep theirs.
+          if (event.shiftKey && canEdit && isInside(event) && isSelectPress(event.target)) {
+            event.preventDefault();
+          }
+        }}
         onPointerUpCapture={(event) => {
           delete event.currentTarget.dataset.boardBusy;
         }}
@@ -1672,8 +1787,7 @@ export function RoomBoard({
           delete event.currentTarget.dataset.boardBusy;
         }}
         onPointerDown={(event) => {
-          // A menu opened from a card is portalled elsewhere, but React still bubbles its events here.
-          if (event.target instanceof Node && !event.currentTarget.contains(event.target)) return;
+          if (!isInside(event)) return;
           setSelectedEdge(null);
           if (event.shiftKey && canEdit && event.button === 0) return marquee.start(event);
           pan.onPointerDown(event);
@@ -1800,6 +1914,7 @@ export function RoomBoard({
                           stroke="transparent"
                           strokeWidth="14"
                           pointerEvents="stroke"
+                          data-board-edge={edge.id}
                           className="cursor-pointer"
                           onPointerDown={stopPointer}
                           onClick={() => setSelectedEdge(selected ? null : edge.id)}
@@ -1982,7 +2097,7 @@ export function RoomBoard({
                   onResize={canEdit ? resizeNote : undefined}
                   onMove={dragNote}
                   onDrop={dropNote}
-                  onBlur={letGo}
+                  onBlur={(target) => release(() => letGo(target))}
                   onText={writeNote}
                   onChange={changeNote}
                   onPasteLink={full ? undefined : pasteLinkInto}
@@ -2389,17 +2504,27 @@ function BoardNote({
   const size = boardNoteSize(note);
   const [quoteOpen, setQuoteOpen] = useState(false);
   const selected = useBoardSelected(noteRef(note.id));
+  const live = boardLiveRect(
+    { x: note.x, y: note.y, w: size?.w, h: size?.h },
+    useBoardLiveDrag(noteRef(note.id)),
+  );
   return (
     <div
       className={cn(
         "group/item absolute flex flex-col rounded-sm border text-foreground shadow-lg",
-        size === undefined && "w-48",
+        size === undefined && live?.w === undefined && "w-48",
         selected && "ring-2 ring-primary ring-offset-2 ring-offset-background",
         note.kind === undefined
           ? noteColorClassName(note.color)
           : "border-border bg-card text-card-foreground",
       )}
-      style={{ left: note.x, top: note.y, width: size?.w, height: size?.h }}
+      style={{
+        left: note.x,
+        top: note.y,
+        width: live?.w ?? size?.w,
+        height: live?.h ?? size?.h,
+        ...boardLiveStyle(note, live),
+      }}
       data-board-item={noteRef(note.id)}
     >
       <div
@@ -2789,6 +2914,10 @@ function BoardCard({
 }) {
   const target = { kind: "card", id } as const;
   const selected = useBoardSelected(cardRef(id));
+  const live = boardLiveRect(
+    { x: at.x, y: at.y, w: size?.w, h: size?.h },
+    useBoardLiveDrag(cardRef(id)),
+  );
   return (
     <section
       className={cn(
@@ -2796,7 +2925,13 @@ function BoardCard({
         dashed && "border-dashed",
         (highlighted || selected) && "ring-2 ring-primary",
       )}
-      style={{ left: at.x, top: at.y, width: size?.w ?? BOARD_CARD_WIDTH, height: size?.h }}
+      style={{
+        left: at.x,
+        top: at.y,
+        width: live?.w ?? size?.w ?? BOARD_CARD_WIDTH,
+        height: live?.h ?? size?.h,
+        ...boardLiveStyle(at, live),
+      }}
       data-board-drop={dropTarget}
       data-board-item={cardRef(id)}
     >
@@ -2995,6 +3130,18 @@ export function RoomCursors({
     if (x === undefined || y === undefined || zoom === undefined) onGone();
     else onView({ x, y, zoom });
   }, [following, x, y, zoom, onGone, onView]);
+  const live = use(RoomLiveContext);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- hands what others drag to the board's live store, so only the cards they move render
+  useEffect(() => {
+    live.setDraggers(
+      cursors.map((cursor) => ({
+        color: boardCursorColor(guests, cursor.guestId),
+        drag: cursor.drag,
+      })),
+    );
+  }, [live, cursors, guests]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a board that closes takes everyone's drags off its live store
+  useEffect(() => () => live.setDraggers([]), [live]);
   return cursors.map((cursor) => {
     const name =
       cursor.guestId === undefined

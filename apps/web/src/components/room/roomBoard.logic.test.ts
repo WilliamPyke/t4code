@@ -28,9 +28,12 @@ import {
   type BoardPoint,
   type BoardPresence,
   type BoardRect,
+  type BoardValue,
   appendNoteToDraft,
   BOARD_SPLIT_DIVIDER,
   besideBoardItem,
+  boardDragItems,
+  boardTakenRects,
   boardAgentCode,
   boardAgents,
   boardArtifactAuthor,
@@ -217,6 +220,96 @@ describe("placeBoardItem", () => {
       x: 480,
       y: 100,
     });
+  });
+});
+
+describe("boardTakenRects", () => {
+  const room = { x: 80, y: 72, width: 320, height: 165 };
+  const sizeRect = (size: { w: number; h: number }) => ({ width: size.w, height: size.h });
+  it.each([
+    {
+      name: "keeps the room thread's card as tall as it grows",
+      drawn: [{ ref: "card:thread", rect: room }],
+      board: { positions: {} },
+      upcoming: [],
+      taken: [{ ...room, height: 420 }],
+    },
+    {
+      name: "keeps a resized card at its size",
+      drawn: [{ ref: "card:thread", rect: room }],
+      board: { positions: {}, sizes: { thread: { w: 320, h: 165 } } },
+      upcoming: [],
+      taken: [room],
+    },
+    {
+      name: "keeps a guest's card a card row tall, and notes and pins as drawn",
+      drawn: [
+        { ref: "card:guest:g1", rect: { x: 440, y: 72, width: 320, height: 120 } },
+        { ref: "note:a", rect: { x: 0, y: 400, width: 192, height: 90 } },
+      ],
+      board: { positions: {} },
+      upcoming: [],
+      taken: [
+        { x: 440, y: 72, width: 320, height: 240 },
+        { x: 0, y: 400, width: 192, height: 90 },
+      ],
+    },
+    {
+      name: "reserves the grid slot a guest's agent card will take",
+      drawn: [],
+      board: { positions: {} },
+      upcoming: ["agent:g1"],
+      taken: [{ x: 800, y: 72, width: 320, height: 240 }],
+    },
+    {
+      name: "reserves an upcoming card where it was saved",
+      drawn: [],
+      board: { positions: { "agent:g1": { x: 1000, y: 900 } } },
+      upcoming: ["agent:g1"],
+      taken: [{ x: 1000, y: 900, width: 320, height: 240 }],
+    },
+    {
+      name: "keeps clear of a note not drawn yet, such as one just added or a hidden resolved pin",
+      drawn: [{ ref: "note:a", rect: { x: 0, y: 400, width: 192, height: 90 } }],
+      board: {
+        positions: {},
+        notes: [
+          { id: "a", text: "", x: 0, y: 400 },
+          { id: "b", text: "", x: 600, y: 600, kind: "thread" as const },
+          { id: "c", text: "", x: 40, y: 40, kind: "comment" as const, resolved: true as const },
+        ],
+      },
+      upcoming: [],
+      taken: [
+        { x: 0, y: 400, width: 192, height: 90 },
+        { x: 600, y: 600, ...sizeRect(boardNewNoteSize("thread")) },
+        { x: 40, y: 40, ...sizeRect(boardNewNoteSize("comment")) },
+      ],
+    },
+  ])("$name", ({ drawn, board, upcoming, taken }) => {
+    expect(
+      boardTakenRects(drawn, { notes: [], ...board }, ["thread", "guest:g1"], upcoming),
+    ).toEqual(taken);
+  });
+
+  it("puts a new box clear of the room thread's card as it will grow, not as it is drawn", () => {
+    // Too narrow for the box beside the card: it has to go under it.
+    const view = { x: 0, y: 0, width: 520, height: 1_000 };
+    const box = boardNewNoteSize("thread");
+    const taken = boardTakenRects(
+      [{ ref: "card:thread", rect: room }],
+      { positions: {}, notes: [] },
+      ["thread"],
+      [],
+    );
+    const at = placeBoardItem(box, { x: 260, y: 400 }, taken, view);
+    const grown = { ...room, height: 420 };
+    expect(
+      at.x < grown.x + grown.width &&
+        grown.x < at.x + box.w &&
+        at.y < grown.y + grown.height &&
+        grown.y < at.y + box.h,
+    ).toBe(false);
   });
 });
 
@@ -719,6 +812,73 @@ describe("cursorSender", () => {
     cursor.close();
     cursor.close();
     expect(sent.slice(3)).toEqual([{ at: null, view: null }]);
+  });
+
+  it("sends a drag with the pointer, where it landed once, then a pointer without it", () => {
+    using _timers = { [Symbol.dispose]: () => vi.useRealTimers() };
+    vi.useFakeTimers();
+    const sent: Array<BoardPresence> = [];
+    const cursor = cursorSender((presence) => sent.push(presence));
+    const at = { x: 1, y: 1 };
+    const item = (x: number) => ({ ref: "note:a", x, y: 0 });
+    cursor.move(at);
+    cursor.drag([item(10)]);
+    vi.advanceTimersByTime(0);
+    expect(sent).toEqual([{ at, drag: { items: [item(10)] } }]);
+    // A group dragged with the pointer still: the drag alone is news.
+    cursor.drag([item(20)]);
+    vi.advanceTimersByTime(80);
+    cursor.land([item(25)]);
+    vi.advanceTimersByTime(80);
+    vi.advanceTimersByTime(80);
+    vi.advanceTimersByTime(200);
+    expect(sent.slice(1)).toEqual([
+      { at, drag: { items: [item(20)] } },
+      { at, drag: { items: [item(25)], done: true } },
+      { at },
+    ]);
+    // Nothing dragged is no drag.
+    cursor.drag([]);
+    vi.advanceTimersByTime(200);
+    expect(sent).toHaveLength(4);
+  });
+});
+
+describe("boardDragItems", () => {
+  const note = { id: "a", text: "Hi", x: 0, y: 0 };
+  it.each([
+    {
+      name: "a note moved, at the whole pixels the room takes",
+      held: [["note:a", { ...note, x: 10.4, y: 20.6 }]],
+      items: [{ ref: "note:a", x: 10, y: 21 }],
+    },
+    {
+      name: "not a note only written in",
+      held: [["note:a", { ...note, text: "Hello" }]],
+      items: [],
+    },
+    {
+      name: "a note resized, with its size",
+      held: [["note:a", { ...note, size: { w: 300, h: 200 } }]],
+      items: [{ ref: "note:a", x: 0, y: 0, w: 300, h: 200 }],
+    },
+    {
+      name: "a card moved and resized from its left corner, as one",
+      held: [
+        ["size:thread", { w: 400.2, h: 500 }],
+        ["card:thread", { x: -40, y: 0 }],
+      ],
+      items: [{ ref: "card:thread", x: -40, y: 0, w: 400, h: 500 }],
+    },
+    {
+      name: "a guest's card, whose id has a colon",
+      held: [["card:guest:g1", { x: 5, y: 5 }]],
+      items: [{ ref: "card:guest:g1", x: 5, y: 5 }],
+    },
+  ])("$name", ({ held, items }) => {
+    expect(
+      boardDragItems(new Map(held as Array<[string, BoardValue]>), new Map([["note:a", note]])),
+    ).toEqual(items);
   });
 });
 

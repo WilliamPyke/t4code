@@ -1322,6 +1322,52 @@ it.effect("shows each person's pointer on the board to everyone else while they 
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
 
+it.effect(
+  "shows what someone drags to the others with their pointer, until it ends or expires",
+  () =>
+    Effect.gen(function* () {
+      const { orchestrator, guestShares, credential } = yield* shareThread;
+      const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+      const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+      const samId = thread.guestShare!.guests![0]!.id;
+      const room = { threadId, shareId: thread.guestShare!.id };
+      const cursorsSeenBy = <E extends { readonly type: string }>(events: Stream.Stream<E>) =>
+        Effect.gen(function* () {
+          const queue = yield* Queue.unbounded<unknown>();
+          yield* Stream.runForEach(events, (event) =>
+            "cursors" in event ? Queue.offer(queue, event.cursors) : Effect.void,
+          ).pipe(Effect.forkScoped);
+          assert.deepEqual(yield* Queue.take(queue), []);
+          return queue;
+        });
+      const owner = yield* cursorsSeenBy(guestShares.roomCursors(room));
+      const samPage = yield* cursorsSeenBy(yield* guestShares.stream(sam.token));
+      const drag = {
+        items: [
+          { ref: "note:a", x: 40, y: 50 },
+          { ref: "card:thread", w: 400 },
+        ],
+      };
+
+      yield* guestShares.moveCursor({ session: sam.token }, { x: 1, y: 1 }, undefined, drag);
+      assert.deepEqual(yield* Queue.take(owner), [{ guestId: samId, x: 1, y: 1, drag }]);
+      // The next pointer post without one ends it; a drag let go says where it landed first.
+      const landed = { ...drag, done: true as const };
+      yield* guestShares.moveCursor({ session: sam.token }, { x: 2, y: 1 }, undefined, landed);
+      assert.deepEqual(yield* Queue.take(owner), [{ guestId: samId, x: 2, y: 1, drag: landed }]);
+      yield* guestShares.moveCursor({ session: sam.token }, { x: 3, y: 1 });
+      assert.deepEqual(yield* Queue.take(owner), [{ guestId: samId, x: 3, y: 1 }]);
+
+      // The owner's drag reaches the guest and never comes back to the owner.
+      yield* guestShares.moveCursor(room, { x: 5, y: 5 }, undefined, drag);
+      assert.deepEqual(yield* Queue.take(samPage), [{ x: 5, y: 5, drag }]);
+      // A drag nobody ends goes with the pointer it came with.
+      yield* TestClock.adjust("61 seconds");
+      assert.deepEqual(yield* Queue.take(samPage), []);
+      assert.deepEqual(yield* Queue.take(owner), []);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
 it.effect("shows each person's view of the board to the others until they close it", () =>
   Effect.gen(function* () {
     const { orchestrator, guestShares, credential } = yield* shareThread;

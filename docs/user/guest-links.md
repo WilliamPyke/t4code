@@ -50,7 +50,8 @@ working, and a guest's agent gets a card as soon as it starts a turn
 scrolling to zoom.
 
 Everyone with the board open sees the others' pointers on it, each with its owner's name. Yours
-shows only while your pointer is over the board. Click a name on a pointer, or **Follow** on a
+shows only while your pointer is over the board. A card someone is dragging or resizing moves for
+everyone as they do it, outlined in their pointer's colour. Click a name on a pointer, or **Follow** on a
 guest's card, to see what they see as they move around; panning or zooming yourself, or **Stop
 following**, ends it.
 

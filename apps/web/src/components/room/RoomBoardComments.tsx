@@ -42,7 +42,13 @@ import {
   boardCursorColor,
   boardPersonName,
 } from "./roomBoard.logic";
-import { useBoardNow, useCommentProgress } from "./roomBoardLive";
+import {
+  boardLiveRect,
+  boardLiveStyle,
+  useBoardLiveDrag,
+  useBoardNow,
+  useCommentProgress,
+} from "./roomBoardLive";
 
 // How far a held pointer goes before a press on a pin is a drag, not a click, in screen pixels.
 const DRAG_SLOP = 4;
@@ -140,10 +146,16 @@ export function CommentPin({
     if (moved) onDrop(note);
     else if (event.type === "pointerup") onToggle(note);
   };
+  const live = boardLiveRect(note, useBoardLiveDrag(itemRef));
   return (
     <div
       className="group/item absolute size-8 origin-top-left"
-      style={{ left: note.x, top: note.y, transform: scale === 1 ? undefined : `scale(${scale})` }}
+      style={{
+        left: note.x,
+        top: note.y,
+        transform: scale === 1 ? undefined : `scale(${scale})`,
+        ...boardLiveStyle(note, live, scale),
+      }}
       data-board-item={itemRef}
       data-board-pin
     >

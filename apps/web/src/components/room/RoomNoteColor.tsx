@@ -1,7 +1,9 @@
-import { ROOM_BOARD_NOTE_COLORS, type RoomBoardNoteColor } from "@t3tools/contracts";
+import { ROOM_BOARD_NOTE_COLORS, RoomBoardNoteColor } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { PaletteIcon } from "lucide-react";
 import type { PointerEvent } from "react";
 
+import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { cn } from "~/lib/utils";
 
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
@@ -37,6 +39,12 @@ const COLOR_NAMES: Readonly<Record<RoomBoardNoteColor, string>> = {
 
 export const noteColorClassName = (color: RoomBoardNoteColor | undefined) =>
   NOTE_COLOR_CLASSES[color ?? "yellow"];
+
+const LastNoteColor = Schema.NullOr(RoomBoardNoteColor);
+
+/** The colour this person last gave a note on this device, which their new notes take. */
+export const useLastNoteColor = () =>
+  useLocalStorage("t3code.roomBoardNoteColor", null, LastNoteColor);
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
 
@@ -78,7 +86,7 @@ export function NoteColorPicker({
           }}
         >
           {ROOM_BOARD_NOTE_COLORS.map((choice) => (
-            <MenuRadioItem key={choice} value={choice}>
+            <MenuRadioItem key={choice} value={choice} closeOnClick>
               <span className="flex items-center gap-2">
                 <span aria-hidden className={cn("size-3 rounded-full", SWATCH_CLASSES[choice])} />
                 {COLOR_NAMES[choice]}

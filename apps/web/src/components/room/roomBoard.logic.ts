@@ -1,5 +1,6 @@
 import {
   GuestId,
+  ROOM_BOARD_DRAG_MAX_ITEMS,
   ROOM_BOARD_MAX_CARD_SIZE,
   ROOM_BOARD_MAX_COORDINATE,
   ROOM_BOARD_MAX_EDGES,
@@ -17,6 +18,8 @@ import {
   type RoomArtifactContent,
   type RoomBoard,
   type RoomBoardChange,
+  type RoomBoardDrag,
+  type RoomBoardDragItem,
   type RoomBoardEdge,
   type RoomBoardNote,
   type RoomBoardReaction,
@@ -367,6 +370,52 @@ export const besideBoardItem = (
   );
 
 /**
+ * What a new card must stay clear of: everything drawn, each card whose height follows its
+ * content at least as tall as it grows to, notes on the board that are not drawn (just added, or
+ * hidden resolved pins), and the grid slots `upcoming` cards will take when they appear, such as
+ * the agent card of a guest whose agent has not run yet.
+ */
+export function boardTakenRects(
+  drawn: ReadonlyArray<{ readonly ref: string; readonly rect: BoardRect }>,
+  board: Pick<RoomBoard, "positions" | "sizes" | "notes">,
+  cardIds: ReadonlyArray<string>,
+  upcoming: ReadonlyArray<string>,
+): Array<BoardRect> {
+  const drawnRefs = new Set(drawn.map(({ ref }) => ref));
+  const undrawn = board.notes
+    .filter((note) => !drawnRefs.has(boardEditKey({ kind: "note", id: note.id })))
+    .map(boardNoteRect);
+  const grown = drawn.map(({ ref, rect }) => {
+    const id = ref.startsWith("card:") ? ref.slice("card:".length) : null;
+    if (id === null || board.sizes?.[id] !== undefined) return rect;
+    const grows = id === ROOM_BOARD_THREAD_CARD ? THREAD_CARD_HEIGHT : CARD_ROW_HEIGHT;
+    return { ...rect, height: Math.max(rect.height, grows) };
+  });
+  const placed = placeBoardCards(
+    [...cardIds, ...upcoming],
+    board.positions,
+    undefined,
+    board.sizes,
+  );
+  const slots = upcoming.flatMap((id) => {
+    const at = placed[id];
+    return at === undefined ? [] : [{ ...at, width: BOARD_CARD_WIDTH, height: CARD_ROW_HEIGHT }];
+  });
+  return [...grown, ...undrawn, ...slots];
+}
+
+/** Where a note is and how big, at its given size or, for heights the browser decides, a guess. */
+function boardNoteRect(note: RoomBoardNote): BoardRect {
+  const size = boardNoteSize(note);
+  return {
+    x: note.x,
+    y: note.y,
+    width: size?.w ?? NOTE_WIDTH,
+    height: size?.h ?? (note.pinnedTo === undefined ? NOTE_HEIGHT : COMMENT_HEIGHT),
+  };
+}
+
+/**
  * What is on a board and where, at the sizes it was given or, for heights the browser decides,
  * a guess. For when nothing on screen can be measured.
  */
@@ -386,16 +435,7 @@ export function boardItemRects(
       board.sizes?.[id]?.h ??
       (id === ROOM_BOARD_THREAD_CARD ? THREAD_CARD_HEIGHT : CARD_ROW_HEIGHT),
   }));
-  const notes = board.notes.map((note) => {
-    const size = boardNoteSize(note);
-    return {
-      x: note.x,
-      y: note.y,
-      width: size?.w ?? NOTE_WIDTH,
-      height: size?.h ?? (note.pinnedTo === undefined ? NOTE_HEIGHT : COMMENT_HEIGHT),
-    };
-  });
-  return [...cards, ...notes];
+  return [...cards, ...board.notes.map(boardNoteRect)];
 }
 
 /**
@@ -851,12 +891,13 @@ export const boardCursorAt = (view: BoardView, screen: BoardPoint): BoardPoint =
 const CURSOR_SEND_INTERVAL_MS = 80;
 
 /**
- * What the room hears of this person on the board: their pointer, or null once it left, and their
- * view when it changed, or null once they closed the board.
+ * What the room hears of this person on the board: their pointer, or null once it left, their
+ * view when it changed, or null once they closed the board, and what they drag while they do.
  */
 export interface BoardPresence {
   readonly at: BoardPoint | null;
   readonly view?: RoomBoardViewport | null;
+  readonly drag?: RoomBoardDrag;
 }
 
 const samePoint = (a: BoardPoint | null, b: BoardPoint | null) =>
@@ -865,26 +906,41 @@ const sameViewport = (a: RoomBoardViewport | null, b: RoomBoardViewport | null) 
   a === null || b === null ? a === b : samePoint(a, b) && a.zoom === b.zoom;
 
 /**
- * Sends a pointer's position and the board's view at most every `CURSOR_SEND_INTERVAL_MS`,
- * always ending on the latest, and nothing already sent. A pointer leaving is sent at once, and
- * closing the board takes both away.
+ * Sends a pointer's position, the board's view and what is dragged at most every
+ * `CURSOR_SEND_INTERVAL_MS`, always ending on the latest, and nothing already sent. A pointer
+ * leaving is sent at once, and closing the board takes both away. A drag rides the pointer's post;
+ * where it landed is sent once, and the post after it says the drag is over.
  */
 export function cursorSender(send: (presence: BoardPresence) => void) {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let at: BoardPoint | null = null;
   let view: RoomBoardViewport | null = null;
+  let drag: RoomBoardDrag | null = null;
   let sentAt: BoardPoint | null = null;
   let sentView: RoomBoardViewport | null = null;
+  let sentDrag: RoomBoardDrag | null = null;
   let lastSend = Number.NEGATIVE_INFINITY;
   const flush = () => {
     if (timer !== null) clearTimeout(timer);
     timer = null;
     const viewChanged = !sameViewport(view, sentView);
-    if (samePoint(at, sentAt) && !viewChanged) return;
+    const dragChanged = JSON.stringify(drag) !== JSON.stringify(sentDrag);
+    if (samePoint(at, sentAt) && !viewChanged && !dragChanged) return;
+    // A pointer off the board takes its drag with it.
+    const sentWith = at === null ? null : drag;
     sentAt = at;
     sentView = view;
+    sentDrag = sentWith;
     lastSend = Date.now();
-    send(viewChanged ? { at, view } : { at });
+    send({
+      at,
+      ...(viewChanged ? { view } : {}),
+      ...(sentWith === null ? {} : { drag: sentWith }),
+    });
+    if (sentWith?.done === true) {
+      drag = null;
+      schedule();
+    }
   };
   const schedule = () => {
     if (timer !== null) return;
@@ -899,6 +955,16 @@ export function cursorSender(send: (presence: BoardPresence) => void) {
       view = next;
       schedule();
     },
+    /** What is dragged now; nothing is no drag. */
+    drag: (items: ReadonlyArray<RoomBoardDragItem>) => {
+      drag = items.length === 0 ? null : { items };
+      schedule();
+    },
+    /** Where a drag landed as it was let go. */
+    land: (items: ReadonlyArray<RoomBoardDragItem>) => {
+      drag = items.length === 0 ? null : { items, done: true };
+      schedule();
+    },
     leave: () => {
       at = null;
       flush();
@@ -908,12 +974,53 @@ export function cursorSender(send: (presence: BoardPresence) => void) {
       timer = null;
       at = null;
       view = null;
+      drag = null;
       if (sentAt === null && sentView === null) return;
       sentAt = null;
       sentView = null;
+      sentDrag = null;
       send({ at: null, view: null });
     },
   };
+}
+
+/**
+ * What a person drags now, from the edits they hold: each card or note whose place or size moved
+ * from where the gesture took it, at the whole pixels the room takes. A note only written in is
+ * not dragged.
+ */
+export function boardDragItems(
+  held: ReadonlyMap<string, BoardValue>,
+  from: ReadonlyMap<string, BoardValue | undefined>,
+): Array<RoomBoardDragItem> {
+  const items = new Map<string, RoomBoardDragItem>();
+  const put = (ref: string, fields: Omit<RoomBoardDragItem, "ref">) =>
+    items.set(ref, { ...items.get(ref), ...fields, ref });
+  for (const [key, raw] of held) {
+    if (raw === null) continue;
+    const colon = key.indexOf(":");
+    const kind = key.slice(0, colon);
+    const id = key.slice(colon + 1);
+    const value = settleBoardValue(raw);
+    if (kind === "note" && "text" in value) {
+      const before = from.get(key);
+      const was = before !== undefined && before !== null && "text" in before ? before : null;
+      const sized =
+        value.size !== undefined &&
+        (was?.size?.w !== value.size.w || was?.size?.h !== value.size.h);
+      if (was !== null && was.x === value.x && was.y === value.y && !sized) continue;
+      put(key, {
+        x: value.x,
+        y: value.y,
+        ...(sized && value.size !== undefined ? { w: value.size.w, h: value.size.h } : {}),
+      });
+    } else if (kind === "card" && "x" in value) {
+      put(key, { x: value.x, y: value.y });
+    } else if (kind === "size" && "w" in value) {
+      put(`card:${id}`, clampBoardSize(value));
+    }
+  }
+  return [...items.values()].slice(0, ROOM_BOARD_DRAG_MAX_ITEMS);
 }
 
 export interface BoardSize {

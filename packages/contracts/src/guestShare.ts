@@ -604,10 +604,37 @@ export const RoomAgentActivity = Schema.Struct({
 });
 export type RoomAgentActivity = typeof RoomAgentActivity.Type;
 
+export const ROOM_BOARD_DRAG_MAX_ITEMS = 64;
+
+/**
+ * A card or note someone is dragging or resizing, by its board ref (`note:<id>`, `card:<id>`),
+ * where and how big it is this moment. Absent fields did not change.
+ */
+export const RoomBoardDragItem = Schema.Struct({
+  ref: Schema.String.check(Schema.isMaxLength(128)),
+  x: Schema.optional(RoomBoardCoordinate),
+  y: Schema.optional(RoomBoardCoordinate),
+  w: Schema.optional(RoomBoardLength),
+  h: Schema.optional(RoomBoardLength),
+});
+export type RoomBoardDragItem = typeof RoomBoardDragItem.Type;
+
+/**
+ * What someone is dragging, sent with their pointer and never stored. `done` is the drag let go:
+ * where it landed, which the board's stored positions are about to say.
+ */
+export const RoomBoardDrag = Schema.Struct({
+  items: Schema.Array(RoomBoardDragItem).check(Schema.isMaxLength(ROOM_BOARD_DRAG_MAX_ITEMS)),
+  done: Schema.optional(Schema.Literal(true)),
+});
+export type RoomBoardDrag = typeof RoomBoardDrag.Type;
+
 /** Someone's pointer on the board, in board pixels. Absent `guestId` is the owner's. */
 export const RoomCursor = Schema.Struct({
   guestId: Schema.optional(GuestId),
   ...RoomBoardPoint.fields,
+  /** What they are dragging now. Absent from an older server. */
+  drag: Schema.optional(RoomBoardDrag),
 });
 export type RoomCursor = typeof RoomCursor.Type;
 
@@ -688,11 +715,13 @@ export type RoomLiveInput = typeof RoomLiveInput.Type;
 
 /**
  * Where someone's pointer is on the board, or null once it left. `view` is what their board
- * shows, null once they closed it, and unchanged when absent.
+ * shows, null once they closed it, and unchanged when absent. `drag` is what they drag, absent
+ * when they drag nothing.
  */
 const RoomCursorFields = {
   at: Schema.NullOr(RoomBoardPoint),
   view: Schema.optional(Schema.NullOr(RoomBoardViewport)),
+  drag: Schema.optional(RoomBoardDrag),
 };
 
 /** The owner's pointer and view on the board. */

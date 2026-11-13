@@ -42,6 +42,7 @@ import {
   type RoomBoardChange,
   type RoomCodeState,
   roomCodeStateOf,
+  type RoomBoardDrag,
   type RoomBoardPoint,
   type RoomBoardViewport,
   type RoomCursorsEvent,
@@ -186,7 +187,11 @@ interface RoomLive {
       readonly code?: RoomCodeState;
     }
   >;
-  readonly cursors: ReadonlyMap<string, Expiring & RoomBoardPoint>;
+  /** Each pointer, with what its person drags while they drag, which goes with the pointer. */
+  readonly cursors: ReadonlyMap<
+    string,
+    Expiring & RoomBoardPoint & { readonly drag?: RoomBoardDrag }
+  >;
   readonly views: ReadonlyMap<string, Expiring & RoomBoardViewport>;
   /** What the agent of each guest's own thread box does on their machine, by guest and run. */
   readonly boxes: ReadonlyMap<string, Expiring & RoomBoxProgress>;
@@ -402,12 +407,13 @@ export class GuestShareService extends Context.Service<
     readonly roomCursors: (input: RoomLiveInput) => Stream.Stream<RoomCursorsEvent>;
     /**
      * Moves the owner's pointer on the board while they read the room's pointers, or a guest's
-     * while their page is open. Null takes it off.
+     * while their page is open, with what they drag. Null takes it off.
      */
     readonly moveCursor: (
       by: RoomLiveInput | { readonly session: string },
       at: RoomBoardPoint | null,
       view?: RoomBoardViewport | null,
+      drag?: RoomBoardDrag,
     ) => Effect.Effect<void, GuestShareAccessError>;
     /** What the room said after `after`, for the guest's own machine. Changes nothing here. */
     readonly roomUpdates: (
@@ -1209,17 +1215,28 @@ const make = Effect.gen(function* () {
         return next;
       });
     });
-  /** Moves someone's pointer, and their view unless `view` is absent. Null takes either away. */
+  /**
+   * Moves someone's pointer, and their view unless `view` is absent. Null takes either away. A
+   * pointer without `drag` drags nothing.
+   */
   const setCursor = (
     shareId: GuestShareId,
     key: string,
     at: RoomBoardPoint | null,
     view?: RoomBoardViewport | null,
+    drag?: RoomBoardDrag,
   ) =>
     changeRoom(shareId, (room, now) => {
       const cursors = new Map(room.cursors);
       if (at === null) cursors.delete(key);
-      else cursors.set(key, { x: at.x, y: at.y, until: now + CURSOR_TTL_MS });
+      else {
+        cursors.set(key, {
+          x: at.x,
+          y: at.y,
+          ...(drag === undefined ? {} : { drag }),
+          until: now + CURSOR_TTL_MS,
+        });
+      }
       if (view === undefined) return { ...room, cursors };
       const views = new Map(room.views);
       if (view === null) views.delete(key);
@@ -1865,10 +1882,11 @@ const make = Effect.gen(function* () {
     by: RoomLiveInput | { readonly session: string },
     at: RoomBoardPoint | null,
     view?: RoomBoardViewport | null,
+    drag?: RoomBoardDrag,
   ) {
     if (!("session" in by)) {
       if (!ownerBoards.has(by.shareId)) return yield* inactive;
-      return yield* setCursor(by.shareId, OWNER_CURSOR, at, view);
+      return yield* setCursor(by.shareId, OWNER_CURSOR, at, view, drag);
     }
     const claims = yield* verifySession(by.session);
     if (Option.isNone(claims) || claims.value.kind !== "session") {
@@ -1881,7 +1899,7 @@ const make = Effect.gen(function* () {
     if (moves && !allowCursorMove(`${shareId}:${guestId}`, now)) {
       return yield* new GuestShareAccessError({ reason: "too_fast" });
     }
-    yield* setCursor(shareId, guestId, at, view);
+    yield* setCursor(shareId, guestId, at, view, drag);
   });
 
   const roomUpdates = Effect.fn("GuestShareService.roomUpdates")(function* (

@@ -501,7 +501,7 @@ const boardCursorRoute = HttpRouter.add(
     if (body._tag === "None") return yield* badRequest;
     const guestShares = yield* GuestShareService;
     return yield* guestShares
-      .moveCursor({ session }, body.value.at, body.value.view)
+      .moveCursor({ session }, body.value.at, body.value.view, body.value.drag)
       .pipe(
         Effect.as(HttpServerResponse.empty({ status: 204, headers: NO_STORE })),
         Effect.catchTags({ GuestShareAccessError: errorResponse }),
