@@ -173,12 +173,16 @@ const PLACE_GAP = 16;
 const PLACE_REACH = 1_200;
 const PLACE_STEPS = 60;
 
-/** The spot nearest `around` that covers least of what is `taken`, inside `area` when given. */
+/**
+ * The spot nearest `around` that covers least of what is `taken`, inside `area` when given, and
+ * only to the right of and below it when `onward`.
+ */
 function searchBoardSpot(
   size: RoomBoardSize,
   around: BoardPoint,
   taken: ReadonlyArray<BoardRect>,
   area: BoardRect | undefined,
+  onward = false,
 ): { readonly at: BoardPoint; readonly cover: number } | null {
   const reach = area === undefined ? PLACE_REACH : Math.max(area.width, area.height);
   const step = Math.max(PLACE_GAP, Math.ceil(reach / PLACE_STEPS));
@@ -204,8 +208,9 @@ function searchBoardSpot(
     return sum;
   };
   const offsets: Array<readonly [number, number]> = [];
-  for (let i = -reachSteps; i <= reachSteps; i += 1) {
-    for (let j = -reachSteps; j <= reachSteps; j += 1) offsets.push([i, j]);
+  const from = onward ? 0 : -reachSteps;
+  for (let i = from; i <= reachSteps; i += 1) {
+    for (let j = from; j <= reachSteps; j += 1) offsets.push([i, j]);
   }
   offsets.sort(
     ([ai, aj], [bi, bj]) => ai * ai + aj * aj - (bi * bi + bj * bj) || aj - bj || ai - bi,
@@ -244,6 +249,80 @@ export function placeBoardItem(
   const best =
     anywhere !== null && (inView === null || anywhere.cover < inView.cover) ? anywhere : inView;
   return best?.at ?? { x: Math.round(around.x - size.w / 2), y: Math.round(around.y - size.h / 2) };
+}
+
+const containsPoint = (rect: BoardRect, at: BoardPoint) =>
+  at.x >= rect.x && at.x <= rect.x + rect.width && at.y >= rect.y && at.y <= rect.y + rect.height;
+
+/**
+ * The section a card added from the toolbar goes into: the one selected alone, else the one the
+ * pointer was last over, else the one holding the card this person last added or selected. A
+ * section out of view does not count.
+ */
+export function boardAddSection(
+  sections: ReadonlyArray<{ readonly ref: string; readonly rect: BoardRect }>,
+  view: BoardRect,
+  hints: {
+    readonly selected: string | null;
+    readonly pointer: BoardPoint | null;
+    readonly lastCard: BoardPoint | null;
+  },
+): BoardRect | null {
+  const seen = sections.filter(
+    ({ rect }) =>
+      rect.x < view.x + view.width &&
+      rect.x + rect.width > view.x &&
+      rect.y < view.y + view.height &&
+      rect.y + rect.height > view.y,
+  );
+  const under = (at: BoardPoint | null) =>
+    at === null ? undefined : seen.findLast(({ rect }) => containsPoint(rect, at));
+  return (
+    (
+      seen.find(({ ref }) => ref === hints.selected) ??
+      under(hints.pointer) ??
+      under(hints.lastCard)
+    )?.rect ?? null
+  );
+}
+
+/**
+ * Where a card added from the toolbar goes: into `section`'s free space, nearest the middle of the
+ * view, or beside the section when it is full; with no section, as near the middle of the view as
+ * it is clear of what is `taken`.
+ */
+export function boardAddSpot(
+  size: RoomBoardSize,
+  taken: ReadonlyArray<BoardRect>,
+  view: BoardRect,
+  section: BoardRect | null,
+): BoardPoint {
+  const middle = { x: view.x + view.width / 2, y: view.y + view.height / 2 };
+  if (section === null) return placeBoardItem(size, middle, taken, view);
+  const inner = {
+    x: section.x,
+    y: section.y + SECTION_TITLE_HEIGHT,
+    width: section.width,
+    height: section.height - SECTION_TITLE_HEIGHT,
+  };
+  const fits =
+    inner.width >= size.w + PLACE_GAP * 2 && inner.height >= size.h + PLACE_GAP * 2
+      ? searchBoardSpot(
+          size,
+          {
+            x: Math.min(Math.max(middle.x, inner.x), inner.x + inner.width),
+            y: Math.min(Math.max(middle.y, inner.y), inner.y + inner.height),
+          },
+          taken,
+          inner,
+        )
+      : null;
+  if (fits !== null && fits.cover === 0) return fits.at;
+  return placeBoardItem(
+    size,
+    { x: section.x + section.width + PLACE_GAP * 2 + size.w / 2, y: section.y + size.h / 2 },
+    [...taken, section],
+  );
 }
 
 /**
@@ -408,10 +487,9 @@ export const besideBoardItem = (
   );
 
 /**
- * What a new card must stay clear of: everything drawn, each card whose height follows its
- * content at least as tall as it grows to, notes on the board that are not drawn (just added, or
- * hidden resolved pins), and the grid slots `upcoming` cards will take when they appear, such as
- * the agent card of a guest whose agent has not run yet.
+ * What a new card must stay clear of: everything drawn, cards that grow with their content at
+ * their full height, notes not drawn (just added, or hidden resolved pins), and the grid slots
+ * `upcoming` cards will take, such as a guest's agent card. Sections are not: cards land in them.
  */
 export function boardTakenRects(
   drawn: ReadonlyArray<{ readonly ref: string; readonly rect: BoardRect }>,
@@ -421,7 +499,10 @@ export function boardTakenRects(
 ): Array<BoardRect> {
   const drawnRefs = new Set(drawn.map(({ ref }) => ref));
   const undrawn = board.notes
-    .filter((note) => !drawnRefs.has(boardEditKey({ kind: "note", id: note.id })))
+    .filter(
+      (note) =>
+        note.section !== true && !drawnRefs.has(boardEditKey({ kind: "note", id: note.id })),
+    )
     .map(boardNoteRect);
   const grown = drawn.map(({ ref, rect }) => {
     const id = ref.startsWith("card:") ? ref.slice("card:".length) : null;
@@ -934,6 +1015,8 @@ export const boardCursorAt = (view: BoardView, screen: BoardPoint): BoardPoint =
   settleBoardValue(screenToBoard(view, screen));
 
 const CURSOR_SEND_INTERVAL_MS = 80;
+// Within the two seconds the room keeps a drag nobody posted again before taking it for gone.
+const DRAG_BEAT_MS = 1_000;
 
 /**
  * What the room hears of this person on the board: their pointer, or null once it left, their
@@ -951,13 +1034,14 @@ const sameViewport = (a: RoomBoardViewport | null, b: RoomBoardViewport | null) 
   a === null || b === null ? a === b : samePoint(a, b) && a.zoom === b.zoom;
 
 /**
- * Sends a pointer's position, the board's view and what is dragged at most every
- * `CURSOR_SEND_INTERVAL_MS`, always ending on the latest, and nothing already sent. A pointer
- * leaving is sent at once, and closing the board takes both away. A drag rides the pointer's post;
- * where it landed is sent once, and the post after it says the drag is over.
+ * Sends pointer, view and drag at most every `CURSOR_SEND_INTERVAL_MS`, ending on the latest and
+ * repeating nothing, but a drag held still every `DRAG_BEAT_MS`. A pointer leaving is sent at once,
+ * and closing takes pointer and view away. Where a drag landed is sent once, and the post after it
+ * says the drag is over.
  */
 export function cursorSender(send: (presence: BoardPresence) => void) {
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let beat: ReturnType<typeof setTimeout> | null = null;
   let at: BoardPoint | null = null;
   let view: RoomBoardViewport | null = null;
   let drag: RoomBoardDrag | null = null;
@@ -965,18 +1049,23 @@ export function cursorSender(send: (presence: BoardPresence) => void) {
   let sentView: RoomBoardViewport | null = null;
   let sentDrag: RoomBoardDrag | null = null;
   let lastSend = Number.NEGATIVE_INFINITY;
-  const flush = () => {
+  const flush = (again = false) => {
     if (timer !== null) clearTimeout(timer);
     timer = null;
     const viewChanged = !sameViewport(view, sentView);
     const dragChanged = JSON.stringify(drag) !== JSON.stringify(sentDrag);
-    if (samePoint(at, sentAt) && !viewChanged && !dragChanged) return;
+    if (!again && samePoint(at, sentAt) && !viewChanged && !dragChanged) return;
     // A pointer off the board takes its drag with it.
     const sentWith = at === null ? null : drag;
     sentAt = at;
     sentView = view;
     sentDrag = sentWith;
     lastSend = Date.now();
+    if (beat !== null) clearTimeout(beat);
+    beat =
+      sentWith !== null && sentWith.done !== true
+        ? setTimeout(() => flush(true), DRAG_BEAT_MS)
+        : null;
     send({
       at,
       ...(viewChanged ? { view } : {}),
@@ -1016,7 +1105,9 @@ export function cursorSender(send: (presence: BoardPresence) => void) {
     },
     close: () => {
       if (timer !== null) clearTimeout(timer);
+      if (beat !== null) clearTimeout(beat);
       timer = null;
+      beat = null;
       at = null;
       view = null;
       drag = null;
@@ -1983,13 +2074,34 @@ export function boardDuplicates(
   });
 }
 
+/** What copying a selection left out, as a sentence, or null when it copied all of it. */
+export function boardCopySkipped(
+  notes: ReadonlyArray<RoomBoardNote>,
+  cards: number,
+): string | null {
+  const kinds = new Set<string>();
+  for (const note of notes) {
+    if (note.section === true) kinds.add("Sections");
+    else if (note.pinnedTo !== undefined) kinds.add("Comments on replies");
+    else if (note.kind === "thread") kinds.add("Thread boxes");
+    else if (note.kind === "artifact") kinds.add("Artifacts");
+    else if (note.kind === "comment") kinds.add("Comment threads");
+  }
+  if (cards > 0) kinds.add("The room's cards");
+  const named = [...kinds].map((kind, index) => (index === 0 ? kind : kind.toLowerCase()));
+  if (named.length === 0) return null;
+  const list =
+    named.length === 1 ? named[0] : `${named.slice(0, -1).join(", ")} and ${named.at(-1)}`;
+  return `${list} are not copied.`;
+}
+
 const TIDY_GAP = 24;
 
 /**
  * Where Tidy puts these items: a grid in their reading order (by rows as they sit, then left to
  * right), as near square as it goes, each column as wide as the widest item and each row as tall
- * as its tallest, with even gaps. It starts where they started when that is clear of `taken`, and
- * else at the nearest spot that is.
+ * as its tallest, with even gaps. It starts at their top-left corner when that is clear of
+ * `taken`, and else at the nearest clear spot right of or below it, never up into what is above.
  */
 export function boardTidy(
   items: ReadonlyArray<{ readonly ref: string; readonly rect: BoardRect }>,
@@ -2017,11 +2129,13 @@ export function boardTidy(
   const width = columns * cell + (columns - 1) * TIDY_GAP;
   const height =
     heights.reduce((sum, rowHeight) => sum + rowHeight, 0) + (heights.length - 1) * TIDY_GAP;
-  const origin = placeBoardItem(
+  const origin = searchBoardSpot(
     { w: width, h: height },
     { x: bounds.x + width / 2, y: bounds.y + height / 2 },
     taken,
-  );
+    undefined,
+    true,
+  )?.at ?? { x: bounds.x, y: bounds.y };
   return ordered.map(({ ref }, index) => {
     const row = Math.floor(index / columns);
     return {

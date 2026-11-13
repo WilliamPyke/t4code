@@ -36,10 +36,11 @@ makes it last 1, 7 or 30 days from now, and everyone on it stays. An extended li
 in full: a [short readable link](#where-the-link-opens) you sent earlier still works until the
 link's first end, but not after it.
 
-Choose **Stop sharing** to end the link for everyone at once. Archiving the thread, choosing
-**Replace link**, or unlinking the machine from T Connect also ends it. If anyone has joined, T Code asks
-you to confirm before it stops sharing or replaces the link. You can send or dismiss guest
-messages from the mobile app.
+Choose **Stop sharing**, in the thread header or the share dialog, to end the link for everyone at
+once. **Replace link** in the dialog ends it too and makes a new one: pick how long the new link
+lasts, the first choice being as long as the old one did. Archiving the thread or unlinking the
+machine from T Connect also ends it. If anyone has joined, T Code asks you to confirm before it
+stops sharing or replaces the link. You can send or dismiss guest messages from the mobile app.
 
 ## See the room as a board
 
@@ -52,13 +53,16 @@ You can plan on a board before inviting anyone. A thread you have not shared ope
 board, kept on the thread from your first change, and its header says **Not shared**. Everything
 that needs no guest works there: cards, lines, colours, comment threads, thread boxes running on
 your agent, and artifacts. **Share** in the board's header opens the same dialog as **Share with
-guests**, to make, extend or replace the link or clear the board. Once shared, the header names who
+guests**, to make, extend, replace or stop the link or clear the board. Once shared, the header names who
 joined (click the names to manage guests) and has **Stop sharing**. The thread's card says when your agent is
 working, and a guest's agent gets a card as soon as it starts a turn
 [on their machine](#your-turns-show-in-the-room). Scroll or drag the empty board to move, and
 hold Ctrl or Cmd while scrolling, or pinch, to zoom towards the pointer. Double-click the empty
-board to add a note there and start writing in it. When cards are small on screen, the buttons on a
-note's header fold into one **…** menu, so the rest of the header is free to grab.
+board to add a note there and start writing in it. A card added from the toolbar is ready to type
+in too, and goes where you are working: into the section you selected, last pointed at, or last
+added or picked a card in, or else as near the middle of the view as there is room. When cards are
+small on screen, the buttons on a note's header fold into one **…** menu, so the rest of the
+header is free to grab.
 
 Everyone with the board open sees the others' pointers on it, each with its owner's name. Yours
 shows only while your pointer is over the board. A card someone is dragging or resizing moves for
@@ -86,14 +90,14 @@ selection; dragging any other card moves just that one and selects it. The arrow
 selection a little, or further with Shift. The bar just above a selection also recolours all its
 notes at once, and has:
 
-- **Tidy**, which lines the selected cards up in an even grid near where they were, in the order
-  you read them, clear of other cards.
+- **Tidy**, which lines the selected cards up in an even grid from where the top-left one was, in
+  the order you read them, moving it right or down only as far as it takes to clear other cards.
 - **Duplicate** (or Ctrl+D, Cmd+D on a Mac), which copies the selected notes, tasks and links next
   to them as your own cards and selects the copies. Thread boxes, artifacts, comment threads and
-  sections are not copied. Ctrl+C then Ctrl+V (Cmd on a Mac) does the same, placing the copies at
+  sections are not copied, and the board says so. Ctrl+C then Ctrl+V (Cmd on a Mac) does the same, placing the copies at
   your pointer. Pasting text copied anywhere else makes a note of it, and pasting a link makes a
   link card.
-- **Group in a section**, which puts a section around them.
+- **Group in a section**, which puts a section around them where they are.
 
 Delete (or Backspace) removes the selected cards you may delete after you confirm; cards that are
 someone else's stay, and the board says how many it left. Escape or **Clear** ends the selection.
@@ -103,7 +107,8 @@ A **Section** is a titled frame drawn behind the cards, to group them. Drag it b
 the cards sitting mostly inside it move with it; drag a card out and it is no longer in it. Resize
 it from its bottom corners and colour it like a note. A section never goes to an agent and takes no
 lines. Only whoever added it, or the owner, can rename or delete it, and deleting it leaves its
-cards where they are.
+cards where they are. Enter or clicking away saves a section's, thread box's or artifact's title;
+Escape puts back the one it had.
 
 Ctrl+Z (Cmd+Z on a Mac) undoes your own last change on the board, and Ctrl+Shift+Z or Ctrl+Y
 redoes it; the arrows in the toolbar do the same. Undo covers moving and resizing cards, a note's
@@ -150,7 +155,7 @@ before you send it.
 To bring a thread you already have onto the board, open the toolbar's **Thread** menu and choose
 **Add one of your threads**, then pick it. The owner picks from the threads on their machine; a
 guest can do this once a machine of theirs is in the room, and picks from that machine's threads.
-The box takes the thread's name and shows its last finished turn. From then on the room sees that
+A thread that is shared itself, or keeps a board of its own, is not listed. The box takes the thread's name and shows its last finished turn. From then on the room sees that
 thread the way it sees any box: the start of each prompt, the cards that went with it, the model,
 what the agent is doing, and the start of its reply. That includes turns you run in the thread
 itself, from its own message box, not only prompts sent from the board. An artifact is filled only

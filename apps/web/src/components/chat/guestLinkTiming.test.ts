@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { linkEndsLabel, linkEndsSoon } from "./guestLinkTiming";
+import { linkEndsLabel, linkEndsSoon, linkLifetimeDays } from "./guestLinkTiming";
 
 const NOW = Date.parse("2026-11-13T12:00:00.000Z");
 const MINUTE = 60_000;
@@ -20,8 +20,21 @@ describe("linkEndsLabel", () => {
     [90 * MINUTE, "Ends in 2 hours"],
     [70 * MINUTE, "Ends in 1 hour"],
     [20 * MINUTE, "Ends within the hour"],
+    [0, "Expired"],
   ])("a link with %i ms left reads %s", (left, label) => {
     expect(linkEndsLabel(endsIn(left), NOW)).toBe(label);
+  });
+});
+
+describe("linkLifetimeDays", () => {
+  it.each([
+    [DAY, 1],
+    [7 * DAY, 7],
+    // Extended from a week to a month a few days in.
+    [33 * DAY, 30],
+    [3 * DAY, 1],
+  ])("a link made to end %i ms later lasts %i days", (lasted, days) => {
+    expect(linkLifetimeDays(endsIn(0), endsIn(lasted), [1, 7, 30])).toBe(days);
   });
 });
 

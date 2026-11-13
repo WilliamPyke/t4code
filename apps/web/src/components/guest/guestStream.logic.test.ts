@@ -13,7 +13,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { makeThreadProjectionFixture } from "../../test-fixtures";
 import {
-  formatGuestExpiry,
   guestFilesProblem,
   inviteShareId,
   nextAwaitingRowIds,
@@ -126,15 +125,6 @@ describe("unplacedGuestMessages", () => {
       "dismissed",
       "late",
     ]);
-  });
-});
-
-describe("formatGuestExpiry", () => {
-  const now = Date.parse("2026-10-23T00:00:00.000Z");
-  it("shows whole hours, then minutes, then expired", () => {
-    expect(formatGuestExpiry("2026-10-23T23:59:00.000Z", now)).toBe("23h left");
-    expect(formatGuestExpiry("2026-10-23T00:45:30.000Z", now)).toBe("45m left");
-    expect(formatGuestExpiry("2026-10-23T00:00:00.000Z", now)).toBe("Expired");
   });
 });
 

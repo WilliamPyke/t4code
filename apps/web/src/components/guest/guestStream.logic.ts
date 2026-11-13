@@ -50,13 +50,6 @@ export function unplacedGuestMessages(
     .toSorted((a, b) => a.submittedAt.localeCompare(b.submittedAt));
 }
 
-/** "23h left" or "5m left", rounded down, for the shared thread's header. */
-export function formatGuestExpiry(expiresAt: string, nowMs: number): string {
-  const minutes = Math.floor((Date.parse(expiresAt) - nowMs) / 60_000);
-  if (minutes <= 0) return "Expired";
-  return minutes >= 60 ? `${Math.floor(minutes / 60)}h left` : `${minutes}m left`;
-}
-
 /**
  * The share an invite (`<shareId>.<signature>`) opens. Only used to find this browser's session
  * for it; the server checks the signature.

@@ -1360,12 +1360,19 @@ it.effect(
       assert.deepEqual(yield* Queue.take(owner), [{ guestId: samId, x: 2, y: 1, drag: landed }]);
       yield* guestShares.moveCursor({ session: sam.token }, { x: 3, y: 1 });
       assert.deepEqual(yield* Queue.take(owner), [{ guestId: samId, x: 3, y: 1 }]);
+      // A drag its page stopped posting, as when the tab closed mid-drag, ends in two seconds;
+      // the pointer stays until it expires or its stream closes.
+      yield* guestShares.moveCursor({ session: sam.token }, { x: 4, y: 1 }, undefined, drag);
+      assert.deepEqual(yield* Queue.take(owner), [{ guestId: samId, x: 4, y: 1, drag }]);
+      yield* TestClock.adjust("2 seconds");
+      assert.deepEqual(yield* Queue.take(owner), [{ guestId: samId, x: 4, y: 1 }]);
 
       // The owner's drag reaches the guest and never comes back to the owner.
       yield* guestShares.moveCursor(room, { x: 5, y: 5 }, undefined, drag);
       assert.deepEqual(yield* Queue.take(samPage), [{ x: 5, y: 5, drag }]);
-      // A drag nobody ends goes with the pointer it came with.
+      // A drag nobody ends goes first, then the pointer it came with.
       yield* TestClock.adjust("61 seconds");
+      assert.deepEqual(yield* Queue.take(samPage), [{ x: 5, y: 5 }]);
       assert.deepEqual(yield* Queue.take(samPage), []);
       assert.deepEqual(yield* Queue.take(owner), []);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),

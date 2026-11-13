@@ -141,6 +141,59 @@ describe("RoomBoard sections", () => {
       expect(moved.toSorted()).toEqual(["frame", "inside"]);
     });
   });
+
+  it("puts a title back on Escape, sending nothing, and saves it on Enter", async () => {
+    const board = renderBoard([
+      { id: "frame", text: "Plan", x: 0, y: 500, section: true, size: { w: 500, h: 300 } },
+      { id: "box", text: "Review", x: 600, y: 500, kind: "thread" },
+    ]);
+    const { onChange } = board;
+    await using screen = await board.screen;
+    for (const name of ["Section title", "Thread name"]) {
+      const field = screen.getByRole("textbox", { name, exact: true });
+      await userEvent.click(field);
+      await userEvent.keyboard(" draft{Escape}");
+      await expect.element(field).not.toHaveFocus();
+      await expect.element(field).toHaveValue(name === "Section title" ? "Plan" : "Review");
+    }
+    expect(onChange).not.toHaveBeenCalled();
+
+    const title = screen.getByRole("textbox", { name: "Section title", exact: true });
+    await userEvent.click(title);
+    await userEvent.keyboard("{Control>}a{/Control}Plan B{Enter}");
+    await vi.waitFor(() =>
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "note.put", noteId: "frame", text: "Plan B" }),
+      ),
+    );
+  });
+
+  it("grows a section from its own size when its corner is dragged", async () => {
+    await using _viewport = await boardSizedViewport();
+    const board = renderBoard([
+      { id: "frame", text: "Plan", x: 0, y: 0, section: true, size: { w: 640, h: 420 } },
+    ]);
+    const { onChange } = board;
+    await using screen = await board.screen;
+    const section = screen.container.querySelector('[data-board-item="note:frame"]');
+    if (section === null) throw new Error("The board did not draw the section");
+    const zoom = section.getBoundingClientRect().width / 640;
+    const corner = middleOf(section.querySelectorAll("div[data-board-grip]")[1]!);
+    await commands.mouse([
+      { type: "down", ...corner },
+      { type: "move", x: corner.x + 100, y: corner.y + 60 },
+      { type: "up", x: corner.x + 100, y: corner.y + 60 },
+    ]);
+    await vi.waitFor(() =>
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "note.put", noteId: "frame" }),
+      ),
+    );
+    const put = onChange.mock.lastCall?.[0];
+    if (put?.type !== "note.put") throw new Error("The section's size was not sent");
+    expect(put.size?.w).toBeCloseTo(640 + 100 / zoom, -1);
+    expect(put.size?.h).toBeCloseTo(420 + 60 / zoom, -1);
+  });
 });
 
 describe("RoomBoard selection", () => {
@@ -204,6 +257,34 @@ describe("RoomBoard selection", () => {
       );
       expect(coloured.toSorted()).toEqual(["a", "b"]);
     });
+  });
+
+  it("tidies the selection where it is, and groups it in a section without moving it", async () => {
+    await using _viewport = await boardSizedViewport();
+    const board = renderBoard([
+      { id: "a", text: "First", x: 600, y: 500 },
+      { id: "b", text: "Second", x: 900, y: 520 },
+      { id: "c", text: "Third", x: 620, y: 700 },
+    ]);
+    const { onChange } = board;
+    await using screen = await board.screen;
+    await userEvent.keyboard("{Shift>}");
+    for (const id of ["a", "b", "c"]) {
+      const header = screen.container.querySelector(`[data-board-item="note:${id}"] > div`);
+      if (header === null) throw new Error(`The board did not draw note ${id}`);
+      await userEvent.click(header);
+    }
+    await userEvent.keyboard("{/Shift}");
+    await userEvent.click(screen.getByRole("button", { name: "Tidy" }));
+    const moved = () =>
+      onChange.mock.calls.flatMap(([change]) => (change.type === "note.put" ? [change] : []));
+    await vi.waitFor(() => expect(moved()).toHaveLength(3));
+    expect(Math.min(...moved().map((change) => change.x))).toBe(600);
+    expect(Math.min(...moved().map((change) => change.y))).toBe(500);
+
+    await userEvent.click(screen.getByRole("button", { name: "Group in a section" }));
+    await vi.waitFor(() => expect(moved()).toHaveLength(4));
+    expect(moved()[3]).toMatchObject({ section: true, x: 568, y: 428 });
   });
 
   it("selects with Shift-clicks without selecting the page's text, and drags the group", async () => {
@@ -516,6 +597,51 @@ describe("RoomBoard keys and pointer", () => {
     await expect
       .element(screen.getByRole("textbox", { name: "Note", exact: true }).last())
       .toHaveFocus();
+  });
+
+  it("puts the caret in a note added from the toolbar, so a space typed adds no other note", async () => {
+    const board = renderBoard([]);
+    const { onChange } = board;
+    await using screen = await board.screen;
+    await userEvent.click(screen.getByRole("button", { name: "Note", exact: true }));
+    const field = screen.getByRole("textbox", { name: "Note", exact: true });
+    await expect.element(field).toHaveFocus();
+    await userEvent.keyboard("Ship it now");
+    await expect.element(field).toHaveValue("Ship it now");
+    expect(new Set(puts(onChange).map((change) => change.noteId)).size).toBe(1);
+  });
+
+  it("puts a note added from the toolbar into the section last clicked, with its title ready", async () => {
+    const board = renderBoard([
+      // Below the thread's own card and the places kept for guests' cards.
+      { id: "frame", text: "Plan", x: 500, y: 500, section: true, size: { w: 640, h: 420 } },
+    ]);
+    const { onChange } = board;
+    await using screen = await board.screen;
+    await userEvent.click(headerIn(screen.container, "frame"), { position: { x: 300, y: 10 } });
+    await userEvent.click(screen.getByRole("button", { name: "Note", exact: true }));
+    await vi.waitFor(() => expect(puts(onChange)).toHaveLength(1));
+    const note = puts(onChange)[0]!;
+    expect(note.x).toBeGreaterThanOrEqual(500);
+    expect(note.y).toBeGreaterThanOrEqual(540);
+    expect(note.x + 192).toBeLessThanOrEqual(1_140);
+    expect(note.y).toBeLessThanOrEqual(920);
+
+    await userEvent.click(screen.getByRole("button", { name: "Section", exact: true }));
+    await expect
+      .element(screen.getByRole("textbox", { name: "Section title" }).last())
+      .toHaveFocus();
+  });
+
+  it("gives the board its keys back after a toolbar button is clicked", async () => {
+    const board = renderBoard([{ id: "a", text: "First", x: 0, y: 0 }]);
+    const { onChange } = board;
+    await using screen = await board.screen;
+    await userEvent.click(headerIn(screen.container, "a"));
+    await userEvent.click(screen.getByRole("button", { name: "Fit" }));
+    await userEvent.keyboard("{ArrowRight}");
+    await vi.waitFor(() => expect(puts(onChange)).toHaveLength(1));
+    expect(puts(onChange)[0]).toMatchObject({ noteId: "a", x: 4 });
   });
 
   it("pastes copies of the copied cards, and a note of text copied elsewhere", async () => {

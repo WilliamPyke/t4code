@@ -161,6 +161,10 @@ const CURSOR_RATE_WINDOW_MS = 1_000;
 const AGENT_ACTIVITY_TTL_MS = 10 * 60_000;
 // A pointer nobody moved for this long is taken off the board.
 const CURSOR_TTL_MS = 60_000;
+// A drag not posted again for this long ended with its page: a held drag is posted every second.
+const DRAG_TTL_MS = 2_000;
+// How soon a pointers stream drops a drag that ended that way.
+const DRAG_SWEEP_INTERVAL = Duration.seconds(1);
 // A view is dropped when its board closes; this only catches a board that never said so.
 const VIEW_TTL_MS = 10 * 60_000;
 // How soon an open room stream drops what expired when nothing else changed.
@@ -191,7 +195,7 @@ interface RoomLive {
   /** Each pointer, with what its person drags while they drag, which goes with the pointer. */
   readonly cursors: ReadonlyMap<
     string,
-    Expiring & RoomBoardPoint & { readonly drag?: RoomBoardDrag }
+    Expiring & RoomBoardPoint & { readonly drag?: RoomBoardDrag; readonly dragUntil?: number }
   >;
   readonly views: ReadonlyMap<string, Expiring & RoomBoardViewport>;
   /** What the agent of each guest's own thread box does on their machine, by guest and run. */
@@ -1234,7 +1238,7 @@ const make = Effect.gen(function* () {
         cursors.set(key, {
           x: at.x,
           y: at.y,
-          ...(drag === undefined ? {} : { drag }),
+          ...(drag === undefined ? {} : { drag, dragUntil: now + DRAG_TTL_MS }),
           until: now + CURSOR_TTL_MS,
         });
       }
@@ -1261,10 +1265,14 @@ const make = Effect.gen(function* () {
    * A share's live room as it changes, and again every few seconds so what expired drops out
    * with nothing else happening. `changesWith` keeps the ticks from repeating an event.
    */
-  const roomEvents = <A>(shareId: GuestShareId, view: (room: RoomLive, now: number) => A) =>
+  const roomEvents = <A>(
+    shareId: GuestShareId,
+    view: (room: RoomLive, now: number) => A,
+    sweep: Duration.Input = ROOM_LIVE_SWEEP_INTERVAL,
+  ) =>
     Stream.merge(
       SubscriptionRef.changes(live),
-      Stream.tick(ROOM_LIVE_SWEEP_INTERVAL).pipe(Stream.mapEffect(() => SubscriptionRef.get(live))),
+      Stream.tick(sweep).pipe(Stream.mapEffect(() => SubscriptionRef.get(live))),
     ).pipe(
       Stream.mapEffect((current) =>
         Effect.map(DateTime.now, (at) =>
@@ -1307,16 +1315,25 @@ const make = Effect.gen(function* () {
     );
   /** Everyone's pointers and views but the reader's own. */
   const cursorsOf = (shareId: GuestShareId, reader: string) =>
-    roomEvents(shareId, (room, now): RoomCursorsEvent => {
-      const others = <V extends Expiring>(entries: ReadonlyMap<string, V>) =>
-        [...entries]
-          .filter(([key, entry]) => key !== reader && entry.until > now)
-          .toSorted(([left], [right]) => left.localeCompare(right))
-          .map(([key, { until: _until, ...entry }]) =>
-            key === OWNER_CURSOR ? entry : { guestId: GuestId.make(key), ...entry },
-          );
-      return { type: "cursors", cursors: others(room.cursors), views: others(room.views) };
-    });
+    roomEvents(
+      shareId,
+      (room, now): RoomCursorsEvent => {
+        const others = <V extends Expiring>(entries: ReadonlyMap<string, V>) =>
+          [...entries]
+            .filter(([key, entry]) => key !== reader && entry.until > now)
+            .toSorted(([left], [right]) => left.localeCompare(right))
+            .map(([key, { until: _until, ...entry }]) =>
+              key === OWNER_CURSOR ? entry : { guestId: GuestId.make(key), ...entry },
+            );
+        const cursors = others(room.cursors).map(({ drag, dragUntil, ...cursor }) =>
+          drag === undefined || (drag.done !== true && (dragUntil ?? 0) <= now)
+            ? cursor
+            : { ...cursor, drag },
+        );
+        return { type: "cursors", cursors, views: others(room.views) };
+      },
+      DRAG_SWEEP_INTERVAL,
+    );
 
   /** Where the owner's code is for a shared thread, or null when git cannot say. */
   const ownerCodeOf = Effect.fn("GuestShareService.ownerCodeOf")(

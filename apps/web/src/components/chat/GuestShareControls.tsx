@@ -79,7 +79,7 @@ import { GuestMessageAttachments } from "./GuestMessageAttachments";
 import { GuestMessageName, guestBubbleClassName } from "./guestMessageStyle";
 import { roomBoardLocation } from "../room/roomBoardNavigation";
 import { GuestTurnList } from "./GuestTurnList";
-import { linkEndsLabel, linkEndsSoon } from "./guestLinkTiming";
+import { linkEndsLabel, linkEndsSoon, linkLifetimeDays } from "./guestLinkTiming";
 import { guestShareDialogThreadAtom } from "./guestShareDialogState";
 import { guestMessageArtifactTitle, guestMessageBoxTitle } from "./roomBoardPrompt";
 
@@ -153,6 +153,15 @@ function GuestShareDialog({
         (choice) => nowMs + choice * DAY_MS > Date.parse(activeShare.expiresAt) + HOUR_MS,
       )
     : [];
+  // A replacement lasts as long as the link it replaces did, unless another length is picked.
+  const currentLifetime =
+    activeShare === null
+      ? undefined
+      : linkLifetimeDays(activeShare.createdAt, activeShare.expiresAt, GUEST_SHARE_LIFETIME_DAYS);
+  const replaceChoices = GUEST_SHARE_LIFETIME_DAYS.toSorted(
+    (left, right) => Number(right === currentLifetime) - Number(left === currentLifetime),
+  );
+  const stopSharing = useStopSharing(threadRef);
   const { teams } = useTeams();
 
   const clearBoard = async () => {
@@ -194,6 +203,7 @@ function GuestShareDialog({
   const create = async (
     replace: boolean,
     team?: { readonly id: string; readonly name: string },
+    lifetime: GuestShareLifetimeDays = days,
   ) => {
     // Moving between a guest link and a team ends what the thread had.
     const ending = replace || (team === undefined ? sharedTeam !== null : live);
@@ -220,7 +230,7 @@ function GuestShareDialog({
       input: {
         threadId: threadRef.threadId,
         replace: replace || ending,
-        ...(team === undefined ? { days } : { teamId: team.id }),
+        ...(team === undefined ? { days: lifetime } : { teamId: team.id }),
       },
     });
     if (result._tag === "Success") {
@@ -400,15 +410,42 @@ function GuestShareDialog({
                   </MenuPopup>
                 </Menu>
               ) : null}
-              {joinable ? (
+              {activeShare === null ? null : (
                 <Button
-                  variant="outline"
+                  variant="destructive-outline"
                   size="sm"
-                  onClick={() => void create(true)}
-                  disabled={!canCreate || state.status === "creating"}
+                  onClick={() => void stopSharing.stop(activeShare)}
+                  disabled={stopSharing.closing || state.status === "creating"}
                 >
-                  Replace link
+                  Stop sharing
                 </Button>
+              )}
+              {joinable ? (
+                <Menu>
+                  <MenuTrigger
+                    render={
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!canCreate || state.status === "creating"}
+                      />
+                    }
+                  >
+                    Replace link
+                  </MenuTrigger>
+                  <MenuPopup align="end">
+                    <MenuGroup>
+                      <MenuGroupLabel>The new link lasts</MenuGroupLabel>
+                      {replaceChoices.map((choice) => (
+                        <MenuItem key={choice} onClick={() => void create(true, undefined, choice)}>
+                          {choice === currentLifetime
+                            ? `${lifetimeLabel(choice)}, as now`
+                            : lifetimeLabel(choice)}
+                        </MenuItem>
+                      ))}
+                    </MenuGroup>
+                  </MenuPopup>
+                </Menu>
               ) : null}
               <Button
                 size="sm"
@@ -443,10 +480,7 @@ export function GuestShareIndicator({
   readonly onBoard?: boolean;
 }) {
   const share = useThreadGuestShare(threadRef);
-  const closeGuestShare = useOrchestrationCommand(threadEnvironment.closeGuestShare, {
-    label: "stop guest share",
-  });
-  const [closing, setClosing] = useState(false);
+  const stopSharing = useStopSharing(threadRef);
   const navigate = useNavigate();
   if (share === null) return null;
   return (
@@ -465,30 +499,40 @@ export function GuestShareIndicator({
       <Button
         size="xs"
         variant="ghost-muted"
-        disabled={closing}
-        onClick={async () => {
-          const confirmed = await confirmEndingLink(
-            share,
-            [
-              "Stop sharing this thread?",
-              share.team === undefined
-                ? "Everyone on the guest link loses access at once, and the link stops working. The board is kept for when you share again."
-                : `Everyone in it loses access at once, and ${share.team.name} no longer lists it. The board is kept for when you share again.`,
-            ].join("\n"),
-          );
-          if (!confirmed) return;
-          setClosing(true);
-          await closeGuestShare({
-            environmentId: threadRef.environmentId,
-            input: { threadId: threadRef.threadId },
-          });
-          setClosing(false);
-        }}
+        disabled={stopSharing.closing}
+        onClick={() => void stopSharing.stop(share)}
       >
         Stop sharing
       </Button>
     </div>
   );
+}
+
+/** Ends a thread's share for everyone on it, once the owner confirms. */
+function useStopSharing(threadRef: ScopedThreadRef) {
+  const closeGuestShare = useOrchestrationCommand(threadEnvironment.closeGuestShare, {
+    label: "stop guest share",
+  });
+  const [closing, setClosing] = useState(false);
+  const stop = async (share: ThreadGuestShare) => {
+    const confirmed = await confirmEndingLink(
+      share,
+      [
+        "Stop sharing this thread?",
+        share.team === undefined
+          ? "Everyone on the guest link loses access at once, and the link stops working. The board is kept for when you share again."
+          : `Everyone in it loses access at once, and ${share.team.name} no longer lists it. The board is kept for when you share again.`,
+      ].join("\n"),
+    );
+    if (!confirmed) return;
+    setClosing(true);
+    await closeGuestShare({
+      environmentId: threadRef.environmentId,
+      input: { threadId: threadRef.threadId },
+    });
+    setClosing(false);
+  };
+  return { closing, stop };
 }
 
 function GuestShareStatus({

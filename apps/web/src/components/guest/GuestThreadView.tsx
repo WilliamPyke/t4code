@@ -127,12 +127,8 @@ import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
 import { GuestHtmlRender } from "./GuestHtmlRender";
 import { openGuestFile, useGuestFiles } from "./guestFiles";
-import {
-  formatGuestExpiry,
-  guestFilesProblem,
-  nextAwaitingRowIds,
-  unplacedGuestMessages,
-} from "./guestStream.logic";
+import { linkEndsLabel } from "../chat/guestLinkTiming";
+import { guestFilesProblem, nextAwaitingRowIds, unplacedGuestMessages } from "./guestStream.logic";
 import { guestTurnItemSource } from "./guestTurnItemSource";
 import { type OwnRoomMachine, OwnBoxModelPicker, useOwnRoomMachine } from "./ownRoomMachine";
 
@@ -1140,7 +1136,7 @@ function ExpiryLabel({ expiresAt }: { readonly expiresAt: string }) {
   const nowMinute = useNowMinute();
   return (
     <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-      {formatGuestExpiry(expiresAt, Date.parse(`${nowMinute}Z`))}
+      {linkEndsLabel(expiresAt, Date.parse(`${nowMinute}Z`))}
     </span>
   );
 }

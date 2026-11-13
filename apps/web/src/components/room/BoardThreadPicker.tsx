@@ -39,7 +39,10 @@ export function BoardThreadPicker({
         <ThreadPicker
           environmentId={environmentId}
           pending={pending}
-          include={(thread) => !excluded.has(thread.id)}
+          // A shared thread, or one keeping a board of its own, already shows its turns to a room.
+          include={(thread) =>
+            !excluded.has(thread.id) && thread.guestShared !== true && thread.hasRoomBoard !== true
+          }
           onSelect={async (thread) => {
             setPending(true);
             const added = await onPick(thread);

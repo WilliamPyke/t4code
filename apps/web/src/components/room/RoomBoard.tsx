@@ -114,6 +114,9 @@ import {
   boardTidy,
   boardDragItems,
   boardTakenRects,
+  boardAddSection,
+  boardAddSpot,
+  boardCopySkipped,
   boardAgents,
   boardArtifactAuthor,
   boardArtifactWriting,
@@ -331,7 +334,8 @@ function ResizeHandle({
         corner === "right" ? "-right-1 cursor-nwse-resize" : "-left-1 cursor-nesw-resize",
       )}
       onPointerDown={(event) => {
-        const box = event.currentTarget.parentElement;
+        // A section's grips sit in a `display: contents` wrapper, which measures 0 by 0.
+        const box = event.currentTarget.closest<HTMLElement>("[data-board-item]");
         if (event.button !== 0 || box === null) return;
         // Neither the board nor the card under the corner moves.
         event.stopPropagation();
@@ -679,8 +683,15 @@ export function RoomBoard({
   const sendCursor = useStableCallback((presence: BoardPresence) => onCursor?.(presence));
   const [cursor] = useState(() => cursorSender(sendCursor));
   const pointing = onCursor !== undefined;
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- takes this person's pointer and view off everyone else's board when the board closes
-  useEffect(() => () => cursor.close(), [cursor]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- takes this person's pointer, view and drag off everyone else's board when the board or its page closes
+  useEffect(() => {
+    const close = () => cursor.close();
+    window.addEventListener("pagehide", close);
+    return () => {
+      window.removeEventListener("pagehide", close);
+      close();
+    };
+  }, [cursor]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- tells the room what this board shows, so others can follow it
   useEffect(() => {
     const area = boardAreaOf(surfaceRef.current);
@@ -1187,6 +1198,13 @@ export function RoomBoard({
   };
   const writeNote = (note: RoomBoardNote, text: string) =>
     hold({ kind: "note", id: note.id }, { ...noteNow(note), text });
+  // Escape in a title: back to what is stored, sending nothing.
+  const revertText = (target: BoardTarget) => {
+    const key = boardEditKey(target);
+    held.current.delete(key);
+    gestureFrom.current.delete(key);
+    setEdits((current) => dropHeldBoardEdits(current, new Set([key])));
+  };
   const changeNote: ChangeNote = (note, update) =>
     send({ kind: "note", id: note.id }, settleBoardValue(update(noteNow(note))));
   // A team's relay may not keep a colour yet, so only a room's notes offer one.
@@ -1257,21 +1275,43 @@ export function RoomBoard({
     setFollowing(null);
     setView(next);
   };
-  // A new card lands in view when there is room, clear of everything there at drawn sizes.
+  // The card this person last added or selected alone, which a new card joins in its section.
+  const lastCard = useRef<string | null>(null);
+  // A new card lands where this person is working: in the section they are on, else nearest the
+  // middle of the view, clear of everything there at drawn sizes.
   const freeSpot = (
     kind: RoomBoardNote["kind"],
     size: RoomBoardSize = boardNewNoteSize(kind),
+    intoSection = true,
   ): BoardPoint => {
     const within = visibleBoardRect(
       view,
       boardAreaOf(surfaceRef.current) ?? { width: 600, height: 400 },
     );
-    return placeBoardItem(
-      size,
-      { x: within.x + within.width / 2, y: within.y + within.height / 2 },
-      takenRects(),
-      within,
-    );
+    const sections = shown.notes.flatMap((note) => {
+      if (note.section !== true) return [];
+      const { w, h } = note.size ?? BOARD_SECTION_SIZE;
+      return [{ ref: noteRef(note.id), rect: { x: note.x, y: note.y, width: w, height: h } }];
+    });
+    const last = lastCard.current === null ? null : drawnItem(lastCard.current);
+    const lastRect = last === null ? null : drawnRect(last);
+    if (!intoSection) {
+      return boardAddSpot(
+        size,
+        [...takenRects(), ...sections.map(({ rect }) => rect)],
+        within,
+        null,
+      );
+    }
+    const section = boardAddSection(sections, within, {
+      selected: selected.size === 1 ? ([...selected][0] ?? null) : null,
+      pointer: lastPointer.current,
+      lastCard:
+        lastRect === null
+          ? null
+          : { x: lastRect.x + lastRect.width / 2, y: lastRect.y + lastRect.height / 2 },
+    });
+    return boardAddSpot(size, takenRects(), within, section);
   };
   const newNote = (
     fields: Partial<Pick<RoomBoardNote, "kind" | "url" | "text">>,
@@ -1288,20 +1328,30 @@ export function RoomBoard({
       ...(fields.kind !== undefined || noteColor === null ? {} : { color: noteColor }),
     });
     send({ kind: "note", id }, value);
+    lastCard.current = noteRef(id);
     const size = boardNewNoteSize(fields.kind);
     reveal({ x: value.x, y: value.y, width: size.w, height: size.h }, true);
     return id;
   };
   const addCard = (fields: Pick<RoomBoardNote, "kind" | "url">, wanted?: BoardPoint) => {
-    if (!canEdit || full) return;
-    newNote(fields, wanted ?? freeSpot(fields.kind));
+    if (!canEdit || full) return null;
+    return newNote(fields, wanted ?? freeSpot(fields.kind));
+  };
+  // Draws the card added at once and puts the caret in its text, so what is typed next goes there
+  // and never to the button that added it.
+  const addAndType = (add: () => string | null) => {
+    const id = flushSync(add);
+    if (id === null) return;
+    drawnItem(noteRef(id))
+      ?.querySelector<HTMLElement>("textarea:not([data-box-prompt]), input")
+      ?.focus({ preventScroll: true });
   };
   /** Adds a section in view, or round the rects given, as one change of this viewer's. */
   const addSection = (around?: ReadonlyArray<BoardRect>) => {
-    if (!canEdit || full) return;
+    if (!canEdit || full) return null;
     const framed = around === undefined ? null : boardSectionAround(around);
     const size = framed?.size ?? BOARD_SECTION_SIZE;
-    const at = framed ?? freeSpot(undefined, size);
+    const at = framed ?? freeSpot(undefined, size, false);
     const id = randomUUID();
     const value = settleBoardValue({
       id,
@@ -1313,7 +1363,9 @@ export function RoomBoard({
       ...(viewer === null ? {} : { guestId: viewer }),
     });
     send({ kind: "note", id }, value);
+    lastCard.current = noteRef(id);
     reveal({ x: value.x, y: value.y, width: size.w, height: size.h }, true);
+    return id;
   };
   const selectedNotes = selectedItems.flatMap(({ value }) => ("id" in value ? [value] : []));
   const canDuplicate =
@@ -1352,8 +1404,21 @@ export function RoomBoard({
     setSelection(new Set(copies.map(({ note }) => noteRef(note.id))));
     reveal({ ...spot, width: bounds.width, height: bounds.height }, true);
   };
+  // Copying a mixed selection says what it left out, as Delete does.
+  const sayCopied = (copied: number) => {
+    const skipped = boardCopySkipped(
+      selectedNotes,
+      selectedItems.filter(({ target }) => target.kind === "card").length,
+    );
+    if (skipped !== null) {
+      toastManager.add({ type: "info", title: `Copied ${copied}`, description: skipped });
+    }
+  };
   const duplicateSelection = () => {
-    if (canDuplicate) landCopies(copiesOf(selectedNotes));
+    if (!canDuplicate) return;
+    const copies = copiesOf(selectedNotes);
+    landCopies(copies);
+    sayCopied(copies.length);
   };
   // Copied cards stay on this board only. What went on the system clipboard with them tells a
   // paste of them from a paste of something copied since, elsewhere.
@@ -1379,6 +1444,7 @@ export function RoomBoard({
     const text = copies.map(({ note }) => boardNoteMessage(note)).join("\n\n");
     event.clipboardData.setData("text/plain", text);
     copied.current = { text, copies };
+    sayCopied(copies.length);
   };
   const pasteOnBoard = (event: ClipboardEvent<HTMLDivElement>) => {
     if (!isBoardKey(event.target) || !canEdit) return;
@@ -1513,8 +1579,15 @@ export function RoomBoard({
   const submitLinkDraft = () => {
     const url = linkDraft === null ? null : boardUrlIn(linkDraft);
     if (url === null) return;
-    addLink(url);
-    setLinkDraft(null);
+    addAndType(() => {
+      setLinkDraft(null);
+      return addLink(url);
+    });
+  };
+  // After a toolbar action that types nothing, the board's own keys work again at once.
+  const thenBoard = (action: () => void) => {
+    action();
+    surfaceRef.current?.focus({ preventScroll: true });
   };
 
   const startLink = (from: string, event: PointerEvent<HTMLElement>) => {
@@ -1896,7 +1969,7 @@ export function RoomBoard({
         {following === null ? null : (
           <span className="flex shrink-0 items-center gap-1.5 text-xs">
             Following {personName(following.person)}
-            <Button size="xs" variant="outline" onClick={() => setFollowing(null)}>
+            <Button size="xs" variant="outline" onClick={() => thenBoard(() => setFollowing(null))}>
               Stop following
             </Button>
           </span>
@@ -1909,7 +1982,7 @@ export function RoomBoard({
                   size="sm"
                   variant="outline"
                   disabled={cannotAddThread !== null}
-                  onClick={() => addCard({ kind: "thread" })}
+                  onClick={() => addAndType(() => addCard({ kind: "thread" }))}
                 >
                   <MessagesSquareIcon />
                   <ToolLabel>Thread</ToolLabel>
@@ -1927,8 +2000,11 @@ export function RoomBoard({
                     <ChevronDownIcon />
                   </MenuTrigger>
                 </WhyNot>
-                <MenuPopup align="start">
-                  <MenuItem onClick={() => addCard({ kind: "thread" })}>New thread box</MenuItem>
+                {/* The new box's name field keeps the caret it took. */}
+                <MenuPopup align="start" finalFocus={() => isBoardKey(document.activeElement)}>
+                  <MenuItem onClick={() => addAndType(() => addCard({ kind: "thread" }))}>
+                    New thread box
+                  </MenuItem>
                   <MenuItem
                     onClick={() => {
                       const at = freeSpot("thread");
@@ -1947,7 +2023,7 @@ export function RoomBoard({
                 size="sm"
                 variant="outline"
                 disabled={cannotAdd !== null}
-                onClick={() => addCard({})}
+                onClick={() => addAndType(() => addCard({}))}
               >
                 <StickyNoteIcon />
                 <ToolLabel>Note</ToolLabel>
@@ -1958,7 +2034,7 @@ export function RoomBoard({
                 size="sm"
                 variant="outline"
                 disabled={cannotAdd !== null}
-                onClick={() => addCard({ kind: "task" })}
+                onClick={() => addAndType(() => addCard({ kind: "task" }))}
               >
                 <ListTodoIcon />
                 <ToolLabel>Task</ToolLabel>
@@ -1981,7 +2057,7 @@ export function RoomBoard({
                   size="sm"
                   variant="outline"
                   disabled={cannotAddArtifact !== null}
-                  onClick={() => addCard({ kind: "artifact" })}
+                  onClick={() => addAndType(() => addCard({ kind: "artifact" }))}
                 >
                   <AppWindowIcon />
                   <ToolLabel>Artifact</ToolLabel>
@@ -1994,7 +2070,7 @@ export function RoomBoard({
                   size="sm"
                   variant="outline"
                   disabled={cannotAdd !== null}
-                  onClick={() => addSection()}
+                  onClick={() => addAndType(() => addSection())}
                 >
                   <FrameIcon />
                   <ToolLabel>Section</ToolLabel>
@@ -2008,7 +2084,7 @@ export function RoomBoard({
                   variant={placingComment ? "secondary" : "outline"}
                   aria-pressed={placingComment}
                   disabled={cannotAdd !== null}
-                  onClick={startComment}
+                  onClick={() => thenBoard(startComment)}
                 >
                   <MessageCirclePlusIcon />
                   <ToolLabel>Comment</ToolLabel>
@@ -2038,7 +2114,7 @@ export function RoomBoard({
                     aria-label={`Resolved (${resolvedComments})`}
                     aria-hidden={resolvedComments === 0 || undefined}
                     tabIndex={resolvedComments === 0 ? -1 : undefined}
-                    onClick={() => setShowResolved((shown) => !shown)}
+                    onClick={() => thenBoard(() => setShowResolved((shown) => !shown))}
                   >
                     <CircleCheckIcon />
                     <ResolvedCount count={resolvedComments} />
@@ -2064,13 +2140,13 @@ export function RoomBoard({
               aria-invalid={linkDraft.trim() !== "" && boardUrlIn(linkDraft) === null}
               onChange={(event) => setLinkDraft(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Escape") setLinkDraft(null);
+                if (event.key === "Escape") thenBoard(() => setLinkDraft(null));
               }}
             />
             <Button size="sm" type="submit" disabled={boardUrlIn(linkDraft) === null}>
               Add
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => setLinkDraft(null)}>
+            <Button size="sm" variant="ghost" onClick={() => thenBoard(() => setLinkDraft(null))}>
               Cancel
             </Button>
           </form>
@@ -2078,24 +2154,29 @@ export function RoomBoard({
         <BoardHistoryButtons
           canUndo={canEdit && history.undo.length > 0}
           canRedo={canEdit && history.redo.length > 0}
-          onUndo={() => travel("undo")}
-          onRedo={() => travel("redo")}
+          onUndo={() => thenBoard(() => travel("undo"))}
+          onRedo={() => thenBoard(() => travel("redo"))}
         />
         <Button
           size="icon-sm"
           variant="ghost"
           aria-label="Zoom out"
-          onClick={() => zoomBy(1 / 1.2)}
+          onClick={() => thenBoard(() => zoomBy(1 / 1.2))}
         >
           <MinusIcon />
         </Button>
         <span className="w-10 text-center text-xs text-muted-foreground tabular-nums">
           {Math.round(view.zoom * 100)}%
         </span>
-        <Button size="icon-sm" variant="ghost" aria-label="Zoom in" onClick={() => zoomBy(1.2)}>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label="Zoom in"
+          onClick={() => thenBoard(() => zoomBy(1.2))}
+        >
           <PlusIcon />
         </Button>
-        <Button size="sm" variant="ghost" onClick={fitAll}>
+        <Button size="sm" variant="ghost" onClick={() => thenBoard(fitAll)}>
           <ScanIcon />
           <ToolLabel>Fit</ToolLabel>
         </Button>
@@ -2162,6 +2243,7 @@ export function RoomBoard({
           held.moved = true;
           // A card dragged from outside the selection goes alone, and becomes the selection.
           if (held.on !== null && !selected.has(held.on)) setSelection(new Set([held.on]));
+          if (held.on !== null) lastCard.current = held.on;
         }}
         onPointerUpCapture={(event) => {
           delete event.currentTarget.dataset.boardBusy;
@@ -2170,6 +2252,7 @@ export function RoomBoard({
           if (held === null || held.moved) return;
           if (Math.hypot(event.clientX - held.x, event.clientY - held.y) >= CLICK_SLOP) return;
           setSelection(held.on === null ? NO_SELECTION : new Set([held.on]));
+          if (held.on !== null) lastCard.current = held.on;
         }}
         onPointerCancelCapture={(event) => {
           delete event.currentTarget.dataset.boardBusy;
@@ -2248,14 +2331,7 @@ export function RoomBoard({
             return;
           }
           const at = pointerOnBoard(event);
-          if (at === null) return;
-          // Drawn at once, so its text field can take the caret.
-          const id = flushSync(() => noteAt(at));
-          if (id !== null) {
-            drawnItem(noteRef(id))
-              ?.querySelector<HTMLTextAreaElement>("textarea")
-              ?.focus({ preventScroll: true });
-          }
+          if (at !== null) addAndType(() => noteAt(at));
         }}
         onCopy={copySelection}
         onPointerUp={(event) => {
@@ -2320,6 +2396,7 @@ export function RoomBoard({
                   }
                   onText={(text) => writeNote(note, text)}
                   onBlur={() => release(() => letGo(target))}
+                  onRevert={() => revertText(target)}
                   onDelete={() => send(target, null)}
                   onPickColor={
                     canEdit && cards === undefined
@@ -2560,6 +2637,7 @@ export function RoomBoard({
                   onMove={dragNote}
                   onDrop={dropNote}
                   onBlur={(target) => release(() => letGo(target))}
+                  onRevert={revertText}
                   onText={writeNote}
                   onChange={changeNote}
                   onPasteLink={full ? undefined : pasteLinkInto}
@@ -2913,6 +2991,7 @@ function BoardNote({
   onMove,
   onDrop,
   onBlur,
+  onRevert,
   onText,
   onChange,
   onPasteLink,
@@ -2953,6 +3032,7 @@ function BoardNote({
   ) => void;
   readonly onDrop: (note: RoomBoardNote) => void;
   readonly onBlur: (target: BoardTarget) => void;
+  readonly onRevert: (target: BoardTarget) => void;
   readonly onText: (note: RoomBoardNote, text: string) => void;
   readonly onChange: ChangeNote;
   /** Absent when a pasted link cannot become a card of its own, on a full board. */
@@ -3208,6 +3288,12 @@ function BoardNote({
           onPointerDown={stopPointer}
           onChange={(event) => onText(note, event.target.value)}
           onKeyDown={(event) => {
+            // A title goes back to what is stored on Escape; a note's text is kept, and saved.
+            if (event.key === "Escape") {
+              event.stopPropagation();
+              if (titled) onRevert(target);
+              event.currentTarget.blur();
+            }
             if (titled && event.key === "Enter") {
               event.preventDefault();
               event.currentTarget.blur();

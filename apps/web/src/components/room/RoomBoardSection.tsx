@@ -29,6 +29,7 @@ export function BoardSection({
   handles,
   onText,
   onBlur,
+  onRevert,
   onDelete,
   onPickColor,
 }: {
@@ -42,6 +43,8 @@ export function BoardSection({
   readonly handles: ReactNode;
   readonly onText: (text: string) => void;
   readonly onBlur: () => void;
+  /** Escape: the title goes back to what is stored. */
+  readonly onRevert: () => void;
   readonly onDelete: () => void;
   readonly onPickColor: ((color: RoomBoardNoteColor) => void) | undefined;
 }) {
@@ -79,13 +82,17 @@ export function BoardSection({
           placeholder={canRename ? "Name this section" : "Untitled section"}
           className={cn(
             // As wide as its title, so the rest of the bar is left to drag by.
-            "field-sizing-content min-w-32 max-w-[70%] truncate bg-transparent px-1 text-sm font-semibold outline-none placeholder:text-placeholder",
+            "field-sizing-content min-w-0 max-w-[70%] truncate bg-transparent px-1 text-sm font-semibold outline-none placeholder:text-placeholder",
             !canRename && "cursor-default",
           )}
           onPointerDown={stopPointer}
           onChange={(event) => onText(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter") event.currentTarget.blur();
+            if (event.key === "Escape") {
+              event.stopPropagation();
+              onRevert();
+            }
+            if (event.key === "Enter" || event.key === "Escape") event.currentTarget.blur();
           }}
           onBlur={onBlur}
         />

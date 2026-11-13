@@ -370,6 +370,13 @@ export function ThreadRoomBoard({
       ? ROOM_BOARD_ROOM_BOX
       : chat;
   const panelRef = panelChat === chat ? chatRef : threadRef;
+  const boxGone =
+    structure !== null && chat !== null && chat !== ROOM_BOARD_ROOM_BOX && chatBox === undefined;
+  const showRoomChat = useStableCallback(() => onChat(ROOM_BOARD_ROOM_BOX));
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the URL names the open box; once that box is off the board, it names the room thread's conversation the panel shows instead
+  useEffect(() => {
+    if (boxGone) showRoomChat();
+  }, [boxGone, showRoomChat]);
   const panelTitle =
     panelChat === null || panelChat === ROOM_BOARD_ROOM_BOX
       ? title

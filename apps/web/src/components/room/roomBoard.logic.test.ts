@@ -34,6 +34,9 @@ import {
   besideBoardItem,
   boardDragItems,
   boardTakenRects,
+  boardAddSection,
+  boardAddSpot,
+  boardCopySkipped,
   boardAgentCode,
   boardAgents,
   boardArtifactAuthor,
@@ -275,6 +278,77 @@ describe("placeBoardItem", () => {
     expect(covers(at, box, note)).toBe(false);
   });
 
+  it.each([
+    {
+      name: "the section selected alone, though the pointer is over another",
+      hints: { selected: "note:b", pointer: { x: 100, y: 100 }, lastCard: null },
+      into: "b",
+    },
+    {
+      name: "the section the pointer was last over",
+      hints: { selected: null, pointer: { x: 100, y: 100 }, lastCard: { x: 900, y: 100 } },
+      into: "a",
+    },
+    {
+      name: "the section holding the card last added or selected",
+      hints: { selected: null, pointer: { x: 500, y: 600 }, lastCard: { x: 900, y: 100 } },
+      into: "b",
+    },
+    {
+      name: "no section when the pointer and the last card are on the open board",
+      hints: { selected: null, pointer: { x: 500, y: 600 }, lastCard: null },
+      into: null,
+    },
+    {
+      name: "no section out of view",
+      hints: { selected: "note:c", pointer: null, lastCard: { x: 3_000, y: 100 } },
+      into: null,
+    },
+  ])("adds a card into $name", ({ hints, into }) => {
+    const sections = {
+      a: { x: 0, y: 0, width: 400, height: 300 },
+      b: { x: 700, y: 0, width: 400, height: 300 },
+      c: { x: 2_800, y: 0, width: 400, height: 300 },
+    };
+    const view = { x: 0, y: 0, width: 1_200, height: 800 };
+    expect(
+      boardAddSection(
+        Object.entries(sections).map(([id, rect]) => ({ ref: `note:${id}`, rect })),
+        view,
+        hints,
+      ),
+    ).toEqual(into === null ? null : sections[into as keyof typeof sections]);
+  });
+
+  it.each([
+    {
+      name: "as near the middle of the view as is clear, not in a corner",
+      taken: [{ x: 500, y: 330, width: 200, height: 140 }],
+      section: null,
+      check: (at: BoardPoint, size: { w: number; h: number }) =>
+        Math.hypot(at.x + size.w / 2 - 600, at.y + size.h / 2 - 400) < 300,
+    },
+    {
+      name: "into a section's free space, below its title",
+      taken: [{ x: 100, y: 100, width: 200, height: 120 }],
+      section: { x: 100, y: 60, width: 640, height: 420 },
+      check: (at: BoardPoint, size: { w: number; h: number }) =>
+        at.x >= 100 && at.x + size.w <= 740 && at.y >= 100 && at.y + size.h <= 480,
+    },
+    {
+      name: "beside a section that is full",
+      taken: [{ x: 100, y: 100, width: 640, height: 380 }],
+      section: { x: 100, y: 60, width: 640, height: 420 },
+      check: (at: BoardPoint) => at.x >= 740,
+    },
+  ])("adds a card from the toolbar $name", ({ taken, section, check }) => {
+    const view = { x: 0, y: 0, width: 1_200, height: 800 };
+    const note = boardNewNoteSize(undefined);
+    const at = boardAddSpot(note, taken, view, section);
+    expect(check(at, note)).toBe(true);
+    expect(taken.some((rect) => covers(at, note, rect))).toBe(false);
+  });
+
   it("puts a card made from another beside it, to its right and clear of what is there", () => {
     const box = { x: 100, y: 100, width: 340, height: 460 };
     const artifact = boardNewNoteSize("artifact");
@@ -358,6 +432,18 @@ describe("boardTakenRects", () => {
         { x: 600, y: 600, ...sizeRect(boardNewNoteSize("thread")) },
         { x: 40, y: 40, ...sizeRect(boardNewNoteSize("comment")) },
       ],
+    },
+    {
+      name: "leaves a section free to land in",
+      drawn: [],
+      board: {
+        positions: {},
+        notes: [
+          { id: "s", text: "Plan", x: 0, y: 0, section: true as const, size: { w: 640, h: 420 } },
+        ],
+      },
+      upcoming: [],
+      taken: [],
     },
   ])("$name", ({ drawn, board, upcoming, taken }) => {
     expect(
@@ -914,6 +1000,17 @@ describe("cursorSender", () => {
     cursor.drag([]);
     vi.advanceTimersByTime(200);
     expect(sent).toHaveLength(4);
+    // A drag held still is posted again each second, or the room takes its page for gone.
+    cursor.drag([item(30)]);
+    vi.advanceTimersByTime(200);
+    vi.advanceTimersByTime(1_000);
+    expect(sent.slice(4)).toEqual([
+      { at, drag: { items: [item(30)] } },
+      { at, drag: { items: [item(30)] } },
+    ]);
+    cursor.close();
+    vi.advanceTimersByTime(5_000);
+    expect(sent.slice(6)).toEqual([{ at: null, view: null }]);
   });
 });
 
@@ -1896,6 +1993,31 @@ describe("selecting several cards", () => {
     expect(boardDuplicates(notes.slice(0, 1), sam, () => "mine")[0]?.note.guestId).toBe(sam);
   });
 
+  it.each([
+    { name: "nothing when all of it is copied", kinds: [undefined, "task"], cards: 0, said: null },
+    {
+      name: "what it left out, in one sentence",
+      kinds: [undefined, "artifact", "comment", "thread"],
+      cards: 0,
+      said: "Artifacts, comment threads and thread boxes are not copied.",
+    },
+    {
+      name: "the room's cards",
+      kinds: [undefined],
+      cards: 2,
+      said: "The room's cards are not copied.",
+    },
+  ] as const)("says on copying a selection $name", ({ kinds, cards, said }) => {
+    const notes = kinds.map((kind, index) => ({
+      id: `n${index}`,
+      text: "",
+      x: 0,
+      y: 0,
+      ...(kind === undefined ? {} : { kind }),
+    }));
+    expect(boardCopySkipped(notes, cards)).toBe(said);
+  });
+
   it("tidies cards into a grid in reading order, with even gaps, clear of the rest", () => {
     const items = [
       { ref: "note:c", rect: { x: 410, y: 30, width: 100, height: 80 } },
@@ -1916,6 +2038,26 @@ describe("selecting several cards", () => {
       const { width, height } = items.find((item) => item.ref === ref)!.rect;
       expect(x >= 400 || y >= 300 || x + width <= 0 || y + height <= 0).toBe(true);
     }
+  });
+
+  it.each([
+    { name: "where they are when nothing is in the way", taken: [], at: { x: 400, y: 300 } },
+    {
+      // Nearer up and to the left, but that would take the grid off where they were.
+      name: "down or right, never up or left, past a card just beside the grid",
+      taken: [{ x: 730, y: 300, width: 200, height: 100 }],
+      at: { x: 400, y: 420 },
+    },
+  ])("starts a tidied grid $name", ({ taken, at }) => {
+    const items = [
+      { ref: "note:a", rect: { x: 400, y: 300, width: 150, height: 100 } },
+      { ref: "note:b", rect: { x: 600, y: 320, width: 150, height: 100 } },
+    ];
+    const tidied = boardTidy(items, taken);
+    expect({
+      x: Math.min(...tidied.map(({ x }) => x)),
+      y: Math.min(...tidied.map(({ y }) => y)),
+    }).toEqual(at);
   });
 
   it("moves every selected card and note together, one change each, and leaves pins out", () => {
