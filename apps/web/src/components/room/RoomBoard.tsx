@@ -207,6 +207,11 @@ function dragHandlers(
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
 
+/** A toolbar button's words, read out but not shown while the board is too narrow for them. */
+const ToolLabel = ({ children }: { readonly children: ReactNode }) => (
+  <span className="sr-only @5xl/board:not-sr-only">{children}</span>
+);
+
 /** Whether a wheel turned over a card's text or content can still scroll that, not the board. */
 function scrollsInside(event: WheelEvent): boolean {
   const scroller =
@@ -1189,11 +1194,11 @@ export function RoomBoard({
   const markerId = `board-arrow${useId().replace(/[^\w-]/g, "")}`;
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-clip overscroll-none">
-      <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+    <div className="@container/board flex min-h-0 min-w-0 flex-1 flex-col overflow-clip overscroll-none">
+      <header className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-3 py-2 @5xl/board:gap-2">
         <Button size="sm" variant="ghost" onClick={onBack ?? onOpenThread}>
           <ArrowLeftIcon />
-          {backLabel}
+          <ToolLabel>{backLabel}</ToolLabel>
         </Button>
         <h1 className="min-w-0 flex-1 truncate text-sm font-medium">
           {title}
@@ -1224,7 +1229,7 @@ export function RoomBoard({
                 onClick={() => addCard({ kind: "thread" })}
               >
                 <MessagesSquareIcon />
-                Thread
+                <ToolLabel>Thread</ToolLabel>
               </Button>
             ) : null}
             <Button
@@ -1234,7 +1239,7 @@ export function RoomBoard({
               onClick={() => addCard({})}
             >
               <StickyNoteIcon />
-              Note
+              <ToolLabel>Note</ToolLabel>
             </Button>
             <Button
               size="sm"
@@ -1243,7 +1248,7 @@ export function RoomBoard({
               onClick={() => addCard({ kind: "task" })}
             >
               <ListTodoIcon />
-              Task
+              <ToolLabel>Task</ToolLabel>
             </Button>
             <Button
               size="sm"
@@ -1252,7 +1257,7 @@ export function RoomBoard({
               onClick={() => setLinkDraft("")}
             >
               <LinkIcon />
-              Link
+              <ToolLabel>Link</ToolLabel>
             </Button>
             {cards === undefined ? (
               <Button
@@ -1262,7 +1267,7 @@ export function RoomBoard({
                 onClick={() => addCard({ kind: "artifact" })}
               >
                 <AppWindowIcon />
-                Artifact
+                <ToolLabel>Artifact</ToolLabel>
               </Button>
             ) : null}
             {cards === undefined ? (
@@ -1274,7 +1279,7 @@ export function RoomBoard({
                 onClick={startComment}
               >
                 <MessageCirclePlusIcon />
-                Comment
+                <ToolLabel>Comment</ToolLabel>
               </Button>
             ) : null}
             {resolvedComments === 0 ? null : (
@@ -1282,10 +1287,12 @@ export function RoomBoard({
                 size="sm"
                 variant={showResolved ? "secondary" : "ghost"}
                 aria-pressed={showResolved}
+                aria-label={`Resolved (${resolvedComments})`}
                 onClick={() => setShowResolved((shown) => !shown)}
               >
                 <CircleCheckIcon />
-                Resolved ({resolvedComments})
+                <span className="hidden @5xl/board:inline">Resolved ({resolvedComments})</span>
+                <span className="@5xl/board:hidden">{resolvedComments}</span>
               </Button>
             )}
           </>
@@ -1333,7 +1340,7 @@ export function RoomBoard({
         </Button>
         <Button size="sm" variant="ghost" onClick={fitAll}>
           <ScanIcon />
-          Fit
+          <ToolLabel>Fit</ToolLabel>
         </Button>
       </header>
       <div
@@ -1352,6 +1359,16 @@ export function RoomBoard({
         // While a pointer is held on the board, artifact pages let it through; see RoomArtifactBody.
         onPointerDownCapture={(event) => {
           event.currentTarget.dataset.boardBusy = "";
+          // Cards stop their presses from reaching the board, and a press on one closes the thread too.
+          const target = event.target;
+          if (
+            openComment !== null &&
+            target instanceof Element &&
+            event.currentTarget.contains(target) &&
+            target.closest("[data-board-overlay], [data-board-pin]") === null
+          ) {
+            closeComment();
+          }
         }}
         onPointerUpCapture={(event) => {
           delete event.currentTarget.dataset.boardBusy;
@@ -1363,7 +1380,6 @@ export function RoomBoard({
           // A menu opened from a card is portalled elsewhere, but React still bubbles its events here.
           if (event.target instanceof Node && !event.currentTarget.contains(event.target)) return;
           setSelectedEdge(null);
-          if (openComment !== null) closeComment();
           pan.onPointerDown(event);
         }}
         onKeyDown={(event) => {

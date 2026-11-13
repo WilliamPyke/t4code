@@ -1,4 +1,5 @@
 import {
+  GUEST_NAME_MAX_LENGTH,
   GUEST_PENDING_ATTACHMENT_BYTES_LIMIT,
   GUEST_PENDING_MESSAGE_LIMIT,
   GUEST_RESOLVED_MESSAGE_LIMIT,
@@ -261,7 +262,7 @@ export const roomPersonName =
   (share: ThreadGuestShare, ownerName: string) =>
   (guestId: GuestId | undefined): string | undefined =>
     guestId === undefined
-      ? ownerName.trim() || undefined
+      ? ownerName.trim().slice(0, GUEST_NAME_MAX_LENGTH).trim() || undefined
       : share.guests?.find((guest) => guest.id === guestId)?.name;
 
 /** The labels of the cards these arrow refs name on the share's board, as everyone reads them. */

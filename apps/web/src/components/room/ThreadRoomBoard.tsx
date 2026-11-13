@@ -6,6 +6,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { deriveThreadStructureRuntime } from "@t3tools/client-runtime/state/thread-execution";
 import {
+  GUEST_NAME_MAX_LENGTH,
   type GuestShareId,
   type ModelSelection,
   ROOM_BOARD_ROOM_BOX,
@@ -23,6 +24,7 @@ import { XIcon } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
+import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { randomUUID } from "~/lib/utils";
 import { deriveThreadAgentWorking } from "~/session-logic";
@@ -197,6 +199,12 @@ export function ThreadRoomBoard({
         );
   const pendingRequests = useAtomValue(environmentThreadDetails.pendingRequestsAtom(threadRef));
   const providers = useEnvironmentProviders().get(threadRef.environmentId) ?? NO_PROVIDERS;
+  // As guests see it, so what the owner sends names them the way the room does.
+  const ownerName = useEnvironmentSettings(
+    threadRef.environmentId,
+    (settings) =>
+      settings.guestOwnerName.trim().slice(0, GUEST_NAME_MAX_LENGTH).trim() || undefined,
+  );
   const canPrompt = useAtomValue(
     serverEnvironment.promptRoomBox.permissionAtom(threadRef.environmentId),
   );
@@ -239,7 +247,7 @@ export function ThreadRoomBoard({
         threadId: threadRef.threadId,
         boxId,
         text: turn.text,
-        cards: boardContextCards(share.board, share.guests ?? NO_GUESTS, prompt.cards),
+        cards: boardContextCards(share.board, share.guests ?? NO_GUESTS, prompt.cards, ownerName),
         ...(prompt.artifactId === null ? {} : { artifactId: prompt.artifactId }),
         ...(turn.modelSelection === undefined ? {} : { modelSelection: turn.modelSelection }),
       },
@@ -357,7 +365,7 @@ export function ThreadRoomBoard({
               )}
               agentWorking={agentWorking}
               viewer={null}
-              ownerName={undefined}
+              ownerName={ownerName}
               cursorLayer={
                 share === null ? null : (
                   <OwnerBoardCursors

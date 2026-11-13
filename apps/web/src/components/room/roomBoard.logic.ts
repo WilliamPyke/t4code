@@ -490,7 +490,8 @@ const PANEL_GAP = 8;
 /**
  * Where an open comment thread sits on the board's surface, in screen pixels from its top-left:
  * beside its pin, on whichever side has room, growing down from a pin in the top half and up from
- * one in the bottom half, and never past the surface's edges.
+ * one in the bottom half, and never past the surface's edges. With room on neither side, it goes
+ * below a pin in the top half and above one in the bottom half.
  */
 export function boardCommentPanelSpot(
   pin: BoardRect,
@@ -503,17 +504,22 @@ export function boardCommentPanelSpot(
 } {
   const width = BOARD_COMMENT_PANEL_WIDTH;
   const right = pin.x + pin.width + PANEL_GAP;
-  const left =
+  const beside =
     right + width + PANEL_GAP <= area.width
       ? right
       : pin.x - PANEL_GAP - width >= PANEL_GAP
         ? pin.x - PANEL_GAP - width
-        : Math.max(PANEL_GAP, Math.min(right, area.width - PANEL_GAP - width));
+        : null;
+  const left = beside ?? Math.max(PANEL_GAP, Math.min(right, area.width - PANEL_GAP - width));
+  const stacked = beside === null;
   if (pin.y + pin.height / 2 <= area.height / 2) {
-    const top = Math.max(PANEL_GAP, pin.y);
+    const top = Math.max(PANEL_GAP, stacked ? pin.y + pin.height + PANEL_GAP : pin.y);
     return { left, top, maxHeight: area.height - top - PANEL_GAP };
   }
-  const bottom = Math.max(PANEL_GAP, area.height - pin.y - pin.height);
+  const bottom = Math.max(
+    PANEL_GAP,
+    stacked ? area.height - pin.y + PANEL_GAP : area.height - pin.y - pin.height,
+  );
   return { left, bottom, maxHeight: area.height - bottom - PANEL_GAP };
 }
 

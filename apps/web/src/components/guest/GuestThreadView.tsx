@@ -420,7 +420,7 @@ function GuestThreadSession({
         boxId,
         title: view.board?.notes.find((note) => note.id === boxId)?.text ?? "",
         text: turn.text,
-        cards: boardContextCards(view.board, view.guests, prompt.cards),
+        cards: boardContextCards(view.board, view.guests, prompt.cards, view.ownerName),
         ...(prompt.artifactId === null ? {} : { artifactId: prompt.artifactId }),
         ...(turn.modelSelection === undefined ? {} : { modelSelection: turn.modelSelection }),
       },
@@ -458,7 +458,7 @@ function GuestThreadSession({
     }
     const text = guestBoardPromptText(
       prompt.text,
-      boardContextCards(view.board, view.guests, prompt.cards),
+      boardContextCards(view.board, view.guests, prompt.cards, view.ownerName),
     );
     const failure =
       text === ""

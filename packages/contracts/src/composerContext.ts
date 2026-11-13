@@ -259,7 +259,7 @@ export const RoomBoardContextCard = Schema.Struct({
    * unknown.
    */
   author: Schema.optional(Schema.Literals(["owner", "owner_agent", "guest", "guest_agent"])),
-  /** The guest's name, for a guest or their agent. */
+  /** The author's name: a guest's, or the name the owner shows guests when they set one. */
   name: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(GUEST_NAME_MAX_LENGTH))),
   text: BoundedString(ROOM_ARTIFACT_MAX_LENGTH),
   /**

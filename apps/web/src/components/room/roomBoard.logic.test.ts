@@ -1315,7 +1315,14 @@ describe("comment pins", () => {
     for (const [rect, spot] of rows) {
       expect(boardCommentPanelSpot(rect, area)).toEqual(spot);
     }
-    // Too narrow for either side: inside the board, even if over the pin.
-    expect(boardCommentPanelSpot(pin(100, 100), { width: 300, height: 600 }).left).toBe(8);
+    // Too narrow for either side: below a pin in the top half, above one in the bottom half.
+    const narrow = { width: 300, height: 600 };
+    const narrowRows = [
+      [pin(100, 100), { left: 8, top: 140, maxHeight: 452 }],
+      [pin(100, 500), { left: 8, bottom: 108, maxHeight: 484 }],
+    ] as const;
+    for (const [rect, spot] of narrowRows) {
+      expect(boardCommentPanelSpot(rect, narrow)).toEqual(spot);
+    }
   });
 });

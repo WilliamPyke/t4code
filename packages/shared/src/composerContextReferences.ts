@@ -156,9 +156,11 @@ const ROOM_CARDS_NOTICE =
 function roomCardAuthor(card: RoomBoardContextCard): string {
   switch (card.author) {
     case "owner":
-      return "the room's owner";
+      return card.name === undefined ? "the room's owner" : `${card.name} (the room's owner)`;
     case "owner_agent":
-      return "the room owner's agent";
+      return card.name === undefined
+        ? "the room owner's agent"
+        : `${card.name}'s agent (the room owner's agent)`;
     case "guest":
       return `${card.name ?? "a guest"} (a guest)`;
     case "guest_agent":

@@ -480,7 +480,7 @@ export function roomBoardCardIdentity(
                 : `Comment from ${by} on a reply`;
   const writer = note.kind === "artifact" && note.artifact !== undefined ? note.artifact : note;
   const agent = writer !== note;
-  const guestName = writer.guestId === undefined ? undefined : nameOf(writer.guestId);
+  const writerName = nameOf(writer.guestId);
   return {
     label: label.slice(0, 200),
     author:
@@ -491,7 +491,7 @@ export function roomBoardCardIdentity(
         : agent
           ? "guest_agent"
           : "guest",
-    ...(writer.guestId === undefined || guestName === undefined ? {} : { name: guestName }),
+    ...(writerName === undefined ? {} : { name: writerName }),
   };
 }
 

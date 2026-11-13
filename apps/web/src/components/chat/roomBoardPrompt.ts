@@ -28,16 +28,19 @@ interface PromptCard {
 }
 
 /**
- * The board's cards with who wrote each: a guest by name, or the room's owner. An artifact's
- * content was written by the agent of whoever filled it last.
+ * The board's cards with who wrote each: a guest by name, or the room's owner, by the name they
+ * show guests when they set one. An artifact's content was written by the agent of whoever
+ * filled it last.
  */
 export function boardContextCards(
   board: RoomBoard | undefined,
   guests: ReadonlyArray<ThreadGuest>,
   cards: ReadonlyArray<PromptCard>,
+  ownerName: string | undefined,
 ): ReadonlyArray<RoomBoardContextCard> {
   const named = (guestId: string | undefined) => {
-    const name = guests.find((guest) => guest.id === guestId)?.name;
+    const name =
+      guestId === undefined ? ownerName : guests.find((guest) => guest.id === guestId)?.name;
     return name === undefined ? {} : { name };
   };
   return cards.map((card) => {
@@ -47,10 +50,10 @@ export function boardContextCards(
         ? {}
         : note.kind === "artifact" && note.artifact !== undefined
           ? note.artifact.guestId === undefined
-            ? { author: "owner_agent" as const }
+            ? { author: "owner_agent" as const, ...named(undefined) }
             : { author: "guest_agent" as const, ...named(note.artifact.guestId) }
           : note.guestId === undefined
-            ? { author: "owner" as const }
+            ? { author: "owner" as const, ...named(undefined) }
             : { author: "guest" as const, ...named(note.guestId) };
     return {
       ref: card.ref,

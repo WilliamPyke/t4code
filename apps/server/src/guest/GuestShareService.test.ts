@@ -2640,6 +2640,10 @@ it.effect(
       assert.equal(inRoom.boxThreadId, roomThreadId);
       // Prompted again, the box keeps its thread.
       // A card that says which it is gets its label and author from the board; one gone is not sent.
+      // The owner's cards carry the name they show guests.
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+        guestOwnerName: " Will ",
+      });
       const again = yield* boxes.prompt({
         threadId: roomThreadId,
         boxId: "box:1",
@@ -2654,7 +2658,15 @@ it.effect(
       assert.lengthOf(both, 2);
       assert.deepInclude(both[1]?.context?.records[0], {
         kind: "room-cards",
-        cards: [{ ref: "note:art:1", label: 'Artifact "Hero"', author: "owner", text: "Hero" }],
+        cards: [
+          {
+            ref: "note:art:1",
+            label: 'Artifact "Hero"',
+            author: "owner",
+            name: "Will",
+            text: "Hero",
+          },
+        ],
       });
 
       // A guest's box is run by their own requests, which the owner sends.

@@ -408,6 +408,12 @@ describe("roomBoardCardIdentity", () => {
     expect(roomBoardCardIdentity(note({ pinnedTo: "message:1" }), () => "Will").label).toBe(
       "Comment from Will on a reply",
     );
+    // The owner by the name they show guests, which their cards carry too.
+    expect(roomBoardCardIdentity(note({ kind: "comment" }), () => "Alex")).toEqual({
+      label: "Comment thread from Alex",
+      author: "owner",
+      name: "Alex",
+    });
     expect(roomBoardCardIdentity(note({ kind: "comment", guestId: sam }), names)).toEqual({
       label: "Comment thread from Sam",
       author: "guest",

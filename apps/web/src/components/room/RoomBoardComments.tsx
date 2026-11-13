@@ -17,7 +17,8 @@ import {
 import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 
-import { formatRelativeTimeLabel } from "../../timestampFormat";
+import { formatRecentTimestamp } from "../../timestampFormat";
+import { useInlineActionConfirm } from "../pullRequest/useInlineActionConfirm";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import {
@@ -112,6 +113,7 @@ export function CommentPin({
       className="group/item absolute size-8 origin-top-left"
       style={{ left: note.x, top: note.y, transform: scale === 1 ? undefined : `scale(${scale})` }}
       data-board-item={itemRef}
+      data-board-pin
     >
       <button
         type="button"
@@ -165,21 +167,29 @@ export function CommentPin({
 const scrollIntoViewOnMount = (element: HTMLElement | null) =>
   element?.scrollIntoView({ block: "nearest" });
 
+type InlineConfirm = ReturnType<typeof useInlineActionConfirm>;
+
 function CommentEntry({
+  id,
   people,
   guestId,
   text,
   at,
   now,
+  confirm,
   onRemove,
 }: {
+  /** Names the entry to the confirm its delete button asks for. */
+  readonly id: string;
   readonly people: BoardPeople;
   readonly guestId: string | undefined;
   readonly text: string;
   readonly at: string | undefined;
   readonly now: number;
+  readonly confirm: InlineConfirm;
   readonly onRemove: (() => void) | undefined;
 }) {
+  const armed = confirm.isArmed(id);
   return (
     <li ref={scrollIntoViewOnMount} className="flex flex-col gap-1">
       <div className="flex min-w-0 items-center gap-1.5">
@@ -189,18 +199,19 @@ function CommentEntry({
         </span>
         {at === undefined ? null : (
           <time dateTime={at} className="shrink-0 text-2xs text-muted-foreground">
-            {formatRelativeTimeLabel(at, now)}
+            {formatRecentTimestamp(at, "locale", now)}
           </time>
         )}
         {onRemove === undefined ? null : (
           <Button
-            size="icon-micro"
-            variant="ghost-muted"
-            aria-label="Delete reply"
+            size={armed ? "micro" : "icon-micro"}
+            variant={armed ? "destructive-outline" : "ghost-muted"}
+            aria-label={armed ? "Confirm delete reply" : "Delete reply"}
             className="ms-auto"
-            onClick={onRemove}
+            {...confirm.props(id, onRemove)}
           >
             <XIcon />
+            {armed ? "Delete?" : null}
           </Button>
         )}
       </div>
@@ -254,6 +265,8 @@ export function CommentThreadPanel({
   const replies = note.replies ?? [];
   const full = replies.length >= ROOM_BOARD_MAX_REPLIES;
   const resolved = note.resolved === true;
+  const confirm = useInlineActionConfirm(note.id);
+  const deleteArmed = confirm.isArmed("thread");
   const panel = useRef<HTMLElement | null>(null);
   const [area, setArea] = useState<BoardSize | null>(null);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps the thread inside the board, whose size only the browser knows, before it paints
@@ -311,12 +324,13 @@ export function CommentThreadPanel({
         )}
         {draft || onDelete === undefined ? null : (
           <Button
-            size="icon-micro"
-            variant="ghost-muted"
-            aria-label="Delete thread"
-            onClick={onDelete}
+            size={deleteArmed ? "micro" : "icon-micro"}
+            variant={deleteArmed ? "destructive-outline" : "ghost-muted"}
+            aria-label={deleteArmed ? "Confirm delete thread" : "Delete thread"}
+            {...(replies.length === 0 ? { onClick: onDelete } : confirm.props("thread", onDelete))}
           >
             <Trash2Icon />
+            {deleteArmed ? "Delete?" : null}
           </Button>
         )}
         <Button size="icon-micro" variant="ghost-muted" aria-label="Close" onClick={onClose}>
@@ -329,21 +343,25 @@ export function CommentThreadPanel({
           className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-2.5"
         >
           <CommentEntry
+            id="first"
             people={people}
             guestId={note.guestId}
             text={note.text}
             at={note.createdAt}
             now={now}
+            confirm={confirm}
             onRemove={undefined}
           />
           {replies.map((reply) => (
             <CommentEntry
               key={reply.id}
+              id={`reply:${reply.id}`}
               people={people}
               guestId={reply.guestId}
               text={reply.text}
               at={reply.at}
               now={now}
+              confirm={confirm}
               onRemove={
                 canEdit && isRoomCardOwnedBy(reply, people.viewer)
                   ? () => onRemoveReply(reply.id)

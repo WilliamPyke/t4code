@@ -398,6 +398,8 @@ describe("provider projection", () => {
         { label: "Task", author: "owner", text: "Fix login" },
         { label: 'Artifact "Plan"', author: "owner_agent", text: "# Plan" },
         { label: 'Artifact "Page"', author: "guest_agent", name: "Sam", text: "<p>Hi</p>" },
+        { label: "Note from Alex", author: "owner", name: "Alex", text: "Ship Friday" },
+        { label: 'Artifact "Spec"', author: "owner_agent", name: "Alex", text: "# Spec" },
       ],
     });
     const artifact = roomArtifactContextRecord({
@@ -407,7 +409,7 @@ describe("provider projection", () => {
       title: "Plan",
       current: "# Plan\n- one",
     });
-    expect([cards.label, artifact.label]).toEqual(["Board · 4 cards", 'Artifact "Plan"']);
+    expect([cards.label, artifact.label]).toEqual(["Board · 6 cards", 'Artifact "Plan"']);
     const projected = projectComposerContextForProvider({
       text: `Write the plan [${cards.label}](t3-context://v1/room-cards/${cards.contextId}) [${artifact.label}](t3-context://v1/room-artifact/${artifact.contextId})`,
       records: [cards, artifact],
@@ -421,6 +423,13 @@ describe("provider projection", () => {
     expect(projected).toContain('Artifact "Plan", written by the room owner\'s agent:\n  # Plan');
     expect(projected).toContain(
       "Artifact \"Page\", written by Sam's agent (a guest's agent):\n  <p>Hi</p>",
+    );
+    // The owner by the name they show guests, when they set one.
+    expect(projected).toContain(
+      "Note from Alex, written by Alex (the room's owner):\n  Ship Friday",
+    );
+    expect(projected).toContain(
+      "Artifact \"Spec\", written by Alex's agent (the room owner's agent):\n  # Spec",
     );
     expect(projected).toContain('shown as the artifact "Plan" on the board');
     expect(projected).toContain("one ```html block holding a complete HTML document");
