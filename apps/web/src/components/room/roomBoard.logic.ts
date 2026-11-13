@@ -1,6 +1,7 @@
 import {
   ROOM_BOARD_MAX_CARD_SIZE,
   ROOM_BOARD_MAX_COORDINATE,
+  ROOM_BOARD_MAX_EDGES,
   ROOM_BOARD_MIN_CARD_SIZE,
   ROOM_BOARD_QUOTE_MAX_LENGTH,
   ROOM_BOARD_ROOM_BOX,
@@ -412,6 +413,18 @@ export function pinnedCommentSpot(
   );
 }
 
+/**
+ * The card a new comment pin dropped on `under` goes with: a thread box or an artifact, which a
+ * line from the pin carries the thread to. Null over anything else, or when the board holds no
+ * more lines.
+ */
+export function boardCommentLineTo(board: RoomBoard, under: string | null): string | null {
+  if (under === null || (board.edges?.length ?? 0) >= ROOM_BOARD_MAX_EDGES) return null;
+  if (under === roomBoardCardRef(ROOM_BOARD_THREAD_CARD)) return under;
+  const note = board.notes.find((candidate) => roomBoardNoteRef(candidate.id) === under);
+  return note?.kind === "thread" || note?.kind === "artifact" ? under : null;
+}
+
 /** Where a card or note is, how wide it is, and how far down the middle of its header is. */
 export interface BoardBox extends BoardPoint {
   readonly width: number;
@@ -683,6 +696,10 @@ const replaceById = <Item extends { readonly id: string }>(
     ? items.map((other) => (other.id === item.id ? item : other))
     : [...items, item];
 
+// As the server takes a line: one between the same two cards under another id changes nothing.
+const sameLine = (edge: RoomBoardEdge, other: RoomBoardEdge) =>
+  edge.id !== other.id && edge.from === other.from && edge.to === other.to;
+
 const CARD_REF = roomBoardCardRef("");
 
 /**
@@ -725,7 +742,9 @@ export function resolveBoard(board: RoomBoard, edits: BoardEdits): RoomBoard {
       if (value !== null && "w" in value) sizes[target.id] = { w: value.w, h: value.h };
     } else if (target.kind === "edge") {
       if (value === null) edges = edges.filter((edge) => edge.id !== target.id);
-      else if ("from" in value) edges = replaceById(edges, value);
+      else if ("from" in value && !edges.some((edge) => sameLine(edge, value))) {
+        edges = replaceById(edges, value);
+      }
     } else if (value === null) {
       notes = notes.filter((note) => note.id !== target.id);
     } else if ("text" in value) {

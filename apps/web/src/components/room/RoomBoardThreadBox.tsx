@@ -1,13 +1,25 @@
+import { useAtomValue } from "@effect/atom-react";
 import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import {
+  AuthOrchestrationOperateScope,
   ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH,
   type RoomBoard,
   type RoomBoxTurn,
+  type ScopedThreadRef,
   type ThreadGuestMessage,
 } from "@t3tools/contracts";
 import { roomBoxExcerpt } from "@t3tools/shared/roomBoard";
-import type { PointerEvent, ReactNode } from "react";
+import { type PointerEvent, type ReactNode, useState } from "react";
+
+import { useEnvironmentScope } from "~/state/session";
+import { environmentThreadDetails, threadEnvironment } from "~/state/threads";
+import { useAtomCommand } from "~/state/use-atom-command";
 
 import { Button } from "../ui/button";
+import { ComposerPendingApprovalActions } from "../chat/ComposerPendingApprovalActions";
 import { guestMessageArtifactTitle } from "../chat/roomBoardPrompt";
 import { BoardProgressLine } from "./RoomBoardArtifact";
 import { type BoardPeople, boardPersonName } from "./roomBoard.logic";
@@ -70,15 +82,17 @@ export function BoxTurns({
 /**
  * What a box's agent is doing now: its phase, model and how long it has run, and the start of
  * what it is writing. Reads only its own box's run, so another box's tick does not render it.
- * The way to an approval is the box's own Open conversation, so it is not offered twice.
  */
 export function BoxProgress({
   boxId,
   fallback,
+  approval,
 }: {
   readonly boxId: string;
   /** What shows when the server reports no runs for boxes, or none for this one. */
   readonly fallback?: ReactNode;
+  /** Mounted only while the run waits on approval, so it reads the box's requests only then. */
+  readonly approval?: ReactNode;
 }) {
   const progress = useBoxProgress(boxId);
   if (progress === undefined) return fallback ?? null;
@@ -97,6 +111,7 @@ export function BoxProgress({
       >
         <BoardProgressLine progress={progress} />
       </p>
+      {progress.phase === "approval" ? approval : null}
       {preview === "" ? null : (
         <p className="line-clamp-4 rounded-md bg-muted/50 px-2 py-1 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
           {preview}
@@ -180,5 +195,79 @@ export function BoxRequests({
         );
       })}
     </ol>
+  );
+}
+
+/**
+ * The first approval a box's run waits on, for the person whose agent it is: what it asks, cut to
+ * a couple of lines, and the thread page's own answers. A question is answered in the conversation.
+ */
+export function BoxApproval({
+  threadRef,
+  onOpen,
+}: {
+  readonly threadRef: ScopedThreadRef;
+  /** Opens the box's conversation, when the box has no button of its own for it. */
+  readonly onOpen?: (() => void) | undefined;
+}) {
+  const approval = useAtomValue(environmentThreadDetails.pendingRequestsAtom(threadRef))
+    ?.approvals[0];
+  const canRespond = useEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope);
+  const respond = useAtomCommand(threadEnvironment.respondToApproval, { reportFailure: false });
+  const [responding, setResponding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const open =
+    onOpen === undefined ? null : (
+      <Button size="micro" variant="outline" onPointerDown={stopPointer} onClick={onOpen}>
+        Open conversation
+      </Button>
+    );
+  if (approval === undefined) return open;
+  return (
+    <div
+      role="group"
+      aria-label="Approval"
+      className="flex flex-col gap-1.5 rounded-md border border-warning/40 px-2 py-1.5 text-xs"
+      onPointerDown={stopPointer}
+    >
+      <p className="line-clamp-2 font-mono text-2xs whitespace-pre-wrap [overflow-wrap:anywhere]">
+        {approval.detail || approval.requestKind}
+      </p>
+      {approval.responseCapability === "live" ? null : (
+        <p className="text-2xs text-warning">The agent stopped. Open the conversation to go on.</p>
+      )}
+      <div className="flex flex-wrap items-center gap-1">
+        <ComposerPendingApprovalActions
+          requestId={approval.requestId}
+          isResponding={responding}
+          canRespond={approval.responseCapability === "live"}
+          disabled={!canRespond}
+          options={approval.options}
+          onRespondToApproval={async (requestId, decision) => {
+            if (!canRespond || responding) return;
+            setResponding(true);
+            setError(null);
+            const result = await respond({
+              environmentId: threadRef.environmentId,
+              input: { threadId: threadRef.threadId, requestId, decision },
+            });
+            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+              const failure = squashAtomCommandFailure(result);
+              setError(
+                failure instanceof Error ? failure.message : "Could not answer the approval.",
+              );
+            }
+            setResponding(false);
+            return result;
+          }}
+        />
+        {open}
+      </div>
+      {error === null ? null : (
+        <p role="alert" className="text-2xs text-destructive">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }

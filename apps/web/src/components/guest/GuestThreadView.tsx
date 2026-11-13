@@ -108,6 +108,7 @@ import { composerDraftPick } from "../room/BoardModelPicker";
 import { BoardSplit } from "../room/BoardSplit";
 import { BoardThreadPicker } from "../room/BoardThreadPicker";
 import { RoomBoard, RoomCursors } from "../room/RoomBoard";
+import { BoxApproval } from "../room/RoomBoardThreadBox";
 import { RoomReplyProvider, revealRoomReply } from "../room/RoomReplyComments";
 import {
   BOARD_THREAD_MESSAGES,
@@ -634,6 +635,12 @@ function GuestThreadSession({
               view.shareId,
             )}
             needsApproval={(pendingRequests?.approvals.length ?? 0) > 0}
+            renderBoxApproval={(boxId) => {
+              const threadId = machine?.boxes[boxId];
+              return machine == null || threadId === undefined ? null : (
+                <BoxApproval threadRef={scopeThreadRef(machine.environmentId, threadId)} />
+              );
+            }}
             onUseNote={(text) => {
               // Only a draft in the message box: the guest sends it, and the owner still approves it.
               flushSync(() => {

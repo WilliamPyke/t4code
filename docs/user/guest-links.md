@@ -120,7 +120,9 @@ Each person deletes their own replies, and the owner can delete any; only whoeve
 or the owner, deletes the whole thread.
 
 A thread with a line into a thread box goes with its prompts whole, every comment with who wrote
-it; a very long thread sends its first comment and its newest replies.
+it; a very long thread sends its first comment and its newest replies. A new comment placed on a
+thread box or an artifact gets that line by itself once you write it, unless the board already
+holds all the lines it can. Moving a pin later does not change its lines.
 
 ### Lines between cards
 

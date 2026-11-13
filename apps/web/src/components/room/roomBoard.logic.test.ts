@@ -3,6 +3,7 @@ import {
   GuestMessageId,
   ROOM_BOARD_MAX_CARD_SIZE,
   ROOM_BOARD_MAX_COORDINATE,
+  ROOM_BOARD_MAX_EDGES,
   ROOM_BOARD_MAX_REPLIES,
   ROOM_BOARD_MIN_CARD_SIZE,
   ROOM_BOARD_NOTE_MAX_LENGTH,
@@ -38,6 +39,7 @@ import {
   boardCardBox,
   boardChangeOf,
   boardChangeQueue,
+  boardCommentLineTo,
   boardCommentPanelSpot,
   boardConnector,
   boardCursorAt,
@@ -261,6 +263,12 @@ describe("resolveBoard", () => {
       edges: [{ to: "card:thread", from: "note:n", id: "e" }],
     };
     expect(resolveBoard(linked, drawn).edges).toHaveLength(1);
+    // Someone else drew the same line first: the server keeps theirs and takes this one as done.
+    const theirs: RoomBoard = {
+      ...stored,
+      edges: [{ id: "f", from: "note:n", to: "card:thread" }],
+    };
+    expect(resolveBoard(theirs, drawn).edges).toEqual(theirs.edges);
     const gone = putBoardEdit(linked, drawn, { kind: "note", id: "n" }, null, false);
     expect(resolveBoard(linked, gone).edges).toEqual([]);
     expect(boardChangeOf(arrow, null)).toEqual({ type: "edge.remove", edgeId: "e" });
@@ -1333,5 +1341,36 @@ describe("comment pins", () => {
     for (const [rect, spot] of narrowRows) {
       expect(boardCommentPanelSpot(rect, narrow)).toEqual(spot);
     }
+  });
+
+  it("goes with the thread box or artifact it is dropped on", () => {
+    const board: RoomBoard = {
+      positions: {},
+      notes: [
+        { id: "box", text: "", x: 0, y: 0, kind: "thread" },
+        { id: "page", text: "", x: 0, y: 0, kind: "artifact" },
+        { id: "idea", text: "Ship it", x: 0, y: 0 },
+        { id: "pin", text: "Why?", x: 0, y: 0, kind: "comment" },
+      ],
+    };
+    const rows = [
+      ["card:thread", "card:thread"],
+      ["note:box", "note:box"],
+      ["note:page", "note:page"],
+      ["note:idea", null],
+      ["note:pin", null],
+      ["card:guest:g1", null],
+      [null, null],
+    ] as const;
+    for (const [under, to] of rows) {
+      expect(boardCommentLineTo(board, under)).toBe(to);
+    }
+    // A board with all the lines it holds takes the pin without one.
+    const edges = Array.from({ length: ROOM_BOARD_MAX_EDGES }, (_, index) => ({
+      id: `e${index}`,
+      from: "note:idea",
+      to: `note:n${index}`,
+    }));
+    expect(boardCommentLineTo({ ...board, edges }, "note:box")).toBeNull();
   });
 });

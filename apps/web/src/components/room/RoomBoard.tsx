@@ -47,6 +47,7 @@ import {
 } from "lucide-react";
 import {
   type ClipboardEvent,
+  type MouseEvent,
   type PointerEvent,
   type ReactNode,
   createContext,
@@ -69,6 +70,7 @@ import { observeResize } from "~/lib/observeResize";
 import { useStableCallback } from "~/hooks/useStableCallback";
 
 import { cn, randomUUID } from "~/lib/utils";
+import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { Button } from "../ui/button";
@@ -109,6 +111,7 @@ import {
   boardCardBox,
   boardChangeOf,
   boardChangeQueue,
+  boardCommentLineTo,
   boardConnector,
   boardCursorAt,
   clientRectToBoard,
@@ -422,6 +425,7 @@ export function RoomBoard({
   resolvingRequests = NO_BOXES,
   ownerWritingArtifactId = null,
   needsApproval = false,
+  renderBoxApproval,
 }: {
   readonly title: string;
   /** Null when the thread is not shared, so there is no room to arrange a board for. */
@@ -501,6 +505,11 @@ export function RoomBoard({
   readonly ownerWritingArtifactId?: string | null | undefined;
   /** The owner's thread is waiting for the owner to approve something. */
   readonly needsApproval?: boolean | undefined;
+  /**
+   * What a box whose agent is this viewer's asks them to approve, shown on it while it waits.
+   * Absent, or null for a box: others see only that it waits.
+   */
+  readonly renderBoxApproval?: ((boxId: string) => ReactNode) | undefined;
 }) {
   const board = room?.board ?? EMPTY_ROOM_BOARD;
   const running = useRoomRunning();
@@ -525,9 +534,10 @@ export function RoomBoard({
   const [placingComment, setPlacingComment] = useState(false);
   const [openComment, setOpenComment] = useState<string | null>(null);
   // A thread started here and not written yet: only this person sees it, and closing drops it.
-  const [draftComment, setDraftComment] = useState<(BoardPoint & { readonly id: string }) | null>(
-    null,
-  );
+  // `on` is the card it was dropped on, which a line from it joins once it is written.
+  const [draftComment, setDraftComment] = useState<
+    (BoardPoint & { readonly id: string; readonly on: string | null }) | null
+  >(null);
   const [showResolved, setShowResolved] = useState(false);
   const sendCursor = useStableCallback((presence: BoardPresence) => onCursor?.(presence));
   const [cursor] = useState(() => cursorSender(sendCursor));
@@ -547,7 +557,7 @@ export function RoomBoard({
     return () => clearTimeout(timer);
   }, [notice]);
   // Where a pointer is on the board, measured against the surface's own place on screen.
-  const pointerOnBoard = (event: PointerEvent<HTMLElement>) => {
+  const pointerOnBoard = (event: { readonly clientX: number; readonly clientY: number }) => {
     const area = boardAreaOf(surfaceRef.current);
     return area === null ? null : clientToBoard(view, area, { x: event.clientX, y: event.clientY });
   };
@@ -647,7 +657,9 @@ export function RoomBoard({
     draftComment === null
       ? null
       : {
-          ...draftComment,
+          id: draftComment.id,
+          x: draftComment.x,
+          y: draftComment.y,
           text: "",
           kind: "comment",
           ...(viewer === null ? {} : { guestId: viewer }),
@@ -978,14 +990,15 @@ export function RoomBoard({
     // Escape on the board stops placing.
     surfaceRef.current?.focus({ preventScroll: true });
   };
-  const placeComment = (event: PointerEvent<HTMLElement>) => {
-    event.stopPropagation();
+  // On click, not on press: the press's own focus change would take the caret out of the field.
+  const placeComment = (event: MouseEvent<HTMLElement>) => {
     setPlacingComment(false);
     const at = pointerOnBoard(event);
     if (at === null || !canEdit || full) return;
     const half = (BOARD_PIN_SIZE * pinScale) / 2;
     const id = randomUUID();
-    setDraftComment({ id, ...settleBoardValue({ x: at.x - half, y: at.y - half }) });
+    const on = dataAt(event.clientX, event.clientY, "boardItem");
+    setDraftComment({ id, on, ...settleBoardValue({ x: at.x - half, y: at.y - half }) });
     setOpenComment(id);
   };
   const dragPin = (note: RoomBoardNote, dx: number, dy: number) =>
@@ -1009,6 +1022,15 @@ export function RoomBoard({
       });
     }
     send({ kind: "note", id: note.id }, settleBoardValue({ ...note, text }));
+    const to = boardCommentLineTo(shown, draftComment?.on ?? null);
+    if (to !== null) {
+      const line = randomUUID();
+      send(
+        { kind: "edge", id: line },
+        { id: line, from: noteRef(note.id), to },
+        boardEditKey({ kind: "note", id: note.id }),
+      );
+    }
     setDraftComment(null);
     return Promise.resolve(true);
   };
@@ -1135,7 +1157,7 @@ export function RoomBoard({
     const body = (
       <>
         {tail}
-        <BoxProgress boxId={box.id} fallback={fallback} />
+        <BoxProgress boxId={box.id} fallback={fallback} approval={renderBoxApproval?.(box.id)} />
         <BoxRequests
           requests={boardBoxRequests(room?.messages ?? [], box.id)}
           board={shown}
@@ -1202,7 +1224,12 @@ export function RoomBoard({
 
   return (
     <div className="@container/board flex min-h-0 min-w-0 flex-1 flex-col overflow-clip overscroll-none">
-      <header className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-3 py-2 @5xl/board:gap-2">
+      <header
+        className={cn(
+          "flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-3 py-2 @5xl/board:gap-2",
+          COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
+        )}
+      >
         <Button size="sm" variant="ghost" onClick={onBack ?? onOpenThread}>
           <ArrowLeftIcon />
           <ToolLabel>{backLabel}</ToolLabel>
@@ -1771,7 +1798,8 @@ export function RoomBoard({
             aria-hidden
             data-board-overlay
             className="absolute inset-0 z-20 cursor-crosshair"
-            onPointerDown={placeComment}
+            onPointerDown={stopPointer}
+            onClick={placeComment}
           />
         ) : null}
         {commentPanel()}

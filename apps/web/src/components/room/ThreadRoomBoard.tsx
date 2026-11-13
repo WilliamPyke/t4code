@@ -65,6 +65,7 @@ import {
 import { BoardSplit } from "./BoardSplit";
 import { RoomBoard, RoomCursors } from "./RoomBoard";
 import { RoomReplyProvider, revealRoomReply } from "./RoomReplyComments";
+import { BoxApproval } from "./RoomBoardThreadBox";
 import {
   BOARD_THREAD_MESSAGES,
   EMPTY_ROOM_BOARD,
@@ -416,6 +417,15 @@ export function ThreadRoomBoard({
               resolvingRequests={requests.busyIds}
               ownerWritingArtifactId={writingArtifactId}
               needsApproval={(pendingRequests?.approvals.length ?? 0) > 0}
+              renderBoxApproval={(boxId) => {
+                const ref = boxThreadRef(boxId);
+                return ref === null ? null : (
+                  <BoxApproval
+                    threadRef={ref}
+                    onOpen={boxId === ROOM_BOARD_ROOM_BOX ? () => openPanel() : undefined}
+                  />
+                );
+              }}
             />
           }
           panel={
