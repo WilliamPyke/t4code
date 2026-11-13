@@ -246,6 +246,27 @@ describe("applyRoomBoardChange", () => {
     expect(removed.edges).toEqual([]);
   });
 
+  it("adds a section only as a frame of its own, which stays one", () => {
+    const framed = applied(
+      EMPTY_ROOM_BOARD,
+      put("s", { text: "Plan", section: true, color: "green" }),
+    );
+    expect(framed.notes[0]).toEqual({
+      id: "s",
+      text: "Plan",
+      x: 0,
+      y: 0,
+      guestId: sam,
+      section: true,
+      color: "green",
+    });
+    expect(applied(framed, put("s", { text: "Plan" })).notes[0]?.section).toBe(true);
+    expect(applied(EMPTY_ROOM_BOARD, put("n", { text: "Hi" })).notes[0]?.section).toBeUndefined();
+    expect(
+      Result.isFailure(apply(EMPTY_ROOM_BOARD, put("t", { kind: "task", section: true }))),
+    ).toBe(true);
+  });
+
   it("lets only a card's person, or the owner, remove it or rename a thread box", () => {
     const eve = GuestId.make("guest:eve");
     const board: RoomBoard = {
@@ -254,6 +275,7 @@ describe("applyRoomBoardChange", () => {
         { id: "sams", text: "Sam's", x: 0, y: 0, guestId: sam },
         { id: "owners", text: "Owner's", x: 0, y: 0, kind: "task" },
         { id: "box", text: "Box", x: 0, y: 0, kind: "thread", guestId: sam },
+        { id: "frame", text: "Plan", x: 0, y: 0, section: true, guestId: sam },
       ],
     };
     const remove = (noteId: string): RoomBoardChange => ({ type: "note.remove", noteId });
@@ -266,6 +288,13 @@ describe("applyRoomBoardChange", () => {
       [put("box", { text: "Renamed" }), sam, true],
       [put("box", { text: "Renamed" }), null, true],
       [put("box", { text: "Renamed" }), eve, false],
+      [remove("frame"), eve, false],
+      [put("frame", { text: "Renamed" }), sam, true],
+      [put("frame", { text: "Renamed" }), eve, false],
+      [put("frame", { text: "Plan", x: 80, y: 80, color: "blue" }), eve, true],
+      // A section is a frame, not a card: no line joins it.
+      [{ type: "edge.put", edgeId: "f", from: "note:sams", to: "note:frame" }, null, false],
+      [{ type: "edge.put", edgeId: "g", from: "note:frame", to: "note:sams" }, sam, false],
       // Anyone moves or sizes any card, edits a note or a task, and ticks or assigns a task.
       [put("box", { text: "Box", x: 40, y: 40, size: { w: 400, h: 300 } }), eve, true],
       [put("sams", { text: "Edited" }), eve, true],

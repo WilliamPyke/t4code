@@ -1,5 +1,5 @@
 import { Trash2Icon, XIcon } from "lucide-react";
-import { createContext, type PointerEvent, use, useRef } from "react";
+import { createContext, type PointerEvent, type ReactNode, use, useRef } from "react";
 
 import { useInlineActionConfirm } from "../pullRequest/useInlineActionConfirm";
 import { Button } from "../ui/button";
@@ -98,9 +98,12 @@ export function SelectionBar({
   removable,
   onDelete,
   onClear,
+  children,
 }: {
   readonly count: number;
   readonly removable: number;
+  /** What else the selection can do, before Delete. */
+  readonly children?: ReactNode;
   /** Its button, `data-selection-delete`, is what the Delete key presses. */
   readonly onDelete: () => void;
   readonly onClear: () => void;
@@ -116,6 +119,7 @@ export function SelectionBar({
       <span role="status" className="tabular-nums">
         {count} selected
       </span>
+      {children}
       {removable === 0 ? null : (
         <Button
           size="micro"

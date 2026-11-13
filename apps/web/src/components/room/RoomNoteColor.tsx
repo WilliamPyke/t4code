@@ -19,6 +19,19 @@ const NOTE_COLOR_CLASSES: Readonly<Record<RoomBoardNoteColor, string>> = {
   grey: "border-muted-foreground/30 bg-muted-foreground/8 dark:bg-muted-foreground/16",
 };
 
+/** A section's frame and faint fill in each colour, quieter than a note so cards read over it. */
+const SECTION_COLOR_CLASSES: Readonly<Record<RoomBoardNoteColor, string>> = {
+  yellow: "border-warning/50 bg-warning/4",
+  green: "border-success/50 bg-success/4",
+  blue: "border-info/50 bg-info/4",
+  pink: "border-guest/50 bg-guest/4",
+  purple: "border-violet-500/50 bg-violet-500/4",
+  grey: "border-muted-foreground/40 bg-muted-foreground/4",
+};
+
+export const sectionColorClassName = (color: RoomBoardNoteColor | undefined) =>
+  SECTION_COLOR_CLASSES[color ?? "grey"];
+
 const SWATCH_CLASSES: Readonly<Record<RoomBoardNoteColor, string>> = {
   yellow: "bg-warning",
   green: "bg-success",

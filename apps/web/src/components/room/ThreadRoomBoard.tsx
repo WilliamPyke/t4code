@@ -18,6 +18,7 @@ import {
   type ThreadGuestMessage,
   type ThreadId,
   roomCodeStateOf,
+  unsharedRoomId,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { XIcon } from "lucide-react";
@@ -54,6 +55,7 @@ import { Button } from "../ui/button";
 import { SidebarInset } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
 import { BoardChatPanel } from "./BoardChatPanel";
+import { BoardSharing } from "./BoardSharing";
 import { BoardThreadPicker } from "./BoardThreadPicker";
 import {
   BoardModelName,
@@ -74,17 +76,20 @@ import {
   type BoardPrompt,
   boardMessages,
 } from "./roomBoard.logic";
+import { roomBoardViewKey } from "./roomBoardNavigation";
 import { RoomLiveContext, type RoomLiveStore, createRoomLiveStore } from "./roomBoardLive";
 
 const NO_GUESTS: ReadonlyArray<ThreadGuest> = [];
 const NO_PROVIDERS: ReadonlyArray<ServerProvider> = [];
 const NO_BOARD_THREADS: Readonly<Record<string, ThreadId>> = {};
+const NO_GUEST_MESSAGES: ReadonlyArray<ThreadGuestMessage> = [];
 const GIT_ACTIONS = ["runStackedAction", "pull", "publishRepository"] as const;
 
 /** The share of a thread its owner reads, and how they change its board when they may. */
 function useOwnerRoom(threadRef: ScopedThreadRef | null) {
   const structure = useQuietThreadProjection(threadRef)?.projection ?? null;
   const share = structure?.thread.guestShare ?? null;
+  const kept = structure?.thread.roomBoard ?? null;
   const canChange = useAtomValue(
     serverEnvironment.changeGuestBoard.permissionAtom(threadRef?.environmentId ?? null),
   );
@@ -97,11 +102,11 @@ function useOwnerRoom(threadRef: ScopedThreadRef | null) {
             input: { threadId: threadRef.threadId, change },
           }).then((result) => result._tag === "Success")
       : undefined;
-  return { structure, share, onChange };
+  return { structure, share, kept, onChange };
 }
 
 /**
- * The owner's timeline with the room's comments on its replies, while the thread is shared.
+ * The owner's timeline with the room's comments on its replies, while the thread has a board.
  * Comments live on the board, so they never reach the agent.
  */
 export function OwnerRoomReplies({
@@ -111,15 +116,15 @@ export function OwnerRoomReplies({
   readonly threadRef: ScopedThreadRef | null;
   readonly children: ReactNode;
 }) {
-  const { share, onChange } = useOwnerRoom(threadRef);
+  const { share, kept, onChange } = useOwnerRoom(threadRef);
   return (
     <RoomReplyProvider
       room={
-        share === null
+        share === null && kept === null
           ? null
           : {
-              board: share.board ?? EMPTY_ROOM_BOARD,
-              people: { guests: share.guests ?? NO_GUESTS, viewer: null },
+              board: share?.board ?? kept?.board ?? EMPTY_ROOM_BOARD,
+              people: { guests: share?.guests ?? NO_GUESTS, viewer: null },
               onChange,
             }
       }
@@ -130,7 +135,7 @@ export function OwnerRoomReplies({
 }
 
 /**
- * The owner's board for a thread they share, read from the thread and changed on its server, with
+ * The owner's board of a thread, shared or not, read from the thread and changed on its server, with
  * a conversation beside it. `chat` names the thread box whose conversation is open, from the URL.
  */
 export function ThreadRoomBoard({
@@ -144,7 +149,13 @@ export function ThreadRoomBoard({
 }) {
   const navigate = useNavigate();
   const shell = useThreadShell(threadRef);
-  const { structure, share, onChange } = useOwnerRoom(threadRef);
+  const { structure, share, kept, onChange } = useOwnerRoom(threadRef);
+  // Unshared, the owner works alone on the board the thread keeps, or an empty one it starts.
+  const room = share ?? {
+    board: kept?.board ?? EMPTY_ROOM_BOARD,
+    messages: NO_GUEST_MESSAGES,
+  };
+  const roomId = share?.id ?? unsharedRoomId(threadRef.threadId);
   const items = useThreadVisibleTurnItems(threadRef);
   const [live] = useState(createRoomLiveStore);
   const { data: presence } = useEnvironmentQuery(
@@ -177,7 +188,6 @@ export function ThreadRoomBoard({
   };
   // The task becomes the owner's, and a draft whose send answers it once the turn finishes.
   const takeTask = (task: RoomBoardNote) => {
-    if (share === null) return;
     if (task.assignee === undefined || task.assignee.guestId !== undefined) {
       void onChange?.({
         type: "note.put",
@@ -189,7 +199,7 @@ export function ThreadRoomBoard({
       });
     }
     putInDraft(task.text);
-    takeRoomTaskToDraft({ threadRef, shareId: share.id, taskId: task.id, text: task.text });
+    takeRoomTaskToDraft({ threadRef, shareId: roomId, taskId: task.id, text: task.text });
   };
   const agentWorking = structure !== null && deriveThreadAgentWorking(structure);
   const writingArtifactId =
@@ -198,7 +208,7 @@ export function ThreadRoomBoard({
       : ownerWritingArtifactId(
           items.map((projected) => projected.item),
           deriveThreadStructureRuntime(structure)?.activeRunId,
-          share?.id,
+          roomId,
         );
   const pendingRequests = useAtomValue(environmentThreadDetails.pendingRequestsAtom(threadRef));
   const providers = useEnvironmentProviders().get(threadRef.environmentId) ?? NO_PROVIDERS;
@@ -212,7 +222,7 @@ export function ThreadRoomBoard({
     serverEnvironment.promptRoomBox.permissionAtom(threadRef.environmentId),
   );
   const promptRoomBox = useAtomCommand(serverEnvironment.promptRoomBox, "send the prompt");
-  const boardThreads = share?.boardThreads ?? NO_BOARD_THREADS;
+  const boardThreads = share?.boardThreads ?? kept?.boardThreads ?? NO_BOARD_THREADS;
   const canAddThread = useAtomValue(
     serverEnvironment.addRoomBoxThread.permissionAtom(threadRef.environmentId),
   );
@@ -245,7 +255,7 @@ export function ThreadRoomBoard({
   };
   const sendingRef = useRef(false);
   const promptBox = async (boxId: string, prompt: BoardPrompt) => {
-    if (share === null || sendingRef.current) return false;
+    if (sendingRef.current) return false;
     const selection = boxSelection(boxId);
     // As the composer sends it: the options picked, and an effort the model reads from the prompt.
     const turn =
@@ -259,7 +269,7 @@ export function ThreadRoomBoard({
         threadId: threadRef.threadId,
         boxId,
         text: turn.text,
-        cards: boardContextCards(share.board, share.guests ?? NO_GUESTS, prompt.cards, ownerName),
+        cards: boardContextCards(room.board, share?.guests ?? NO_GUESTS, prompt.cards, ownerName),
         ...(prompt.artifactId === null ? {} : { artifactId: prompt.artifactId }),
         ...(prompt.commentId === undefined ? {} : { commentId: prompt.commentId }),
         ...(turn.modelSelection === undefined ? {} : { modelSelection: turn.modelSelection }),
@@ -346,11 +356,24 @@ export function ThreadRoomBoard({
     }
   };
   const title = shell?.title ?? "Board";
-  const panelRef = chat === null ? null : boxThreadRef(chat);
-  const panelTitle =
+  const chatBox =
     chat === null || chat === ROOM_BOARD_ROOM_BOX
+      ? undefined
+      : room.board?.notes.find((note) => note.id === chat && note.kind === "thread");
+  const chatRef = chat === null ? null : boxThreadRef(chat);
+  const chatShell = useThreadShell(chatRef);
+  // A box taken off the board, or whose thread is gone, opens on the room thread instead.
+  const panelChat =
+    chat !== null &&
+    chat !== ROOM_BOARD_ROOM_BOX &&
+    (chatBox === undefined || (chatRef !== null && chatShell === null))
+      ? ROOM_BOARD_ROOM_BOX
+      : chat;
+  const panelRef = panelChat === chat ? chatRef : threadRef;
+  const panelTitle =
+    panelChat === null || panelChat === ROOM_BOARD_ROOM_BOX
       ? title
-      : share?.board?.notes.find((note) => note.id === chat)?.text.trim() || "Thread box";
+      : chatBox?.text.trim() || "Thread box";
   const closePanel = useStableCallback(() => onChat(null));
   const popOut = useStableCallback(() => {
     if (panelRef === null) return;
@@ -362,16 +385,16 @@ export function ThreadRoomBoard({
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-none">
       <RoomLiveContext value={live}>
-        {share === null ? null : (
-          <OwnerBoardLive threadRef={threadRef} shareId={share.id} live={live} />
-        )}
+        <OwnerBoardLive threadRef={threadRef} shareId={roomId} live={live} />
         <BoardSplit
           open={chat !== null}
           board={
             <RoomBoard
               title={title}
-              room={share}
-              shareId={share?.id}
+              room={room}
+              shareId={roomId}
+              viewKey={roomBoardViewKey(threadRef)}
+              sharing={<BoardSharing threadRef={threadRef} shared={share !== null} />}
               online={presence?.online ?? []}
               messages={boardMessages(
                 items.map((projected) => projected.item),
@@ -410,9 +433,9 @@ export function ThreadRoomBoard({
               onTakeTask={takeTask}
               onOpenPullRequest={canOpenPullRequest ? () => void openPullRequest() : undefined}
               openingPullRequest={openingPullRequest}
-              onPromptBox={share !== null && canPrompt ? promptBox : undefined}
+              onPromptBox={canPrompt ? promptBox : undefined}
               askInComments
-              onAddThread={share !== null && canAddThread ? setAddingAt : undefined}
+              onAddThread={canAddThread ? setAddingAt : undefined}
               renderBoxModel={renderBoxModel}
               onOpenConversation={openPanel}
               renderRequestModel={renderRequestModel}
@@ -432,7 +455,7 @@ export function ThreadRoomBoard({
             />
           }
           panel={
-            chat === null ? null : panelRef === null ? (
+            panelChat === null ? null : panelRef === null ? (
               <BoardPanelEmpty title={panelTitle} onClose={closePanel} />
             ) : (
               <BoardChatPanel

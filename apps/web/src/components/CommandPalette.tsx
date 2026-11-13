@@ -1456,7 +1456,7 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
-  if (activeThread?.guestShared === true) {
+  if (activeThread !== null) {
     const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
     actionItems.push({
       kind: "action",
@@ -1469,19 +1469,21 @@ function OpenCommandPaletteDialog(props: {
       },
     });
   }
-  const sharedThreads = threads.filter((thread) => thread.guestShared === true);
+  const sharedThreads = threads.filter(
+    (thread) => thread.guestShared === true || thread.hasRoomBoard === true,
+  );
   if (sharedThreads.length > 0) {
     actionItems.push({
       kind: "submenu",
       value: "action:open-board-of",
-      searchTerms: ["board", "room", "shared threads", "guests"],
+      searchTerms: ["board", "room", "shared threads", "guests", "canvas"],
       title: "Open board of...",
       icon: <PanelsTopLeftIcon className={ITEM_ICON_CLASS} />,
       addonIcon: <PanelsTopLeftIcon className={ADDON_ICON_CLASS} />,
       groups: [
         {
           value: "shared-threads",
-          label: "Shared threads",
+          label: "Threads with a board",
           items: sharedThreads.map((thread) => ({
             kind: "action" as const,
             value: `action:open-board:${thread.environmentId}:${thread.id}`,

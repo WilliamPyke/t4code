@@ -128,8 +128,15 @@ function putNote(
     return Result.fail("A task can only be assigned to someone in the room.");
   }
   const pinned = existing === undefined ? change.pinnedTo : existing.pinnedTo;
+  if (
+    existing === undefined &&
+    change.section === true &&
+    (kind !== undefined || pinned !== undefined)
+  ) {
+    return Result.fail("A section is a frame of its own, not a card of another kind.");
+  }
   if (change.color !== undefined && (kind !== undefined || pinned !== undefined)) {
-    return Result.fail("Only a note can have a colour.");
+    return Result.fail("Only a note or a section can have a colour.");
   }
   // An artifact's content, a task's answer and a thread box's turns come only from the owner's
   // server, never a change.
@@ -148,6 +155,7 @@ function putNote(
         ? {}
         : { quote: change.quote }),
       ...(kind === "comment" ? { createdAt: at } : {}),
+      ...(change.section === true ? { section: true } : {}),
     } satisfies RoomBoardNote);
   const { done: _done, assignee: _assignee, size: _size, color: _color, ...rest } = base;
   const done = change.done ?? base.done === true;
@@ -254,11 +262,15 @@ export function applyRoomBoardChange(
         return Result.fail("This board has as many thread boxes as it holds. Remove one first.");
       }
       if (
-        existing?.kind === "thread" &&
+        (existing?.kind === "thread" || existing?.section === true) &&
         change.text !== existing.text &&
         !isRoomCardOwnedBy(existing, author)
       ) {
-        return Result.fail("Only the owner and whoever added this thread box can rename it.");
+        return Result.fail(
+          existing.section === true
+            ? "Only the owner and whoever added this section can rename it."
+            : "Only the owner and whoever added this thread box can rename it.",
+        );
       }
       if (
         existing?.kind === "comment" &&
@@ -300,6 +312,11 @@ export function applyRoomBoardChange(
         return Result.succeed(board);
       }
       if (change.from === change.to) return Result.fail("An arrow joins two different cards.");
+      if (
+        [change.from, change.to].some((ref) => roomBoardNoteOfRef(board, ref)?.section === true)
+      ) {
+        return Result.fail("An arrow cannot join a section.");
+      }
       if (!isOnBoard(scope, board, change.from) || !isOnBoard(scope, board, change.to)) {
         return Result.fail("An arrow joins cards that are on the board.");
       }

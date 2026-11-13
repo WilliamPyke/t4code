@@ -1,7 +1,8 @@
 # Guest links
 
 A guest link lets up to 8 teammates follow one thread in their browsers and ask the agent questions,
-with no account. For people you work with every day, share with a [team](./teams.md) instead. They see your messages and the agent's replies as they stream. Each message they
+with no account, and work with you on the thread's [board](#see-the-room-as-a-board), which you can
+also use on your own before you share. For people you work with every day, share with a [team](./teams.md) instead. They see your messages and the agent's replies as they stream. Each message they
 send waits until you send or dismiss it, unless you let a guest
 [send without asking](#let-a-guest-send-without-asking).
 
@@ -30,7 +31,7 @@ The thread header names who has joined. On web, click the names to see who has t
 right now.
 
 To invite someone later, choose **Share with guests** again and **Show link**: it is the same link.
-The dialog says when the link ends, and warns once it has less than a day left. **Extend link**
+The dialog says when the link ends, and asks you to extend it once it has less than 6 hours left. **Extend link**
 makes it last 1, 7 or 30 days from now, and everyone on it stays. An extended link is given out
 in full: a [short readable link](#where-the-link-opens) you sent earlier still works until the
 link's first end, but not after it.
@@ -42,9 +43,17 @@ messages from the mobile app.
 
 ## See the room as a board
 
-On web, choose **Board** in a shared thread's header. The board is where the room works: the
+On web, every thread has a board: choose **Open board** in the thread's menu or the command
+palette, or **Board** in a shared thread's header. The board is where the room works: the
 thread, each guest, and every [thread box](#thread-boxes) appear as cards you can drag, with what
-each guest has waiting for you, and you can add notes. The thread's card says when your agent is
+each guest has waiting for you, and you can add notes.
+
+You can plan on a board before inviting anyone. A thread you have not shared opens on an empty
+board, kept on the thread from your first change, and its header says **Not shared**. Everything
+that needs no guest works there: cards, lines, colours, comment threads, thread boxes running on
+your agent, and artifacts. **Share** in the board's header opens the same dialog as **Share with
+guests**, to make, extend or replace the link or clear the board. Once shared, the header names who
+joined (click the names to manage guests) and has **Stop sharing**. The thread's card says when your agent is
 working, and a guest's agent gets a card as soon as it starts a turn
 [on their machine](#your-turns-show-in-the-room). Scroll to move, and hold Ctrl or Cmd while
 scrolling to zoom.
@@ -68,14 +77,30 @@ with the smiley on it; reactions show under the card with how many, and clicking
 back your own. When the owner removes a guest, that guest's reactions go too.
 
 Hold Shift and click cards to select several, or hold Shift and drag across empty board to select
-everything the rectangle touches. Drag any selected card to move them all together. Delete (or
-Backspace) removes the selected cards you may delete after you confirm; cards that are someone
-else's stay, and the board says how many it left. Escape or **Clear** ends the selection. Only you
-see what you selected.
+everything the rectangle touches. Drag any selected card to move them all together. The bar over a
+selection also recolours all its notes at once, and has:
+
+- **Tidy**, which lines the selected cards up in an even grid near where they were, in the order
+  you read them, clear of other cards.
+- **Duplicate** (or Ctrl+D, Cmd+D on a Mac), which copies the selected notes, tasks and links next
+  to them as your own cards and selects the copies. Thread boxes, artifacts, comment threads and
+  sections are not copied.
+- **Group in a section**, which puts a section around them.
+
+Delete (or Backspace) removes the selected cards you may delete after you confirm; cards that are
+someone else's stay, and the board says how many it left. Escape or **Clear** ends the selection.
+Only you see what you selected.
+
+A **Section** is a titled frame drawn behind the cards, to group them. Drag it by its title bar and
+the cards sitting mostly inside it move with it; drag a card out and it is no longer in it. Resize
+it from its bottom corners and colour it like a note. A section never goes to an agent and takes no
+lines. Only whoever added it, or the owner, can rename or delete it, and deleting it leaves its
+cards where they are.
 
 Ctrl+Z (Cmd+Z on a Mac) undoes your own last change on the board, and Ctrl+Shift+Z or Ctrl+Y
 redoes it; the arrows in the toolbar do the same. Undo covers moving and resizing cards, a note's
-text and colour, adding a card, and drawing or deleting a line. It does not bring back a card you
+text and colour, adding a card, and drawing or deleting a line, and takes back a Tidy, Duplicate or
+recolouring of several cards in one step. It does not bring back a card you
 deleted. If someone else has changed that card since, the undo is skipped and the board says so,
 so you never undo another person's work. Undo history lasts while the board is open.
 
@@ -121,7 +146,7 @@ thread the way it sees any box: the start of each prompt, the cards that went wi
 what the agent is doing, and the start of its reply. That includes turns you run in the thread
 itself, from its own message box, not only prompts sent from the board. An artifact is filled only
 by a prompt sent from the board with a line to it. A thread can be on one board at a time, and a
-shared thread or one joined from someone's room cannot be added.
+shared thread, one with a board of its own, or one joined from someone's room cannot be added.
 
 While a box's agent works, everyone sees what it is doing: waiting its turn, thinking, using a
 tool, writing its reply, or waiting for whoever runs it to approve something. An artifact a box
@@ -228,7 +253,8 @@ message.
 
 The board belongs to the thread, not to the link. Replacing the link, making a new one after it
 expired, stopping sharing and archiving the thread all keep it: the next link opens on the same cards, lines, comment
-threads and artifacts. Its guests have to join again, as new people. What people from an earlier
+threads and artifacts. While the thread is not shared you keep working on it alone, and your thread
+boxes keep showing their turns. Its guests have to join again, as new people. What people from an earlier
 link added stays under the name they had, but it is nobody's now, so only the owner can delete it,
 and a task cannot be given to them. Their own thread boxes stay as cards showing their last turns,
 and no one can prompt them; the owner's boxes keep their threads. To start over, choose **Clear
@@ -236,10 +262,10 @@ board** in the **Share with guests** dialog, which removes every card, line and 
 everyone, including from a board kept while the thread is not shared. Removing a guest is
 different: it removes what they added and leaves their tasks unassigned.
 
-Besides **Board** in the header, a shared thread's sidebar row has a board button, its right-click
-menu has **Open board**, and the command palette has **Open board** for the current thread and
-**Open board of...** for any shared one. The board opens with the conversation beside it as you
-last left it on that device.
+A thread that is shared or has a board shows a board button on its sidebar row, and the command
+palette's **Open board of...** lists those threads. The board opens where you last left it on that
+device, panned and zoomed the same, with the same conversation beside it; if that box or its thread
+is gone, the thread's own conversation opens instead.
 
 Someone who continued the thread on their own machine has the board in their own T Code: **Board**
 in the joined thread's header opens it, and their own boxes run on that machine.

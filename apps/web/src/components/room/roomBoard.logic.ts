@@ -250,6 +250,27 @@ export const visibleBoardRect = (view: BoardView, area: BoardSize): BoardRect =>
   height: area.height / view.zoom,
 });
 
+/**
+ * The view a board opens with: the one this device last had, unless it shows none of the cards,
+ * when the board fits them all instead.
+ */
+export function openingBoardView(
+  remembered: BoardView,
+  area: BoardSize,
+  rects: ReadonlyArray<BoardRect>,
+): BoardView | null {
+  const seen = visibleBoardRect(remembered, area);
+  return rects.some(
+    (rect) =>
+      rect.x < seen.x + seen.width &&
+      rect.x + rect.width > seen.x &&
+      rect.y < seen.y + seen.height &&
+      rect.y + rect.height > seen.y,
+  )
+    ? remembered
+    : null;
+}
+
 /** A rect in the window, such as a button inside a card, in board pixels. */
 export const clientRectToBoard = (
   view: BoardView,
@@ -878,6 +899,7 @@ export function boardChangeOf(target: BoardTarget, value: BoardValue): RoomBoard
     ...(value.quote === undefined ? {} : { quote: value.quote }),
     ...(value.size === undefined ? {} : { size: value.size }),
     ...(value.color === undefined ? {} : { color: value.color }),
+    ...(value.section === true ? { section: true } : {}),
     ...(value.kind === "task"
       ? { done: value.done === true, assignee: value.assignee ?? null }
       : {}),
@@ -1856,6 +1878,138 @@ export function boardItemsInRect(
         rect.y + rect.height >= area.y,
     )
     .map(({ ref }) => ref);
+}
+
+/** How big a new section is when it frames nothing yet. */
+export const BOARD_SECTION_SIZE: RoomBoardSize = { w: 640, h: 420 };
+const SECTION_PADDING = 32;
+const SECTION_TITLE_HEIGHT = 40;
+
+/** The items whose centre is inside `area`, but `self`: what a section carries when dragged. */
+export const boardItemsCentredIn = (
+  items: ReadonlyArray<{ readonly ref: string; readonly rect: BoardRect }>,
+  area: BoardRect,
+  self: string,
+): Array<string> =>
+  items
+    .filter(({ ref, rect }) => {
+      const x = rect.x + rect.width / 2;
+      const y = rect.y + rect.height / 2;
+      return (
+        ref !== self &&
+        x >= area.x &&
+        x <= area.x + area.width &&
+        y >= area.y &&
+        y <= area.y + area.height
+      );
+    })
+    .map(({ ref }) => ref);
+
+/** A section that frames these rects, with room for its title, or null for none. */
+export function boardSectionAround(
+  rects: ReadonlyArray<BoardRect>,
+): (BoardPoint & { readonly size: RoomBoardSize }) | null {
+  const bounds = boardBounds(rects);
+  if (bounds === null) return null;
+  const x = Math.round(bounds.x - SECTION_PADDING);
+  const y = Math.round(bounds.y - SECTION_PADDING - SECTION_TITLE_HEIGHT);
+  return {
+    x,
+    y,
+    size: clampBoardSize({
+      w: bounds.width + SECTION_PADDING * 2,
+      h: bounds.height + SECTION_PADDING * 2 + SECTION_TITLE_HEIGHT,
+    }),
+  };
+}
+
+/**
+ * Copies of the notes, tasks and links among `notes`, each named by `newId`, as `viewer`'s own
+ * (null for the owner), where the originals are: a task as not done and given to no one. Thread
+ * boxes, artifacts, comment threads, comments on replies and sections are not copied: what makes
+ * them is their conversation, content or what sits on them.
+ */
+export function boardDuplicates(
+  notes: ReadonlyArray<RoomBoardNote>,
+  viewer: GuestId | null,
+  newId: () => string,
+): Array<{ readonly from: string; readonly note: RoomBoardNote }> {
+  return notes.flatMap((note) => {
+    const copies =
+      note.section !== true &&
+      note.pinnedTo === undefined &&
+      (note.kind === undefined || note.kind === "task" || note.kind === "link");
+    if (!copies) return [];
+    return [
+      {
+        from: note.id,
+        note: {
+          id: newId(),
+          text: note.text,
+          x: note.x,
+          y: note.y,
+          ...(viewer === null ? {} : { guestId: viewer }),
+          ...(note.kind === undefined ? {} : { kind: note.kind }),
+          ...(note.url === undefined ? {} : { url: note.url }),
+          ...(note.size === undefined ? {} : { size: note.size }),
+          ...(note.color === undefined ? {} : { color: note.color }),
+        },
+      },
+    ];
+  });
+}
+
+const TIDY_GAP = 24;
+
+/**
+ * Where Tidy puts these items: a grid in their reading order (by rows as they sit, then left to
+ * right), as near square as it goes, each column as wide as the widest item and each row as tall
+ * as its tallest, with even gaps. It starts where they started when that is clear of `taken`, and
+ * else at the nearest spot that is.
+ */
+export function boardTidy(
+  items: ReadonlyArray<{ readonly ref: string; readonly rect: BoardRect }>,
+  taken: ReadonlyArray<BoardRect>,
+): Array<{ readonly ref: string; readonly x: number; readonly y: number }> {
+  const bounds = boardBounds(items.map(({ rect }) => rect));
+  if (bounds === null) return [];
+  const rows: Array<Array<(typeof items)[number]>> = [];
+  let rowEnd = -Infinity;
+  for (const item of items.toSorted((left, right) => left.rect.y - right.rect.y)) {
+    const row = rows.at(-1);
+    if (row === undefined || item.rect.y >= rowEnd) {
+      rows.push([item]);
+      rowEnd = item.rect.y + item.rect.height / 2;
+    } else row.push(item);
+  }
+  const ordered = rows.flatMap((row) => row.toSorted((left, right) => left.rect.x - right.rect.x));
+  const columns = Math.ceil(Math.sqrt(ordered.length));
+  const cell = Math.max(...ordered.map(({ rect }) => rect.width));
+  const heights: Array<number> = [];
+  ordered.forEach(({ rect }, index) => {
+    const row = Math.floor(index / columns);
+    heights[row] = Math.max(heights[row] ?? 0, rect.height);
+  });
+  const width = columns * cell + (columns - 1) * TIDY_GAP;
+  const height =
+    heights.reduce((sum, rowHeight) => sum + rowHeight, 0) + (heights.length - 1) * TIDY_GAP;
+  const origin = placeBoardItem(
+    { w: width, h: height },
+    { x: bounds.x + width / 2, y: bounds.y + height / 2 },
+    taken,
+  );
+  return ordered.map(({ ref }, index) => {
+    const row = Math.floor(index / columns);
+    return {
+      ref,
+      x: Math.round(origin.x + (index % columns) * (cell + TIDY_GAP)),
+      y: Math.round(
+        origin.y +
+          heights.slice(0, row).reduce((sum, rowHeight) => sum + rowHeight, 0) +
+          row * TIDY_GAP,
+      ),
+    };
+  });
 }
 
 /** A selected card or note and where it is now. */

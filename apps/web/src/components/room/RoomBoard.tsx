@@ -32,8 +32,11 @@ import {
   BotIcon,
   ChevronDownIcon,
   CircleCheckIcon,
+  CopyIcon,
   ExternalLinkIcon,
+  FrameIcon,
   GitBranchIcon,
+  LayoutGridIcon,
   LinkIcon,
   ListTodoIcon,
   MessageCirclePlusIcon,
@@ -106,6 +109,8 @@ import {
   NO_BOARD_EDITS,
   besideBoardItem,
   boardBounds,
+  boardDuplicates,
+  boardTidy,
   boardDragItems,
   boardTakenRects,
   boardAgents,
@@ -131,6 +136,10 @@ import {
   boardHistoryChanges,
   boardHistoryWith,
   boardItemsInRect,
+  boardItemsCentredIn,
+  boardSectionAround,
+  BOARD_SECTION_SIZE,
+  type BoardSelected,
   boardNoteBox,
   boardNoteMessage,
   boardNewNoteSize,
@@ -156,6 +165,7 @@ import {
   cursorSender,
   dropBoardEdit,
   fitBoardView,
+  openingBoardView,
   followBoardView,
   panBoardBy,
   panToShow,
@@ -173,6 +183,7 @@ import {
   visibleBoardRect,
   zoomBoardAt,
 } from "./roomBoard.logic";
+import { rememberRoomBoardView, rememberedRoomBoardView } from "./roomBoardNavigation";
 import { RoomArtifactLive } from "./RoomBoardArtifact";
 import { CommentPin, CommentThreadPanel } from "./RoomBoardComments";
 import { useCommentUnread } from "./roomCommentSeen";
@@ -188,6 +199,9 @@ import {
   useBoardSelected,
 } from "./RoomBoardSelection";
 import { BoardPromptBox } from "./RoomBoardPrompt";
+import { BoardEdgeLine } from "./RoomBoardEdge";
+import { dragHandlers, isInside } from "./roomBoardPointer";
+import { BoardSection } from "./RoomBoardSection";
 import { BoxProgress, BoxRequests, BoxTurns } from "./RoomBoardThreadBox";
 import {
   RoomLiveContext,
@@ -209,6 +223,9 @@ const GRID = 22;
 // How far past the cards and notes the arrows' drawing area reaches.
 const EDGE_MARGIN = 400;
 const FOLLOW_NOTICE_MS = 4_000;
+const VIEW_SAVE_DELAY_MS = 500;
+/** How far past the originals a duplicate is looked for, in board pixels. */
+const DUPLICATE_OFFSET = 40;
 // About what three clamped lines of a quote hold on a note of the default width.
 const QUOTE_CLAMP_LENGTH = 90;
 
@@ -222,41 +239,6 @@ const EDGE_STROKE_COLORS: Readonly<Record<EdgeStroke, string>> = {
   selected: "var(--color-primary)",
 };
 const EDGE_STROKES = Object.entries(EDGE_STROKE_COLORS);
-
-/** Whether an event's target is drawn inside the element handling it, not in a portal from it. */
-const isInside = (event: { readonly target: EventTarget; readonly currentTarget: Element }) =>
-  event.target instanceof Node && event.currentTarget.contains(event.target);
-
-/**
- * Pointer handlers that report how far a held pointer moved, in screen pixels, and when it is
- * let go.
- */
-function dragHandlers(
-  onMove: (dx: number, dy: number, event: PointerEvent<HTMLElement>) => void,
-  onEnd?: (event: PointerEvent<HTMLElement>) => void,
-) {
-  const release = (event: PointerEvent<HTMLElement>) => {
-    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-    event.currentTarget.releasePointerCapture(event.pointerId);
-    onEnd?.(event);
-  };
-  return {
-    onPointerDown: (event: PointerEvent<HTMLElement>) => {
-      // A menu, popover or dialog opened from here is portalled elsewhere, but React still
-      // bubbles its presses here, and capturing them would steal their clicks.
-      if (event.button !== 0 || !isInside(event)) return;
-      // The board under a card must not start panning too.
-      event.stopPropagation();
-      event.currentTarget.setPointerCapture(event.pointerId);
-    },
-    onPointerMove: (event: PointerEvent<HTMLElement>) => {
-      if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-      onMove(event.movementX, event.movementY, event);
-    },
-    onPointerUp: release,
-    onPointerCancel: release,
-  };
-}
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
 
@@ -471,6 +453,7 @@ export function RoomBoard({
   title,
   room,
   shareId,
+  viewKey,
   online,
   messages,
   agentWorking = false,
@@ -490,6 +473,7 @@ export function RoomBoard({
   openingPullRequest,
   cards,
   summary,
+  sharing,
   backLabel = "Thread",
   ownerAssignable = true,
   formerPeople = NO_FORMER_PEOPLE,
@@ -512,6 +496,8 @@ export function RoomBoard({
   readonly room: BoardRoom | null;
   /** The share the board is, which names what this device remembers of it. */
   readonly shareId?: string | undefined;
+  /** Names the view this device remembers for the board, so it reopens where it was left. */
+  readonly viewKey?: string | undefined;
   readonly online: ReadonlyArray<GuestId>;
   readonly messages: ReadonlyArray<BoardMessage>;
   /** The owner's agent is working on the room thread, for a server that reports no box runs. */
@@ -553,6 +539,8 @@ export function RoomBoard({
   readonly cards?: ReadonlyArray<BoardCardSpec>;
   /** Said beside the title instead of who joined the room. */
   readonly summary?: string;
+  /** Who is in the room and the way to share it, shown after the title in place of the summary. */
+  readonly sharing?: ReactNode;
   readonly backLabel?: string;
   /** Whether a task can be for the owner, who has no card of their own. */
   readonly ownerAssignable?: boolean;
@@ -610,7 +598,12 @@ export function RoomBoard({
   const unrecorded = useRef(false);
   const [history, setHistory] = useState(NO_HISTORY);
   const [queueChange] = useState(boardChangeQueue);
-  const [view, setView] = useState(INITIAL_BOARD_VIEW);
+  // The view left here last time, which the board reopens on when it still shows a card.
+  const [remembered] = useState(() =>
+    viewKey === undefined ? undefined : rememberedRoomBoardView(viewKey),
+  );
+  const [view, setView] = useState<BoardView>(remembered ?? INITIAL_BOARD_VIEW);
+  const unsavedView = useRef<BoardView | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const fitted = useRef(false);
   const canEdit = room !== null && onChange !== undefined;
@@ -640,9 +633,10 @@ export function RoomBoard({
   const marquee = useBoardMarquee((rect) => {
     const area = boardAreaOf(surfaceRef.current);
     if (area === null) return;
+    // A section is selected by its title bar, so a marquee over one picks out its cards.
     const items = [
       ...(surfaceRef.current?.querySelectorAll<HTMLElement>(
-        "[data-board-item]:not([data-board-pin])",
+        "[data-board-item]:not([data-board-pin]):not([data-board-section])",
       ) ?? []),
     ].flatMap((element) => {
       const ref = element.dataset.boardItem;
@@ -717,10 +711,34 @@ export function RoomBoard({
     }
     fitted.current = true;
     const rects = drawnRectsIn(surfaceRef.current);
-    setView((current) => (current === INITIAL_BOARD_VIEW ? fitBoardView(rects, area) : current));
+    setView((current) =>
+      current === INITIAL_BOARD_VIEW ||
+      (current === remembered && openingBoardView(current, area, rects) === null)
+        ? fitBoardView(rects, area)
+        : current,
+    );
   });
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the first view is measured from the cards and the surface as the browser laid them out
   useLayoutEffect(fitFirst, [fitFirst, fittable]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps the view in this device's storage, written once it settles
+  useEffect(() => {
+    if (viewKey === undefined || !fitted.current) return;
+    unsavedView.current = view;
+    const timer = setTimeout(() => {
+      unsavedView.current = null;
+      rememberRoomBoardView(viewKey, view);
+    }, VIEW_SAVE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [view, viewKey]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a view still settling when the board closes is kept too
+  useEffect(
+    () => () => {
+      if (viewKey !== undefined && unsavedView.current !== null) {
+        rememberRoomBoardView(viewKey, unsavedView.current);
+      }
+    },
+    [viewKey],
+  );
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- follows the board's on-screen size, which a conversation opening beside it shrinks
   useEffect(() => {
     const surface = surfaceRef.current;
@@ -925,13 +943,41 @@ export function RoomBoard({
   // A selection dragged together lands together: one change for each card in it.
   const dropItem = (target: BoardTarget) =>
     release(() => {
-      if (!inGroup(target)) return letGo(target);
-      for (const item of selectedItems) letGo(item.target);
+      const group = inGroup(target) ? selectedItems : carried.current.get(boardEditKey(target));
+      carried.current.delete(boardEditKey(target));
+      if (group === undefined) return letGo(target);
+      for (const item of group) letGo(item.target);
     });
+  // A section dragged on its own carries what sits over it when the drag starts.
+  const carried = useRef(new Map<string, ReadonlyArray<BoardSelected>>());
+  const sectionGroup = (target: BoardTarget): ReadonlyArray<BoardSelected> | null => {
+    const key = boardEditKey(target);
+    const known = carried.current.get(key);
+    if (known !== undefined) return known;
+    const section =
+      target.kind === "note" ? shown.notes.find((note) => note.id === target.id) : undefined;
+    const element = drawnItem(key);
+    if (section?.section !== true || element === null) return null;
+    const items = [
+      ...(surfaceRef.current?.querySelectorAll<HTMLElement>(
+        "[data-board-item]:not([data-board-pin])",
+      ) ?? []),
+    ].map((item) => ({ ref: item.dataset.boardItem ?? "", rect: drawnRect(item) }));
+    const group = boardSelectionItems(shown, positions, [
+      key,
+      ...boardItemsCentredIn(items, drawnRect(element), key),
+    ]);
+    carried.current.set(key, group);
+    return group;
+  };
+  const isSectionRef = (ref: string) =>
+    shown.notes.some((note) => note.section === true && noteRef(note.id) === ref);
+  const groupOf = (target: BoardTarget) => (inGroup(target) ? selectedItems : sectionGroup(target));
   const dragBy = (target: BoardTarget, from: BoardPoint, dx: number, dy: number) => {
     if (!canEdit) return;
-    if (inGroup(target)) {
-      const now = selectedItems.map((item) => {
+    const group = groupOf(target);
+    if (group !== null) {
+      const now = group.map((item) => {
         const last = held.current.get(boardEditKey(item.target));
         return last !== undefined && "x" in last ? { ...item, value: last } : item;
       });
@@ -1078,9 +1124,12 @@ export function RoomBoard({
   const drawnRects = () => drawnRectsIn(surfaceRef.current);
   const takenRects = () =>
     boardTakenRects(
-      [...(surfaceRef.current?.querySelectorAll<HTMLElement>("[data-board-item]") ?? [])].map(
-        (element) => ({ ref: element.dataset.boardItem ?? "", rect: drawnRect(element) }),
-      ),
+      // A new card may land over a section.
+      [
+        ...(surfaceRef.current?.querySelectorAll<HTMLElement>(
+          "[data-board-item]:not([data-board-section])",
+        ) ?? []),
+      ].map((element) => ({ ref: element.dataset.boardItem ?? "", rect: drawnRect(element) })),
       shown,
       cardIds,
       upcomingCardIds,
@@ -1099,8 +1148,10 @@ export function RoomBoard({
     setView(next);
   };
   // A new card lands in view when there is room, clear of everything there at drawn sizes.
-  const freeSpot = (kind: RoomBoardNote["kind"]): BoardPoint => {
-    const size = boardNewNoteSize(kind);
+  const freeSpot = (
+    kind: RoomBoardNote["kind"],
+    size: RoomBoardSize = boardNewNoteSize(kind),
+  ): BoardPoint => {
     const within = visibleBoardRect(
       view,
       boardAreaOf(surfaceRef.current) ?? { width: 600, height: 400 },
@@ -1131,6 +1182,101 @@ export function RoomBoard({
   const addCard = (fields: Pick<RoomBoardNote, "kind" | "url">, wanted?: BoardPoint) => {
     if (!canEdit || full) return;
     newNote(fields, wanted ?? freeSpot(fields.kind));
+  };
+  /** Adds a section in view, or round the rects given, as one change of this viewer's. */
+  const addSection = (around?: ReadonlyArray<BoardRect>) => {
+    if (!canEdit || full) return;
+    const framed = around === undefined ? null : boardSectionAround(around);
+    const size = framed?.size ?? BOARD_SECTION_SIZE;
+    const at = framed ?? freeSpot(undefined, size);
+    const id = randomUUID();
+    const value = settleBoardValue({
+      id,
+      text: "",
+      x: at.x,
+      y: at.y,
+      size,
+      section: true,
+      ...(viewer === null ? {} : { guestId: viewer }),
+    });
+    send({ kind: "note", id }, value);
+    reveal({ x: value.x, y: value.y, width: size.w, height: size.h }, true);
+  };
+  const selectedNotes = selectedItems.flatMap(({ value }) => ("id" in value ? [value] : []));
+  const canDuplicate =
+    canEdit && cards === undefined && boardDuplicates(selectedNotes, viewer, () => "").length > 0;
+  // Copies land together, clear of every card, near the originals, and become the selection.
+  const duplicateSelection = () => {
+    if (!canDuplicate) return;
+    const copies = boardDuplicates(selectedNotes, viewer, randomUUID)
+      .slice(0, Math.max(0, ROOM_BOARD_MAX_NOTES - shown.notes.length))
+      .flatMap((copy) => {
+        const element = drawnItem(noteRef(copy.from));
+        return element === null ? [] : [{ ...copy, rect: drawnRect(element) }];
+      });
+    const bounds = boardBounds(copies.map(({ rect }) => rect));
+    if (bounds === null) return;
+    const spot = placeBoardItem(
+      { w: bounds.width, h: bounds.height },
+      // Just below the originals, a little to the right.
+      {
+        x: bounds.x + bounds.width / 2 + DUPLICATE_OFFSET,
+        y: bounds.y + bounds.height * 1.5 + DUPLICATE_OFFSET,
+      },
+      takenRects(),
+    );
+    for (const { note } of copies) {
+      const value = settleBoardValue({
+        ...note,
+        x: note.x + spot.x - bounds.x,
+        y: note.y + spot.y - bounds.y,
+      });
+      send({ kind: "note", id: note.id }, value);
+    }
+    setSelection(new Set(copies.map(({ note }) => noteRef(note.id))));
+    reveal({ ...spot, width: bounds.width, height: bounds.height }, true);
+  };
+  // Plain notes in the selection, which its colour control recolours together.
+  const colorable = selectedNotes.filter(
+    (note) => note.kind === undefined && note.pinnedTo === undefined && note.section !== true,
+  );
+  const firstColor = colorable[0]?.color ?? "yellow";
+  const sharedColor = colorable.every((note) => (note.color ?? "yellow") === firstColor)
+    ? firstColor
+    : undefined;
+  const colorSelection = (color: RoomBoardNoteColor) => {
+    setNoteColor(color);
+    for (const note of colorable) changeNote(note, (current) => ({ ...current, color }));
+  };
+  const tidySelection = () => {
+    if (!canEdit) return;
+    const items = selectedItems.flatMap((item) => {
+      const element = drawnItem(boardEditKey(item.target));
+      return element === null
+        ? []
+        : [{ ...item, ref: boardEditKey(item.target), rect: drawnRect(element) }];
+    });
+    if (items.length < 2) return;
+    const taken = [
+      ...(surfaceRef.current?.querySelectorAll<HTMLElement>(
+        "[data-board-item]:not([data-board-section])",
+      ) ?? []),
+    ].flatMap((element) =>
+      selected.has(element.dataset.boardItem ?? "") ? [] : [drawnRect(element)],
+    );
+    for (const { ref, x, y } of boardTidy(items, taken)) {
+      const item = items.find((candidate) => candidate.ref === ref);
+      if (item === undefined) continue;
+      const now = "text" in item.value ? noteNow(item.value) : item.value;
+      send(item.target, settleBoardValue({ ...now, x, y }));
+    }
+  };
+  const groupInSection = () => {
+    const rects = [...selected].flatMap((ref) => {
+      const element = drawnItem(ref);
+      return element === null ? [] : [drawnRect(element)];
+    });
+    if (rects.length > 0) addSection(rects);
   };
   /** Adds a card of `kind` beside an item, with a line between them in the direction given. */
   const addBeside = (ref: string, kind: "artifact" | "thread", direction: "from" | "to") => {
@@ -1228,7 +1374,13 @@ export function RoomBoard({
       return;
     }
     const to = dataAt(event.clientX, event.clientY, "boardItem");
-    if (from === undefined || to === null || to === from || edges.length >= ROOM_BOARD_MAX_EDGES) {
+    if (
+      from === undefined ||
+      to === null ||
+      to === from ||
+      isSectionRef(to) ||
+      edges.length >= ROOM_BOARD_MAX_EDGES
+    ) {
       return;
     }
     if (edges.some((edge) => edge.from === from && edge.to === to)) return;
@@ -1254,7 +1406,8 @@ export function RoomBoard({
     if (at === null || !canEdit || full) return;
     const half = (BOARD_PIN_SIZE * pinScale) / 2;
     const id = randomUUID();
-    const on = dataAt(event.clientX, event.clientY, "boardItem");
+    const under = dataAt(event.clientX, event.clientY, "boardItem");
+    const on = under === null || isSectionRef(under) ? null : under;
     setDraftComment({ id, on, ...settleBoardValue({ x: at.x - half, y: at.y - half }) });
     setOpenComment(id);
   };
@@ -1547,10 +1700,13 @@ export function RoomBoard({
         </Button>
         <h1 className="min-w-0 flex-1 truncate text-sm font-medium">
           {title}
-          <span className="ms-2 font-normal text-muted-foreground">
-            {room === null ? "Not shared" : (summary ?? roomSummary(room, online.length))}
-          </span>
+          {sharing === undefined ? (
+            <span className="ms-2 font-normal text-muted-foreground">
+              {room === null ? "Not shared" : (summary ?? roomSummary(room, online.length))}
+            </span>
+          ) : null}
         </h1>
+        {sharing}
         {notice === null ? null : (
           <span role="status" className="shrink-0 text-xs text-muted-foreground">
             {notice}
@@ -1637,6 +1793,17 @@ export function RoomBoard({
               >
                 <AppWindowIcon />
                 <ToolLabel>Artifact</ToolLabel>
+              </Button>
+            ) : null}
+            {cards === undefined ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!canEdit || full}
+                onClick={() => addSection()}
+              >
+                <FrameIcon />
+                <ToolLabel>Section</ToolLabel>
               </Button>
             ) : null}
             {cards === undefined ? (
@@ -1807,6 +1974,11 @@ export function RoomBoard({
               travel(redo ? "redo" : "undo");
               return;
             }
+            if (key === "d" && !event.shiftKey && selected.size > 0) {
+              event.preventDefault();
+              duplicateSelection();
+              return;
+            }
           }
           // Delete acts only on the board itself, so a focused card's own controls keep theirs.
           if (
@@ -1859,6 +2031,42 @@ export function RoomBoard({
             )}
             style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}
           >
+            {shown.notes.map((note) => {
+              if (note.section !== true) return null;
+              const target = { kind: "note", id: note.id } as const;
+              const own = canEdit && isRoomCardOwnedBy(note, viewer);
+              return (
+                <BoardSection
+                  key={note.id}
+                  note={note}
+                  canRename={own}
+                  canDelete={own}
+                  onMove={(dx, dy) => dragBy(target, note, dx, dy)}
+                  onDrop={() => dropItem(target)}
+                  handles={
+                    <ItemHandles
+                      from={noteRef(note.id)}
+                      on="note"
+                      link={undefined}
+                      onResize={
+                        canEdit
+                          ? (corner, from, dx, dy) => resizeNote(note, corner, from, dx, dy)
+                          : undefined
+                      }
+                      onEnd={() => release(() => letGo(target))}
+                    />
+                  }
+                  onText={(text) => writeNote(note, text)}
+                  onBlur={() => release(() => letGo(target))}
+                  onDelete={() => send(target, null)}
+                  onPickColor={
+                    canEdit && cards === undefined
+                      ? (color) => changeNote(note, (current) => ({ ...current, color }))
+                      : undefined
+                  }
+                />
+              );
+            })}
             <svg
               aria-hidden
               className="pointer-events-none absolute overflow-visible"
@@ -1902,32 +2110,22 @@ export function RoomBoard({
                   const from = boxes.get(edge.from);
                   const to = boxes.get(edge.to);
                   if (from === undefined || to === undefined) return null;
-                  const { path } = boardConnector(from, to);
                   const selected = selectedEdge === edge.id;
                   const state: EdgeStroke = selected ? "selected" : edgeRole(edge.id);
                   return (
-                    <g key={edge.id}>
-                      {canEdit ? (
-                        <path
-                          d={path}
-                          fill="none"
-                          stroke="transparent"
-                          strokeWidth="14"
-                          pointerEvents="stroke"
-                          data-board-edge={edge.id}
-                          className="cursor-pointer"
-                          onPointerDown={stopPointer}
-                          onClick={() => setSelectedEdge(selected ? null : edge.id)}
-                        />
-                      ) : null}
-                      <path
-                        d={path}
-                        fill="none"
-                        stroke={EDGE_STROKE_COLORS[state]}
-                        strokeWidth={state === "plain" ? 1.5 : 2}
-                        markerEnd={`url(#${markerId}-${state})`}
-                      />
-                    </g>
+                    <BoardEdgeLine
+                      key={edge.id}
+                      id={edge.id}
+                      fromRef={edge.from}
+                      toRef={edge.to}
+                      from={from}
+                      to={to}
+                      color={EDGE_STROKE_COLORS[state]}
+                      width={state === "plain" ? 1.5 : 2}
+                      marker={`url(#${markerId}-${state})`}
+                      selectable={canEdit}
+                      onSelect={() => setSelectedEdge(selected ? null : edge.id)}
+                    />
                   );
                 })}
                 {linking === null ? null : (
@@ -2076,7 +2274,7 @@ export function RoomBoard({
               );
             })}
             {shown.notes.map((note) => {
-              if (note.kind === "comment") return null;
+              if (note.kind === "comment" || note.section === true) return null;
               const box =
                 note.kind === "thread" && cards === undefined
                   ? boxParts(
@@ -2199,7 +2397,29 @@ export function RoomBoard({
             removable={canEdit ? removal.noteIds.length : 0}
             onDelete={deleteSelection}
             onClear={() => setSelection(NO_SELECTION)}
-          />
+          >
+            {canEdit && cards === undefined && colorable.length > 0 ? (
+              <NoteColorPicker color={sharedColor} onPick={colorSelection} />
+            ) : null}
+            {canEdit && selected.size > 1 ? (
+              <Button size="micro" variant="ghost-muted" onClick={tidySelection}>
+                <LayoutGridIcon />
+                Tidy
+              </Button>
+            ) : null}
+            {canDuplicate ? (
+              <Button size="micro" variant="ghost-muted" onClick={duplicateSelection}>
+                <CopyIcon />
+                Duplicate
+              </Button>
+            ) : null}
+            {canEdit && cards === undefined && !full ? (
+              <Button size="micro" variant="ghost-muted" onClick={groupInSection}>
+                <FrameIcon />
+                Group in a section
+              </Button>
+            ) : null}
+          </SelectionBar>
         )}
         {placingComment ? (
           <div

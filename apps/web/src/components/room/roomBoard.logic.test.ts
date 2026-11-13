@@ -64,6 +64,10 @@ import {
   boardHistoryChanges,
   boardHistoryWith,
   boardItemsInRect,
+  boardItemsCentredIn,
+  boardDuplicates,
+  boardTidy,
+  boardSectionAround,
   boardItemTarget,
   boardItemRects,
   boardMessages,
@@ -110,6 +114,7 @@ import {
   settleBoardEdits,
   settleBoardValue,
   visibleBoardRect,
+  openingBoardView,
   zoomBoardAt,
 } from "./roomBoard.logic";
 
@@ -1531,6 +1536,15 @@ describe("the visible board area", () => {
     });
   });
 
+  it("reopens on the view last left, unless it shows none of the cards", () => {
+    const view = { x: -40, y: 20, zoom: 0.5 };
+    const seen = { x: 1000, y: 100, width: 200, height: 100 };
+    const away = { x: 1200, y: 100, width: 200, height: 100 };
+    expect(openingBoardView(view, area, [away, seen])).toBe(view);
+    expect(openingBoardView(view, area, [away])).toBeNull();
+    expect(openingBoardView(view, area, [])).toBeNull();
+  });
+
   it("places a new card inside the area beside the conversation, and needs no pan for it", () => {
     const view = { x: 0, y: 0, zoom: 1 };
     const tall = { ...area, height: 800 };
@@ -1750,6 +1764,86 @@ describe("selecting several cards", () => {
     expect(boardItemsInRect(items, { x: -50, y: 300, width: 60, height: 120 })).toEqual([
       "card:thread",
     ]);
+  });
+
+  it("carries what sits mostly inside a section, and frames cards in a new one", () => {
+    const items = [
+      { ref: "note:frame", rect: { x: 0, y: 0, width: 400, height: 300 } },
+      { ref: "note:mine", rect: { x: 10, y: 10, width: 100, height: 100 } },
+      // Its centre is just outside, though it overlaps.
+      { ref: "note:sams", rect: { x: 340, y: 10, width: 140, height: 100 } },
+      { ref: "card:thread", rect: { x: 0, y: 400, width: 320, height: 200 } },
+    ];
+    expect(boardItemsCentredIn(items, items[0]!.rect, "note:frame")).toEqual(["note:mine"]);
+    expect(
+      boardSectionAround([
+        { x: 100, y: 100, width: 200, height: 100 },
+        { x: 400, y: 150, width: 100, height: 100 },
+      ]),
+    ).toEqual({ x: 68, y: 28, size: { w: 464, h: 254 } });
+    expect(boardSectionAround([])).toBeNull();
+    // A frame never grows past the largest card.
+    expect(boardSectionAround([{ x: 0, y: 0, width: 3_000, height: 100 }])?.size.w).toBe(
+      ROOM_BOARD_MAX_CARD_SIZE,
+    );
+  });
+
+  it("duplicates notes, tasks and links as the viewer's own, and nothing else", () => {
+    const notes: ReadonlyArray<RoomBoardNote> = [
+      { id: "n", text: "Idea", x: 0, y: 0, guestId: sam, color: "green", size: { w: 200, h: 150 } },
+      {
+        id: "t",
+        text: "Ship",
+        x: 10,
+        y: 0,
+        kind: "task",
+        done: true,
+        assignee: { guestId: sam },
+        reactions: [{ emoji: "👍" }],
+      },
+      { id: "l", text: "Docs", x: 20, y: 0, kind: "link", url: "https://x.dev" },
+      { id: "a", text: "Page", x: 0, y: 0, kind: "artifact" },
+      { id: "b", text: "Box", x: 0, y: 0, kind: "thread" },
+      { id: "c", text: "Why?", x: 0, y: 0, kind: "comment" },
+      { id: "s", text: "Plan", x: 0, y: 0, section: true },
+      { id: "p", text: "On a reply", x: 0, y: 0, pinnedTo: "message:1" },
+    ];
+    let next = 0;
+    const copies = boardDuplicates(notes, null, () => `copy-${next++}`);
+    expect(copies).toEqual([
+      {
+        from: "n",
+        note: { id: "copy-0", text: "Idea", x: 0, y: 0, color: "green", size: { w: 200, h: 150 } },
+      },
+      { from: "t", note: { id: "copy-1", text: "Ship", x: 10, y: 0, kind: "task" } },
+      {
+        from: "l",
+        note: { id: "copy-2", text: "Docs", x: 20, y: 0, kind: "link", url: "https://x.dev" },
+      },
+    ]);
+    expect(boardDuplicates(notes.slice(0, 1), sam, () => "mine")[0]?.note.guestId).toBe(sam);
+  });
+
+  it("tidies cards into a grid in reading order, with even gaps, clear of the rest", () => {
+    const items = [
+      { ref: "note:c", rect: { x: 410, y: 30, width: 100, height: 80 } },
+      { ref: "note:a", rect: { x: 0, y: 0, width: 100, height: 100 } },
+      { ref: "note:d", rect: { x: 50, y: 300, width: 100, height: 50 } },
+      { ref: "note:b", rect: { x: 200, y: 20, width: 150, height: 100 } },
+    ];
+    // Reading order a, b, c, d; two columns as wide as the widest card, rows as tall as theirs.
+    expect(boardTidy(items, [])).toEqual([
+      { ref: "note:a", x: 0, y: 0 },
+      { ref: "note:b", x: 174, y: 0 },
+      { ref: "note:c", x: 0, y: 124 },
+      { ref: "note:d", x: 174, y: 124 },
+    ]);
+    // Something else where the grid would go moves it clear.
+    const tidied = boardTidy(items, [{ x: 0, y: 0, width: 400, height: 300 }]);
+    for (const { ref, x, y } of tidied) {
+      const { width, height } = items.find((item) => item.ref === ref)!.rect;
+      expect(x >= 400 || y >= 300 || x + width <= 0 || y + height <= 0).toBe(true);
+    }
   });
 
   it("moves every selected card and note together, one change each, and leaves pins out", () => {

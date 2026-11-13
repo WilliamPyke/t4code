@@ -20,6 +20,7 @@ import {
   ROOM_TASK_ANSWER_MAX_LENGTH,
   RoomBoardChange,
   ThreadId,
+  unsharedRoomId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -1344,7 +1345,12 @@ it.effect("keeps the board across links, with what departed guests added named a
       shareId,
       boxId: "owner-box",
       boxThreadId: ThreadId.make("thread:owner-box"),
-      box: { text: "Mine", x: 0, y: 0 },
+      box: {
+        text: "Mine",
+        x: 0,
+        y: 0,
+        turn: { id: "run-1", prompt: "Plan", reply: "Done", at: "2026-11-12T00:00:00.000Z" },
+      },
     });
     yield* orchestrator.dispatch({
       type: "thread.room-box.link",
@@ -1436,6 +1442,13 @@ it.effect("keeps the board across links, with what departed guests added named a
     assert.deepEqual(reopened.guestShare?.boardThreads, {
       "owner-box": ThreadId.make("thread:owner-box"),
     });
+    // A box shows the turns it showed on the earlier links.
+    assert.deepEqual(
+      reopened.guestShare?.board?.notes
+        .find((note) => note.id === "owner-box")
+        ?.thread?.turns.map((turn) => turn.id),
+      ["run-1"],
+    );
 
     // Clearing empties the board, and clearing an empty one is no error.
     yield* orchestrator.dispatch({
@@ -1482,6 +1495,109 @@ it.effect("keeps a board through archiving, and clears one kept while not shared
       threadId,
     });
     assert.isNull((yield* orchestrator.getThreadRecords(threadId, [])).thread.roomBoard ?? null);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("lets the owner work on a board while the thread is not shared", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* setup;
+    let commands = 0;
+    const next = (label: string) => CommandId.make(`${label}:${commands++}`);
+    const thread = Effect.map(orchestrator.getThreadRecords(threadId, []), (r) => r.thread);
+    const own = unsharedRoomId(threadId);
+    const change = (room: GuestShareId, author: GuestId | null, change: RoomBoardChange) =>
+      orchestrator.dispatch({
+        type: "thread.guest-board.change",
+        commandId: next("board"),
+        threadId,
+        shareId: room,
+        author,
+        change,
+      });
+    yield* orchestrator.dispatch({
+      type: "thread.guest-share.close",
+      commandId: next("close"),
+      threadId,
+    });
+
+    // The first change starts a board on the thread.
+    yield* change(own, null, { type: "note.put", noteId: "plan", text: "Plan", x: 0, y: 0 });
+    assert.deepEqual(
+      (yield* thread).roomBoard?.board.notes.map((note) => note.id),
+      ["plan"],
+    );
+    // Only the owner works on it, and not under the ended share's id.
+    assert.isTrue(
+      Exit.isFailure(yield* Effect.exit(change(own, sam, { type: "note.remove", noteId: "plan" }))),
+    );
+    assert.isTrue(
+      Exit.isFailure(
+        yield* Effect.exit(change(shareId, null, { type: "note.remove", noteId: "plan" })),
+      ),
+    );
+    yield* change(own, null, {
+      type: "note.put",
+      noteId: "page",
+      text: "Page",
+      x: 0,
+      y: 0,
+      kind: "artifact",
+    });
+    // The owner's boxes run, and their turns and artifacts show, as on a shared board.
+    yield* orchestrator.dispatch({
+      type: "thread.room-box.link",
+      commandId: next("link"),
+      threadId,
+      shareId: own,
+      boxId: "box",
+      boxThreadId: ThreadId.make("thread:box"),
+      box: { text: "Mine", x: 0, y: 0 },
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.room-box.turn",
+      commandId: next("turn"),
+      threadId,
+      shareId: own,
+      boxId: "box",
+      turn: { id: "run-1", prompt: "Plan", reply: "Done", at: "2026-11-12T00:00:00.000Z" },
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.room-artifact.fill",
+      commandId: next("fill"),
+      threadId,
+      shareId: own,
+      noteId: "page",
+      turnId: "run-1",
+      body: "# Page",
+    });
+    const kept = (yield* thread).roomBoard;
+    assert.deepEqual(kept?.boardThreads, { box: ThreadId.make("thread:box") });
+    assert.deepEqual(
+      kept?.board.notes.find((note) => note.id === "box")?.thread?.turns.map((turn) => turn.id),
+      ["run-1"],
+    );
+    assert.strictEqual(
+      kept?.board.notes.find((note) => note.id === "page")?.artifact?.body,
+      "# Page",
+    );
+
+    // Sharing takes the board, which then goes by the share's id only.
+    const second = GuestShareId.make("share:two");
+    yield* orchestrator.dispatch({
+      type: "thread.guest-share.open",
+      commandId: next("open"),
+      threadId,
+      shareId: second,
+      host: "env.t3.test",
+      expiresAt: DateTime.formatIso(DateTime.add(yield* DateTime.now, { hours: 24 })),
+    });
+    const shared = yield* thread;
+    assert.deepEqual(shared.guestShare?.boardThreads, { box: ThreadId.make("thread:box") });
+    assert.isTrue(
+      Exit.isFailure(
+        yield* Effect.exit(change(own, null, { type: "note.remove", noteId: "plan" })),
+      ),
+    );
   }).pipe(Effect.provide(layerTest)),
 );
 

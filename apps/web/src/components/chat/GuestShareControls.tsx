@@ -79,6 +79,7 @@ import { GuestMessageAttachments } from "./GuestMessageAttachments";
 import { GuestMessageName, guestBubbleClassName } from "./guestMessageStyle";
 import { roomBoardLocation } from "../room/roomBoardNavigation";
 import { GuestTurnList } from "./GuestTurnList";
+import { linkEndsLabel, linkEndsSoon } from "./guestLinkTiming";
 import { guestShareDialogThreadAtom } from "./guestShareDialogState";
 import { guestMessageArtifactTitle, guestMessageBoxTitle } from "./roomBoardPrompt";
 
@@ -117,17 +118,6 @@ const DAY_MS = 24 * HOUR_MS;
 const lifetimeLabel = (days: GuestShareLifetimeDays) => (days === 1 ? "1 day" : `${days} days`);
 const cardCount = (count: number) => (count === 1 ? "1 card" : `${count} cards`);
 
-/** "Ends in 6 days", or in hours once it has less than a day left. */
-function linkEndsLabel(expiresAt: string, nowMs: number): string {
-  const left = Date.parse(expiresAt) - nowMs;
-  if (left >= DAY_MS) {
-    const days = Math.floor(left / DAY_MS);
-    return `Ends in ${days} ${days === 1 ? "day" : "days"}`;
-  }
-  const hours = Math.floor(left / HOUR_MS);
-  return hours >= 1 ? `Ends in ${hours} ${hours === 1 ? "hour" : "hours"}` : "Ends within the hour";
-}
-
 function GuestShareDialog({
   threadRef,
   onClose,
@@ -156,7 +146,7 @@ function GuestShareDialog({
   const live = activeShare !== null && activeShare.expiresAt.slice(0, 16) > nowMinute;
   const sharedTeam = live ? (activeShare.team ?? null) : null;
   const joinable = live && sharedTeam === null && activeShare.joinsClosed !== true;
-  const endsSoon = joinable && Date.parse(activeShare.expiresAt) - nowMs < DAY_MS;
+  const endsSoon = joinable && linkEndsSoon(activeShare.expiresAt, nowMs);
   // Extending only ever makes a link last longer.
   const extendChoices = joinable
     ? GUEST_SHARE_LIFETIME_DAYS.filter(
@@ -357,7 +347,7 @@ function GuestShareDialog({
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <span className="text-muted-foreground">
                 {activeShare === null
-                  ? `The board from the last link has ${cardCount(board.notes.length)}. Sharing again brings it back.`
+                  ? `The board has ${cardCount(board.notes.length)}. Everyone who joins sees it.`
                   : `The board has ${cardCount(board.notes.length)}. It stays when the link changes.`}
               </span>
               <Button size="xs" variant="outline" onClick={() => void clearBoard()}>
@@ -441,8 +431,17 @@ function GuestShareDialog({
   );
 }
 
-/** Header status for a shared thread, with the way to end the share. */
-export function GuestShareIndicator({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
+/**
+ * Header status for a shared thread, with the way to end the share. `onBoard` leaves out the way
+ * to the board it is shown on.
+ */
+export function GuestShareIndicator({
+  threadRef,
+  onBoard = false,
+}: {
+  readonly threadRef: ScopedThreadRef;
+  readonly onBoard?: boolean;
+}) {
   const share = useThreadGuestShare(threadRef);
   const closeGuestShare = useOrchestrationCommand(threadEnvironment.closeGuestShare, {
     label: "stop guest share",
@@ -454,13 +453,15 @@ export function GuestShareIndicator({ threadRef }: { readonly threadRef: ScopedT
     <div className="flex shrink-0 items-center gap-1 text-muted-foreground text-xs">
       <UserIcon aria-hidden className="size-3.5" />
       <GuestShareStatus share={share} threadRef={threadRef} />
-      <Button
-        size="xs"
-        variant="ghost-muted"
-        onClick={() => void navigate(roomBoardLocation(threadRef))}
-      >
-        Board
-      </Button>
+      {onBoard ? null : (
+        <Button
+          size="xs"
+          variant="ghost-muted"
+          onClick={() => void navigate(roomBoardLocation(threadRef))}
+        >
+          Board
+        </Button>
+      )}
       <Button
         size="xs"
         variant="ghost-muted"

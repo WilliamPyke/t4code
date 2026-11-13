@@ -94,8 +94,6 @@ export interface ThreadActionMenuState {
   readonly snoozePresets: ReadonlyArray<SnoozePreset>;
   /** Guest links need their own grant, so the caller checks it instead of `canOperate`. */
   readonly canShareWithGuest?: boolean;
-  /** Shared with guests or a team, so it has a board to open. */
-  readonly guestShared?: boolean;
   /** A No project thread with its own folder, on a server that can promote it. */
   readonly canTurnIntoProject?: boolean;
 }
@@ -185,9 +183,8 @@ export function buildThreadActionMenuItems(
     ...(state.canShareWithGuest
       ? [{ id: "share-guest" as const, label: "Share with guests", icon: "user-plus" }]
       : []),
-    ...(state.guestShared
-      ? [{ id: "open-board" as const, label: "Open board", icon: "panels-top-left" }]
-      : []),
+    // Any thread has a board: one never shared starts empty, for its owner alone.
+    { id: "open-board" as const, label: "Open board", icon: "panels-top-left" },
     ...(state.projectFilter
       ? [
           {

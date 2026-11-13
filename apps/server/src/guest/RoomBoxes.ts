@@ -30,7 +30,7 @@ import {
   type ServerProvider,
   ThreadId,
   type ThreadGuestMessage,
-  type ThreadGuestShare,
+  threadOfUnsharedRoom,
 } from "@t3tools/contracts";
 import {
   formatComposerContextReference,
@@ -65,6 +65,8 @@ import {
   roomBoxContextRecord,
   roomBoxOn,
   roomPersonName,
+  threadRoomOf,
+  type ThreadRoom,
 } from "../orchestration-v2/GuestShareDecider.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
@@ -203,7 +205,7 @@ interface BoxMessage {
 /** A box's thread as its room's share records it. */
 interface RoomBoxOfThread {
   readonly roomThreadId: ThreadId;
-  readonly share: ThreadGuestShare;
+  readonly share: ThreadRoom;
   readonly boxId: string;
 }
 
@@ -268,11 +270,8 @@ const make = Effect.gen(function* () {
     const { thread } = yield* orchestrator
       .getThreadRecords(threadId, [])
       .pipe(Effect.mapError(() => fail("inactive")));
-    const share = thread.guestShare ?? null;
-    if (share === null || thread.deletedAt !== null || thread.archivedAt !== null) {
-      return yield* fail("inactive");
-    }
-    return { thread, share };
+    if (thread.deletedAt !== null || thread.archivedAt !== null) return yield* fail("inactive");
+    return { thread, share: threadRoomOf(thread) };
   });
 
   const isUsable = (threadId: ThreadId) =>
@@ -306,12 +305,14 @@ const make = Effect.gen(function* () {
     const named = boxRooms.has(threadId) ? undefined : roomBoxRequestOf(items);
     const roomThreadId =
       boxRooms.get(threadId) ??
-      (named === undefined ? null : yield* orchestrator.findGuestShareThreadId(named.shareId));
+      (named === undefined
+        ? null
+        : (threadOfUnsharedRoom(named.shareId) ??
+          (yield* orchestrator.findGuestShareThreadId(named.shareId))));
     if (roomThreadId === null) return null;
-    const share =
-      (yield* orchestrator.getThreadRecords(roomThreadId, [])).thread.guestShare ?? null;
-    const boxId = share === null ? undefined : boxIdOfThread(share, threadId);
-    return share === null || boxId === undefined ? null : { roomThreadId, share, boxId };
+    const share = threadRoomOf((yield* orchestrator.getThreadRecords(roomThreadId, [])).thread);
+    const boxId = boxIdOfThread(share, threadId);
+    return boxId === undefined ? null : { roomThreadId, share, boxId };
   });
 
   const dispatchMessage = (
@@ -426,7 +427,7 @@ const make = Effect.gen(function* () {
    * longer on the board is left out; one that names none is taken as sent.
    */
   const boardCards = Effect.fn("RoomBoxes.boardCards")(function* (
-    share: ThreadGuestShare,
+    share: ThreadRoom,
     cards: ReadonlyArray<RoomBoardContextCard>,
   ) {
     const ownerName = yield* serverSettings.getSettings.pipe(
@@ -564,6 +565,7 @@ const make = Effect.gen(function* () {
       thread.deletedAt !== null ||
       thread.archivedAt !== null ||
       thread.guestShare != null ||
+      thread.roomBoard != null ||
       thread.roomLink != null ||
       elsewhere !== null
     ) {
@@ -615,7 +617,10 @@ const make = Effect.gen(function* () {
     input: GuestMessageSend,
     creationSource: OrchestrationV2CreationSource,
   ) {
-    const { thread: room, share } = yield* readRoom(input.threadId);
+    const { thread: room } = yield* readRoom(input.threadId);
+    // Only a shared thread has guests whose messages wait.
+    const share = room.guestShare ?? null;
+    if (share === null) return yield* fail("inactive");
     const message = share.messages.find((candidate) => candidate.id === input.guestMessageId);
     if (message === undefined || message.status !== "pending") {
       return yield* fail("not_pending");
@@ -722,11 +727,11 @@ const make = Effect.gen(function* () {
     const { thread, turnItems } = yield* orchestrator.getThreadRecords(threadId, ["turnItems"], {
       turnItemRunIds: [run.id],
     });
-    let share: ThreadGuestShare;
+    let share: ThreadRoom;
     let boxId: string;
     let asked: ThreadGuestMessage | undefined;
-    if (thread.guestShare) {
-      share = thread.guestShare;
+    if (thread.guestShare || thread.roomBoard) {
+      share = threadRoomOf(thread);
       boxId = ROOM_BOARD_ROOM_BOX;
       const guestMessageId = turnItems.find((item) => item.type === "user_message")?.context?.guest
         ?.guestMessageId;
@@ -785,12 +790,12 @@ const make = Effect.gen(function* () {
   };
 
   /** Keeps the index to a room's share as it changes. */
-  const noteBoardThreads = (roomThreadId: ThreadId, share: ThreadGuestShare | null) => {
+  const noteBoardThreads = (roomThreadId: ThreadId, threads: ThreadRoom["boardThreads"]) => {
     let linked = false;
     for (const [boxThreadId, room] of boxRooms) {
       if (room === roomThreadId) boxRooms.delete(boxThreadId);
     }
-    for (const boxThreadId of Object.values(share?.boardThreads ?? {})) {
+    for (const boxThreadId of Object.values(threads ?? {})) {
       linked ||= !boxRooms.has(boxThreadId);
       boxRooms.set(boxThreadId, roomThreadId);
     }
@@ -801,7 +806,7 @@ const make = Effect.gen(function* () {
   // Untraced: it sees every domain event of every thread, and most do nothing here.
   const onEvent = Effect.fnUntraced(function* (event: OrchestrationV2DomainEvent) {
     if (event.type === "thread.guest-share-updated") {
-      return noteBoardThreads(event.threadId, event.payload.guestShare ?? null);
+      return noteBoardThreads(event.threadId, threadRoomOf(event.payload).boardThreads);
     }
     if (event.type === "run.created" || event.type === "run.updated") {
       const run = event.payload;
@@ -942,7 +947,7 @@ const make = Effect.gen(function* () {
 });
 
 /** The box on the share's board whose recorded thread this is: only its runs write to the box. */
-const boxIdOfThread = (share: ThreadGuestShare, threadId: ThreadId): string | undefined =>
+const boxIdOfThread = (share: ThreadRoom, threadId: ThreadId): string | undefined =>
   Object.entries(share.boardThreads ?? {}).find(
     ([boxId, boxThreadId]) => boxThreadId === threadId && roomBoxOn(share, boxId) !== undefined,
   )?.[0];

@@ -81,6 +81,7 @@ import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { forkParked } from "../serverActivation.ts";
+import { threadRoomOf } from "../orchestration-v2/GuestShareDecider.ts";
 import * as RoomBoxes from "./RoomBoxes.ts";
 import { clip } from "./roomUpdates.ts";
 
@@ -1007,8 +1008,11 @@ const make = Effect.gen(function* () {
         { turnItemRunIds: [runId], runIds: [runId] },
       );
       const run = runs.find((candidate) => candidate.id === runId);
-      const share = thread.guestShare ?? null;
-      if (share === null) return yield* answerOnBox(threadId, runId, turnItems, run);
+      // A thread that is neither shared nor keeps a board may be behind a thread box.
+      if (thread.guestShare == null && thread.roomBoard == null) {
+        return yield* answerOnBox(threadId, runId, turnItems, run);
+      }
+      const share = threadRoomOf(thread);
       if (share.board === undefined) return;
       const taskId = roomTaskOfRun(turnItems, share.id);
       const turn = taskId === undefined ? null : guestTurnOf(runId, turnItems);

@@ -570,6 +570,7 @@ function GuestThreadSession({
             title={view.title}
             room={view}
             shareId={share.shareId}
+            viewKey={`guest:${share.shareId}`}
             online={online}
             messages={boardMessages(
               projection.visibleTurnItems.map((row) => row.item),

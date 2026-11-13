@@ -2155,6 +2155,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   pendingGuestMessageCount: Schema.optional(NonNegativeInt),
   /** The thread has a guest link or a team share, even an expired one, so it has a board. */
   guestShared: Schema.optional(Schema.Boolean),
+  /** The thread keeps a board while it is not shared. Absent from older servers. */
+  hasRoomBoard: Schema.optional(Schema.Boolean),
   latestVisibleMessage: Schema.NullOr(OrchestrationV2LatestVisibleMessageSummary),
   latestUserMessageAt: Schema.NullOr(Schema.DateTimeUtc),
   /** Excludes wakes and agent messages that advance latestUserMessageAt through the user role. */

@@ -1674,6 +1674,7 @@ export function threadShellFromProjection(
     pendingRuntimeRequest,
     pendingGuestMessageCount: pendingGuestMessageCount(projection.thread.guestShare),
     ...((projection.thread.guestShare ?? null) === null ? {} : { guestShared: true }),
+    ...((projection.thread.roomBoard ?? null) === null ? {} : { hasRoomBoard: true }),
     // Thread detail owns message bodies. Keeping them out of shell rows makes
     // initial hydration and streaming updates independent of transcript size.
     latestVisibleMessage: null,
@@ -1951,6 +1952,7 @@ function shellFromState(input: {
     pendingRuntimeRequest: input.state.pendingRuntimeRequest,
     pendingGuestMessageCount: pendingGuestMessageCount(input.state.thread.guestShare),
     ...((input.state.thread.guestShare ?? null) === null ? {} : { guestShared: true }),
+    ...((input.state.thread.roomBoard ?? null) === null ? {} : { hasRoomBoard: true }),
     latestVisibleMessage: null,
     latestUserMessageAt: input.state.latestUserMessageAt,
     latestUserAuthoredMessageAt: input.state.latestUserAuthoredMessageAt,
@@ -6696,6 +6698,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   pendingRuntimeRequest: null,
                   pendingGuestMessageCount: pendingGuestMessageCount(thread.guestShare),
                   ...((thread.guestShare ?? null) === null ? {} : { guestShared: true }),
+                  ...((thread.roomBoard ?? null) === null ? {} : { hasRoomBoard: true }),
                   pendingBackgroundTasks: derivePendingBackgroundWork({
                     latestRun:
                       latestRunId === null || status === "idle"
@@ -7367,6 +7370,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         SELECT thread.thread_id AS room_thread_id, box.value AS box_thread_id
         FROM orchestration_v2_projection_threads AS thread,
           json_each(thread.payload_json, '$.guestShare.boardThreads') AS box
+        WHERE thread.deleted_at IS NULL
+        UNION ALL
+        SELECT thread.thread_id AS room_thread_id, box.value AS box_thread_id
+        FROM orchestration_v2_projection_threads AS thread,
+          json_each(thread.payload_json, '$.roomBoard.boardThreads') AS box
         WHERE thread.deleted_at IS NULL
       `;
       return rows.map((row) => ({

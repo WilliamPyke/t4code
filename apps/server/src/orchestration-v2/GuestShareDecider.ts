@@ -19,6 +19,7 @@ import {
   roomBoardGuestCard,
   roomBoardNoteRef,
   roomTaskAnswerExcerpt,
+  unsharedRoomId,
   type RoomArtifactContent,
   type RoomBoard,
   type RoomBoardNote,
@@ -26,6 +27,7 @@ import {
   type GuestId,
   type GuestMessageAttribution,
   type GuestMessageId,
+  type GuestShareId,
   type ComposerContextRecord,
   type OrchestrationMessageContext,
   type OrchestrationV2AppThread,
@@ -153,16 +155,84 @@ function trimResolved(messages: ReadonlyArray<ThreadGuestMessage>): Array<Thread
   return kept.toReversed();
 }
 
+/**
+ * A room as the server works on its board: a thread's share, or while the thread is not shared,
+ * the board kept on it, which only its owner works on.
+ */
+export type ThreadRoom = Pick<
+  ThreadGuestShare,
+  "id" | "board" | "boardThreads" | "guests" | "messages"
+>;
+
+/** The thread's room: its share, or its kept board (none until its first change) by its own id. */
+export function threadRoomOf(thread: OrchestrationV2AppThread): ThreadRoom {
+  const share = thread.guestShare ?? null;
+  if (share !== null) return share;
+  const kept = thread.roomBoard ?? null;
+  return {
+    id: unsharedRoomId(thread.id),
+    messages: [],
+    ...(kept === null ? {} : { board: kept.board }),
+    ...(kept?.boardThreads === undefined ? {} : { boardThreads: kept.boardThreads }),
+  };
+}
+
+/**
+ * The room a command names, if it is the thread's now, and the thread with that room's board and
+ * box threads replaced. An unshared board with nothing on it is not kept.
+ */
+function namedRoom(thread: OrchestrationV2AppThread, roomId: GuestShareId) {
+  const share = thread.guestShare ?? null;
+  const room = threadRoomOf(thread);
+  if (room.id !== roomId) return null;
+  const withBoard = (
+    board: RoomBoard | undefined,
+    boardThreads: ThreadRoom["boardThreads"],
+  ): OrchestrationV2AppThread => {
+    const state = {
+      ...(board === undefined ? {} : { board }),
+      ...(boardThreads === undefined || Object.keys(boardThreads).length === 0
+        ? {}
+        : { boardThreads }),
+    };
+    if (share !== null) {
+      const { board: _board, boardThreads: _threads, ...rest } = share;
+      return { ...thread, guestShare: { ...rest, ...state } };
+    }
+    return {
+      ...thread,
+      roomBoard: state.board === undefined ? null : { ...state, board: state.board },
+    };
+  };
+  return { room, share, withBoard };
+}
+
+/**
+ * The thread with the board of the room a command names changed by `change`: the same thread when
+ * the room is no longer the thread's, has no board, or the change leaves it as it was.
+ */
+function withRoomBoard(
+  thread: OrchestrationV2AppThread,
+  roomId: GuestShareId,
+  change: (board: RoomBoard) => RoomBoard,
+): OrchestrationV2AppThread {
+  const named = namedRoom(thread, roomId);
+  const board = named?.room.board;
+  if (named === null || board === undefined) return thread;
+  const next = change(board);
+  return next === board ? thread : named.withBoard(next, named.room.boardThreads);
+}
+
 /** Only cards the room has, so the positions and arrows cannot grow without bound. */
-const isRoomCard = (share: ThreadGuestShare, cardId: string) =>
+const isRoomCard = (room: ThreadRoom, cardId: string) =>
   cardId === ROOM_BOARD_THREAD_CARD ||
-  share.guests?.some(
+  room.guests?.some(
     (guest) => cardId === roomBoardGuestCard(guest.id) || cardId === roomBoardAgentCard(guest.id),
   ) === true;
 
-const roomScope = (share: ThreadGuestShare): RoomBoardScope => ({
-  hasCard: (cardId) => isRoomCard(share, cardId),
-  hasPerson: (guestId) => hasGuest(share, guestId),
+const roomScope = (room: ThreadRoom): RoomBoardScope => ({
+  hasCard: (cardId) => isRoomCard(room, cardId),
+  hasPerson: (guestId) => room.guests?.some((guest) => guest.id === guestId) === true,
 });
 
 /**
@@ -302,7 +372,7 @@ function boardWithCommentAnswer(
   return { ...board, notes: board.notes.map((other) => (other === note ? answered : other)) };
 }
 
-const artifactOn = (share: ThreadGuestShare, noteId: string | undefined) =>
+const artifactOn = (share: Pick<ThreadRoom, "board">, noteId: string | undefined) =>
   noteId === undefined
     ? undefined
     : share.board?.notes.find((note) => note.id === noteId && note.kind === "artifact");
@@ -312,7 +382,7 @@ const artifactOn = (share: ThreadGuestShare, noteId: string | undefined) =>
  * id, by the name they set for guests, or none so the label says "the owner".
  */
 export const roomPersonName =
-  (share: ThreadGuestShare, ownerName: string) =>
+  (share: Pick<ThreadRoom, "guests" | "board">, ownerName: string) =>
   (guestId: GuestId | undefined): string | undefined =>
     guestId === undefined
       ? ownerName.trim().slice(0, GUEST_NAME_MAX_LENGTH).trim() || undefined
@@ -381,7 +451,7 @@ export function threadWithoutGuestShare(
 
 /** The labels of the cards these arrow refs name on the share's board, as everyone reads them. */
 export const roomCardLabels = (
-  share: ThreadGuestShare,
+  share: Pick<ThreadRoom, "guests" | "board">,
   ownerName: string,
   refs: ReadonlyArray<string>,
 ): ReadonlyArray<string> =>
@@ -393,20 +463,18 @@ export const roomCardLabels = (
   });
 
 /** The thread box with this id on the share's board, if it is still there. */
-export const roomBoxOn = (share: ThreadGuestShare, boxId: string | undefined) =>
+export const roomBoxOn = (share: Pick<ThreadRoom, "board">, boxId: string | undefined) =>
   boxId === undefined
     ? undefined
     : share.board?.notes.find((note) => note.id === boxId && note.kind === "thread");
 
-/** The share without the threads of boxes its board no longer has; the same share when none. */
-function withLiveBoardThreads(share: ThreadGuestShare): ThreadGuestShare {
-  const threads = share.boardThreads;
-  if (threads === undefined) return share;
-  const kept = Object.entries(threads).filter(([boxId]) => roomBoxOn(share, boxId) !== undefined);
-  if (kept.length === Object.keys(threads).length) return share;
-  const { boardThreads: _gone, ...rest } = share;
-  return kept.length === 0 ? rest : { ...rest, boardThreads: Object.fromEntries(kept) };
-}
+/** The box threads of the boxes this board still has. */
+const liveBoardThreads = (board: RoomBoard, threads: ThreadRoom["boardThreads"]) =>
+  threads === undefined
+    ? undefined
+    : Object.fromEntries(
+        Object.entries(threads).filter(([boxId]) => roomBoxOn({ board }, boxId) !== undefined),
+      );
 
 /**
  * The board with a turn shown on a thread box, keeping the last few. A box that is gone, or the
@@ -692,22 +760,19 @@ export function decideGuestShareCommand(input: {
     }
     // The owner's thread behind a thread box: it stays when the box goes, unlinked.
     case "thread.room-box.link": {
-      if (share === null || share.id !== command.shareId)
-        return Result.fail(GUEST_FAILURE.inactive);
-      const threads = share.boardThreads ?? {};
+      const named = namedRoom(thread, command.shareId);
+      if (named === null) return Result.fail(GUEST_FAILURE.inactive);
+      const { room, withBoard } = named;
+      const threads = room.boardThreads ?? {};
       if (command.boxThreadId === null) {
         if (threads[command.boxId] === undefined) return Result.succeed(thread);
         const { [command.boxId]: _gone, ...kept } = threads;
-        const { boardThreads: _all, ...rest } = share;
-        return Result.succeed({
-          ...thread,
-          guestShare: Object.keys(kept).length === 0 ? rest : { ...rest, boardThreads: kept },
-        });
+        return Result.succeed(withBoard(room.board, kept));
       }
       if (command.box !== undefined) {
         const { turn, ...at } = command.box;
         const boxThreadId = command.boxThreadId;
-        if (share.board?.notes.some((note) => note.id === command.boxId) === true) {
+        if (room.board?.notes.some((note) => note.id === command.boxId) === true) {
           return Result.fail("A card with this id is already on the board.");
         }
         // One box per thread, so a run always shows on one box.
@@ -716,43 +781,33 @@ export function decideGuestShareCommand(input: {
         }
         return Result.map(
           applyRoomBoardChange(
-            share.board ?? EMPTY_ROOM_BOARD,
-            roomScope(share),
+            room.board ?? EMPTY_ROOM_BOARD,
+            roomScope(room),
             null,
             { type: "note.put", noteId: command.boxId, kind: "thread", ...at },
             DateTime.formatIso(now),
           ),
-          (added) => ({
-            ...thread,
-            guestShare: {
-              ...share,
-              board: turn === undefined ? added : boardWithBoxTurn(added, command.boxId, turn),
-              boardThreads: { ...threads, [command.boxId]: boxThreadId },
-            },
-          }),
+          (added) =>
+            withBoard(turn === undefined ? added : boardWithBoxTurn(added, command.boxId, turn), {
+              ...threads,
+              [command.boxId]: boxThreadId,
+            }),
         );
       }
       // A guest's box runs here too while its requests come through the owner.
-      if (roomBoxOn(share, command.boxId) === undefined) return Result.fail(GUEST_FAILURE.boxGone);
+      if (roomBoxOn(room, command.boxId) === undefined) return Result.fail(GUEST_FAILURE.boxGone);
       if (threads[command.boxId] === command.boxThreadId) return Result.succeed(thread);
-      return Result.succeed({
-        ...thread,
-        guestShare: {
-          ...share,
-          boardThreads: { ...threads, [command.boxId]: command.boxThreadId },
-        },
-      });
-    }
-    // Like an artifact's fill: the box's turn already ran, and the room only sees it.
-    case "thread.room-box.turn": {
-      if (share === null || share.id !== command.shareId || share.board === undefined) {
-        return Result.succeed(thread);
-      }
-      const board = boardWithBoxTurn(share.board, command.boxId, command.turn);
       return Result.succeed(
-        board === share.board ? thread : { ...thread, guestShare: { ...share, board } },
+        withBoard(room.board, { ...threads, [command.boxId]: command.boxThreadId }),
       );
     }
+    // Like an artifact's fill: the box's turn already ran, and the room only sees it.
+    case "thread.room-box.turn":
+      return Result.succeed(
+        withRoomBoard(thread, command.shareId, (board) =>
+          boardWithBoxTurn(board, command.boxId, command.turn),
+        ),
+      );
     case "thread.guest-message.route": {
       if (share === null) return Result.fail("This thread has no guest link.");
       const message = share.messages.find((candidate) => candidate.id === command.guestMessageId);
@@ -781,30 +836,30 @@ export function decideGuestShareCommand(input: {
         updatedAt: now,
       }));
     }
-    // Only the share changes, and the thread keeps its place in every list: arranging a board
-    // starts nothing here and reaches no agent.
+    // Only the board changes, and the thread keeps its place in every list: arranging a board
+    // starts nothing here and reaches no agent. Unshared, only the owner has the board.
     case "thread.guest-board.change": {
+      const named = namedRoom(thread, command.shareId);
       if (
-        share === null ||
-        share.id !== command.shareId ||
-        (command.author !== null && (!hasGuest(share, command.author) || isExpired(share, now)))
+        named === null ||
+        (command.author !== null &&
+          (share === null || !hasGuest(share, command.author) || isExpired(share, now)))
       ) {
         return Result.fail(GUEST_FAILURE.inactive);
       }
-      const before = share.board ?? EMPTY_ROOM_BOARD;
+      const { room, withBoard } = named;
+      const before = room.board ?? EMPTY_ROOM_BOARD;
       // A removed thread box forgets its thread, which stays the owner's.
       return Result.map(
         applyRoomBoardChange(
           before,
-          roomScope(share),
+          roomScope(room),
           command.author,
           command.change,
           DateTime.formatIso(now),
         ),
         (board) =>
-          board === before
-            ? thread
-            : { ...thread, guestShare: withLiveBoardThreads({ ...share, board }) },
+          board === before ? thread : withBoard(board, liveBoardThreads(board, room.boardThreads)),
       );
     }
     // Only the share changes: a guest's own turn starts nothing here and reaches no agent.
@@ -892,56 +947,47 @@ export function decideGuestShareCommand(input: {
       });
     }
     // The owner's turn already ran; this only shows on the board which task it answered.
-    case "thread.room-task.answer": {
-      if (share === null || share.id !== command.shareId || share.board === undefined) {
-        return Result.succeed(thread);
-      }
-      const board = boardWithTaskAnswered(share.board, command.taskId, undefined, command.turn);
+    case "thread.room-task.answer":
       return Result.succeed(
-        board === share.board ? thread : { ...thread, guestShare: { ...share, board } },
+        withRoomBoard(thread, command.shareId, (board) =>
+          boardWithTaskAnswered(board, command.taskId, undefined, command.turn),
+        ),
       );
-    }
     // Like a task's answer: the owner's turn already ran, and the room only sees what it wrote.
-    case "thread.room-artifact.fill": {
-      if (share === null || share.id !== command.shareId || share.board === undefined) {
-        return Result.succeed(thread);
-      }
-      const board = boardWithArtifactFilled(share.board, command.noteId, {
-        body: command.body,
-        ...(command.truncated === true ? { truncated: true } : {}),
-        ...(command.askedBy === undefined ? {} : { askedBy: command.askedBy }),
-        turnId: command.turnId,
-        updatedAt: DateTime.formatIso(now),
-        ...(command.prompt === undefined ? {} : { prompt: command.prompt }),
-        ...(command.cards === undefined || command.cards.length === 0
-          ? {}
-          : { cards: command.cards }),
-        ...(command.boxId === undefined ? {} : { boxId: command.boxId }),
-        ...(command.model === undefined ? {} : { model: command.model }),
-      });
+    case "thread.room-artifact.fill":
       return Result.succeed(
-        board === share.board ? thread : { ...thread, guestShare: { ...share, board } },
+        withRoomBoard(thread, command.shareId, (board) =>
+          boardWithArtifactFilled(board, command.noteId, {
+            body: command.body,
+            ...(command.truncated === true ? { truncated: true } : {}),
+            ...(command.askedBy === undefined ? {} : { askedBy: command.askedBy }),
+            turnId: command.turnId,
+            updatedAt: DateTime.formatIso(now),
+            ...(command.prompt === undefined ? {} : { prompt: command.prompt }),
+            ...(command.cards === undefined || command.cards.length === 0
+              ? {}
+              : { cards: command.cards }),
+            ...(command.boxId === undefined ? {} : { boxId: command.boxId }),
+            ...(command.model === undefined ? {} : { model: command.model }),
+          }),
+        ),
       );
-    }
     // Like an artifact's fill: the owner's turn already ran, and the thread only shows its answer.
-    case "thread.room-comment.answer": {
-      if (share === null || share.id !== command.shareId || share.board === undefined) {
-        return Result.succeed(thread);
-      }
-      const board = boardWithCommentAnswer(share.board, command.noteId, {
-        guestId: undefined,
-        text: command.text,
-        at: DateTime.formatIso(now),
-        agent: {
-          turnId: command.turnId,
-          boxId: command.boxId,
-          ...(command.model === undefined ? {} : { model: command.model }),
-        },
-      });
+    case "thread.room-comment.answer":
       return Result.succeed(
-        board === share.board ? thread : { ...thread, guestShare: { ...share, board } },
+        withRoomBoard(thread, command.shareId, (board) =>
+          boardWithCommentAnswer(board, command.noteId, {
+            guestId: undefined,
+            text: command.text,
+            at: DateTime.formatIso(now),
+            agent: {
+              turnId: command.turnId,
+              boxId: command.boxId,
+              ...(command.model === undefined ? {} : { model: command.model }),
+            },
+          }),
+        ),
       );
-    }
     case "thread.room-link.set":
       return (thread.roomLink ?? null) === null && command.roomLink === null
         ? Result.succeed(thread)

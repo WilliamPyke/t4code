@@ -102,6 +102,7 @@ import {
   hasGuest,
   roomBoxOn,
   roomCardLabels,
+  threadRoomOf,
 } from "../orchestration-v2/GuestShareDecider.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { coalesceThreadLiveStream } from "../orchestration-v2/ThreadLiveEventCoalescer.ts";
@@ -1840,7 +1841,7 @@ const make = Effect.gen(function* () {
   /** Whether the owner's thread still shares this share, for a read of its live room. */
   const ownsRoom = (input: RoomLiveInput) =>
     orchestrator.getThreadRecords(input.threadId, []).pipe(
-      Effect.map(({ thread }) => thread.guestShare?.id === input.shareId),
+      Effect.map(({ thread }) => threadRoomOf(thread).id === input.shareId),
       Effect.orElseSucceed(() => false),
     );
   const roomAgents = (input: RoomLiveInput) =>
@@ -1966,8 +1967,8 @@ const make = Effect.gen(function* () {
       const { thread } = yield* orchestrator
         .getThreadRecords(by.threadId, [])
         .pipe(Effect.mapError(() => inactive));
-      if (!thread.guestShare) return yield* inactive;
-      return { threadId: thread.id, shareId: thread.guestShare.id, author: null };
+      // Unshared, the owner works on the board the thread keeps, or starts one.
+      return { threadId: thread.id, shareId: threadRoomOf(thread).id, author: null };
     }
     const { thread, share, guestId } = yield* authorize(by.session, "session");
     // The one guest of a link made before several could join has no id to sign a note with.

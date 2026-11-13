@@ -442,8 +442,14 @@ export const RoomBoardNote = Schema.Struct({
   quote: Schema.optional(Schema.String.check(Schema.isMaxLength(ROOM_BOARD_QUOTE_MAX_LENGTH))),
   /** Absent until someone resizes the card. */
   size: Schema.optional(RoomBoardSize),
-  /** A plain note's colour, once someone picked one. */
+  /** A plain note's or a section's colour, once someone picked one. */
   color: Schema.optional(RoomBoardNoteColor),
+  /**
+   * A section: a titled frame drawn behind the cards, whose `text` is its title. It holds nothing:
+   * the cards over it are only where they are. Set when it is added, never after. Not a `kind`,
+   * so a client that predates it still reads the board and shows it as a note.
+   */
+  section: Schema.optional(Schema.Literal(true)),
   /** What an agent wrote into an artifact. No board change sets it. */
   artifact: Schema.optional(RoomArtifactContent),
   /** A thread box's recent turns. No board change sets it; it stays when the box changes. */
@@ -525,7 +531,7 @@ export const RoomBoardChange = Schema.Union([
   }),
   /**
    * Adds the note, or replaces the text and place of the one with this id. `kind`, `url`,
-   * `pinnedTo` and `quote` are kept from when it was added. Absent `size`, `done`, `assignee`
+   * `pinnedTo`, `quote` and `section` are kept from when it was added. Absent `size`, `done`, `assignee`
    * and `color` stay as they were, so an older client's edit keeps them; a null `assignee`
    * clears it.
    */
@@ -542,6 +548,7 @@ export const RoomBoardChange = Schema.Union([
     done: RoomBoardNote.fields.done,
     assignee: Schema.optional(Schema.NullOr(RoomBoardAssignee)),
     color: RoomBoardNote.fields.color,
+    section: RoomBoardNote.fields.section,
   }),
   /** Removes the note and its arrows. */
   Schema.Struct({ type: Schema.Literal("note.remove"), noteId: RoomBoardNote.fields.id }),
@@ -849,6 +856,20 @@ export const ThreadRoomBoard = Schema.Struct({
   boardThreads: Schema.optional(Schema.Record(Schema.String, ThreadId)),
 });
 export type ThreadRoomBoard = typeof ThreadRoomBoard.Type;
+
+const UNSHARED_ROOM_PREFIX = "board:";
+
+/**
+ * The id a thread's board goes by while the thread is not shared, where a share's id would be:
+ * what the owner's board commands, its runs' records and its live progress name. A share's id is
+ * base64url, so it never starts with the prefix.
+ */
+export const unsharedRoomId = (threadId: ThreadId): GuestShareId =>
+  GuestShareId.make(`${UNSHARED_ROOM_PREFIX}${threadId}`);
+
+/** The thread whose unshared board this id names, or null for a share's id. */
+export const threadOfUnsharedRoom = (id: GuestShareId): ThreadId | null =>
+  id.startsWith(UNSHARED_ROOM_PREFIX) ? ThreadId.make(id.slice(UNSHARED_ROOM_PREFIX.length)) : null;
 
 type GuestRoster = Pick<ThreadGuestShare, "guests" | "guestName">;
 

@@ -37,6 +37,44 @@ export function rememberRoomBoardChat(ref: ScopedThreadRef, chat: string | null)
   }
 }
 
+// Per device: the pan and zoom each board was last left at, by `roomBoardViewKey`.
+const BOARD_VIEW_STORAGE_KEY = "t3code:room-board-view:v1";
+const BoardViews = Schema.Record(
+  Schema.String,
+  Schema.Struct({ x: Schema.Finite, y: Schema.Finite, zoom: Schema.Finite }),
+);
+type BoardViewState = (typeof BoardViews.Type)[string];
+
+const readBoardViews = () => {
+  try {
+    return getLocalStorageItem(BOARD_VIEW_STORAGE_KEY, BoardViews) ?? {};
+  } catch {
+    return {};
+  }
+};
+
+/** What names a board's remembered view: the owner's thread, or a guest's room. */
+export const roomBoardViewKey = (ref: ScopedThreadRef) => threadKey(ref);
+
+/** The view this device last left a board at, if any. */
+export const rememberedRoomBoardView = (key: string): BoardViewState | undefined =>
+  readBoardViews()[key];
+
+/** Keeps the view a board was left at, for the next time it opens here. */
+export function rememberRoomBoardView(key: string, view: BoardViewState): void {
+  const { [key]: _previous, ...others } = readBoardViews();
+  const kept = Object.entries(others).slice(-(BOARD_CHAT_THREADS_KEPT - 1));
+  try {
+    setLocalStorageItem(
+      BOARD_VIEW_STORAGE_KEY,
+      { ...Object.fromEntries(kept), [key]: view },
+      BoardViews,
+    );
+  } catch {
+    // Storage that is full or blocked only loses the view.
+  }
+}
+
 /**
  * Where a thread's board opens: with the conversation the owner last left beside it, none if
  * they closed it, or the room thread's the first time.

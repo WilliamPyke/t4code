@@ -1110,7 +1110,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     </Tooltip>
   ) : null;
   const boardButton =
-    thread.guestShared === true && !sortable?.isDragging ? (
+    (thread.guestShared === true || thread.hasRoomBoard === true) && !sortable?.isDragging ? (
       <Tooltip>
         <TooltipTrigger
           render={

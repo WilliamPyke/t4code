@@ -505,9 +505,12 @@ it.effect("lets the owner and each guest change the board everyone on the link s
       commandId: CommandId.make("close-board"),
       threadId,
     });
-    for (const by of [{ session: eve.token }, { threadId }]) {
-      assert.equal((yield* Effect.flip(guestShares.changeBoard(by, remove))).reason, "inactive");
-    }
+    assert.equal(
+      (yield* Effect.flip(guestShares.changeBoard({ session: eve.token }, remove))).reason,
+      "inactive",
+    );
+    // The owner keeps working on the board the thread keeps.
+    yield* guestShares.changeBoard({ threadId }, remove);
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
 
