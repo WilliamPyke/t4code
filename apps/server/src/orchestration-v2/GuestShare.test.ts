@@ -16,6 +16,7 @@ import {
   type OrchestrationV2AppThread,
   ROOM_BOARD_MAX_EDGES,
   ROOM_BOARD_MAX_NOTES,
+  ROOM_BOARD_MAX_REPLIES,
   ROOM_TASK_ANSWER_MAX_LENGTH,
   RoomBoardChange,
   ThreadId,
@@ -585,6 +586,121 @@ it.effect("fills an artifact card with the owner's turn, and nothing else on the
     const after = yield* read;
     assert.lengthOf(after.runs, 0);
     assert.lengthOf(after.messages, 0);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("posts an agent's answer in its comment thread once per run, as whose agent it was", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* setup;
+    yield* orchestrator.dispatch({
+      type: "thread.guest-share.redeem",
+      commandId: CommandId.make("redeem:sam"),
+      threadId,
+      shareId,
+      guestId: sam,
+      guestName: "Sam",
+    });
+    let commands = 0;
+    const change = (author: GuestId | null, change: RoomBoardChange) =>
+      orchestrator.dispatch({
+        type: "thread.guest-board.change",
+        commandId: CommandId.make(`board:${commands++}`),
+        threadId,
+        shareId,
+        author,
+        change,
+      });
+    const answer = (noteId: string, turnId: string, share = shareId) =>
+      orchestrator.dispatch({
+        type: "thread.room-comment.answer",
+        commandId: CommandId.make(`answer:${commands++}`),
+        threadId,
+        shareId: share,
+        noteId,
+        turnId,
+        text: `Answer from ${turnId}`,
+        boxId: "thread",
+        model: "GPT-5.1 Codex",
+      });
+    const repliesOf = (noteId: string) =>
+      Effect.map(
+        orchestrator.getThreadRecords(threadId, []),
+        ({ thread }) =>
+          thread.guestShare?.board?.notes.find((note) => note.id === noteId)?.replies ?? [],
+      );
+    yield* change(sam, {
+      type: "note.put",
+      noteId: "c",
+      text: "Is it fixed?",
+      x: 0,
+      y: 0,
+      kind: "comment",
+    });
+    yield* change(null, { type: "note.put", noteId: "note", text: "Plain", x: 0, y: 0 });
+    yield* change(sam, {
+      type: "note.put",
+      noteId: "box",
+      text: "Sam's",
+      x: 0,
+      y: 0,
+      kind: "thread",
+    });
+    yield* answer("c", "run:1");
+    yield* answer("c", "run:1");
+    // Not a comment thread, no such card, or another share's: nothing is posted.
+    yield* answer("note", "run:2");
+    yield* answer("gone", "run:3");
+    yield* answer("c", "run:4", GuestShareId.make("share:old"));
+    const once = yield* repliesOf("c");
+    assert.lengthOf(once, 1);
+    assert.deepInclude(once[0], {
+      text: "Answer from run:1",
+      agent: { turnId: "run:1", boxId: "thread", model: "GPT-5.1 Codex" },
+    });
+    assert.isUndefined(once[0]?.guestId);
+    assert.lengthOf(yield* repliesOf("note"), 0);
+    // A resolved thread still takes an answer.
+    yield* change(null, { type: "comment.resolve", noteId: "c", resolved: true });
+    yield* answer("c", "run:5");
+    assert.lengthOf(yield* repliesOf("c"), 2);
+    // A guest's machine answers only from their own box, as their agent.
+    const post = (id: string, boxId: string | undefined) =>
+      orchestrator.dispatch({
+        type: "thread.guest-turn.post",
+        commandId: CommandId.make(`turn:${commands++}`),
+        threadId,
+        shareId,
+        guestId: sam,
+        turn: {
+          id,
+          prompt: "Is it?",
+          reply: "Yes.",
+          ...(boxId === undefined ? {} : { boxId, model: "Haiku" }),
+          comment: { noteId: "c", text: "Yes, it is fixed." },
+        },
+      });
+    yield* post("run:sam", "box");
+    yield* post("run:sam", "box");
+    yield* post("run:loose", undefined);
+    yield* post("run:owners", "thread");
+    const bySam = (yield* repliesOf("c")).slice(2);
+    assert.lengthOf(bySam, 1);
+    assert.deepInclude(bySam[0], {
+      text: "Yes, it is fixed.",
+      guestId: sam,
+      agent: { turnId: "run:sam", boxId: "box", model: "Haiku" },
+    });
+    // A full thread takes no more.
+    for (let index = (yield* repliesOf("c")).length; index < ROOM_BOARD_MAX_REPLIES; index++) {
+      yield* change(null, { type: "comment.reply", noteId: "c", replyId: `r${index}`, text: "Hi" });
+    }
+    yield* answer("c", "run:late");
+    const full = yield* repliesOf("c");
+    assert.lengthOf(full, ROOM_BOARD_MAX_REPLIES);
+    assert.notInclude(JSON.stringify(full), "run:late");
+    // Deleted meanwhile: nothing, silently.
+    yield* change(sam, { type: "note.remove", noteId: "c" });
+    yield* answer("c", "run:after");
   }).pipe(Effect.provide(layerTest)),
 );
 

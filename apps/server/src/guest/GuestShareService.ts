@@ -37,6 +37,7 @@ import {
   ROOM_BOX_PROGRESS_DETAIL_MAX_LENGTH,
   ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH,
   ROOM_BOX_PROMPT_MAX_LENGTH,
+  ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH,
   type RoomBoxProgress,
   type RoomArtifactRead,
   type RoomBoardChange,
@@ -65,7 +66,7 @@ import {
 import { chatMarkdownImageSources } from "@t3tools/shared/markdownPipeline";
 import { buildGuestLink, buildShortGuestLink } from "@t3tools/shared/guestLinks";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
-import { roomArtifactBody } from "@t3tools/shared/roomBoard";
+import { roomArtifactBody, roomBoxExcerpt } from "@t3tools/shared/roomBoard";
 import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 import * as NodeOS from "node:os";
 
@@ -1643,6 +1644,7 @@ const make = Effect.gen(function* () {
       boxId: askedBox,
       cards: sentCards,
       model: sentModel,
+      comment: postedComment,
       ...turn
     } = request;
     // Only the guest's own box shows it; anything else is one of the room's turns as before.
@@ -1665,6 +1667,19 @@ const make = Effect.gen(function* () {
             body: filled.body,
             ...(posted.truncated === true || filled.truncated ? { truncated: true } : {}),
           };
+    // Like an artifact's, the answer is taken from the text again, and only from the guest's own
+    // box, as their agent's; the board takes it only in a comment thread.
+    const answer =
+      postedComment === undefined || boxId === undefined
+        ? ""
+        : roomBoxExcerpt(
+            sanitizeLinkedPrompt(postedComment.text).text,
+            ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH,
+          );
+    const comment =
+      postedComment === undefined || answer === ""
+        ? undefined
+        : { noteId: postedComment.noteId, text: answer };
     yield* dispatchGuestCommand({
       type: "thread.guest-turn.post",
       commandId: yield* commandId("turn"),
@@ -1682,6 +1697,7 @@ const make = Effect.gen(function* () {
               boxId,
               ...(cards.length === 0 ? {} : { cards }),
               ...(model === "" ? {} : { model }),
+              ...(comment === undefined ? {} : { comment }),
             }),
       },
     });
@@ -1703,6 +1719,9 @@ const make = Effect.gen(function* () {
         : undefined;
     const artifactId = share.board?.notes.find(
       (note) => note.id === request.artifactId && note.kind === "artifact",
+    )?.id;
+    const commentId = share.board?.notes.find(
+      (note) => note.id === request.commentId && note.kind === "comment",
     )?.id;
     if (!allowActivity(`${share.id}:${guestId}`, DateTime.toEpochMillis(yield* DateTime.now))) {
       return yield* new GuestShareAccessError({ reason: "too_fast" });
@@ -1731,6 +1750,7 @@ const make = Effect.gen(function* () {
           boxId: box.id,
           guestId,
           ...(artifactId === undefined ? {} : { artifactId }),
+          ...(commentId === undefined ? {} : { commentId }),
           phase,
           ...(phase === "tool" && detail !== "" ? { detail } : {}),
           ...(phase === "writing" && preview !== "" ? { preview } : {}),

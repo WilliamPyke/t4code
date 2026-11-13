@@ -5,6 +5,7 @@ import {
   GUEST_RESOLVED_MESSAGE_LIMIT,
   GUEST_SHARE_MAX_GUESTS,
   GUEST_TURN_LIMIT,
+  ROOM_BOARD_MAX_REPLIES,
   TEAM_SHARE_MAX_GUESTS,
   ROOM_BOARD_ROOM_BOX,
   ROOM_BOARD_THREAD_CARD,
@@ -21,6 +22,7 @@ import {
   type RoomArtifactContent,
   type RoomBoard,
   type RoomBoardNote,
+  type RoomBoardReply,
   type GuestId,
   type GuestMessageAttribution,
   type GuestMessageId,
@@ -68,6 +70,7 @@ export type GuestShareCommand = Extract<
       | "thread.guest-board.change"
       | "thread.room-task.answer"
       | "thread.room-artifact.fill"
+      | "thread.room-comment.answer"
       | "thread.room-box.link"
       | "thread.room-box.turn"
       | "thread.guest-message.route"
@@ -248,6 +251,47 @@ function boardWithArtifactFilled(
     artifact: roomArtifactAfterFill(note.artifact, content),
   };
   return { ...board, notes: board.notes.map((other) => (other === note ? filled : other)) };
+}
+
+/**
+ * The board with an agent's answer appended to the comment thread it was asked from, as a reply
+ * of whose agent it was. Only a comment thread with room for it takes it; any other id, or the
+ * same run again, leaves the board as it was, so a thread deleted meanwhile takes nothing.
+ */
+function boardWithCommentAnswer(
+  board: RoomBoard,
+  noteId: string,
+  answer: {
+    readonly guestId: GuestId | undefined;
+    readonly text: string;
+    readonly at: string;
+    readonly agent: NonNullable<RoomBoardReply["agent"]>;
+  },
+): RoomBoard {
+  const note = board.notes.find((candidate) => candidate.id === noteId);
+  const replies = note?.replies ?? [];
+  const id = `agent:${answer.agent.turnId}`.slice(0, 64);
+  if (
+    note?.kind !== "comment" ||
+    answer.text.trim() === "" ||
+    replies.length >= ROOM_BOARD_MAX_REPLIES ||
+    replies.some(
+      (reply) =>
+        reply.id === id ||
+        (reply.agent?.turnId === answer.agent.turnId && reply.guestId === answer.guestId),
+    )
+  ) {
+    return board;
+  }
+  const reply: RoomBoardReply = {
+    id,
+    text: answer.text,
+    ...(answer.guestId === undefined ? {} : { guestId: answer.guestId }),
+    at: answer.at,
+    agent: answer.agent,
+  };
+  const answered: RoomBoardNote = { ...note, replies: [...replies, reply] };
+  return { ...board, notes: board.notes.map((other) => (other === note ? answered : other)) };
 }
 
 const artifactOn = (share: ThreadGuestShare, noteId: string | undefined) =>
@@ -667,7 +711,7 @@ export function decideGuestShareCommand(input: {
       if (turns.some((turn) => turn.guestId === command.guestId && turn.id === command.turn.id)) {
         return Result.succeed(thread);
       }
-      const { truncated, taskId, artifact, boxId, cards, model, ...turn } = command.turn;
+      const { truncated, taskId, artifact, boxId, cards, model, comment, ...turn } = command.turn;
       // Only the guest's own thread box shows their turn; any other box is ignored.
       const namedBox = roomBoxOn(share, boxId);
       const box = namedBox?.guestId === command.guestId ? namedBox : undefined;
@@ -698,7 +742,21 @@ export function decideGuestShareCommand(input: {
             });
       // A box's turn is the box's conversation, so it stays out of the room's own turns.
       if (box !== undefined && filled !== undefined) {
-        const board = boardWithBoxTurn(filled, box.id, {
+        // Only the guest's own box answers a comment thread, as their agent.
+        const commented =
+          comment === undefined
+            ? filled
+            : boardWithCommentAnswer(filled, comment.noteId, {
+                guestId: command.guestId,
+                text: comment.text,
+                at: DateTime.formatIso(now),
+                agent: {
+                  turnId: turn.id,
+                  boxId: box.id,
+                  ...(model === undefined ? {} : { model }),
+                },
+              });
+        const board = boardWithBoxTurn(commented, box.id, {
           id: turn.id,
           ...about,
           prompt: roomBoxExcerpt(turn.prompt, ROOM_BOX_PROMPT_MAX_LENGTH),
@@ -750,6 +808,25 @@ export function decideGuestShareCommand(input: {
           : { cards: command.cards }),
         ...(command.boxId === undefined ? {} : { boxId: command.boxId }),
         ...(command.model === undefined ? {} : { model: command.model }),
+      });
+      return Result.succeed(
+        board === share.board ? thread : { ...thread, guestShare: { ...share, board } },
+      );
+    }
+    // Like an artifact's fill: the owner's turn already ran, and the thread only shows its answer.
+    case "thread.room-comment.answer": {
+      if (share === null || share.id !== command.shareId || share.board === undefined) {
+        return Result.succeed(thread);
+      }
+      const board = boardWithCommentAnswer(share.board, command.noteId, {
+        guestId: undefined,
+        text: command.text,
+        at: DateTime.formatIso(now),
+        agent: {
+          turnId: command.turnId,
+          boxId: command.boxId,
+          ...(command.model === undefined ? {} : { model: command.model }),
+        },
       });
       return Result.succeed(
         board === share.board ? thread : { ...thread, guestShare: { ...share, board } },

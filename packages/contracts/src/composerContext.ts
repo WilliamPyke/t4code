@@ -34,6 +34,7 @@ export const COMPOSER_CONTEXT_KINDS = [
   "room-updates",
   "room-cards",
   "room-artifact",
+  "room-comment",
 ] as const;
 export type KnownComposerContextKind = (typeof COMPOSER_CONTEXT_KINDS)[number];
 
@@ -302,6 +303,22 @@ export const RoomArtifactContextRecord = Schema.Struct({
 });
 export type RoomArtifactContextRecord = typeof RoomArtifactContextRecord.Type;
 
+/**
+ * The comment thread on the owner's board that the reply to this message is posted in. The agent
+ * is told so; the owner's server posts the reply there once the turn completes.
+ */
+export const RoomCommentContextRecord = Schema.Struct({
+  ...recordBase,
+  kind: Schema.Literal("room-comment"),
+  shareId: GuestShareId,
+  noteId: RoomBoardNote.fields.id,
+  /** The room thread whose share holds the comment thread. Absent on a guest's machine. */
+  threadId: Schema.optional(ThreadId),
+  /** The thread box the message was sent from. */
+  boxId: Schema.optional(RoomBoardNote.fields.id),
+});
+export type RoomCommentContextRecord = typeof RoomCommentContextRecord.Type;
+
 const isJson = Schema.is(Schema.Json);
 
 /** Excludes known discriminators so malformed known records fail their own schema. */
@@ -336,6 +353,7 @@ export const KnownComposerContextRecord = Schema.Union([
   RoomUpdatesContextRecord,
   RoomCardsContextRecord,
   RoomArtifactContextRecord,
+  RoomCommentContextRecord,
 ]);
 export type KnownComposerContextRecord = typeof KnownComposerContextRecord.Type;
 

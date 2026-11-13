@@ -20,6 +20,7 @@ describe("RoomBoard comments", () => {
       <RoomBoard
         title="Launch"
         room={{
+          messages: [],
           board: {
             positions: {},
             notes: [{ id: "box", text: "Review", x: 500, y: 0, kind: "thread" }],

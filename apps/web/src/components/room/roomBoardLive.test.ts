@@ -32,6 +32,11 @@ describe("createRoomLiveStore", () => {
       run("b", { artifactId: "art", draft: "# Hi" }),
     ]);
     expect(live.artifact("art")?.boxId).toBe("b");
+    // A run answering a comment thread shows there, until it ends.
+    live.setBoxes([run("a", { commentId: "talk" })]);
+    expect(live.comment("talk")).toBe(live.box("a"));
+    live.setBoxes([run("a")]);
+    expect(live.comment("talk")).toBeUndefined();
     live.setBoxes(undefined);
     expect(live.hasProgress()).toBe(false);
   });

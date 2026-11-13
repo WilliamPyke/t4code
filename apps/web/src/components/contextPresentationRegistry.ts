@@ -64,6 +64,10 @@ const DEFINITIONS = [
     kind: "room-artifact",
     capabilities: { details: "popover", expanded: "none", defaultDraftView: "compact" },
   },
+  {
+    kind: "room-comment",
+    capabilities: { details: "popover", expanded: "none", defaultDraftView: "compact" },
+  },
 ] as const satisfies ReadonlyArray<ContextPresentationDefinition>;
 
 function buildDefinitionRegistry(

@@ -92,6 +92,8 @@ export const SharedThreadPromptBoxInput = Schema.Struct({
   cards: Schema.optional(Schema.Array(RoomBoardContextCard)),
   /** The artifact card the reply fills, read from the room as it is now. */
   artifactId: Schema.optional(RoomBoardNote.fields.id),
+  /** The comment thread the reply is posted in, which the room checks when it takes the turn. */
+  commentId: Schema.optional(RoomBoardNote.fields.id),
   /** Absent: the box thread's own model, or the joined thread's for a box prompted first. */
   modelSelection: Schema.optional(ModelSelection),
 });

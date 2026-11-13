@@ -30,6 +30,10 @@ import {
   boardAgentCode,
   boardAgents,
   boardArtifactAuthor,
+  boardCommentAgentAuthor,
+  boardCommentAskBoxes,
+  boardCommentPromptCard,
+  boardCommentReplying,
   boardArtifactWriting,
   boardBoxAgentLabel,
   boardBoxName,
@@ -862,7 +866,13 @@ describe("boardPromptContext", () => {
       kind: "comment",
       guestId: sam,
       resolved: true,
-      replies: [reply("r1", "Not yet\nTests fail"), reply("r2", "Fixed", sam)],
+      replies: [
+        reply("r1", "Not yet\nTests fail"),
+        reply("r2", "Fixed", sam),
+        // Agents' answers read as whose agent wrote them.
+        { ...reply("r3", "Tests pass now.", sam), agent: { turnId: "t3", boxId: "b" } },
+        { ...reply("r4", "Ship it.\n"), agent: { turnId: "t4", boxId: "thread" } },
+      ],
     });
     const context = boardPromptContext(board([talk], [arrow("note:talk", "card:thread")]), {
       ...people,
@@ -879,10 +889,15 @@ describe("boardPromptContext", () => {
       {
         label: "Comment thread from You",
         sharedLabel: "Comment thread from Sam",
-        text: "Sam: Ship it?\nThe owner: Not yet\nTests fail\nSam: Fixed",
+        text: "Sam: Ship it?\nThe owner: Not yet\nTests fail\nSam: Fixed\nSam's agent: Tests pass now.\nThe owner's agent: Ship it.",
         excerpt: "Ship it?",
       },
     ]);
+    // Asked from the thread, the card ends with the question just sent, as its asker's.
+    expect(boardCommentPromptCard(talk, { ...people, viewer: sam }, "Is it?")?.text).toBe(
+      `${context.cards[0]?.text}\nSam: Is it?`,
+    );
+    expect(boardCommentPromptCard(talk, people, " ")?.text).toBe(context.cards[0]?.text);
     // A long thread keeps its first comment and its newest replies, and says what it left out.
     const long = "x".repeat(ROOM_BOARD_NOTE_MAX_LENGTH);
     const full = note("talk", {
@@ -971,6 +986,21 @@ describe("boardArtifactAuthor", () => {
     expect(boardArtifactAuthor({ guestId: sam, askedBy: sam }, asSam)).toBe("Your agent");
   });
 
+  it("names whose agent answers in a comment thread, and on what, while it replies and after", () => {
+    const owner = { guests, viewer: null, ownerName: "Alex" };
+    const asSam = { guests, viewer: sam };
+    const agent = { turnId: "t", boxId: "b", model: "Haiku" };
+    expect(boardCommentAgentAuthor({ guestId: sam, agent }, owner)).toBe("Sam's agent · Haiku");
+    expect(boardCommentAgentAuthor({ agent }, asSam)).toBe("Owner's agent · Haiku");
+    expect(boardCommentAgentAuthor({ agent: {} }, owner)).toBe("Your agent");
+    expect(boardCommentReplying({ guestId: sam, phase: "thinking" }, owner)).toBe(
+      "Sam's agent is replying… · Thinking",
+    );
+    expect(boardCommentReplying({ phase: "tool", detail: "Editing files" }, owner)).toBe(
+      "Your agent is replying… · Editing files",
+    );
+  });
+
   it("says which way a restore goes, by which version is older", () => {
     const older = "2026-11-12T00:00:00.000Z";
     const newer = "2026-11-12T00:05:00.000Z";
@@ -1057,6 +1087,15 @@ describe("thread boxes", () => {
       true,
     ]);
     expect(canPromptBoardBox(sams!, eve)).toBe(false);
+    // A comment thread asks only the viewer's own boxes, the room thread's card first.
+    expect(boardCommentAskBoxes(boxes, null)).toEqual([
+      { id: "thread", label: "Your agent · Launch" },
+      { id: "b1", label: "Your agent · Pricing" },
+    ]);
+    expect(boardCommentAskBoxes(boxes, sam)).toEqual([
+      { id: "b2", label: "Your agent · Untitled thread" },
+    ]);
+    expect(boardCommentAskBoxes(boxes, eve)).toEqual([]);
   });
 
   it("says whose agent runs a box, a guest's by who ran its last turn", () => {

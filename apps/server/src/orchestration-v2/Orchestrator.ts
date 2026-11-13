@@ -575,6 +575,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.guest-board.change":
     case "thread.room-task.answer":
     case "thread.room-artifact.fill":
+    case "thread.room-comment.answer":
     case "thread.room-box.link":
     case "thread.room-box.turn":
     case "thread.guest-message.route":
@@ -13641,6 +13642,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.guest-board.change":
       case "thread.room-task.answer":
       case "thread.room-artifact.fill":
+      case "thread.room-comment.answer":
       case "thread.room-box.link":
       case "thread.room-box.turn":
       case "thread.guest-message.route":
@@ -14009,6 +14011,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.type === "thread.guest-board.change" ||
           command.type === "thread.room-task.answer" ||
           command.type === "thread.room-artifact.fill" ||
+          command.type === "thread.room-comment.answer" ||
           command.type === "thread.room-box.link" ||
           command.type === "thread.room-box.turn" ||
           command.type === "thread.guest-message.route" ||

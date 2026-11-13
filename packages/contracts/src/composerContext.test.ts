@@ -140,6 +140,13 @@ const knownRecords: Record<(typeof COMPOSER_CONTEXT_KINDS)[number], Record<strin
     noteId: "note-1",
     title: "Plan",
   },
+  "room-comment": {
+    ...base,
+    kind: "room-comment",
+    label: "Reply in the comment thread",
+    shareId: "share-1",
+    noteId: "note-1",
+  },
 };
 
 describe("ComposerContextRecord", () => {

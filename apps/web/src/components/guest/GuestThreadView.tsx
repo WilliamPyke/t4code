@@ -432,6 +432,7 @@ function GuestThreadSession({
         text: turn.text,
         cards: boardContextCards(view.board, view.guests, prompt.cards, view.ownerName),
         ...(prompt.artifactId === null ? {} : { artifactId: prompt.artifactId }),
+        ...(prompt.commentId === undefined ? {} : { commentId: prompt.commentId }),
         ...(turn.modelSelection === undefined ? {} : { modelSelection: turn.modelSelection }),
       },
     });
@@ -595,6 +596,7 @@ function GuestThreadSession({
             onChange={(change) => postBoardChange(endpoint, change)}
             onCursor={(presence) => postBoardCursor(endpoint, presence)}
             onPromptBox={promptBox}
+            askInComments={machine != null}
             onAddThread={machine == null ? undefined : setAddingAt}
             renderBoxModel={(boxId) =>
               machine == null ? (

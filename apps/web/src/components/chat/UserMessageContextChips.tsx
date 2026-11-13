@@ -24,7 +24,11 @@ import { PREFERRED_HIGHLIGHTER } from "../../lib/syntaxHighlighting";
 import ChatMarkdown from "../ChatMarkdown";
 import { EnvironmentContextChip } from "../EnvironmentContextChip";
 import { RoomUpdatesContextChip } from "../RoomUpdatesContextChip";
-import { RoomArtifactContextChip, RoomCardsContextChip } from "./RoomBoardContextChips";
+import {
+  RoomArtifactContextChip,
+  RoomCardsContextChip,
+  RoomCommentContextChip,
+} from "./RoomBoardContextChips";
 import { ThreadContextChip } from "../ThreadContextChip";
 import { MessageCircleIcon, MousePointerClickIcon, PaintbrushIcon } from "lucide-react";
 import type { ComposerContextId, KnownComposerContextRecord } from "@t3tools/contracts";
@@ -361,6 +365,16 @@ const userMessageContextPresentationRegistry = createContextPresentationRegistry
       render: (record, context) =>
         record.kind === "room-artifact" ? (
           <RoomArtifactContextChip record={record} copyMarkdown={context.copyMarkdown} />
+        ) : (
+          <UnavailableUserMessageContextChip {...context} />
+        ),
+    },
+    {
+      kind: "room-comment",
+      canRender: (record) => record.kind === "room-comment",
+      render: (record, context) =>
+        record.kind === "room-comment" ? (
+          <RoomCommentContextChip record={record} copyMarkdown={context.copyMarkdown} />
         ) : (
           <UnavailableUserMessageContextChip {...context} />
         ),

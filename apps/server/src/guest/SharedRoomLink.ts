@@ -23,6 +23,7 @@ import {
   type RoomBoxProgress,
   ROOM_BOX_PROMPT_MAX_LENGTH,
   ROOM_BOX_REPLY_MAX_LENGTH,
+  ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH,
   ROOM_TASK_CONTEXT_KIND,
   ROOM_UPDATES_MAX_CHARS,
   RoomTaskContextPayload,
@@ -46,6 +47,7 @@ import {
   formatComposerContextReference,
   roomArtifactContextRecord,
   roomCardsContextRecord,
+  roomCommentContextRecord,
 } from "@t3tools/shared/composerContextReferences";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
 import {
@@ -53,6 +55,7 @@ import {
   roomArtifactRequestOf,
   roomBoxExcerpt,
   roomCardLabelsOf,
+  roomCommentRequestOf,
   roomRunPromptText,
   roomRunReplyText,
 } from "@t3tools/shared/roomBoard";
@@ -209,6 +212,18 @@ function artifactOfRun(
   if (noteId === undefined || reply === "") return undefined;
   const { body, truncated } = roomArtifactBody(reply);
   return { noteId, body, ...(truncated ? { truncated } : {}) };
+}
+
+/** What a finished run posts in the comment thread it was asked to answer: its reply as prose. */
+function commentOfRun(
+  noteId: string | undefined,
+  items: ReadonlyArray<OrchestrationV2TurnItem>,
+): NonNullable<GuestTurnRequest["comment"]> | undefined {
+  const text =
+    noteId === undefined
+      ? ""
+      : roomBoxExcerpt(roomRunReplyText(items), ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH);
+  return noteId === undefined || text === "" ? undefined : { noteId, text };
 }
 
 /** The start of a run's prompt, as the room shows it while the run goes on. */
@@ -591,6 +606,17 @@ const make = Effect.gen(function* () {
               boxId: input.boxId,
             }),
           ]),
+      // The room checks it is a comment thread there when it takes the turn.
+      ...(input.commentId === undefined
+        ? []
+        : [
+            roomCommentContextRecord({
+              batch,
+              shareId: input.shareId,
+              noteId: input.commentId,
+              boxId: input.boxId,
+            }),
+          ]),
     ];
     const chips = records.map(formatComposerContextReference).join(" ");
     const text = [asked, chips].filter((part) => part !== "").join("\n\n");
@@ -717,6 +743,8 @@ const make = Effect.gen(function* () {
       link.shareId === undefined
         ? undefined
         : roomArtifactRequestOf(turnItems, link.shareId)?.noteId;
+    const commentId =
+      link.shareId === undefined ? undefined : roomCommentRequestOf(turnItems, link.shareId);
     const run = runs.find((candidate) => candidate.id === runId);
     const cards = roomCardLabelsOf(turnItems);
     const model =
@@ -739,6 +767,7 @@ const make = Effect.gen(function* () {
               prompt: roomRunPromptText(turnItems).trim(),
               ...(cards.length === 0 ? {} : { cards: [...cards] }),
               ...(model === "" ? {} : { model }),
+              commentId,
             },
     };
   });
@@ -777,13 +806,15 @@ const make = Effect.gen(function* () {
       const turn = guestTurnOf(runId, turnItems);
       if (turn === null) return;
       const artifact = artifactOfRun(artifactId, turnItems);
-      const { prompt: asked, ...shown } = box ?? { prompt: turn.prompt };
+      const { prompt: asked, commentId, ...shown } = box ?? { prompt: turn.prompt };
+      const comment = commentOfRun(commentId, turnItems);
       const request: GuestTurnRequest = {
         ...turn,
         prompt: clip(asked, GUEST_TURN_PROMPT_MAX_LENGTH),
         ...about,
         ...(artifact === undefined ? {} : { artifact }),
         ...shown,
+        ...(comment === undefined ? {} : { comment }),
       };
       const response = yield* http
         .execute(
@@ -839,7 +870,11 @@ const make = Effect.gen(function* () {
                 ...(artifactId === undefined ? {} : { artifactId }),
                 ...(box === undefined
                   ? {}
-                  : { boxId: box.boxId, ...(box.model === undefined ? {} : { model: box.model }) }),
+                  : {
+                      boxId: box.boxId,
+                      ...(box.model === undefined ? {} : { model: box.model }),
+                      ...(box.commentId === undefined ? {} : { commentId: box.commentId }),
+                    }),
               }),
             )));
       const tracked =
@@ -944,6 +979,7 @@ const make = Effect.gen(function* () {
           turn: { id: turn.id, reply: turn.reply },
         });
       }
+      yield* answerComment(threadId, share.id, runId, ROOM_BOARD_ROOM_BOX, turnItems, run);
       const request = roomArtifactRequestOf(turnItems, share.id);
       const artifact = artifactOfRun(request?.noteId, turnItems);
       if (request === undefined || artifact === undefined) return;
@@ -965,6 +1001,34 @@ const make = Effect.gen(function* () {
     },
     Effect.catch((cause) => Effect.logWarning("Could not show a turn on the board", { cause })),
   );
+
+  /** Posts a run of the owner's agent in the comment thread it was asked from, if it was. */
+  const answerComment = Effect.fn("SharedRoomLink.answerComment")(function* (
+    roomThreadId: ThreadId,
+    shareId: GuestShareId,
+    runId: RunId,
+    boxId: string,
+    turnItems: ReadonlyArray<OrchestrationV2TurnItem>,
+    run: OrchestrationV2Run | undefined,
+  ) {
+    const comment = commentOfRun(roomCommentRequestOf(turnItems, shareId), turnItems);
+    if (comment === undefined) return;
+    const model =
+      run === undefined
+        ? ""
+        : RoomBoxes.roomBoxModelName(run.modelSelection, yield* providerRegistry.getProviders);
+    yield* orchestrator.dispatch({
+      type: "thread.room-comment.answer",
+      commandId: CommandId.make(`server:room-comment:${runId}`),
+      threadId: roomThreadId,
+      shareId,
+      noteId: comment.noteId,
+      turnId: runId,
+      text: comment.text,
+      boxId,
+      ...(model === "" ? {} : { model }),
+    });
+  });
 
   const answerOnBox = Effect.fn("SharedRoomLink.answerOnBox")(function* (
     threadId: ThreadId,
@@ -998,6 +1062,7 @@ const make = Effect.gen(function* () {
         ...askedBy,
       },
     });
+    yield* answerComment(roomThreadId, share.id, runId, box.boxId, turnItems, run);
     const artifact = artifactOfRun(roomArtifactRequestOf(turnItems, share.id)?.noteId, turnItems);
     if (artifact === undefined) return;
     yield* orchestrator.dispatch({

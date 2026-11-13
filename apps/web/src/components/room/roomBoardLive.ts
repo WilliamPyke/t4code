@@ -19,6 +19,7 @@ export interface RoomLiveStore {
   readonly hasProgress: () => boolean;
   readonly box: (boxId: string) => RoomBoxProgress | undefined;
   readonly artifact: (artifactId: string) => RoomBoxProgress | undefined;
+  readonly comment: (commentId: string) => RoomBoxProgress | undefined;
   readonly now: () => number;
 }
 
@@ -31,6 +32,7 @@ export function createRoomLiveStore(): RoomLiveStore {
   let boxes: ReadonlyArray<RoomBoxProgress> | undefined;
   let byBox = new Map<string, RoomBoxProgress>();
   let byArtifact = new Map<string, RoomBoxProgress>();
+  let byComment = new Map<string, RoomBoxProgress>();
   let now = Date.now();
   let timer: ReturnType<typeof setInterval> | null = null;
   const notify = () => {
@@ -73,6 +75,12 @@ export function createRoomLiveStore(): RoomLiveStore {
           nextByArtifact.set(entry.artifactId, entry);
         }
       }
+      const nextByComment = new Map<string, RoomBoxProgress>();
+      for (const entry of nextByBox.values()) {
+        if (entry.commentId !== undefined && !nextByComment.has(entry.commentId)) {
+          nextByComment.set(entry.commentId, entry);
+        }
+      }
       const changed =
         (boxes === undefined) !== (next === undefined) ||
         nextByBox.size !== byBox.size ||
@@ -80,6 +88,7 @@ export function createRoomLiveStore(): RoomLiveStore {
       boxes = next;
       byBox = nextByBox;
       byArtifact = nextByArtifact;
+      byComment = nextByComment;
       runClock(nextByBox.size > 0);
       if (changed) notify();
     },
@@ -95,6 +104,7 @@ export function createRoomLiveStore(): RoomLiveStore {
     hasProgress: () => boxes !== undefined,
     box: (boxId) => byBox.get(boxId),
     artifact: (artifactId) => byArtifact.get(artifactId),
+    comment: (commentId) => byComment.get(commentId),
     now: () => now,
   };
 }
@@ -123,6 +133,12 @@ export function useBoxProgress(boxId: string): RoomBoxProgress | undefined {
 export function useArtifactProgress(artifactId: string): RoomBoxProgress | undefined {
   const store = use(RoomLiveContext);
   return useSyncExternalStore(store.subscribe, () => store.artifact(artifactId));
+}
+
+/** The run an agent answers a comment thread in, while it runs. */
+export function useCommentProgress(commentId: string): RoomBoxProgress | undefined {
+  const store = use(RoomLiveContext);
+  return useSyncExternalStore(store.subscribe, () => store.comment(commentId));
 }
 
 /** The board's clock, which ticks once a second only while a run is in flight. */

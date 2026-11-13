@@ -1,9 +1,14 @@
-import type { RoomArtifactContextRecord, RoomCardsContextRecord } from "@t3tools/contracts";
+import type {
+  RoomArtifactContextRecord,
+  RoomCardsContextRecord,
+  RoomCommentContextRecord,
+} from "@t3tools/contracts";
 import {
+  ROOM_COMMENT_INSTRUCTION,
   formatRoomBoardCards,
   roomArtifactInstruction,
 } from "@t3tools/shared/composerContextReferences";
-import { PanelsTopLeftIcon, StickyNoteIcon } from "lucide-react";
+import { MessageSquareIcon, PanelsTopLeftIcon, StickyNoteIcon } from "lucide-react";
 
 import { ContextChipPopover } from "../contextChipParts";
 
@@ -51,6 +56,32 @@ export function RoomArtifactContextChip(props: {
         </p>
         <div className="whitespace-pre-wrap wrap-break-word text-sm">
           {roomArtifactInstruction(props.record)}
+        </div>
+      </div>
+    </ContextChipPopover>
+  );
+}
+
+/** The comment thread on the room's board a message's reply is posted in. Opens what the agent was told. */
+export function RoomCommentContextChip(props: {
+  record: RoomCommentContextRecord;
+  copyMarkdown?: string;
+}) {
+  return (
+    <ContextChipPopover
+      kind="thread"
+      icon={<MessageSquareIcon />}
+      label={props.record.label}
+      accessibleLabel={props.record.label}
+      copyMarkdown={props.copyMarkdown}
+    >
+      <div className="max-h-80 space-y-2 overflow-y-auto">
+        <p className="text-muted-foreground text-xs">
+          The reply is posted in a comment thread on the room's board, where everyone in the room
+          sees it.
+        </p>
+        <div className="whitespace-pre-wrap wrap-break-word text-sm">
+          {ROOM_COMMENT_INSTRUCTION}
         </div>
       </div>
     </ContextChipPopover>

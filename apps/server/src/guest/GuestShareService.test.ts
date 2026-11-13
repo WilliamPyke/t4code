@@ -1066,6 +1066,7 @@ it.effect("shows a guest's own thread box running on their machine, and its turn
     yield* put({ session: sam.token }, "sams", "thread");
     yield* put({ threadId }, "owners", "thread");
     yield* put({ threadId }, "plan", "artifact");
+    yield* put({ threadId }, "ask", "comment");
     const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
     const samId = thread.guestShare!.guests![0]!.id;
     const live = yield* Queue.unbounded<unknown>();
@@ -1084,6 +1085,7 @@ it.effect("shows a guest's own thread box running on their machine, and its turn
       preview: "# Dark",
       draft: "# Dark",
       model: "GPT-5.1 Codex",
+      commentId: "ask",
     };
     // The box shows the run, as the guest's agent's, and the guest's agent card does not.
     yield* guestShares.postActivity(token, { ...running, boxId: "sams" });
@@ -1095,6 +1097,7 @@ it.effect("shows a guest's own thread box running on their machine, and its turn
           boxId: "sams",
           guestId: samId,
           artifactId: "plan",
+          commentId: "ask",
           phase: "writing",
           preview: "# Dark",
           draft: "# Dark",
@@ -1116,6 +1119,8 @@ it.effect("shows a guest's own thread box running on their machine, and its turn
       artifact: { noteId: "plan", body: "# Dark" },
       cards: ["Note from Eve"],
       model: "GPT-5.1 Codex",
+      // Taken from the text again, so a guest's machine can post no more than an answer.
+      comment: { noteId: "ask", text: "## Yes,\u200b **dark**." },
     };
     yield* guestShares.postTurn(token, { ...turn, id: "run:1", boxId: "sams" });
     // The finished turn ends the run on the box.
@@ -1147,12 +1152,26 @@ it.effect("shows a guest's own thread box running on their machine, and its turn
       cards: ["Note from Eve"],
       model: "GPT-5.1 Codex",
     });
+    // The comment thread gets the answer as Sam's agent's, from the box that ran it.
+    assert.deepEqual(
+      after.note("ask")?.replies?.map(({ at: _at, ...reply }) => reply),
+      [
+        {
+          id: "agent:run:1",
+          text: "Yes, dark.",
+          guestId: samId,
+          agent: { turnId: "run:1", boxId: "sams", model: "GPT-5.1 Codex" },
+        },
+      ],
+    );
     // A box's turn is the box's conversation, not one of the room's turns.
     assert.isUndefined(after.share.turns);
     // A turn for someone else's box is one of the room's turns, and shows on no box.
     yield* guestShares.postTurn(token, { ...turn, id: "run:3", boxId: "owners" });
     const other = yield* notes;
     assert.isUndefined(other.note("owners")?.thread);
+    // Nor does it answer a comment thread: only the guest's own box does.
+    assert.lengthOf(other.note("ask")?.replies ?? [], 1);
     assert.deepEqual(
       other.share.turns?.map((posted) => posted.id),
       ["run:3"],
@@ -2601,10 +2620,11 @@ it.effect(
       );
       const boxes = yield* RoomBoxes.RoomBoxes;
       const owner = { threadId: roomThreadId };
-      const put = (noteId: string, kind: "thread" | "artifact", text: string) =>
+      const put = (noteId: string, kind: "thread" | "artifact" | "comment", text: string) =>
         ({ type: "note.put", noteId, text, x: 0, y: 0, kind }) as const;
       yield* guestShares.changeBoard(owner, put("box:1", "thread", "Landing page"));
       yield* guestShares.changeBoard(owner, put("art:1", "artifact", "Hero"));
+      yield* guestShares.changeBoard(owner, put("c:1", "comment", "Is the hero right?"));
       const roomShare = orchestrator
         .getThreadRecords(roomThreadId, [])
         .pipe(Effect.map(({ thread }) => thread.guestShare!));
@@ -2635,9 +2655,20 @@ it.effect(
         threadId: roomThreadId,
         boxId: "box:1",
       });
-      // The room thread's own card runs in the room thread.
-      const inRoom = yield* boxes.prompt({ threadId: roomThreadId, boxId: "thread", text: "Hi" });
+      // The room thread's own card runs in the room thread. A comment thread to answer is asked
+      // only of one that is a comment thread on the board.
+      const inRoom = yield* boxes.prompt({
+        threadId: roomThreadId,
+        boxId: "thread",
+        text: "Hi",
+        commentId: "art:1",
+      });
       assert.equal(inRoom.boxThreadId, roomThreadId);
+      const roomAsked = (yield* orchestrator.getThreadRecords(roomThreadId, [
+        "messages",
+      ])).messages.find((message) => message.text === "Hi");
+      assert.isDefined(roomAsked);
+      assert.isUndefined(roomAsked?.context);
       // Prompted again, the box keeps its thread.
       // A card that says which it is gets its label and author from the board; one gone is not sent.
       // The owner's cards carry the name they show guests.
@@ -2652,10 +2683,20 @@ it.effect(
           { ref: "note:art:1", label: "Artifact from You", author: "guest", text: "Hero" },
           { ref: "note:gone", label: "Note from You", author: "owner", text: "Gone" },
         ],
+        commentId: "c:1",
       });
       assert.equal(again.boxThreadId, boxThreadId);
       const both = (yield* orchestrator.getThreadRecords(boxThreadId, ["messages"])).messages;
       assert.lengthOf(both, 2);
+      assert.deepEqual(
+        both[1]?.context?.records.map((record) => record.kind),
+        ["room-cards", "room-comment", "room-box"],
+      );
+      assert.deepInclude(both[1]?.context?.records[1], {
+        noteId: "c:1",
+        threadId: roomThreadId,
+        boxId: "box:1",
+      });
       assert.deepInclude(both[1]?.context?.records[0], {
         kind: "room-cards",
         cards: [

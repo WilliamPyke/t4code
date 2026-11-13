@@ -1,4 +1,5 @@
 import {
+  GuestId,
   ROOM_BOARD_MAX_CARD_SIZE,
   ROOM_BOARD_MAX_COORDINATE,
   ROOM_BOARD_MAX_EDGES,
@@ -17,6 +18,7 @@ import {
   type RoomBoardChange,
   type RoomBoardEdge,
   type RoomBoardNote,
+  type RoomBoardReply,
   type RoomBoardSize,
   type RoomBoardViewport,
   type RoomBoxProgress,
@@ -1015,6 +1017,8 @@ export interface BoardPrompt {
   readonly cards: ReadonlyArray<BoardPromptCard>;
   /** The artifact note the box has a line to, which the reply rewrites. */
   readonly artifactId: string | null;
+  /** The comment thread the reply is posted in, when it was asked from one. */
+  readonly commentId?: string | undefined;
 }
 
 /** A note added to a composer's draft as a paragraph of its own. */
@@ -1209,16 +1213,20 @@ const EXCERPT_CHIP_LENGTH = 80;
 
 /**
  * A comment thread as a prompt carries it: each comment on a line of its own after its author's
- * name, as everyone reads it. A thread too long for one card keeps its first comment and its
- * newest replies, and says how many it left out.
+ * name, as everyone reads it, an agent's answer after whose agent it was. A thread too long for
+ * one card keeps its first comment and its newest replies, and says how many it left out.
  */
 function commentThreadText(note: RoomBoardNote, people: BoardPeople): string {
-  const said = [{ guestId: note.guestId, text: note.text }, ...(note.replies ?? [])]
+  const said = [
+    { guestId: note.guestId, text: note.text, agent: undefined },
+    ...(note.replies ?? []),
+  ]
     .filter((comment) => comment.text.trim() !== "")
-    .map(
-      (comment) =>
-        `${sentenceStart(sharedPersonName(people, comment.guestId))}: ${comment.text.trim()}`,
-    );
+    .map((comment) => {
+      const person = sharedPersonName(people, comment.guestId);
+      const author = comment.agent === undefined ? person : `${person}'s agent`;
+      return `${sentenceStart(author)}: ${comment.text.trim()}`;
+    });
   const [first, ...replies] = said;
   if (first === undefined) return "";
   const marker = (left: number) => `(${left} earlier ${left === 1 ? "reply" : "replies"} left out)`;
@@ -1283,6 +1291,60 @@ function boardPromptCard(
     excerpt: note.kind === "artifact" ? "" : cutText(said.trim(), EXCERPT_CHIP_LENGTH),
   };
 }
+
+/**
+ * A comment thread as a prompt asked from it carries it, with `asked`, the viewer's question just
+ * sent and not on their board yet, as their last reply. Null for a thread with nothing said.
+ */
+export function boardCommentPromptCard(
+  note: RoomBoardNote,
+  people: BoardPeople,
+  asked = "",
+): BoardPromptCard | null {
+  if (asked.trim() === "") return boardPromptCard(note, people);
+  const question = {
+    id: "asked",
+    text: asked,
+    at: "",
+    ...(people.viewer === null ? {} : { guestId: GuestId.make(people.viewer) }),
+  };
+  return boardPromptCard({ ...note, replies: [...(note.replies ?? []), question] }, people);
+}
+
+/** What an agent asked from a comment thread is sent when the person asking typed nothing. */
+export const BOARD_COMMENT_ASK_TEXT = "Respond to this comment thread.";
+
+/**
+ * The thread boxes someone can ask from a comment thread: their own, the room thread's card first
+ * for the owner, each as the menu names it: "Your agent · Pricing".
+ */
+export function boardCommentAskBoxes(
+  boxes: ReadonlyArray<BoardThreadBox>,
+  viewer: string | null,
+): ReadonlyArray<{ readonly id: string; readonly label: string }> {
+  return boxes
+    .filter((box) => canPromptBoardBox(box, viewer))
+    .map((box) => ({ id: box.id, label: `Your agent · ${box.title || "Untitled thread"}` }));
+}
+
+/** Who wrote an agent's answer in a comment thread, and on what: "Sam's agent · Haiku". */
+export const boardCommentAgentAuthor = (
+  reply: {
+    readonly guestId?: string | undefined;
+    readonly agent: Pick<NonNullable<RoomBoardReply["agent"]>, "model">;
+  },
+  people: BoardPeople,
+): string =>
+  [sentenceStart(boardAgentName(people, reply.guestId)), reply.agent.model]
+    .filter((part) => part !== undefined && part.trim() !== "")
+    .join(" · ");
+
+/** What an open comment thread says while an agent answers it: "Sam's agent is replying… · Writing". */
+export const boardCommentReplying = (
+  progress: Pick<RoomBoxProgress, "guestId" | "phase" | "detail">,
+  people: BoardPeople,
+): string =>
+  `${sentenceStart(boardAgentName(people, progress.guestId))} is replying… · ${boardProgressPhase(progress)}`;
 
 /** A thread box as lines name it: the room thread's own card, or a thread note. */
 export const boardBoxRef = (boxId: string): string =>

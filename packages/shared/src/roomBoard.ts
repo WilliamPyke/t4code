@@ -13,6 +13,7 @@ import {
   RoomArtifactContextRecord,
   RoomBoxContextPayload,
   RoomCardsContextRecord,
+  RoomCommentContextRecord,
   type GuestId,
   type GuestMessageId,
   type GuestShareId,
@@ -370,6 +371,7 @@ export function roomArtifactAfterFill(
 
 const isRoomArtifactRecord = Schema.is(RoomArtifactContextRecord);
 const isRoomCardsRecord = Schema.is(RoomCardsContextRecord);
+const isRoomCommentRecord = Schema.is(RoomCommentContextRecord);
 const decodeRoomBox = Schema.decodeUnknownOption(RoomBoxContextPayload);
 
 /**
@@ -398,6 +400,20 @@ export function roomArtifactRequestOf(
         ...(guestMessageId === undefined ? {} : { guestMessageId }),
         ...(record.boxId === undefined ? {} : { boxId: record.boxId }),
       };
+    }
+  }
+  return undefined;
+}
+
+/** The comment thread of this share that one of a run's messages asked its agent to answer. */
+export function roomCommentRequestOf(
+  items: ReadonlyArray<OrchestrationV2TurnItem>,
+  shareId: GuestShareId,
+): string | undefined {
+  for (const item of items) {
+    if (item.type !== "user_message") continue;
+    for (const record of item.context?.records ?? []) {
+      if (isRoomCommentRecord(record) && record.shareId === shareId) return record.noteId;
     }
   }
   return undefined;

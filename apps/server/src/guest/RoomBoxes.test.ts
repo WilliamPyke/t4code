@@ -48,7 +48,8 @@ const itemsByRun: Record<string, ReadonlyArray<OrchestrationV2TurnItem>> = {
   "run:room": asked([record("room-artifact", { shareId, noteId: "art:a", title: "A" })]),
   // Sent from the box's thread itself, so it carries no word of the board.
   "run:box": asked([]),
-  "run:late": asked([], "Late"),
+  // Asked from a comment thread, whose answer is posted there.
+  "run:late": asked([record("room-comment", { shareId, noteId: "comment:1" })], "Late"),
   // Says it is the box's, from a thread the share never recorded for it.
   "run:stray": asked([boxRecord]),
   "run:last": [
@@ -298,7 +299,12 @@ it.effect("shows each box's agent at work about once a second, and nothing once 
         run("run:late", lateThreadId, "running", "run.created"),
       ]);
       const late = yield* until((views) => of(views.owner, "box:late") !== undefined);
-      assert.deepInclude(of(late.owner, "box:late"), { phase: "thinking", prompt: "Late" });
+      assert.deepInclude(of(late.owner, "box:late"), {
+        phase: "thinking",
+        prompt: "Late",
+        commentId: "comment:1",
+      });
+      assert.deepInclude(of(late.guests, "box:late"), { commentId: "comment:1" });
 
       yield* Queue.offerAll(events, [
         run("run:room", roomThreadId, "completed"),

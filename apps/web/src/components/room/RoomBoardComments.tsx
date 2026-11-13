@@ -2,9 +2,17 @@ import {
   ROOM_BOARD_MAX_REPLIES,
   ROOM_BOARD_NOTE_MAX_LENGTH,
   type RoomBoardNote,
+  type RoomBoardReply,
 } from "@t3tools/contracts";
 import { isRoomCardOwnedBy } from "@t3tools/shared/roomBoard";
-import { ArrowUpIcon, CircleCheckIcon, RotateCcwIcon, Trash2Icon, XIcon } from "lucide-react";
+import {
+  ArrowUpIcon,
+  BotIcon,
+  CircleCheckIcon,
+  RotateCcwIcon,
+  Trash2Icon,
+  XIcon,
+} from "lucide-react";
 import {
   type PointerEvent,
   type ReactNode,
@@ -20,16 +28,19 @@ import { cn } from "~/lib/utils";
 import { formatRecentTimestamp } from "../../timestampFormat";
 import { useInlineActionConfirm } from "../pullRequest/useInlineActionConfirm";
 import { Button } from "../ui/button";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Textarea } from "../ui/textarea";
 import {
   type BoardPeople,
   type BoardRect,
   type BoardSize,
+  boardCommentAgentAuthor,
   boardCommentPanelSpot,
+  boardCommentReplying,
   boardCursorColor,
   boardPersonName,
 } from "./roomBoard.logic";
-import { useBoardNow } from "./roomBoardLive";
+import { useBoardNow, useCommentProgress } from "./roomBoardLive";
 
 // How far a held pointer goes before a press on a pin is a drag, not a click, in screen pixels.
 const DRAG_SLOP = 4;
@@ -47,10 +58,13 @@ function Avatar({
   people,
   guestId,
   large = false,
+  agent = false,
 }: {
   readonly people: BoardPeople;
   readonly guestId: string | undefined;
   readonly large?: boolean;
+  /** Whose agent it is: a bot in their colour instead of their initial. */
+  readonly agent?: boolean;
 }) {
   return (
     <span
@@ -61,7 +75,20 @@ function Avatar({
       )}
       style={{ backgroundColor: boardCursorColor(people.guests, guestId) }}
     >
-      {initialOf(people, guestId)}
+      {agent ? <BotIcon className="size-3" /> : initialOf(people, guestId)}
+    </span>
+  );
+}
+
+/** The sign on a pin that an agent is answering in its thread now. */
+function AgentAnswering({ noteId }: { readonly noteId: string }) {
+  if (useCommentProgress(noteId) === undefined) return null;
+  return (
+    <span
+      aria-hidden
+      className="pointer-events-none absolute -right-1.5 -bottom-1.5 grid size-4 place-items-center rounded-full border border-border bg-card text-card-foreground"
+    >
+      <BotIcon className="size-2.5" />
     </span>
   );
 }
@@ -151,6 +178,7 @@ export function CommentPin({
       >
         <Avatar people={people} guestId={note.guestId} large />
       </button>
+      <AgentAnswering noteId={note.id} />
       {replies === 0 ? null : (
         <span
           aria-hidden
@@ -173,6 +201,7 @@ function CommentEntry({
   id,
   people,
   guestId,
+  agent,
   text,
   at,
   now,
@@ -183,6 +212,8 @@ function CommentEntry({
   readonly id: string;
   readonly people: BoardPeople;
   readonly guestId: string | undefined;
+  /** Set on an agent's answer: `guestId` is then whose agent. */
+  readonly agent?: RoomBoardReply["agent"];
   readonly text: string;
   readonly at: string | undefined;
   readonly now: number;
@@ -193,9 +224,11 @@ function CommentEntry({
   return (
     <li ref={scrollIntoViewOnMount} className="flex flex-col gap-1">
       <div className="flex min-w-0 items-center gap-1.5">
-        <Avatar people={people} guestId={guestId} />
+        <Avatar people={people} guestId={guestId} agent={agent !== undefined} />
         <span className="min-w-0 truncate text-xs font-medium">
-          {boardPersonName(people, guestId)}
+          {agent === undefined
+            ? boardPersonName(people, guestId)
+            : boardCommentAgentAuthor({ guestId, agent }, people)}
         </span>
         {at === undefined ? null : (
           <time dateTime={at} className="shrink-0 text-2xs text-muted-foreground">
@@ -220,10 +253,31 @@ function CommentEntry({
   );
 }
 
+/** The line at the end of an open thread while an agent answers it, with what it is doing. */
+function AgentReplying({
+  noteId,
+  people,
+}: {
+  readonly noteId: string;
+  readonly people: BoardPeople;
+}) {
+  const progress = useCommentProgress(noteId);
+  if (progress === undefined) return null;
+  return (
+    <li
+      ref={scrollIntoViewOnMount}
+      className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
+    >
+      <Avatar people={people} guestId={progress.guestId} agent />
+      <span className="min-w-0 truncate">{boardCommentReplying(progress, people)}</span>
+    </li>
+  );
+}
+
 /**
  * An open comment thread, beside its pin: each comment with who wrote it and when, and a field to
  * reply. Escape closes it. `draft` is a thread not on the board yet, whose first comment its
- * field writes.
+ * field writes. `askBoxes` are the viewer's own thread boxes, whose agent they can ask to answer.
  */
 export function CommentThreadPanel({
   note,
@@ -231,7 +285,9 @@ export function CommentThreadPanel({
   draft,
   canEdit,
   pin,
+  askBoxes,
   onSend,
+  onAsk,
   onRemoveReply,
   onResolve,
   onDelete,
@@ -243,8 +299,14 @@ export function CommentThreadPanel({
   readonly canEdit: boolean;
   /** Where the pin is on the board's surface, in screen pixels. */
   readonly pin: BoardRect;
+  readonly askBoxes: ReadonlyArray<{ readonly id: string; readonly label: string }>;
   /** Sends the first comment of a draft, or else a reply, and says whether it was taken. */
   readonly onSend: (text: string) => Promise<boolean>;
+  /**
+   * Posts `text` as a reply, when there is any, then asks a box's agent to answer the thread.
+   * Says whether the field can be cleared.
+   */
+  readonly onAsk: (boxId: string, text: string) => Promise<boolean>;
   readonly onRemoveReply: (replyId: string) => void;
   readonly onResolve: (resolved: boolean) => void;
   /** Absent for whoever may not delete the thread. */
@@ -291,6 +353,18 @@ export function CommentThreadPanel({
     setSending(false);
     if (taken) setText("");
   };
+  const ask = async (boxId: string) => {
+    if (sending) return;
+    setSending(true);
+    const taken = await onAsk(boxId, text.trim());
+    setSending(false);
+    if (taken) setText("");
+  };
+  // The question and the answer each take a reply.
+  const canAsk =
+    !draft &&
+    askBoxes.length > 0 &&
+    replies.length + (text.trim() === "" ? 1 : 2) <= ROOM_BOARD_MAX_REPLIES;
   return (
     <section
       ref={panel}
@@ -307,7 +381,9 @@ export function CommentThreadPanel({
       }
       onPointerDown={(event) => event.stopPropagation()}
       onKeyDown={(event) => {
-        if (event.key !== "Escape") return;
+        // A menu opened from the thread is portalled elsewhere, and closes itself.
+        const inside = event.target instanceof Node && event.currentTarget.contains(event.target);
+        if (event.key !== "Escape" || !inside) return;
         event.stopPropagation();
         onClose();
       }}
@@ -358,6 +434,7 @@ export function CommentThreadPanel({
               id={`reply:${reply.id}`}
               people={people}
               guestId={reply.guestId}
+              agent={reply.agent}
               text={reply.text}
               at={reply.at}
               now={now}
@@ -369,6 +446,7 @@ export function CommentThreadPanel({
               }
             />
           ))}
+          <AgentReplying noteId={note.id} people={people} />
         </ol>
       )}
       {!canEdit ? null : full ? (
@@ -403,6 +481,23 @@ export function CommentThreadPanel({
               {text.length}/{ROOM_BOARD_NOTE_MAX_LENGTH}
             </span>
           )}
+          {canAsk ? (
+            <Menu>
+              <MenuTrigger
+                disabled={sending}
+                render={<Button size="icon-sm" variant="ghost-muted" aria-label="Ask an agent" />}
+              >
+                <BotIcon />
+              </MenuTrigger>
+              <MenuPopup align="end" side="top">
+                {askBoxes.map((box) => (
+                  <MenuItem key={box.id} onClick={() => void ask(box.id)}>
+                    {box.label}
+                  </MenuItem>
+                ))}
+              </MenuPopup>
+            </Menu>
+          ) : null}
           <Button
             type="submit"
             size="icon-sm"

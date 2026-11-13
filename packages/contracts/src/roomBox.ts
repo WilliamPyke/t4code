@@ -19,6 +19,8 @@ export const RoomBoxPromptInput = Schema.Struct({
   cards: Schema.optional(Schema.Array(RoomBoardContextCard)),
   /** The artifact card the reply fills. One not on the board is left out. */
   artifactId: Schema.optional(RoomBoardNote.fields.id),
+  /** The comment thread the reply is posted in. One not on the board is left out. */
+  commentId: Schema.optional(RoomBoardNote.fields.id),
   /** Absent: the box thread's own model, or the room thread's for a box prompted first. */
   modelSelection: Schema.optional(ModelSelection),
 });

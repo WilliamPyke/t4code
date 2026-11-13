@@ -36,6 +36,7 @@ import {
   formatComposerContextReference,
   roomArtifactContextRecord,
   roomCardsContextRecord,
+  roomCommentContextRecord,
 } from "@t3tools/shared/composerContextReferences";
 import {
   roomArtifactBody,
@@ -45,6 +46,7 @@ import {
   roomBoxExcerpt,
   roomBoxRequestOf,
   roomCardLabelsOf,
+  roomCommentRequestOf,
   roomRunPromptText,
   roomRunReplyText,
 } from "@t3tools/shared/roomBoard";
@@ -119,6 +121,7 @@ interface TrackedRun {
   readonly shareId: GuestShareId;
   readonly boxId: string;
   readonly artifactId: string | undefined;
+  readonly commentId: string | undefined;
   readonly model: string | undefined;
   readonly prompt: string;
   readonly askedBy: GuestId | undefined;
@@ -143,6 +146,7 @@ const progressOf = (run: TrackedRun): RoomBoxProgress => {
   return {
     boxId: run.boxId,
     ...(run.artifactId === undefined ? {} : { artifactId: run.artifactId }),
+    ...(run.commentId === undefined ? {} : { commentId: run.commentId }),
     phase,
     ...(phase === "tool" && run.detail !== undefined ? { detail: run.detail } : {}),
     ...(phase === "writing" && run.preview !== undefined ? { preview: run.preview } : {}),
@@ -451,6 +455,9 @@ const make = Effect.gen(function* () {
     const artifact = share.board?.notes.find(
       (note) => note.id === input.artifactId && note.kind === "artifact",
     );
+    const comment = share.board?.notes.find(
+      (note) => note.id === input.commentId && note.kind === "comment",
+    );
     const cards = yield* boardCards(share, input.cards ?? []);
     const shown: ReadonlyArray<ComposerContextRecord> = [
       ...(cards.length === 0 ? [] : [roomCardsContextRecord({ batch, cards })]),
@@ -463,6 +470,17 @@ const make = Effect.gen(function* () {
               noteId: artifact.id,
               title: artifact.text,
               current: artifact.artifact?.body,
+              threadId: room.id,
+              boxId: input.boxId,
+            }),
+          ]),
+      ...(comment === undefined
+        ? []
+        : [
+            roomCommentContextRecord({
+              batch,
+              shareId: share.id,
+              noteId: comment.id,
               threadId: room.id,
               boxId: input.boxId,
             }),
@@ -726,6 +744,7 @@ const make = Effect.gen(function* () {
       shareId: share.id,
       boxId,
       artifactId: roomArtifactRequestOf(turnItems, share.id)?.noteId,
+      commentId: roomCommentRequestOf(turnItems, share.id),
       model: roomBoxModelName(run.modelSelection, providers),
       prompt: roomBoxExcerpt(
         asked?.text ?? roomRunPromptText(turnItems),

@@ -52,6 +52,7 @@ import {
   RoomArtifactContent,
   RoomBoardChange,
   RoomBoardNote,
+  RoomBoardReply,
   RoomBoxTurn,
   RoomTaskContextPayload,
   SharedThreadMessage,
@@ -3545,6 +3546,21 @@ const OrchestrationV2InternalCommand = Schema.Union([
     prompt: RoomArtifactContent.fields.prompt,
     cards: RoomArtifactContent.fields.cards,
     boxId: RoomArtifactContent.fields.boxId,
+    model: RoomArtifactContent.fields.model,
+  }),
+  /**
+   * Posts the owner's own agent's turn as a reply in the comment thread it was asked from. It
+   * changes the share and nothing else.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.room-comment.answer"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    noteId: RoomBoardNote.fields.id,
+    turnId: RoomArtifactContent.fields.turnId,
+    text: RoomBoardReply.fields.text,
+    boxId: RoomBoardNote.fields.id,
     model: RoomArtifactContent.fields.model,
   }),
   /**

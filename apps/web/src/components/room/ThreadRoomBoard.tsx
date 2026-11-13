@@ -261,6 +261,7 @@ export function ThreadRoomBoard({
         text: turn.text,
         cards: boardContextCards(share.board, share.guests ?? NO_GUESTS, prompt.cards, ownerName),
         ...(prompt.artifactId === null ? {} : { artifactId: prompt.artifactId }),
+        ...(prompt.commentId === undefined ? {} : { commentId: prompt.commentId }),
         ...(turn.modelSelection === undefined ? {} : { modelSelection: turn.modelSelection }),
       },
     });
@@ -409,6 +410,7 @@ export function ThreadRoomBoard({
               onOpenPullRequest={canOpenPullRequest ? () => void openPullRequest() : undefined}
               openingPullRequest={openingPullRequest}
               onPromptBox={share !== null && canPrompt ? promptBox : undefined}
+              askInComments
               onAddThread={share !== null && canAddThread ? setAddingAt : undefined}
               renderBoxModel={renderBoxModel}
               onOpenConversation={openPanel}

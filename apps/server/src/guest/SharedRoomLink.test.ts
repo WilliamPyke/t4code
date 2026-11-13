@@ -120,6 +120,7 @@ const world = Effect.fn(function* (
               ? Ref.update(sent, (seen) => [...seen, command]).pipe(Effect.as({} as never))
               : (command.type === "thread.room-task.answer" ||
                     command.type === "thread.room-artifact.fill" ||
+                    command.type === "thread.room-comment.answer" ||
                     command.type === "thread.room-box.turn") &&
                   owner !== undefined
                 ? Queue.offer(answers, command).pipe(Effect.as({} as never))
@@ -633,6 +634,21 @@ it.effect(
           },
         ],
       });
+      // Asked from a comment thread: the reply is posted there.
+      const asks = (share: string) => ({
+        version: 1,
+        records: [
+          {
+            version: 1,
+            contextId: "room-comment_1",
+            kind: "room-comment",
+            label: "Reply in the comment thread",
+            shareId: share,
+            noteId: "note:ask",
+            boxId: "thread",
+          },
+        ],
+      });
       const page = "<!doctype html><html><body>Plan</body></html>";
       const turn = (context: object, reply: string) => [
         item(1, { type: "user_message", text: "Draw the plan", context }),
@@ -647,6 +663,8 @@ it.effect(
         "run:guest": turn(fills(shareId, guest), "# Sam's plan"),
         "run:old-share": turn(fills("share:old"), "Old room."),
         "run:artifact": turn(fills(shareId), ["Here it is:", "```html", page, "```"].join("\n")),
+        "run:comment-failed": turn(asks(shareId), "Broke."),
+        "run:comment": turn(asks(shareId), "## Yes\n\nIt is **fixed** now."),
       };
       const settled = (id: string, status: string) =>
         ({ type: "run.updated", threadId, payload: { id, status } }) as never;
@@ -672,6 +690,8 @@ it.effect(
           settled("run:guest", "completed"),
           settled("run:old-share", "completed"),
           settled("run:artifact", "completed"),
+          settled("run:comment-failed", "failed"),
+          settled("run:comment", "completed"),
         ],
         itemsOf: (runId) => runs[runId] ?? [],
       });
@@ -702,6 +722,18 @@ it.effect(
           prompt: "Draw the plan",
           model: "GPT-5.1 Codex",
           boxId: "thread",
+        } as never);
+        // A run asked from a comment thread posts its reply there as prose, once it finished.
+        assert.deepEqual(yield* Queue.take(answers), {
+          type: "thread.room-comment.answer",
+          commandId: "server:room-comment:run:comment",
+          threadId,
+          shareId,
+          noteId: "note:ask",
+          turnId: "run:comment",
+          text: "Yes It is fixed now.",
+          boxId: "thread",
+          model: "GPT-5.1 Codex",
         } as never);
         assert.equal(yield* Queue.size(answers), 0);
       }).pipe(Effect.provide(layer));
@@ -764,6 +796,36 @@ it.effect(
           item(2, { type: "assistant_message", text: "Fixed." }),
         ],
         "run:asked": turn(context(shareId, "box:plan"), "# Dark plan"),
+        // The owner asked the box from a comment thread.
+        "run:comment": [
+          item(1, {
+            type: "user_message",
+            text: "Is it dark enough?",
+            context: {
+              version: 1,
+              records: [
+                {
+                  version: 1,
+                  contextId: "room-comment_1",
+                  kind: "room-comment",
+                  label: "Reply in the comment thread",
+                  shareId,
+                  noteId: "note:ask",
+                  threadId: roomThreadId,
+                  boxId: "box:plan",
+                },
+                {
+                  version: 1,
+                  contextId: "room-box_1",
+                  kind: "room-box",
+                  label: "Thread box",
+                  payload: { shareId, boxId: "box:plan" },
+                },
+              ],
+            },
+          }),
+          item(2, { type: "assistant_message", text: "Yes, **dark** enough." }),
+        ],
       };
       const settled = (id: string, status: string, from: string = threadId) =>
         ({ type: "run.updated", threadId: from, payload: { id, status } }) as never;
@@ -805,6 +867,7 @@ it.effect(
           settled("run:stray", "completed", "thread:stray"),
           settled("run:own", "completed"),
           settled("run:asked", "completed"),
+          settled("run:comment", "completed"),
         ],
         itemsOf: (runId) => runs[runId] ?? [],
       });
@@ -849,6 +912,22 @@ it.effect(
           cards: ["Note from Cam"],
           model: "GPT-5.1 Codex",
           boxId: "box:plan",
+        } as never);
+        // Asked from a comment thread: the box shows the turn, and the thread gets the reply.
+        assert.deepInclude(yield* Queue.take(answers), {
+          type: "thread.room-box.turn",
+          commandId: "server:room-box:run:comment",
+        } as never);
+        assert.deepEqual(yield* Queue.take(answers), {
+          type: "thread.room-comment.answer",
+          commandId: "server:room-comment:run:comment",
+          threadId: roomThreadId,
+          shareId,
+          noteId: "note:ask",
+          turnId: "run:comment",
+          text: "Yes, dark enough.",
+          boxId: "box:plan",
+          model: "GPT-5.1 Codex",
         } as never);
         assert.equal(yield* Queue.size(answers), 0);
       }).pipe(Effect.provide(layer));
@@ -1030,6 +1109,44 @@ it.effect(
           second?.context?.records.map((record) => record.kind),
           ["room-cards"],
         );
+
+        // Asked from a comment thread: the room is told which thread while it runs, and gets the
+        // answer as prose with the finished turn.
+        yield* rooms.promptBox({
+          host: "sam.t3.test",
+          shareId,
+          boxId: "box:1",
+          title: "Design",
+          text: "Is it dark enough?",
+          cards: [
+            { label: "Comment thread from Eve", author: "guest", name: "Eve", text: "Eve: Hm" },
+          ],
+          commentId: "note:ask",
+        });
+        const third = (yield* Ref.get(sent))[2];
+        assert.deepInclude(third?.context?.records[1], {
+          kind: "room-comment",
+          shareId,
+          noteId: "note:ask",
+          boxId: "box:1",
+        });
+        boxItems = [
+          item(1, { type: "user_message", text: third?.text, context: third?.context }),
+          item(2, { type: "assistant_message", text: "## Yes\n\nIt is **dark** enough." }),
+        ];
+        const asked = RunId.make("run:comment");
+        yield* rooms.publishActivity(boxThread, asked, "running");
+        yield* rooms.publishRun(boxThread, asked);
+        const [askedRunning, askedTurn] = (
+          (yield* Ref.get(posts)) as ReadonlyArray<{
+            turn: Record<string, unknown>;
+          }>
+        ).slice(-2);
+        assert.equal(askedRunning?.turn.commentId, "note:ask");
+        assert.deepEqual(askedTurn?.turn.comment, {
+          noteId: "note:ask",
+          text: "Yes It is dark enough.",
+        });
       }).pipe(Effect.provide(layer));
     }),
 );

@@ -360,16 +360,31 @@ export type RoomArtifactContent = typeof RoomArtifactContent.Type;
 
 /** Replies one comment thread holds after its first comment. */
 export const ROOM_BOARD_MAX_REPLIES = 30;
+/** How much of an agent's answer a comment thread keeps, longer than a person's reply. */
+export const ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH = 1_200;
 
 /** A reply in a comment thread on the board. */
 export const RoomBoardReply = Schema.Struct({
-  /** The client that adds the reply names it. */
+  /** The client that adds the reply names it, or the owner's server for an agent's. */
   id: RoomBoardNoteId,
-  text: Schema.String.check(Schema.isMaxLength(ROOM_BOARD_NOTE_MAX_LENGTH)),
-  /** The guest who wrote it. Absent on the owner's replies. */
+  text: Schema.String.check(Schema.isMaxLength(ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH)),
+  /** The guest who wrote it, or whose agent did. Absent on the owner's and their agent's. */
   guestId: Schema.optional(GuestId),
   /** When the server that holds the board took it; never the client's word. */
   at: IsoDateTime,
+  /**
+   * An agent wrote it, asked from the thread. Only the owner's server sets it, from a finished
+   * run; no board change can.
+   */
+  agent: Schema.optional(
+    Schema.Struct({
+      /** The run that wrote it, as the machine that ran it named it. */
+      turnId: ThreadGuestTurn.fields.id,
+      /** The thread box that ran it: `ROOM_BOARD_ROOM_BOX` for the room thread. */
+      boxId: RoomBoardNoteId,
+      model: Schema.optional(RoomBoxModelName),
+    }),
+  ),
 });
 export type RoomBoardReply = typeof RoomBoardReply.Type;
 
@@ -501,7 +516,7 @@ export const RoomBoardChange = Schema.Union([
     type: Schema.Literal("comment.reply"),
     noteId: RoomBoardNote.fields.id,
     replyId: RoomBoardReply.fields.id,
-    text: RoomBoardReply.fields.text,
+    text: Schema.String.check(Schema.isMaxLength(ROOM_BOARD_NOTE_MAX_LENGTH)),
   }),
   Schema.Struct({
     type: Schema.Literal("comment.reply.remove"),
@@ -571,6 +586,8 @@ export const RoomBoxProgress = Schema.Struct({
   guestId: Schema.optional(GuestId),
   /** The artifact card the run's reply will fill. */
   artifactId: Schema.optional(RoomBoardNoteId),
+  /** The comment thread the run's reply will be posted in. */
+  commentId: Schema.optional(RoomBoardNoteId),
   phase: Schema.Literals(["queued", "thinking", "tool", "writing", "approval"]),
   /** For `tool`: the tool's name or a few words. Never its arguments. */
   detail: Schema.optional(
@@ -1011,6 +1028,16 @@ export const GuestTurnRequest = Schema.Struct({
   cards: Schema.optional(RoomBoxCardLabels),
   /** With `boxId`: the model's display name. */
   model: Schema.optional(RoomBoxModelName),
+  /**
+   * With `boxId`: the comment thread the user asked this turn to answer, and the answer, made
+   * from the whole reply. One that is not a comment thread on the share's board is ignored.
+   */
+  comment: Schema.optional(
+    Schema.Struct({
+      noteId: RoomBoardNoteId,
+      text: Schema.String.check(Schema.isMaxLength(ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH)),
+    }),
+  ),
 });
 export type GuestTurnRequest = typeof GuestTurnRequest.Type;
 
@@ -1027,6 +1054,8 @@ export const GuestAgentActivityRequest = Schema.Struct({
   code: RoomAgentActivity.fields.code,
   /** The guest's own thread box the turn runs in, which then shows what its agent is doing. */
   boxId: Schema.optional(RoomBoardNoteId),
+  /** With `boxId`: the comment thread the turn's reply will be posted in. */
+  commentId: RoomBoxProgress.fields.commentId,
   /** With `boxId`: what the agent is doing now, and what it has written so far. */
   phase: Schema.optional(RoomBoxProgress.fields.phase),
   detail: RoomBoxProgress.fields.detail,

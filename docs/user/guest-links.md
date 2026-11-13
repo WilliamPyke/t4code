@@ -124,6 +124,15 @@ it; a very long thread sends its first comment and its newest replies. A new com
 thread box or an artifact gets that line by itself once you write it, unless the board already
 holds all the lines it can. Moving a pin later does not change its lines.
 
+To bring an agent into a thread, type your question in the reply field (or leave it empty) and
+choose the bot button beside Send, then one of your thread boxes. Your question goes in as your
+reply, and that box's agent gets the whole thread and answers it. Its answer lands in the thread
+as a short reply marked with whose agent wrote it and the model, and everyone in the room sees it,
+along with a line while the agent works. You can only ask your own agent: the owner can ask the
+room thread's card or any of their boxes; a guest can ask once a machine of theirs joined the room
+and they have a thread box of their own there. The person whose agent it was, or the owner, can
+delete an answer like any reply. A thread deleted before the answer arrives gets nothing.
+
 ### Lines between cards
 
 Lines carry meaning. A note, task, link, comment, comment thread or artifact with a line into a thread box goes

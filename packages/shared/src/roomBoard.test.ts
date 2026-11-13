@@ -27,6 +27,7 @@ import {
   roomBoardCardIdentity,
   roomBoxExcerpt,
   roomBoxRequestOf,
+  roomCommentRequestOf,
 } from "./roomBoard.ts";
 
 describe("roomBoardWithCards", () => {
@@ -218,6 +219,43 @@ describe("applyRoomBoardChange", () => {
     expect(
       Result.getOrThrow(applyRoomBoardChange(both, scope, eve, reply("r1", "Again"), later)),
     ).toBe(both);
+    // Only the owner's server writes an agent's reply: a client's change that claims one is a
+    // plain reply of its sender.
+    const claimed = { ...reply("r9"), agent: { turnId: "run:9", boxId: "thread" } };
+    expect(applied(both, claimed as RoomBoardChange).notes[0]?.replies?.at(-1)).toEqual({
+      id: "r9",
+      text: "Yes",
+      guestId: sam,
+      at,
+    });
+    // Agents' answers, by whose agent: Eve's, and the owner's.
+    const answered: RoomBoard = {
+      ...both,
+      notes: both.notes.map((note) =>
+        note.id === "c"
+          ? {
+              ...note,
+              replies: [
+                ...(note.replies ?? []),
+                { id: "a1", text: "Done.", guestId: eve, at, agent: { turnId: "t1", boxId: "b" } },
+                { id: "a2", text: "Yes.", at, agent: { turnId: "t2", boxId: "thread" } },
+              ],
+            }
+          : note,
+      ),
+    };
+    const agentRows: ReadonlyArray<readonly [string, typeof sam | null, boolean]> = [
+      ["a1", eve, true],
+      ["a1", null, true],
+      ["a1", sam, false],
+      ["a2", null, true],
+      ["a2", eve, false],
+    ];
+    for (const [replyId, person, allowed] of agentRows) {
+      expect(
+        Result.isSuccess(applyRoomBoardChange(answered, scope, person, unreply(replyId), at)),
+      ).toBe(allowed);
+    }
 
     const rows: ReadonlyArray<readonly [RoomBoardChange, typeof sam | null, boolean]> = [
       [reply("r3"), sam, true],
@@ -365,6 +403,23 @@ describe("roomArtifactRequestOf", () => {
         shareId,
       ),
     ).toEqual({ noteId: "note:plan", boxId: "box:1" });
+    // The comment thread a message asked its agent to answer, of this share only.
+    const comment = (share: string) => ({
+      version: 1,
+      contextId: "room-comment_1",
+      kind: "room-comment",
+      label: "Reply in the comment thread",
+      shareId: share,
+      noteId: "note:ask",
+    });
+    const asked = [message({ records: [record(shareId), comment(shareId)] })];
+    expect(roomCommentRequestOf(asked, shareId)).toBe("note:ask");
+    expect(roomCommentRequestOf([message({ records: [comment("share:old")] })], shareId)).toBe(
+      undefined,
+    );
+    expect(roomCommentRequestOf([message({ records: [record(shareId)] })], shareId)).toBe(
+      undefined,
+    );
   });
 
   it("finds the thread box the owner's server marked a message for, and nothing else", () => {

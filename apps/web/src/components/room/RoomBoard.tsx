@@ -129,6 +129,9 @@ import {
   boardPinScale,
   boardPromptContext,
   boardThreadBoxes,
+  BOARD_COMMENT_ASK_TEXT,
+  boardCommentAskBoxes,
+  boardCommentPromptCard,
   boardUrlIn,
   boardViewportOf,
   canPromptBoardBox,
@@ -426,6 +429,7 @@ export function RoomBoard({
   ownerWritingArtifactId = null,
   needsApproval = false,
   renderBoxApproval,
+  askInComments = false,
 }: {
   readonly title: string;
   /** Null when the thread is not shared, so there is no room to arrange a board for. */
@@ -510,6 +514,11 @@ export function RoomBoard({
    * Absent, or null for a box: others see only that it waits.
    */
   readonly renderBoxApproval?: ((boxId: string) => ReactNode) | undefined;
+  /**
+   * The viewer's own boxes run on their own agent, so a comment thread can ask one to answer it
+   * through `onPromptBox`. Off for a guest whose box prompts wait for the owner.
+   */
+  readonly askInComments?: boolean | undefined;
 }) {
   const board = room?.board ?? EMPTY_ROOM_BOARD;
   const running = useRoomRunning();
@@ -1034,6 +1043,33 @@ export function RoomBoard({
     setDraftComment(null);
     return Promise.resolve(true);
   };
+  const askBoxes =
+    askInComments && canEdit && onPromptBox !== undefined
+      ? boardCommentAskBoxes(threadBoxes, viewer)
+      : [];
+  // The question goes in the thread as the asker's reply, then to the box with the whole thread.
+  const askInComment = async (note: RoomBoardNote, boxId: string, text: string) => {
+    if (onPromptBox === undefined) return false;
+    if (text !== "") {
+      const taken = await changeComment(note.id, {
+        type: "comment.reply",
+        noteId: note.id,
+        replyId: randomUUID(),
+        text,
+      });
+      if (!taken) return false;
+    }
+    // The board may not show the question yet, so the card adds it as the asker's.
+    const card = boardCommentPromptCard(note, people, text);
+    const sent = await onPromptBox(boxId, {
+      text: text === "" ? BOARD_COMMENT_ASK_TEXT : text,
+      cards: card === null ? [] : [card],
+      artifactId: null,
+      commentId: note.id,
+    });
+    // A question already in the thread leaves the field either way.
+    return sent || text !== "";
+  };
   const commentPanel = () => {
     if (openNote === null) return null;
     const pin = BOARD_PIN_SIZE * pinScale * view.zoom;
@@ -1050,7 +1086,9 @@ export function RoomBoard({
           width: pin,
           height: pin,
         }}
+        askBoxes={askBoxes}
         onSend={(text) => sendComment(openNote, text)}
+        onAsk={(boxId, text) => askInComment(openNote, boxId, text)}
         onRemoveReply={(replyId) =>
           void changeComment(openNote.id, {
             type: "comment.reply.remove",
