@@ -1907,7 +1907,7 @@ const make = Effect.gen(function* () {
       shareId,
       author,
       change:
-        change.type === "note.put"
+        change.type === "note.put" || change.type === "comment.reply"
           ? // Characters nobody can see have no place in text the whole room reads.
             { ...change, text: sanitizeLinkedPrompt(change.text).text }
           : change,

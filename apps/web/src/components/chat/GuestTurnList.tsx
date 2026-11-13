@@ -4,14 +4,17 @@ import {
   type ThreadGuestShare,
   type ThreadGuestTurn,
 } from "@t3tools/contracts";
+import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
 
 import { cn } from "~/lib/utils";
+
+import ChatMarkdown from "../ChatMarkdown";
 import { guestBubbleClassName } from "./guestMessageStyle";
 
 /**
  * Turns guests ran in their own T Code after joining from the room. They sit on the agent's
- * side with a guest's dashed edge, so no one reads them as the thread's own agent. Shown as plain
- * text: it comes from another machine.
+ * side with a guest's dashed edge, so no one reads them as the thread's own agent. The reply is
+ * markdown as an agent's is, without raw HTML: it comes from another machine.
  */
 export function GuestTurnList({
   roster,
@@ -50,9 +53,12 @@ export function GuestTurnList({
                   {turn.prompt}
                 </p>
               ) : null}
-              <p className="leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
-                {turn.reply}
-              </p>
+              <ChatMarkdown
+                text={turn.reply}
+                cwd={undefined}
+                lineBreaks={shouldPreserveAssistantLineBreaks(turn.reply)}
+                parseRawHtml={false}
+              />
               {turn.truncated === true ? (
                 <p className="text-2xs text-muted-foreground">Shortened for the room.</p>
               ) : null}

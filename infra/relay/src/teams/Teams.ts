@@ -742,14 +742,16 @@ const make = Effect.gen(function* () {
     function* (input) {
       const { change } = input;
       yield* requireMember(input.teamId, input.userId);
-      // Comments pin to one thread's replies, no agent runs a thread box or fills an artifact
-      // here, and a task here is always for a named member.
+      // Comments pin to one thread's replies or sit in a room with an owner to resolve them, no
+      // agent runs a thread box or fills an artifact here, and a task here is always for a named
+      // member.
       if (
         change.type === "artifact.restore" ||
         (change.type === "note.put" &&
           (change.pinnedTo !== undefined ||
             change.kind === "artifact" ||
             change.kind === "thread" ||
+            change.kind === "comment" ||
             (change.assignee !== undefined &&
               change.assignee !== null &&
               change.assignee.guestId === undefined)))
@@ -762,7 +764,7 @@ const make = Effect.gen(function* () {
         const stored = yield* readBoard(input.teamId);
         const version = stored?.version ?? 0;
         const current = roomBoardWithCards(stored?.board ?? EMPTY_ROOM_BOARD, scope.hasCard);
-        const applied = applyRoomBoardChange(current, scope, author, change);
+        const applied = applyRoomBoardChange(current, scope, author, change, yield* nowIso);
         if (Result.isFailure(applied)) {
           return yield* refuse(
             applied.failure === ROOM_BOARD_FULL ? "board_full" : "board_rejected",

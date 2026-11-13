@@ -3,6 +3,7 @@ import {
   ROOM_BOARD_MAX_ARTIFACTS,
   ROOM_BOARD_MAX_EDGES,
   ROOM_BOARD_MAX_NOTES,
+  ROOM_BOARD_MAX_REPLIES,
   ROOM_BOARD_MAX_THREADS,
   ROOM_BOX_CARD_LABELS_MAX,
   ROOM_BOX_CONTEXT_KIND,
@@ -31,6 +32,7 @@ import * as Schema from "effect/Schema";
 import { replaceComposerContextReferences } from "./composerContextReferences.ts";
 
 export const ROOM_BOARD_FULL = "This board has as many notes as it holds. Remove one first.";
+export const ROOM_COMMENT_THREAD_FULL = `A comment thread holds ${ROOM_BOARD_MAX_REPLIES} replies. Start a new one.`;
 
 export const EMPTY_ROOM_BOARD: RoomBoard = { positions: {}, notes: [] };
 
@@ -101,6 +103,7 @@ function putNote(
   author: GuestId | null,
   existing: RoomBoardNote | undefined,
   change: NotePut,
+  at: string,
 ): Result.Result<RoomBoardNote, string> {
   const kind = existing === undefined ? change.kind : existing.kind;
   // The server never fetches the address; clients open it only in a new tab.
@@ -132,6 +135,7 @@ function putNote(
       ...(change.pinnedTo === undefined || change.quote === undefined
         ? {}
         : { quote: change.quote }),
+      ...(kind === "comment" ? { createdAt: at } : {}),
     } satisfies RoomBoardNote);
   const { done: _done, assignee: _assignee, size: _size, ...rest } = base;
   const done = change.done ?? base.done === true;
@@ -181,16 +185,23 @@ export function canRestoreRoomArtifact(
   );
 }
 
+const withNote = (board: RoomBoard, note: RoomBoardNote, next: RoomBoardNote): RoomBoard => ({
+  ...board,
+  notes: board.notes.map((other) => (other === note ? next : other)),
+});
+
 /**
- * The board after one change by `author` (null for the room's owner), the same board when the
- * change does nothing, or why the board does not take it. The owner's server applies it to a
- * room's board and the relay to a team's, so both take and refuse the same changes.
+ * The board after one change by `author` (null for the room's owner) at `at` (the ISO time the
+ * server takes it, which signs a reply), the same board when the change does nothing, or why the
+ * board does not take it. The owner's server applies it to a room's board and the relay to a
+ * team's, so both take and refuse the same changes.
  */
 export function applyRoomBoardChange(
   board: RoomBoard,
   scope: RoomBoardScope,
   author: GuestId | null,
   change: RoomBoardChange,
+  at: string,
 ): Result.Result<RoomBoard, string> {
   switch (change.type) {
     case "card.move": {
@@ -234,7 +245,14 @@ export function applyRoomBoardChange(
       ) {
         return Result.fail("Only the owner and whoever added this thread box can rename it.");
       }
-      return Result.map(putNote(scope, author, existing, change), (note) => {
+      if (
+        existing?.kind === "comment" &&
+        change.text !== existing.text &&
+        !isRoomCardOwnedBy(existing, author)
+      ) {
+        return Result.fail("Only whoever started this comment thread, or the owner, can edit it.");
+      }
+      return Result.map(putNote(scope, author, existing, change, at), (note) => {
         if (existing === undefined) return { ...board, notes: [...board.notes, note] };
         // A note stays its author's whoever edits it.
         return sameNote(existing, note)
@@ -292,11 +310,47 @@ export function applyRoomBoardChange(
         );
       }
       const { previous, ...shown } = current;
-      const restored: RoomBoardNote = { ...note, artifact: { ...previous, previous: shown } };
-      return Result.succeed({
-        ...board,
-        notes: board.notes.map((other) => (other === note ? restored : other)),
-      });
+      return Result.succeed(
+        withNote(board, note, { ...note, artifact: { ...previous, previous: shown } }),
+      );
+    }
+    case "comment.reply": {
+      const note = board.notes.find((candidate) => candidate.id === change.noteId);
+      if (note?.kind !== "comment") return Result.fail("This comment thread is not on the board.");
+      const replies = note.replies ?? [];
+      if (replies.some((reply) => reply.id === change.replyId)) return Result.succeed(board);
+      const text = change.text.trim();
+      if (text === "") return Result.fail("A reply needs some text.");
+      if (replies.length >= ROOM_BOARD_MAX_REPLIES) return Result.fail(ROOM_COMMENT_THREAD_FULL);
+      const reply = {
+        id: change.replyId,
+        text,
+        ...(author === null ? {} : { guestId: author }),
+        at,
+      };
+      return Result.succeed(withNote(board, note, { ...note, replies: [...replies, reply] }));
+    }
+    case "comment.reply.remove": {
+      const note = board.notes.find((candidate) => candidate.id === change.noteId);
+      const reply = note?.replies?.find((candidate) => candidate.id === change.replyId);
+      if (note === undefined || reply === undefined) return Result.succeed(board);
+      if (!isRoomCardOwnedBy(reply, author)) {
+        return Result.fail("Only the owner and whoever wrote this reply can remove it.");
+      }
+      const { replies: _replies, ...rest } = note;
+      const kept = note.replies?.filter((candidate) => candidate !== reply) ?? [];
+      return Result.succeed(
+        withNote(board, note, kept.length === 0 ? rest : { ...rest, replies: kept }),
+      );
+    }
+    case "comment.resolve": {
+      const note = board.notes.find((candidate) => candidate.id === change.noteId);
+      if (note?.kind !== "comment") return Result.fail("This comment thread is not on the board.");
+      if ((note.resolved === true) === change.resolved) return Result.succeed(board);
+      const { resolved: _resolved, ...rest } = note;
+      return Result.succeed(
+        withNote(board, note, change.resolved ? { ...rest, resolved: true } : rest),
+      );
     }
   }
 }
@@ -419,9 +473,11 @@ export function roomBoardCardIdentity(
           ? `Task from ${by}`
           : note.kind === "link"
             ? `Link from ${by}`
-            : note.pinnedTo === undefined
-              ? `Note from ${by}`
-              : `Comment from ${by} on a reply`;
+            : note.kind === "comment"
+              ? `Comment thread from ${by}`
+              : note.pinnedTo === undefined
+                ? `Note from ${by}`
+                : `Comment from ${by} on a reply`;
   const writer = note.kind === "artifact" && note.artifact !== undefined ? note.artifact : note;
   const agent = writer !== note;
   const guestName = writer.guestId === undefined ? undefined : nameOf(writer.guestId);

@@ -4,16 +4,19 @@ import {
   type OrchestrationV2TurnItem,
   ROOM_ARTIFACT_MAX_LENGTH,
   ROOM_BOARD_MAX_ARTIFACTS,
+  ROOM_BOARD_MAX_REPLIES,
   ROOM_BOARD_MAX_THREADS,
-  type RoomBoard,
+  RoomBoard,
   type RoomBoardChange,
   type RoomBoardNote,
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   EMPTY_ROOM_BOARD,
+  ROOM_COMMENT_THREAD_FULL,
   type RoomBoardScope,
   applyRoomBoardChange,
   canRestoreRoomArtifact,
@@ -51,11 +54,14 @@ describe("roomBoardWithCards", () => {
   });
 });
 
+const decodeBoard = Schema.decodeUnknownSync(RoomBoard);
+
 describe("applyRoomBoardChange", () => {
   const scope: RoomBoardScope = { hasCard: (cardId) => cardId === "thread", hasPerson: () => true };
   const sam = GuestId.make("guest:sam");
+  const at = "2026-11-13T10:00:00.000Z";
   const apply = (board: RoomBoard, change: RoomBoardChange) =>
-    applyRoomBoardChange(board, scope, sam, change);
+    applyRoomBoardChange(board, scope, sam, change, at);
   const applied = (board: RoomBoard, change: RoomBoardChange) =>
     Result.getOrThrow(apply(board, change));
   const put = (
@@ -165,8 +171,109 @@ describe("applyRoomBoardChange", () => {
       [{ type: "edge.put", edgeId: "e", from: "note:sams", to: "note:box" }, eve, true],
     ];
     for (const [change, person, allowed] of rows) {
-      expect(Result.isSuccess(applyRoomBoardChange(board, scope, person, change))).toBe(allowed);
+      expect(Result.isSuccess(applyRoomBoardChange(board, scope, person, change, at))).toBe(
+        allowed,
+      );
     }
+  });
+
+  it("keeps a comment thread's replies, signed and timed by the board, for the room to resolve", () => {
+    const eve = GuestId.make("guest:eve");
+    const later = "2026-11-13T10:05:00.000Z";
+    // A board stored before comment threads had replies decodes as it did.
+    const board = decodeBoard({
+      positions: {},
+      notes: [
+        { id: "c", text: "Is this right?", x: 0, y: 0, guestId: sam, kind: "comment" },
+        { id: "note", text: "Hi", x: 0, y: 0 },
+        { id: "pinned", text: "Why?", x: 0, y: 0, pinnedTo: "message:1" },
+      ],
+    });
+    const reply = (replyId: string, text = "Yes", noteId = "c"): RoomBoardChange => ({
+      type: "comment.reply",
+      noteId,
+      replyId,
+      text,
+    });
+    const unreply = (replyId: string): RoomBoardChange => ({
+      type: "comment.reply.remove",
+      noteId: "c",
+      replyId,
+    });
+    const resolve = (resolved: boolean, noteId = "c"): RoomBoardChange => ({
+      type: "comment.resolve",
+      noteId,
+      resolved,
+    });
+    const byEve = Result.getOrThrow(
+      applyRoomBoardChange(board, scope, eve, reply("r1", " Yes "), at),
+    );
+    const both = Result.getOrThrow(
+      applyRoomBoardChange(byEve, scope, null, reply("r2", "Agreed"), later),
+    );
+    expect(both.notes[0]?.replies).toEqual([
+      { id: "r1", text: "Yes", guestId: eve, at },
+      { id: "r2", text: "Agreed", at: later },
+    ]);
+    expect(
+      Result.getOrThrow(applyRoomBoardChange(both, scope, eve, reply("r1", "Again"), later)),
+    ).toBe(both);
+
+    const rows: ReadonlyArray<readonly [RoomBoardChange, typeof sam | null, boolean]> = [
+      [reply("r3"), sam, true],
+      [reply("r3", "   "), sam, false],
+      [reply("r3", "Yes", "note"), sam, false],
+      [reply("r3", "Yes", "pinned"), sam, false],
+      [reply("r3", "Yes", "gone"), sam, false],
+      // A reply goes with its author or the owner, not with whoever started the thread.
+      [unreply("r1"), eve, true],
+      [unreply("r1"), null, true],
+      [unreply("r1"), sam, false],
+      [unreply("r2"), eve, false],
+      [resolve(true), eve, true],
+      [resolve(true, "note"), eve, false],
+      // The first comment is its author's to edit; anyone moves the pin.
+      [put("c", { text: "Edited" }), eve, false],
+      [put("c", { text: "Edited" }), sam, true],
+      [put("c", { text: "Is this right?", x: 40, y: 40 }), eve, true],
+      [{ type: "note.remove", noteId: "c" }, eve, false],
+      [{ type: "note.remove", noteId: "c" }, sam, true],
+    ];
+    for (const [change, person, allowed] of rows) {
+      expect(Result.isSuccess(applyRoomBoardChange(both, scope, person, change, at))).toBe(allowed);
+    }
+
+    const moved = applied(both, put("c", { text: "Is this right?", x: 40, y: 40 }));
+    expect(moved.notes[0]?.replies).toHaveLength(2);
+    const removed = Result.getOrThrow(applyRoomBoardChange(both, scope, eve, unreply("r1"), at));
+    expect(removed.notes[0]?.replies).toEqual([{ id: "r2", text: "Agreed", at: later }]);
+    expect(applied(both, unreply("gone"))).toBe(both);
+
+    const resolved = applied(both, resolve(true));
+    expect(resolved.notes[0]).toMatchObject({ resolved: true });
+    expect(applied(resolved, resolve(true))).toBe(resolved);
+    const reopened = applied(resolved, resolve(false));
+    expect(reopened.notes[0]).toStrictEqual(both.notes[0]);
+
+    // A new thread is timed by the board too.
+    expect(applied(EMPTY_ROOM_BOARD, put("new", { kind: "comment", text: "Hi" })).notes[0]).toEqual(
+      {
+        id: "new",
+        text: "Hi",
+        x: 0,
+        y: 0,
+        guestId: sam,
+        kind: "comment",
+        createdAt: at,
+      },
+    );
+
+    let full = both;
+    for (let index = 2; index < ROOM_BOARD_MAX_REPLIES; index++) {
+      full = applied(full, reply(`more-${index}`));
+    }
+    expect(full.notes[0]?.replies).toHaveLength(ROOM_BOARD_MAX_REPLIES);
+    expect(apply(full, reply("over"))).toStrictEqual(Result.fail(ROOM_COMMENT_THREAD_FULL));
   });
 
   it("swaps an artifact with the version it replaced, and back, for the people behind it", () => {
@@ -190,7 +297,7 @@ describe("applyRoomBoardChange", () => {
       ],
     };
     const restore = (noteId: string): RoomBoardChange => ({ type: "artifact.restore", noteId });
-    const restored = Result.getOrThrow(applyRoomBoardChange(board, scope, null, restore("a")));
+    const restored = Result.getOrThrow(applyRoomBoardChange(board, scope, null, restore("a"), at));
     expect(restored.notes[0]?.artifact).toStrictEqual({ ...first, previous: secondAlone });
     // Restoring again undoes the restore.
     expect(applied(restored, restore("a")).notes[0]?.artifact).toEqual(second);
@@ -218,7 +325,7 @@ describe("applyRoomBoardChange", () => {
     ];
     for (const [shared, person, allowed] of rows) {
       expect(canRestoreRoomArtifact(shared.notes[0]!, person)).toBe(allowed);
-      expect(Result.isSuccess(applyRoomBoardChange(shared, scope, person, restore("a")))).toBe(
+      expect(Result.isSuccess(applyRoomBoardChange(shared, scope, person, restore("a"), at))).toBe(
         allowed,
       );
     }
@@ -301,6 +408,11 @@ describe("roomBoardCardIdentity", () => {
     expect(roomBoardCardIdentity(note({ pinnedTo: "message:1" }), () => "Will").label).toBe(
       "Comment from Will on a reply",
     );
+    expect(roomBoardCardIdentity(note({ kind: "comment", guestId: sam }), names)).toEqual({
+      label: "Comment thread from Sam",
+      author: "guest",
+      name: "Sam",
+    });
     // An artifact's content is its last writer's agent's, whoever added the card.
     const filled = note({
       kind: "artifact",

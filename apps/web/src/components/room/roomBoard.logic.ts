@@ -462,14 +462,60 @@ export const boardCardBox = (at: BoardPoint, size?: RoomBoardSize): BoardBox => 
   width: size?.w ?? BOARD_CARD_WIDTH,
   headerY: 18,
 });
-export const boardNoteBox = (
+/** A comment thread's pin, in board pixels before `boardPinScale`. */
+export const BOARD_PIN_SIZE = 32;
+const PIN_MIN_ON_SCREEN = 24;
+const PIN_MAX_ON_SCREEN = 40;
+
+/** How much a pin is scaled so it stays 24 to 40 screen pixels across at any zoom. */
+export const boardPinScale = (zoom: number): number =>
+  Math.min(PIN_MAX_ON_SCREEN, Math.max(PIN_MIN_ON_SCREEN, BOARD_PIN_SIZE * zoom)) /
+  (BOARD_PIN_SIZE * zoom);
+
+/** Where a line meets a card or note. A comment pin's depends on the zoom it is drawn at. */
+export function boardNoteBox(
   note: BoardPoint & Partial<Pick<RoomBoardNote, "kind" | "size">>,
-): BoardBox => ({
-  x: note.x,
-  y: note.y,
-  width: boardNoteSize(note)?.w ?? NOTE_WIDTH,
-  headerY: 12,
-});
+  zoom = 1,
+): BoardBox {
+  if (note.kind === "comment") {
+    const size = BOARD_PIN_SIZE * boardPinScale(zoom);
+    return { x: note.x, y: note.y, width: size, headerY: size / 2 };
+  }
+  return { x: note.x, y: note.y, width: boardNoteSize(note)?.w ?? NOTE_WIDTH, headerY: 12 };
+}
+
+const BOARD_COMMENT_PANEL_WIDTH = 288;
+const PANEL_GAP = 8;
+
+/**
+ * Where an open comment thread sits on the board's surface, in screen pixels from its top-left:
+ * beside its pin, on whichever side has room, growing down from a pin in the top half and up from
+ * one in the bottom half, and never past the surface's edges.
+ */
+export function boardCommentPanelSpot(
+  pin: BoardRect,
+  area: BoardSize,
+): {
+  readonly left: number;
+  readonly top?: number;
+  readonly bottom?: number;
+  readonly maxHeight: number;
+} {
+  const width = BOARD_COMMENT_PANEL_WIDTH;
+  const right = pin.x + pin.width + PANEL_GAP;
+  const left =
+    right + width + PANEL_GAP <= area.width
+      ? right
+      : pin.x - PANEL_GAP - width >= PANEL_GAP
+        ? pin.x - PANEL_GAP - width
+        : Math.max(PANEL_GAP, Math.min(right, area.width - PANEL_GAP - width));
+  if (pin.y + pin.height / 2 <= area.height / 2) {
+    const top = Math.max(PANEL_GAP, pin.y);
+    return { left, top, maxHeight: area.height - top - PANEL_GAP };
+  }
+  const bottom = Math.max(PANEL_GAP, area.height - pin.y - pin.height);
+  return { left, bottom, maxHeight: area.height - bottom - PANEL_GAP };
+}
 
 type BoardSide = "left" | "right";
 const sideX = (box: BoardBox, side: BoardSide) => box.x + (side === "right" ? box.width : 0);
@@ -633,14 +679,28 @@ const replaceById = <Item extends { readonly id: string }>(
 
 const CARD_REF = roomBoardCardRef("");
 
-/** A note as this person edits it, with what only the owner's server writes taken from the room. */
+/**
+ * A note as this person edits it, with what only the owner's server writes, and what changes of
+ * their own set, taken from the room.
+ */
 const withServerFields = (note: RoomBoardNote, room: RoomBoardNote | undefined): RoomBoardNote => {
-  const { answer: _answer, artifact: _artifact, thread: _thread, ...own } = note;
+  const {
+    answer: _answer,
+    artifact: _artifact,
+    thread: _thread,
+    createdAt: _createdAt,
+    replies: _replies,
+    resolved: _resolved,
+    ...own
+  } = note;
   return {
     ...own,
     ...(room?.answer === undefined ? {} : { answer: room.answer }),
     ...(room?.artifact === undefined ? {} : { artifact: room.artifact }),
     ...(room?.thread === undefined ? {} : { thread: room.thread }),
+    ...(room?.createdAt === undefined ? {} : { createdAt: room.createdAt }),
+    ...(room?.replies === undefined ? {} : { replies: room.replies }),
+    ...(room?.resolved === undefined ? {} : { resolved: room.resolved }),
   };
 };
 
@@ -1122,6 +1182,33 @@ const sharedPersonName = (people: BoardPeople, guestId: string | undefined): str
 
 const EXCERPT_CHIP_LENGTH = 80;
 
+/**
+ * A comment thread as a prompt carries it: each comment on a line of its own after its author's
+ * name, as everyone reads it. A thread too long for one card keeps its first comment and its
+ * newest replies, and says how many it left out.
+ */
+function commentThreadText(note: RoomBoardNote, people: BoardPeople): string {
+  const said = [{ guestId: note.guestId, text: note.text }, ...(note.replies ?? [])]
+    .filter((comment) => comment.text.trim() !== "")
+    .map(
+      (comment) =>
+        `${sentenceStart(sharedPersonName(people, comment.guestId))}: ${comment.text.trim()}`,
+    );
+  const [first, ...replies] = said;
+  if (first === undefined) return "";
+  const marker = (left: number) => `(${left} earlier ${left === 1 ? "reply" : "replies"} left out)`;
+  const room = PROMPT_ARTIFACT_LENGTH - first.length - marker(replies.length).length - 2;
+  const kept: Array<string> = [];
+  let used = 0;
+  for (const reply of replies.toReversed()) {
+    if (used + reply.length + 1 > room) break;
+    kept.unshift(reply);
+    used += reply.length + 1;
+  }
+  const left = replies.length - kept.length;
+  return [first, ...(left === 0 ? [] : [marker(left)]), ...kept].join("\n");
+}
+
 /** A card as a message from the board carries it, or null for one with nothing written. */
 function boardPromptCard(
   note: RoomBoardNote,
@@ -1138,6 +1225,8 @@ function boardPromptCard(
         return `Task from ${by}`;
       case "link":
         return `Link from ${by}`;
+      case "comment":
+        return `Comment thread from ${by}`;
       default:
         return comment ? `Comment from ${by} on a reply` : `Note from ${by}`;
     }
@@ -1153,9 +1242,11 @@ function boardPromptCard(
           : `${text}\nStatus: ${note.done === true ? "done" : "not done"}`
         : note.kind === "link"
           ? [note.url ?? "", text].filter(Boolean).join("\n")
-          : comment && text !== "" && quote !== undefined
-            ? `On the reply: "${quote}"\n${text}`
-            : text;
+          : note.kind === "comment"
+            ? commentThreadText(note, people)
+            : comment && text !== "" && quote !== undefined
+              ? `On the reply: "${quote}"\n${text}`
+              : text;
   if (body.trim() === "") return null;
   const said = (text === "" ? (note.url ?? "") : text).split("\n")[0] ?? "";
   return {

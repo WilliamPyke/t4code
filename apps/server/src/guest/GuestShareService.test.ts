@@ -466,6 +466,19 @@ it.effect("lets the owner and each guest change the board everyone on the link s
       { type: "card.move", cardId: "thread", x: 40, y: 80 },
     );
     assert.deepEqual((yield* Queue.take(boards)).positions, { thread: { x: 40, y: 80 } });
+    // A reply on a comment thread is signed and cleaned the same way.
+    yield* guestShares.changeBoard(
+      { session: sam.token },
+      { type: "note.put", noteId: "talk", text: "Ship it?", x: 0, y: 0, kind: "comment" },
+    );
+    yield* Queue.take(boards);
+    yield* guestShares.changeBoard(
+      { session: eve.token },
+      { type: "comment.reply", noteId: "talk", replyId: "reply:1", text: "Not​ yet" },
+    );
+    const [reply] = (yield* Queue.take(boards)).notes.at(-1)?.replies ?? [];
+    assert.deepInclude(reply, { id: "reply:1", text: "Not yet" });
+    assert.notEqual(reply?.guestId, samId);
 
     // Only a guest's session writes: not the invite, and not the token their own machine holds.
     const remove = { type: "note.remove", noteId: "note:1" } as const;

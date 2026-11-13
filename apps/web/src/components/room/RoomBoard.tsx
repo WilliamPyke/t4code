@@ -7,6 +7,7 @@ import {
   ROOM_BOARD_NOTE_MAX_LENGTH,
   ROOM_BOARD_ROOM_BOX,
   ROOM_BOARD_THREAD_CARD,
+  ROOM_BOX_REPLY_MAX_LENGTH,
   type RoomAgentActivity,
   type RoomBoardAssignee,
   type RoomBoardChange,
@@ -26,10 +27,12 @@ import {
   AppWindowIcon,
   ArrowLeftIcon,
   BotIcon,
+  CircleCheckIcon,
   ExternalLinkIcon,
   GitBranchIcon,
   LinkIcon,
   ListTodoIcon,
+  MessageCirclePlusIcon,
   MessageSquareShareIcon,
   MessageSquareTextIcon,
   MessagesSquareIcon,
@@ -54,7 +57,11 @@ import {
   useState,
 } from "react";
 
-import { canRestoreRoomArtifact, isRoomCardOwnedBy } from "@t3tools/shared/roomBoard";
+import {
+  canRestoreRoomArtifact,
+  isRoomCardOwnedBy,
+  roomBoxExcerpt,
+} from "@t3tools/shared/roomBoard";
 
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { observeResize } from "~/lib/observeResize";
@@ -70,6 +77,7 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   BOARD_CARD_WIDTH,
+  BOARD_PIN_SIZE,
   type BoardArea,
   type BoardBox,
   type BoardMessage,
@@ -114,6 +122,7 @@ import {
   boardOwnBoxFor,
   boardPersonKey,
   boardPersonName,
+  boardPinScale,
   boardPromptContext,
   boardThreadBoxes,
   boardUrlIn,
@@ -140,6 +149,7 @@ import {
   zoomBoardAt,
 } from "./roomBoard.logic";
 import { RoomArtifactLive } from "./RoomBoardArtifact";
+import { CommentPin, CommentThreadPanel } from "./RoomBoardComments";
 import { BoardPromptBox } from "./RoomBoardPrompt";
 import { BoxProgress, BoxRequests, BoxTurns } from "./RoomBoardThreadBox";
 import { useBoxProgress, useRoomHasProgress, useRoomRunning } from "./roomBoardLive";
@@ -499,6 +509,14 @@ export function RoomBoard({
   const [linkDraft, setLinkDraft] = useState<string | null>(null);
   const [following, setFollowing] = useState<{ person: string; seen: boolean } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Choosing Comment, then pressing the board, starts a thread there.
+  const [placingComment, setPlacingComment] = useState(false);
+  const [openComment, setOpenComment] = useState<string | null>(null);
+  // A thread started here and not written yet: only this person sees it, and closing drops it.
+  const [draftComment, setDraftComment] = useState<(BoardPoint & { readonly id: string }) | null>(
+    null,
+  );
+  const [showResolved, setShowResolved] = useState(false);
   const sendCursor = useStableCallback((presence: BoardPresence) => onCursor?.(presence));
   const [cursor] = useState(() => cursorSender(sendCursor));
   const pointing = onCursor !== undefined;
@@ -536,6 +554,11 @@ export function RoomBoard({
     const surface = surfaceRef.current;
     if (surface === null) return;
     const onWheel = (event: WheelEvent) => {
+      // An open comment thread scrolls itself, and is never zoomed with the board.
+      if (event.target instanceof Element && event.target.closest("[data-board-overlay]")) {
+        if (event.ctrlKey || event.metaKey) event.preventDefault();
+        return;
+      }
       if (!event.ctrlKey && !event.metaKey && scrollsInside(event)) return;
       event.preventDefault();
       const area = boardAreaOf(surface);
@@ -603,11 +626,34 @@ export function RoomBoard({
     shown.sizes,
   );
   const sizes = shown.sizes ?? {};
+  const commentNotes = shown.notes.filter((note) => note.kind === "comment");
+  const resolvedComments = commentNotes.filter((note) => note.resolved === true).length;
+  // Resolved threads are hidden until someone asks for them; an open one stays while it is open.
+  const hiddenComment = (note: RoomBoardNote) =>
+    note.kind === "comment" && note.resolved === true && !showResolved && note.id !== openComment;
+  const draftNote: RoomBoardNote | null =
+    draftComment === null
+      ? null
+      : {
+          ...draftComment,
+          text: "",
+          kind: "comment",
+          ...(viewer === null ? {} : { guestId: viewer }),
+        };
+  const openNote =
+    openComment === null
+      ? null
+      : draftNote?.id === openComment
+        ? draftNote
+        : (commentNotes.find((note) => note.id === openComment) ?? null);
+  const pinScale = boardPinScale(view.zoom);
   const boxes = new Map<string, BoardBox>([
     ...Object.entries(positions).map(
       ([id, at]) => [cardRef(id), boardCardBox(at, sizes[id])] as const,
     ),
-    ...shown.notes.map((note) => [noteRef(note.id), boardNoteBox(note)] as const),
+    ...shown.notes
+      .filter((note) => !hiddenComment(note))
+      .map((note) => [noteRef(note.id), boardNoteBox(note, view.zoom)] as const),
   ]);
   const threadBoxes = cards === undefined ? boardThreadBoxes(shown, title) : [];
   const contexts = new Map(
@@ -718,6 +764,7 @@ export function RoomBoard({
     onUseNote === undefined ||
     note.kind === "artifact" ||
     note.kind === "thread" ||
+    note.kind === "comment" ||
     boardNoteMessage(note).trim() === ""
       ? undefined
       : () => onUseNote(boardNoteMessage(note));
@@ -727,6 +774,7 @@ export function RoomBoard({
     note.kind === "task" ||
     note.kind === "artifact" ||
     note.kind === "thread" ||
+    note.kind === "comment" ||
     boardNoteMessage(note).trim() === ""
       ? undefined
       : () => onGiveNote(note);
@@ -907,6 +955,94 @@ export function RoomBoard({
     send({ kind: "edge", id }, { id, from, to });
   };
   const link = canEdit ? { onStart: startLink, onMove: moveLink, onEnd: endLink } : undefined;
+
+  const closeComment = () => {
+    setOpenComment(null);
+    setDraftComment(null);
+  };
+  const startComment = () => {
+    closeComment();
+    setPlacingComment((placing) => !placing);
+    // Escape on the board stops placing.
+    surfaceRef.current?.focus({ preventScroll: true });
+  };
+  const placeComment = (event: PointerEvent<HTMLElement>) => {
+    event.stopPropagation();
+    setPlacingComment(false);
+    const at = pointerOnBoard(event);
+    if (at === null || !canEdit || full) return;
+    const half = (BOARD_PIN_SIZE * pinScale) / 2;
+    const id = randomUUID();
+    setDraftComment({ id, ...settleBoardValue({ x: at.x - half, y: at.y - half }) });
+    setOpenComment(id);
+  };
+  const dragPin = (note: RoomBoardNote, dx: number, dy: number) =>
+    dragBy({ kind: "note", id: note.id }, note, dx, dy);
+  const dropPin = (note: RoomBoardNote) => letGo({ kind: "note", id: note.id });
+  const togglePin = (note: RoomBoardNote) => {
+    setDraftComment(null);
+    setOpenComment((open) => (open === note.id ? null : note.id));
+  };
+  const changeComment = (noteId: string, change: RoomBoardChange) =>
+    onChange === undefined
+      ? Promise.resolve(false)
+      : queueChange(noteRef(noteId), () => onChange(change));
+  const sendComment = (note: RoomBoardNote, text: string) => {
+    if (note.id !== draftNote?.id) {
+      return changeComment(note.id, {
+        type: "comment.reply",
+        noteId: note.id,
+        replyId: randomUUID(),
+        text,
+      });
+    }
+    send({ kind: "note", id: note.id }, settleBoardValue({ ...note, text }));
+    setDraftComment(null);
+    return Promise.resolve(true);
+  };
+  const commentPanel = () => {
+    if (openNote === null) return null;
+    const pin = BOARD_PIN_SIZE * pinScale * view.zoom;
+    return (
+      <CommentThreadPanel
+        key={openNote.id}
+        note={openNote}
+        people={people}
+        draft={openNote === draftNote}
+        canEdit={canEdit}
+        pin={{
+          x: view.x + openNote.x * view.zoom,
+          y: view.y + openNote.y * view.zoom,
+          width: pin,
+          height: pin,
+        }}
+        onSend={(text) => sendComment(openNote, text)}
+        onRemoveReply={(replyId) =>
+          void changeComment(openNote.id, {
+            type: "comment.reply.remove",
+            noteId: openNote.id,
+            replyId,
+          })
+        }
+        onResolve={(resolved) =>
+          void changeComment(openNote.id, {
+            type: "comment.resolve",
+            noteId: openNote.id,
+            resolved,
+          })
+        }
+        onDelete={
+          canEdit && isRoomCardOwnedBy(openNote, viewer)
+            ? () => {
+                closeComment();
+                send({ kind: "note", id: openNote.id }, null);
+              }
+            : undefined
+        }
+        onClose={closeComment}
+      />
+    );
+  };
   const resize: CardResize | undefined = canEdit
     ? { onResize: resizeCard, onEnd: endCardResize }
     : undefined;
@@ -1129,6 +1265,29 @@ export function RoomBoard({
                 Artifact
               </Button>
             ) : null}
+            {cards === undefined ? (
+              <Button
+                size="sm"
+                variant={placingComment ? "secondary" : "outline"}
+                aria-pressed={placingComment}
+                disabled={!canEdit || full}
+                onClick={startComment}
+              >
+                <MessageCirclePlusIcon />
+                Comment
+              </Button>
+            ) : null}
+            {resolvedComments === 0 ? null : (
+              <Button
+                size="sm"
+                variant={showResolved ? "secondary" : "ghost"}
+                aria-pressed={showResolved}
+                onClick={() => setShowResolved((shown) => !shown)}
+              >
+                <CircleCheckIcon />
+                Resolved ({resolvedComments})
+              </Button>
+            )}
           </>
         ) : (
           <form
@@ -1204,7 +1363,13 @@ export function RoomBoard({
           // A menu opened from a card is portalled elsewhere, but React still bubbles its events here.
           if (event.target instanceof Node && !event.currentTarget.contains(event.target)) return;
           setSelectedEdge(null);
+          if (openComment !== null) closeComment();
           pan.onPointerDown(event);
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "Escape") return;
+          if (placingComment) setPlacingComment(false);
+          else if (openComment !== null) closeComment();
         }}
         onPointerMove={(event) => {
           pan.onPointerMove(event);
@@ -1441,8 +1606,8 @@ export function RoomBoard({
                         {latest.prompt}
                       </p>
                     ) : null}
-                    <p className="line-clamp-6 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
-                      {latest.reply}
+                    <p className="line-clamp-6 text-xs [overflow-wrap:anywhere]">
+                      {roomBoxExcerpt(latest.reply, ROOM_BOX_REPLY_MAX_LENGTH)}
                     </p>
                   </>
                 ) : null}
@@ -1451,6 +1616,7 @@ export function RoomBoard({
             );
           })}
           {shown.notes.map((note) => {
+            if (note.kind === "comment") return null;
             const box =
               note.kind === "thread" && cards === undefined
                 ? boxParts(
@@ -1511,6 +1677,25 @@ export function RoomBoard({
               />
             );
           })}
+          {[...commentNotes, ...(draftNote === null ? [] : [draftNote])].map((note) =>
+            hiddenComment(note) ? null : (
+              <CommentPin
+                key={note.id}
+                note={note}
+                people={people}
+                open={openComment === note.id}
+                scale={pinScale}
+                itemRef={noteRef(note.id)}
+                handle={
+                  note === draftNote ? null : <PinLinkHandle from={noteRef(note.id)} link={link} />
+                }
+                movable={canEdit && note !== draftNote}
+                onDrag={dragPin}
+                onDrop={dropPin}
+                onToggle={togglePin}
+              />
+            ),
+          )}
           {edges.map((edge) => {
             const from = boxes.get(edge.from);
             const to = boxes.get(edge.to);
@@ -1541,6 +1726,15 @@ export function RoomBoard({
           })}
           <BoardFollowContext value={follow}>{cursorLayer}</BoardFollowContext>
         </div>
+        {placingComment ? (
+          <div
+            aria-hidden
+            data-board-overlay
+            className="absolute inset-0 z-20 cursor-crosshair"
+            onPointerDown={placeComment}
+          />
+        ) : null}
+        {commentPanel()}
         {cards === undefined && room !== null ? <LineLegend /> : null}
         {room === null ? (
           <p className="pointer-events-none absolute inset-x-0 bottom-6 text-center text-sm text-muted-foreground">
@@ -1601,22 +1795,46 @@ interface CardResize {
   readonly onEnd: (id: string, corner: BoardCorner) => void;
 }
 
-/** What the coloured lines do, said where people see them. */
+/**
+ * What the coloured lines do, said where people see them. Folded away until asked for, so it never
+ * covers a card.
+ */
 function LineLegend() {
+  const [open, setOpen] = useState(false);
+  const id = useId();
   return (
-    <div className="pointer-events-none absolute bottom-3 left-3 flex flex-col gap-1 rounded-md border border-border bg-card/90 px-2 py-1.5 text-2xs text-muted-foreground">
-      <span className="flex items-center gap-1.5">
-        <span aria-hidden className="h-0.5 w-4 rounded-full bg-info" />
-        Into a thread, or into the artifact it rewrites: goes with its prompts
-      </span>
-      <span className="flex items-center gap-1.5">
-        <span aria-hidden className="h-0.5 w-4 rounded-full bg-success" />
-        From a thread to an artifact: its replies rewrite it
-      </span>
-      <span className="flex items-center gap-1.5">
-        <span aria-hidden className="h-0.5 w-4 rounded-full bg-muted-foreground" />
-        Any other line: only shows a link
-      </span>
+    <div
+      className="absolute bottom-3 left-3 flex flex-col items-start gap-1"
+      onPointerDown={stopPointer}
+    >
+      {open ? (
+        <div
+          id={id}
+          className="flex flex-col gap-1 rounded-md border border-border bg-card/90 px-2 py-1.5 text-2xs text-muted-foreground"
+        >
+          <span className="flex items-center gap-1.5">
+            <span aria-hidden className="h-0.5 w-4 rounded-full bg-info" />
+            Into a thread, or into the artifact it rewrites: goes with its prompts
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span aria-hidden className="h-0.5 w-4 rounded-full bg-success" />
+            From a thread to an artifact: its replies rewrite it
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span aria-hidden className="h-0.5 w-4 rounded-full bg-muted-foreground" />
+            Any other line: only shows a link
+          </span>
+        </div>
+      ) : null}
+      <Button
+        size="micro"
+        variant="outline"
+        aria-expanded={open}
+        aria-controls={open ? id : undefined}
+        onClick={() => setOpen((shown) => !shown)}
+      >
+        {open ? "Hide lines" : "Lines"}
+      </Button>
     </div>
   );
 }
@@ -1633,8 +1851,11 @@ function LinkHandle({
 }: {
   readonly from: string;
   readonly link: LinkHandlers;
-  /** A card's header is taller than a note's; the grip sits level with its middle. */
-  readonly on: "card" | "note";
+  /**
+   * A card's header is taller than a note's; the grip sits level with its middle. A pin's sits
+   * just outside it, so the pin itself stays easy to press.
+   */
+  readonly on: "card" | "note" | "pin";
   readonly side: BoardCorner;
 }) {
   return (
@@ -1646,8 +1867,8 @@ function LinkHandle({
             aria-label={side === "right" ? "Draw a line" : "Draw a line from the left"}
             className={cn(
               "group/link absolute z-10 grid size-6 cursor-crosshair touch-none place-items-center",
-              side === "right" ? "-right-3" : "-left-3",
-              on === "card" ? "top-1.5" : "top-0",
+              on === "pin" ? "-right-7" : side === "right" ? "-right-3" : "-left-3",
+              on === "card" ? "top-1.5" : on === "pin" ? "top-1" : "top-0",
             )}
             onPointerDown={(event) => link.onStart(from, event)}
             onPointerMove={link.onMove}
@@ -1661,6 +1882,17 @@ function LinkHandle({
       <TooltipPopup side={side}>Drag to another card to draw a line</TooltipPopup>
     </Tooltip>
   );
+}
+
+/** The grip a line is drawn from on a comment pin, for whoever may edit the board. */
+function PinLinkHandle({
+  from,
+  link,
+}: {
+  readonly from: string;
+  readonly link: LinkHandlers | undefined;
+}) {
+  return link === undefined ? null : <LinkHandle from={from} link={link} on="pin" side="right" />;
 }
 
 /** Both side grips and both bottom corners of a card or note, for whoever may edit the board. */

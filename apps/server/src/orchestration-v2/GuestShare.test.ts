@@ -1043,7 +1043,36 @@ it.effect("keeps tasks, links, comments and arrows on the board, checked by the 
     );
     assert.isUndefined(trimmed?.notes.find((note) => note.id === "owner-task")?.assignee);
 
-    // A removed guest's cards, comments and arrows go; tasks they had are left with no one.
+    // Anyone in the room replies on a comment thread. The server signs and times each reply,
+    // whatever the client sent.
+    yield* change(sam, put("talk", { kind: "comment", text: "Ship it?" }));
+    const forged = decodeChange({
+      type: "comment.reply",
+      noteId: "talk",
+      replyId: "reply:alex",
+      text: "Not yet",
+      guestId: sam,
+      at: "2000-01-01T00:00:00.000Z",
+    });
+    yield* change(alex, Option.getOrThrow(forged));
+    yield* change(sam, {
+      type: "comment.reply",
+      noteId: "talk",
+      replyId: "reply:sam",
+      text: "Why?",
+    });
+    const now = DateTime.formatIso(yield* DateTime.now);
+    const repliesOf = Effect.map(
+      board,
+      ({ board }) => board?.notes.find((note) => note.id === "talk")?.replies,
+    );
+    assert.deepEqual(yield* repliesOf, [
+      { id: "reply:alex", text: "Not yet", guestId: alex, at: now },
+      { id: "reply:sam", text: "Why?", guestId: sam, at: now },
+    ]);
+
+    // A removed guest's cards, comments, replies and arrows go; tasks they had are left with no
+    // one.
     yield* change(sam, arrow("a6", "note:task", `card:guest:${alex}`));
     yield* orchestrator.dispatch({
       type: "thread.guest.remove",
@@ -1054,8 +1083,9 @@ it.effect("keeps tasks, links, comments and arrows on the board, checked by the 
     const after = (yield* board).board;
     assert.deepEqual(
       after?.notes.map((note) => note.id),
-      ["task", "owner-task"],
+      ["task", "owner-task", "talk"],
     );
+    assert.deepEqual(yield* repliesOf, [{ id: "reply:sam", text: "Why?", guestId: sam, at: now }]);
     assert.isUndefined(after?.notes[0]?.assignee);
     assert.deepEqual(after?.edges, []);
   }).pipe(Effect.provide(layerTest)),

@@ -3,7 +3,9 @@ import {
   GuestMessageId,
   ROOM_BOARD_MAX_CARD_SIZE,
   ROOM_BOARD_MAX_COORDINATE,
+  ROOM_BOARD_MAX_REPLIES,
   ROOM_BOARD_MIN_CARD_SIZE,
+  ROOM_BOARD_NOTE_MAX_LENGTH,
   ROOM_BOARD_QUOTE_MAX_LENGTH,
   type RoomBoard,
   type RoomBoardNote,
@@ -35,6 +37,7 @@ import {
   boardCardBox,
   boardChangeOf,
   boardChangeQueue,
+  boardCommentPanelSpot,
   boardConnector,
   boardCursorAt,
   boardCursorColor,
@@ -45,6 +48,7 @@ import {
   boardNoteBox,
   boardOwnBoxFor,
   boardPanelMaxWidth,
+  boardPinScale,
   boardProgressLine,
   boardProgressPhase,
   boardPromptContext,
@@ -333,6 +337,23 @@ describe("resolveBoard", () => {
       ...box,
       text: "Pricing",
       thread,
+    });
+    // A comment thread keeps the replies and the resolving that land while its pin is dragged.
+    const pin = { id: "a", text: "Ship it?", x: 0, y: 0, kind: "comment" as const };
+    const dragging = putBoardEdit(
+      { positions: {}, notes: [pin] },
+      NO_BOARD_EDITS,
+      target,
+      { ...pin, x: 40 },
+      true,
+    );
+    const replies = [{ id: "r", text: "Not yet", at: "2026-11-13T00:00:00.000Z" }];
+    const answered: RoomBoard = { positions: {}, notes: [{ ...pin, replies, resolved: true }] };
+    expect(resolveBoard(answered, dragging).notes[0]).toEqual({
+      ...pin,
+      x: 40,
+      replies,
+      resolved: true,
     });
   });
 
@@ -820,6 +841,60 @@ describe("boardPromptContext", () => {
     expect(context.artifactEdgeId).toBe("card:thread>note:empty");
   });
 
+  it("carries a comment thread whole, each comment as its author's, the newest that fit", () => {
+    const reply = (id: string, text: string, guestId?: GuestId) => ({
+      id,
+      text,
+      at: "2026-11-13T00:00:00.000Z",
+      ...(guestId === undefined ? {} : { guestId }),
+    });
+    const talk = note("talk", {
+      text: "Ship it?",
+      kind: "comment",
+      guestId: sam,
+      resolved: true,
+      replies: [reply("r1", "Not yet\nTests fail"), reply("r2", "Fixed", sam)],
+    });
+    const context = boardPromptContext(board([talk], [arrow("note:talk", "card:thread")]), {
+      ...people,
+      viewer: sam,
+    });
+    expect(
+      context.cards.map(({ label, sharedLabel, text, excerpt }) => ({
+        label,
+        sharedLabel,
+        text,
+        excerpt,
+      })),
+    ).toEqual([
+      {
+        label: "Comment thread from You",
+        sharedLabel: "Comment thread from Sam",
+        text: "Sam: Ship it?\nThe owner: Not yet\nTests fail\nSam: Fixed",
+        excerpt: "Ship it?",
+      },
+    ]);
+    // A long thread keeps its first comment and its newest replies, and says what it left out.
+    const long = "x".repeat(ROOM_BOARD_NOTE_MAX_LENGTH);
+    const full = note("talk", {
+      text: "Ship it?",
+      kind: "comment",
+      replies: Array.from({ length: ROOM_BOARD_MAX_REPLIES }, (_, index) =>
+        reply(`r${index}`, `${index} ${long}`),
+      ),
+    });
+    const [cut] = boardPromptContext(
+      board([full], [arrow("note:talk", "card:thread")]),
+      people,
+    ).cards;
+    const lines = cut?.text.split("\n") ?? [];
+    expect(cut?.text.length).toBeLessThanOrEqual(4_000);
+    expect(lines[0]).toBe("The owner: Ship it?");
+    expect(lines[1]).toMatch(/^\(\d+ earlier replies left out\)$/);
+    expect(lines.at(-1)).toBe(`The owner: ${ROOM_BOARD_MAX_REPLIES - 1} ${long}`);
+    expect(Number(/\d+/.exec(lines[1] ?? "")?.[0]) + lines.length - 2).toBe(ROOM_BOARD_MAX_REPLIES);
+  });
+
   it("carries the cards into any box and into the artifact it rewrites, never thread boxes", () => {
     const shared = board(
       [
@@ -1204,5 +1279,43 @@ describe("the visible board area", () => {
     expect(boardPanelMaxWidth(1_018)).toBe(509 - BOARD_SPLIT_DIVIDER);
     expect(boardPanelMaxWidth(1_600)).toBe(800 - BOARD_SPLIT_DIVIDER);
     expect(boardPanelMaxWidth(700)).toBe(320);
+  });
+});
+
+describe("comment pins", () => {
+  it("stay a readable size on screen at any zoom", () => {
+    const rows: ReadonlyArray<readonly [number, number]> = [
+      [1, 32],
+      [BOARD_MIN_ZOOM, 24],
+      [0.5, 24],
+      [1.2, 38.4],
+      [BOARD_MAX_ZOOM, 40],
+    ];
+    for (const [zoom, onScreen] of rows) {
+      expect(32 * boardPinScale(zoom) * zoom).toBeCloseTo(onScreen);
+    }
+    // A line meets a pin at the middle of its side, at the size it is drawn.
+    const pin = { x: 10, y: 20, kind: "comment" as const };
+    expect(boardNoteBox(pin, BOARD_MIN_ZOOM)).toEqual({ x: 10, y: 20, width: 120, headerY: 60 });
+  });
+
+  it("opens a thread beside its pin, inside the board and never over the pin", () => {
+    const area = { width: 800, height: 600 };
+    const pin = (x: number, y: number) => ({ x, y, width: 32, height: 32 });
+    const rows = [
+      // Room on the right, in the top half: below the pin's top, to the right.
+      [pin(100, 100), { left: 140, top: 100, maxHeight: 492 }],
+      // No room on the right: to the left.
+      [pin(700, 100), { left: 692 - 288, top: 100, maxHeight: 492 }],
+      // In the bottom half: it grows up from the pin's bottom.
+      [pin(100, 500), { left: 140, bottom: 68, maxHeight: 524 }],
+      // Above the top edge, it stays inside the board.
+      [pin(100, -50), { left: 140, top: 8, maxHeight: 584 }],
+    ] as const;
+    for (const [rect, spot] of rows) {
+      expect(boardCommentPanelSpot(rect, area)).toEqual(spot);
+    }
+    // Too narrow for either side: inside the board, even if over the pin.
+    expect(boardCommentPanelSpot(pin(100, 100), { width: 300, height: 600 }).left).toBe(8);
   });
 });

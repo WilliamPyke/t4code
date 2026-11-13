@@ -479,6 +479,7 @@ describe("Teams", () => {
         { pinnedTo: "message-1" },
         { kind: "artifact" as const },
         { kind: "thread" as const },
+        { kind: "comment" as const },
       ]) {
         expect(yield* refused("ann", note("other", fields))).toMatchObject(
           refusal("board_rejected"),

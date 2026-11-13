@@ -157,8 +157,8 @@ const roomScope = (share: ThreadGuestShare): RoomBoardScope => ({
 });
 
 /**
- * The board without a removed guest's notes, cards and the arrows that touched them. Tasks they
- * were given are left with no one, and lose their agent's answers.
+ * The board without a removed guest's notes, replies, cards and the arrows that touched them.
+ * Tasks they were given are left with no one, and lose their agent's answers.
  */
 function boardWithoutGuest(board: RoomBoard, guestId: GuestId): RoomBoard {
   const withoutCards = roomBoardWithoutCards(board, [
@@ -175,13 +175,18 @@ function boardWithoutGuest(board: RoomBoard, guestId: GuestId): RoomBoard {
       ...withoutCards,
       notes: board.notes.flatMap((note) => {
         if (note.guestId === guestId) return [];
-        if (note.assignee?.guestId !== guestId && note.answer?.guestId !== guestId) return [note];
-        const { assignee, answer, ...rest } = note;
+        const theirs = note.replies?.some((reply) => reply.guestId === guestId) === true;
+        if (!theirs && note.assignee?.guestId !== guestId && note.answer?.guestId !== guestId) {
+          return [note];
+        }
+        const { assignee, answer, replies, ...rest } = note;
+        const kept = replies?.filter((reply) => reply.guestId !== guestId) ?? [];
         return [
           {
             ...rest,
             ...(assignee === undefined || assignee.guestId === guestId ? {} : { assignee }),
             ...(answer === undefined || answer.guestId === guestId ? {} : { answer }),
+            ...(kept.length === 0 ? {} : { replies: kept }),
           },
         ];
       }),
@@ -605,7 +610,13 @@ export function decideGuestShareCommand(input: {
       const before = share.board ?? EMPTY_ROOM_BOARD;
       // A removed thread box forgets its thread, which stays the owner's.
       return Result.map(
-        applyRoomBoardChange(before, roomScope(share), command.author, command.change),
+        applyRoomBoardChange(
+          before,
+          roomScope(share),
+          command.author,
+          command.change,
+          DateTime.formatIso(now),
+        ),
         (board) =>
           board === before
             ? thread

@@ -95,9 +95,24 @@ tool, writing its reply, or waiting for whoever runs it to approve something. An
 fills shows the reply as it is written, a few seconds behind for a box on a guest's machine.
 Removing a box leaves its thread where it is. A board holds up to 12 thread boxes.
 
+### Comment threads
+
+To talk about something on the board, choose **Comment**, click where the comment belongs, write
+it and press Enter. It shows as a pin with your initial; click a pin to open its thread, where
+anyone in the room can reply (Shift+Enter starts a new line). Everyone sees replies as they land.
+Drag a pin to move it. A thread holds up to 30 replies.
+
+When a thread is settled, choose **Resolve**. Resolved threads are hidden: **Resolved** in the
+board's toolbar shows them, and **Reopen** brings one back. Anyone can resolve or reopen a thread.
+Each person deletes their own replies, and the owner can delete any; only whoever started a thread,
+or the owner, deletes the whole thread.
+
+A thread with a line into a thread box goes with its prompts whole, every comment with who wrote
+it; a very long thread sends its first comment and its newest replies.
+
 ### Lines between cards
 
-Lines carry meaning. A note, task, link, comment or artifact with a line into a thread box goes
+Lines carry meaning. A note, task, link, comment, comment thread or artifact with a line into a thread box goes
 with every prompt to that box, each with who wrote it, so anyone can steer a box by attaching a
 note to it. The box's message lists them; remove any you do not want to send. The owner sees them
 as a **Board** chip on the message, and opening it shows exactly what the agent got. The agent
@@ -149,16 +164,17 @@ branch, the card links to it. On the owner's board, when the thread's branch has
 pull request, **Open pull request** on the thread's card pushes it and opens one, as the thread's
 git action does.
 
-To comment on a message, choose **Comment for the room** beside it in the shared thread. The
-comment shows under that message for everyone, and on the board as a note with **Go to reply**
-and the start of the reply it is about; its author or the owner deletes it from either place.
+To comment on one message, choose **Comment for the room** beside it in the shared thread. That
+comment is a single note, not a [comment thread](#comment-threads): it takes no replies, shows
+under that message for everyone, and on the board as a note with **Go to reply** and the start of the reply it is about;
+its author or the owner deletes it from either place.
 
 The board belongs to the room. Guests open the same one with **Board** in the thread's header, and
 everyone sees a card land where it was dropped and a note once its author clicks away from it.
 Anyone in the room can move, resize, connect and edit any card, and tick or assign any task; each
 card names who added it. Only that person and the owner can delete a card, a comment included, or
-rename a thread box. A board holds up to 50 notes, tasks, links, comments, artifacts and thread
-boxes of 280 characters, and 100 lines. An agent sees a card only when it is [on a line into a box](#lines-between-cards) someone
+rename a thread box. A board holds up to 50 notes, tasks, links, comments, comment threads,
+artifacts and thread boxes of 280 characters, and 100 lines. An agent sees a card only when it is [on a line into a box](#lines-between-cards) someone
 prompts, and then only that person's own agent, or the owner's once the owner sends a guest's
 message.
 

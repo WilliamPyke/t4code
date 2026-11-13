@@ -358,11 +358,26 @@ export const RoomArtifactContent = Schema.Struct({
 });
 export type RoomArtifactContent = typeof RoomArtifactContent.Type;
 
+/** Replies one comment thread holds after its first comment. */
+export const ROOM_BOARD_MAX_REPLIES = 30;
+
+/** A reply in a comment thread on the board. */
+export const RoomBoardReply = Schema.Struct({
+  /** The client that adds the reply names it. */
+  id: RoomBoardNoteId,
+  text: Schema.String.check(Schema.isMaxLength(ROOM_BOARD_NOTE_MAX_LENGTH)),
+  /** The guest who wrote it. Absent on the owner's replies. */
+  guestId: Schema.optional(GuestId),
+  /** When the server that holds the board took it; never the client's word. */
+  at: IsoDateTime,
+});
+export type RoomBoardReply = typeof RoomBoardReply.Type;
+
 /**
  * A card someone added to the board: a note, unless `kind` says it is a task, a link, an
- * artifact or a thread box. A note with `pinnedTo` is a comment on that message of the thread.
- * An artifact's and a thread box's `text` is its title. A thread box is a conversation of its
- * own, run by the agent of whoever added it.
+ * artifact, a thread box or a comment thread. A note with `pinnedTo` is a comment on that message
+ * of the thread. An artifact's and a thread box's `text` is its title; a comment thread's is its
+ * first comment. A thread box is a conversation of its own, run by the agent of whoever added it.
  */
 export const RoomBoardNote = Schema.Struct({
   /** The client that adds the note names it. */
@@ -371,7 +386,7 @@ export const RoomBoardNote = Schema.Struct({
   ...RoomBoardPoint.fields,
   /** The guest who added it. Absent on the owner's notes. */
   guestId: Schema.optional(GuestId),
-  kind: Schema.optional(Schema.Literals(["task", "link", "artifact", "thread"])),
+  kind: Schema.optional(Schema.Literals(["task", "link", "artifact", "thread", "comment"])),
   /** A task that is done. */
   done: Schema.optional(Schema.Boolean),
   assignee: Schema.optional(RoomBoardAssignee),
@@ -389,6 +404,14 @@ export const RoomBoardNote = Schema.Struct({
   artifact: Schema.optional(RoomArtifactContent),
   /** A thread box's recent turns. No board change sets it; it stays when the box changes. */
   thread: Schema.optional(RoomBoxState),
+  /** When a comment thread was started, as the server that holds the board took it. */
+  createdAt: Schema.optional(IsoDateTime),
+  /** A comment thread's replies, oldest first. Only the comment changes set them. */
+  replies: Schema.optional(
+    Schema.Array(RoomBoardReply).check(Schema.isMaxLength(ROOM_BOARD_MAX_REPLIES)),
+  ),
+  /** A comment thread someone resolved. Only `comment.resolve` sets it. */
+  resolved: Schema.optional(Schema.Literal(true)),
 });
 export type RoomBoardNote = typeof RoomBoardNote.Type;
 
@@ -473,6 +496,24 @@ export const RoomBoardChange = Schema.Union([
    * first. An artifact with no earlier version stays as it is.
    */
   Schema.Struct({ type: Schema.Literal("artifact.restore"), noteId: RoomBoardNote.fields.id }),
+  /** Adds a reply to a comment thread. A reply id it already has changes nothing. */
+  Schema.Struct({
+    type: Schema.Literal("comment.reply"),
+    noteId: RoomBoardNote.fields.id,
+    replyId: RoomBoardReply.fields.id,
+    text: RoomBoardReply.fields.text,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("comment.reply.remove"),
+    noteId: RoomBoardNote.fields.id,
+    replyId: RoomBoardReply.fields.id,
+  }),
+  /** Resolves a comment thread, or reopens it. */
+  Schema.Struct({
+    type: Schema.Literal("comment.resolve"),
+    noteId: RoomBoardNote.fields.id,
+    resolved: Schema.Boolean,
+  }),
 ]);
 export type RoomBoardChange = typeof RoomBoardChange.Type;
 
