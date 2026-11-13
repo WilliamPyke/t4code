@@ -49,6 +49,7 @@ import {
   useBoardNow,
   useCommentProgress,
 } from "./roomBoardLive";
+import { holdPointer } from "./roomBoardPointer";
 
 // How far a held pointer goes before a press on a pin is a drag, not a click, in screen pixels.
 const DRAG_SLOP = 4;
@@ -161,6 +162,7 @@ export function CommentPin({
     >
       <button
         type="button"
+        data-board-grip
         aria-label={`Comment thread from ${author}${replies === 0 ? "" : `, ${replies} ${replies === 1 ? "reply" : "replies"}`}${unread ? ", new replies" : ""}${note.resolved === true ? ", resolved" : ""}`}
         aria-expanded={open}
         className={cn(
@@ -172,7 +174,7 @@ export function CommentPin({
           if (event.button !== 0) return;
           // The board under a pin must not pan or close the thread.
           event.stopPropagation();
-          event.currentTarget.setPointerCapture(event.pointerId);
+          holdPointer(event);
           press.current = { x: event.clientX, y: event.clientY, moved: false };
         }}
         onPointerMove={(event) => {
@@ -405,6 +407,7 @@ export function CommentThreadPanel({
       ref={panel}
       aria-label={draft ? "New comment" : "Comment thread"}
       data-board-overlay
+      data-board-text
       className={cn(
         "absolute z-30 flex w-72 cursor-default flex-col rounded-lg border border-border bg-popover text-popover-foreground shadow-lg",
         spot === null && "invisible",

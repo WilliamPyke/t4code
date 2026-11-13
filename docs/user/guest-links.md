@@ -55,8 +55,10 @@ your agent, and artifacts. **Share** in the board's header opens the same dialog
 guests**, to make, extend or replace the link or clear the board. Once shared, the header names who
 joined (click the names to manage guests) and has **Stop sharing**. The thread's card says when your agent is
 working, and a guest's agent gets a card as soon as it starts a turn
-[on their machine](#your-turns-show-in-the-room). Scroll to move, and hold Ctrl or Cmd while
-scrolling to zoom.
+[on their machine](#your-turns-show-in-the-room). Scroll or drag the empty board to move, and
+hold Ctrl or Cmd while scrolling, or pinch, to zoom towards the pointer. Double-click the empty
+board to add a note there and start writing in it. When cards are small on screen, the buttons on a
+note's header fold into one **…** menu, so the rest of the header is free to grab.
 
 Everyone with the board open sees the others' pointers on it, each with its owner's name. Yours
 shows only while your pointer is over the board. A card someone is dragging or resizing moves for
@@ -68,23 +70,29 @@ Besides notes, add a **Task**, which anyone can tick off and assign to someone i
 **Link**: type or paste an address, or paste one on the board or into an empty note. A link to a
 GitHub pull request, issue or file shows as its repository and number or path, and **Open**
 opens it in a new tab; T Code does not load the page. To draw an arrow, drag the dot on a card's
-edge onto another card; click an arrow to delete it. Drag a card's bottom-right corner to resize
-it; everyone sees the new size.
+edge onto another card; click an arrow to delete it. Drag a card's bottom corners to resize it;
+everyone sees the new size. Press Escape while dragging, resizing or drawing an arrow to put
+everything back as it was; nothing is sent.
 
 A note can be one of six colours: choose the palette on it. Anyone can recolour a note, and your
 next notes take the colour you picked last. React to a note, task, link, artifact or thread box
 with the smiley on it; reactions show under the card with how many, and clicking one adds or takes
 back your own. When the owner removes a guest, that guest's reactions go too.
 
-Hold Shift and click cards to select several, or hold Shift and drag across empty board to select
-everything the rectangle touches. Drag any selected card to move them all together. The bar over a
-selection also recolours all its notes at once, and has:
+Click a card to select it, and click the empty board to let go of it. Hold Shift and click cards to
+select several, hold Shift and drag across empty board to select everything the rectangle touches,
+or press Ctrl+A (Cmd+A on a Mac) to select every card. Dragging a selected card moves the whole
+selection; dragging any other card moves just that one and selects it. The arrow keys nudge the
+selection a little, or further with Shift. The bar just above a selection also recolours all its
+notes at once, and has:
 
 - **Tidy**, which lines the selected cards up in an even grid near where they were, in the order
   you read them, clear of other cards.
 - **Duplicate** (or Ctrl+D, Cmd+D on a Mac), which copies the selected notes, tasks and links next
   to them as your own cards and selects the copies. Thread boxes, artifacts, comment threads and
-  sections are not copied.
+  sections are not copied. Ctrl+C then Ctrl+V (Cmd on a Mac) does the same, placing the copies at
+  your pointer. Pasting text copied anywhere else makes a note of it, and pasting a link makes a
+  link card.
 - **Group in a section**, which puts a section around them.
 
 Delete (or Backspace) removes the selected cards you may delete after you confirm; cards that are
@@ -104,9 +112,10 @@ recolouring of several cards in one step. It does not bring back a card you
 deleted. If someone else has changed that card since, the undo is skipped and the board says so,
 so you never undo another person's work. Undo history lasts while the board is open.
 
-To turn a note into a message, drag it onto the thread's card or choose **Use as message** on it.
-Its text lands in your message box, after anything you had written, and the note stays on the
-board. Nothing is sent until you send it, and a guest's message still waits for the owner. A guest
+To turn a note into a message, drag it onto the thread's card, which says **Use as message** while
+the note is over it, or choose **Use as message** on the note. Its text lands in your message box,
+after anything you had written (pressing it twice adds it once), and the note stays where it was
+on the board. A card the drop would do nothing for is simply moved there. Nothing is sent until you send it, and a guest's message still waits for the owner. A guest
 whose agent has a card on the board can instead drag a note onto **Your agent** or choose **Give
 to my agent**: it opens as a draft in their own T Code, as a task does below.
 

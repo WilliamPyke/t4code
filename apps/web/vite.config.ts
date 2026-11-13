@@ -147,6 +147,32 @@ const browserTestProject = {
         resetPointer: async ({ page }) => {
           await page.mouse.move(-1, -1);
         },
+        // userEvent has no held mouse, so a press, moves and keys mid-drag go through Playwright.
+        // Points are in the test frame's own pixels.
+        mouse: async (
+          { page, frame },
+          steps: ReadonlyArray<
+            | { readonly type: "down" | "up" | "move"; readonly x: number; readonly y: number }
+            | { readonly type: "key"; readonly key: string }
+          >,
+        ) => {
+          const element = await (await frame()).frameElement();
+          const box = await element.boundingBox();
+          const width = await element.evaluate((node) =>
+            node instanceof Element ? node.clientWidth : 0,
+          );
+          if (box === null || width === 0) throw new Error("The test frame is not on screen");
+          const scale = box.width / width;
+          for (const step of steps) {
+            if (step.type === "key") {
+              await page.keyboard.press(step.key);
+              continue;
+            }
+            await page.mouse.move(box.x + step.x * scale, box.y + step.y * scale, { steps: 4 });
+            if (step.type === "down") await page.mouse.down();
+            if (step.type === "up") await page.mouse.up();
+          }
+        },
       },
     },
   },

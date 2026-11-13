@@ -1,8 +1,19 @@
 import { Trash2Icon, XIcon } from "lucide-react";
-import { createContext, type PointerEvent, type ReactNode, use, useRef } from "react";
+import {
+  createContext,
+  type PointerEvent,
+  type ReactNode,
+  use,
+  useLayoutEffect,
+  useRef,
+} from "react";
+
+import { cn } from "~/lib/utils";
 
 import { useInlineActionConfirm } from "../pullRequest/useInlineActionConfirm";
 import { Button } from "../ui/button";
+import { selectionBarSpot } from "./roomBoard.logic";
+import { holdPointer } from "./roomBoardPointer";
 
 const NOTHING_SELECTED: ReadonlySet<string> = new Set();
 
@@ -10,13 +21,6 @@ const NOTHING_SELECTED: ReadonlySet<string> = new Set();
 export const BoardSelectionContext = createContext(NOTHING_SELECTED);
 
 export const useBoardSelected = (ref: string) => use(BoardSelectionContext).has(ref);
-
-/** A press with Shift that selects instead of acting: not on a control or a text field. */
-export const isSelectPress = (target: EventTarget | null) =>
-  target instanceof Element &&
-  target.closest(
-    "button, a, input, textarea, select, [contenteditable], [role=menuitem], [data-board-overlay], [data-board-pin]",
-  ) === null;
 
 /** A key the board takes as its own: not one typed into a field. */
 export const isBoardKey = (target: EventTarget | null) =>
@@ -57,7 +61,12 @@ export function useBoardMarquee(onSelect: (rect: ClientRect) => void) {
     ),
     start: (event: PointerEvent<HTMLElement>) => {
       from.current = { x: event.clientX, y: event.clientY };
-      event.currentTarget.setPointerCapture(event.pointerId);
+      holdPointer(event);
+    },
+    /** Drops a marquee being drawn, selecting nothing. */
+    cancel: () => {
+      from.current = null;
+      if (box.current !== null) box.current.style.display = "none";
     },
     /** Says whether a marquee took the move. */
     move: (event: PointerEvent<HTMLElement>) => {
@@ -90,16 +99,22 @@ export function useBoardMarquee(onSelect: (rect: ClientRect) => void) {
 }
 
 /**
- * How many cards are selected, over the board so the toolbar never moves, with Delete for the
- * ones this viewer may remove (asked twice) and Clear.
+ * How many cards are selected, with Delete for the ones this viewer may remove (asked twice) and
+ * Clear. It sits beside the selected cards, on the board, and steps out of the way while they move.
  */
 export function SelectionBar({
+  refs,
+  hidden,
   count,
   removable,
   onDelete,
   onClear,
   children,
 }: {
+  /** The selected cards, by `data-board-item`, which it is placed against as they are drawn. */
+  readonly refs: ReadonlySet<string>;
+  /** Cards are being moved. */
+  readonly hidden: boolean;
   readonly count: number;
   readonly removable: number;
   /** What else the selection can do, before Delete. */
@@ -110,10 +125,41 @@ export function SelectionBar({
 }) {
   const confirm = useInlineActionConfirm("board-selection");
   const armed = confirm.isArmed("delete");
+  const barRef = useRef<HTMLDivElement | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- placed against the cards where the browser drew them, after every render that may have moved them or the view
+  useLayoutEffect(() => {
+    const bar = barRef.current;
+    const board = bar?.offsetParent;
+    if (hidden || bar === null || !(board instanceof HTMLElement)) return;
+    const area = board.getBoundingClientRect();
+    const rects = [...refs].flatMap((ref) => {
+      const item = board.querySelector(`[data-board-item="${CSS.escape(ref)}"]`);
+      return item === null ? [] : [item.getBoundingClientRect()];
+    });
+    if (rects.length === 0) return;
+    const left = Math.min(...rects.map((rect) => rect.left));
+    const top = Math.min(...rects.map((rect) => rect.top));
+    const spot = selectionBarSpot(
+      {
+        x: left - area.left,
+        y: top - area.top,
+        width: Math.max(...rects.map((rect) => rect.right)) - left,
+        height: Math.max(...rects.map((rect) => rect.bottom)) - top,
+      },
+      { width: bar.offsetWidth, height: bar.offsetHeight },
+      { width: board.clientWidth, height: board.clientHeight },
+    );
+    bar.style.left = `${spot.left}px`;
+    bar.style.top = `${spot.top}px`;
+  });
   return (
     <div
+      ref={barRef}
       data-board-overlay
-      className="absolute top-2 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-md border border-border bg-popover py-1 ps-2.5 pe-1 text-xs text-popover-foreground shadow-md"
+      className={cn(
+        "absolute top-2 left-2 z-20 flex items-center gap-1 rounded-md border border-border bg-popover py-1 ps-2.5 pe-1 text-xs text-popover-foreground shadow-md",
+        hidden && "invisible",
+      )}
       onPointerDown={(event) => event.stopPropagation()}
     >
       <span role="status" className="tabular-nums">

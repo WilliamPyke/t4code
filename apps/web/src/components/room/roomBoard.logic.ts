@@ -71,6 +71,22 @@ export function zoomBoardAt(view: BoardView, anchor: BoardPoint, factor: number)
   return { zoom, x: anchor.x - held.x * zoom, y: anchor.y - held.y * zoom };
 }
 
+// A wheel's notch is about 100px, a line 16px; a trackpad's pinch sends a few pixels at a time.
+const WHEEL_LINE_PX = 16;
+const WHEEL_PAGE_PX = 800;
+const WHEEL_ZOOM_STEP_PX = 25;
+const WHEEL_ZOOM_PX_PER_E = 200;
+
+/**
+ * How much one wheel or pinch event zooms by: in proportion to how far it turned, so a pinch is
+ * smooth, but never more than one small step, however far a mouse reports a notch went.
+ */
+export function wheelZoomFactor(deltaY: number, deltaMode: number): number {
+  const px = deltaY * (deltaMode === 1 ? WHEEL_LINE_PX : deltaMode === 2 ? WHEEL_PAGE_PX : 1);
+  const step = Math.max(-WHEEL_ZOOM_STEP_PX, Math.min(WHEEL_ZOOM_STEP_PX, px));
+  return Math.exp(-step / WHEEL_ZOOM_PX_PER_E);
+}
+
 export const panBoardBy = (view: BoardView, dx: number, dy: number): BoardView => ({
   ...view,
   x: view.x + dx,
@@ -103,14 +119,16 @@ export function placeBoardCards(
     }
     return slots;
   };
+  // A card no one sized takes the room it grows to: the thread's card is taller than a row.
+  const sizeOf = (id: string): RoomBoardSize =>
+    sizes?.[id] ?? {
+      w: BOARD_CARD_WIDTH,
+      h: id === ROOM_BOARD_THREAD_CARD ? THREAD_CARD_HEIGHT : CARD_ROW_HEIGHT,
+    };
   const taken = new Set(
     cardIds.flatMap((id) => {
       const position = saved[id];
-      if (position === undefined) return [];
-      const size = sizes?.[id];
-      return size === undefined
-        ? [slotOf(position)]
-        : [slotOf(position), ...slotsUnder(position, size)];
+      return position === undefined ? [] : [slotOf(position), ...slotsUnder(position, sizeOf(id))];
     }),
   );
   const placed: Record<string, BoardPoint> = {};
@@ -130,8 +148,7 @@ export function placeBoardCards(
       slot += 1;
     } while (taken.has(slotOf(point)));
     placed[id] = point;
-    const size = sizes?.[id];
-    if (size !== undefined) for (const under of slotsUnder(point, size)) taken.add(under);
+    for (const under of slotsUnder(point, sizeOf(id))) taken.add(under);
   }
   return placed;
 }
@@ -780,6 +797,12 @@ export function dropBoardEdit(
   return rest;
 }
 
+/** Takes back the edits still held for `keys`, as a cancelled drag does; let-go ones stay. */
+export function dropHeldBoardEdits(edits: BoardEdits, keys: ReadonlySet<string>): BoardEdits {
+  const kept = Object.entries(edits).filter(([key, edit]) => !(edit.held && keys.has(key)));
+  return kept.length === Object.keys(edits).length ? edits : Object.fromEntries(kept);
+}
+
 const replaceById = <Item extends { readonly id: string }>(
   items: ReadonlyArray<Item>,
   item: Item,
@@ -1205,7 +1228,8 @@ export interface BoardPrompt {
 /** A note added to a composer's draft as a paragraph of its own. */
 export function appendNoteToDraft(draft: string, note: string): string {
   const text = note.trim();
-  if (text === "") return draft;
+  // A second press of "Use as message" on the same card adds nothing.
+  if (text === "" || draft.trimEnd().endsWith(text)) return draft;
   return draft.trim() === "" ? text : `${draft.trimEnd()}\n\n${text}`;
 }
 
@@ -2037,6 +2061,28 @@ export function boardSelectionItems(
     const note = board.notes.find((candidate) => candidate.id === target.id);
     return note === undefined || note.kind === "comment" ? [] : [{ target, value: note }];
   });
+}
+
+const SELECTION_BAR_GAP = 8;
+
+/**
+ * Where the selection's bar goes, in the board's screen pixels: centred just above the selected
+ * cards, or just below them when there is no room above, and always inside the board, so it
+ * never covers the cards being worked on nor the spot new ones land in.
+ */
+export function selectionBarSpot(
+  selection: BoardRect,
+  bar: BoardSize,
+  board: BoardSize,
+): { readonly left: number; readonly top: number } {
+  const clamp = (value: number, max: number) =>
+    Math.max(SELECTION_BAR_GAP, Math.min(value, max - SELECTION_BAR_GAP));
+  const above = selection.y - SELECTION_BAR_GAP - bar.height;
+  const below = selection.y + selection.height + SELECTION_BAR_GAP;
+  return {
+    left: clamp(selection.x + selection.width / 2 - bar.width / 2, board.width - bar.width),
+    top: clamp(above >= SELECTION_BAR_GAP ? above : below, board.height - bar.height),
+  };
 }
 
 /** Every selected item moved by the same amount, in board pixels, so they land together. */

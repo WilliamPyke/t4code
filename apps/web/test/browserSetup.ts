@@ -5,6 +5,13 @@ declare module "vite-plus/test/browser" {
   interface BrowserCommands {
     /** Defined in vite.config.ts. Moves Playwright's mouse off the page. */
     resetPointer: () => Promise<void>;
+    /** Defined in vite.config.ts. Presses, moves and lets go of the mouse, and presses keys between. */
+    mouse: (
+      steps: ReadonlyArray<
+        | { readonly type: "down" | "up" | "move"; readonly x: number; readonly y: number }
+        | { readonly type: "key"; readonly key: string }
+      >,
+    ) => Promise<void>;
   }
 }
 

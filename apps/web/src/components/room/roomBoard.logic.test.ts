@@ -115,6 +115,8 @@ import {
   settleBoardValue,
   visibleBoardRect,
   openingBoardView,
+  selectionBarSpot,
+  wheelZoomFactor,
   zoomBoardAt,
 } from "./roomBoard.logic";
 
@@ -133,6 +135,55 @@ describe("zoomBoardAt", () => {
   });
 });
 
+describe("selectionBarSpot", () => {
+  const bar = { width: 300, height: 32 };
+  const board = { width: 1000, height: 700 };
+  it.each([
+    {
+      name: "sits centred just above the selection",
+      selection: { x: 400, y: 300, width: 200, height: 100 },
+      spot: { left: 350, top: 260 },
+    },
+    {
+      name: "goes below a selection at the top of the board",
+      selection: { x: 400, y: 20, width: 200, height: 100 },
+      spot: { left: 350, top: 128 },
+    },
+    {
+      name: "stays inside the board beside a selection at its edge",
+      selection: { x: -100, y: 300, width: 120, height: 100 },
+      spot: { left: 8, top: 260 },
+    },
+    {
+      name: "stays inside the board when the selection fills it",
+      selection: { x: 0, y: 0, width: 1000, height: 700 },
+      spot: { left: 350, top: 660 },
+    },
+  ])("$name", ({ selection, spot }) => {
+    expect(selectionBarSpot(selection, bar, board)).toEqual(spot);
+  });
+});
+
+describe("wheelZoomFactor", () => {
+  it.each([
+    {
+      name: "a mouse notch zooms in one small step",
+      deltaY: -100,
+      deltaMode: 0,
+      min: 1.1,
+      max: 1.15,
+    },
+    { name: "a huge notch is still one step", deltaY: -1_000, deltaMode: 0, min: 1.1, max: 1.15 },
+    { name: "a notch in lines is one step", deltaY: 3, deltaMode: 1, min: 0.87, max: 0.9 },
+    { name: "a pinch's few pixels zoom a little", deltaY: -4, deltaMode: 0, min: 1.01, max: 1.03 },
+    { name: "no turn, no zoom", deltaY: 0, deltaMode: 0, min: 1, max: 1 },
+  ])("$name", ({ deltaY, deltaMode, min, max }) => {
+    const factor = wheelZoomFactor(deltaY, deltaMode);
+    expect(factor).toBeGreaterThanOrEqual(min);
+    expect(factor).toBeLessThanOrEqual(max);
+  });
+});
+
 describe("placeBoardCards", () => {
   it("keeps saved positions and gives a new card a free slot, not one under a saved card", () => {
     const wide = placeBoardCards(["thread", "guest:a"], {}, 3, { thread: { w: 440, h: 484 } });
@@ -146,6 +197,23 @@ describe("placeBoardCards", () => {
     expect(placed["guest:a"]).toEqual(saved["guest:a"]);
     const spots = Object.values(placed).map((point) => `${point.x}:${point.y}`);
     expect(new Set(spots).size).toBe(3);
+  });
+
+  const overlaps = (a: BoardRect, b: BoardRect) =>
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+  // The thread's card as it is drawn with a few messages, as a tester saw it.
+  const thread = { width: 320, height: 423 };
+  it.each([
+    { name: "a fourth card, on a board nobody arranged", saved: {} },
+    { name: "a card added after the thread's card was moved", saved: { thread: { x: 80, y: 72 } } },
+    { name: "a card added beside a guest who was moved", saved: { "guest:a": { x: 440, y: 72 } } },
+  ])("keeps $name off the thread's card at the height it is drawn", ({ saved }) => {
+    const ids = ["thread", "guest:a", "guest:b", "guest:c", "agent:a"];
+    const placed = placeBoardCards(ids, saved);
+    const card = { ...placed.thread!, ...thread };
+    for (const id of ids.slice(1)) {
+      expect(overlaps({ ...placed[id]!, width: 320, height: 240 }, card)).toBe(false);
+    }
   });
 });
 
@@ -984,6 +1052,10 @@ describe("appendNoteToDraft", () => {
       "Look at login.\n\nCheck the cache",
     );
     expect(appendNoteToDraft("Keep", "  ")).toBe("Keep");
+    // Pressed twice, the same card is added once.
+    expect(appendNoteToDraft("Look at login.\n\nCheck the cache", "Check the cache")).toBe(
+      "Look at login.\n\nCheck the cache",
+    );
   });
 });
 
