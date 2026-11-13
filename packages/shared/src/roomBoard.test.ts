@@ -4,8 +4,10 @@ import {
   type OrchestrationV2TurnItem,
   ROOM_ARTIFACT_MAX_LENGTH,
   ROOM_BOARD_MAX_ARTIFACTS,
+  ROOM_BOARD_MAX_REACTIONS,
   ROOM_BOARD_MAX_REPLIES,
   ROOM_BOARD_MAX_THREADS,
+  ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH,
   RoomBoard,
   type RoomBoardChange,
   type RoomBoardNote,
@@ -27,6 +29,7 @@ import {
   roomBoardCardIdentity,
   roomBoxExcerpt,
   roomBoxRequestOf,
+  roomCommentAnswer,
   roomCommentRequestOf,
 } from "./roomBoard.ts";
 
@@ -86,6 +89,104 @@ describe("applyRoomBoardChange", () => {
     expect(
       applied(note, put("n", { text: "Hi", x: 1, y: 1, size: { w: 260, h: 150 } })).notes[0]?.size,
     ).toEqual({ w: 260, h: 150 });
+  });
+
+  it("colours a plain note, which an edit that says nothing of it keeps, and no other card", () => {
+    const owners: RoomBoard = {
+      positions: {},
+      notes: [{ id: "n", text: "Hi", x: 0, y: 0 }],
+    };
+    // Anyone may colour a note, as anyone may edit its text.
+    const green = applied(owners, put("n", { text: "Hi", color: "green" }));
+    expect(green.notes[0]).toEqual({ id: "n", text: "Hi", x: 0, y: 0, color: "green" });
+    expect(applied(green, put("n", { text: "Hi" }))).toBe(green);
+    expect(applied(green, put("n", { text: "Hi", color: "green" }))).toBe(green);
+    expect(applied(green, put("n", { text: "Hi", color: "blue" })).notes[0]?.color).toBe("blue");
+    expect(applied(EMPTY_ROOM_BOARD, put("p", { color: "pink" })).notes[0]?.color).toBe("pink");
+    const refused: ReadonlyArray<Partial<Extract<RoomBoardChange, { type: "note.put" }>>> = [
+      { kind: "task" },
+      { kind: "link", url: "https://x.dev" },
+      { kind: "artifact" },
+      { kind: "thread" },
+      { kind: "comment" },
+      { pinnedTo: "message:1" },
+    ];
+    for (const fields of refused) {
+      expect(
+        Result.isFailure(apply(EMPTY_ROOM_BOARD, put("c", { ...fields, color: "blue" }))),
+      ).toBe(true);
+    }
+    const task = applied(EMPTY_ROOM_BOARD, put("t", { kind: "task" }));
+    expect(Result.isFailure(apply(task, put("t", { color: "blue" })))).toBe(true);
+  });
+
+  it("toggles each person's own reaction on a card, within a cap, and never on a pin", () => {
+    const board: RoomBoard = {
+      positions: {},
+      notes: [
+        { id: "n", text: "Hi", x: 0, y: 0 },
+        { id: "c", text: "Why?", x: 0, y: 0, kind: "comment" },
+      ],
+    };
+    const react = (emoji: "👍" | "🎉"): RoomBoardChange => ({
+      type: "note.react",
+      noteId: "n",
+      emoji,
+    });
+    const reacted = (from: RoomBoard, emoji: "👍" | "🎉", by: GuestId | null) =>
+      Result.getOrThrow(applyRoomBoardChange(from, scope, by, react(emoji), at));
+    const rows: ReadonlyArray<
+      readonly [string, RoomBoard, "👍" | "🎉", GuestId | null, RoomBoardNote["reactions"]]
+    > = [
+      ["Sam adds one", board, "👍", sam, [{ emoji: "👍", guestId: sam }]],
+      [
+        "the owner adds the same, as their own",
+        reacted(board, "👍", sam),
+        "👍",
+        null,
+        [{ emoji: "👍", guestId: sam }, { emoji: "👍" }],
+      ],
+      [
+        "Sam adds another",
+        reacted(board, "👍", sam),
+        "🎉",
+        sam,
+        [
+          { emoji: "👍", guestId: sam },
+          { emoji: "🎉", guestId: sam },
+        ],
+      ],
+      ["Sam takes theirs back", reacted(board, "👍", sam), "👍", sam, undefined],
+      [
+        "Sam's again leaves the owner's",
+        reacted(reacted(board, "👍", null), "👍", sam),
+        "👍",
+        sam,
+        [{ emoji: "👍" }],
+      ],
+    ];
+    for (const [, from, emoji, by, reactions] of rows) {
+      expect(reacted(from, emoji, by).notes[0]?.reactions).toEqual(reactions);
+    }
+    expect(Result.isFailure(apply(board, { type: "note.react", noteId: "c", emoji: "👍" }))).toBe(
+      true,
+    );
+    expect(
+      Result.isFailure(apply(board, { type: "note.react", noteId: "gone", emoji: "👍" })),
+    ).toBe(true);
+    const full: RoomBoard = {
+      ...board,
+      notes: [
+        {
+          ...board.notes[0]!,
+          reactions: Array.from({ length: ROOM_BOARD_MAX_REACTIONS }, () => ({ emoji: "👀" })),
+        },
+      ],
+    };
+    expect(Result.isFailure(apply(full, react("👍")))).toBe(true);
+    // Editing a card keeps its reactions.
+    const kept = applied(reacted(board, "👍", sam), put("n", { text: "Hello" }));
+    expect(kept.notes[0]?.reactions).toEqual([{ emoji: "👍", guestId: sam }]);
   });
 
   it("keeps the quote a comment was added with, and takes none on any other note", () => {
@@ -517,6 +618,26 @@ describe("roomBoxExcerpt", () => {
     ];
     for (const [text, plain] of rows) expect(roomBoxExcerpt(text, 600)).toBe(plain);
     expect(roomBoxExcerpt("## Done\nAll fixed", 8)).toBe("Done Al…");
+  });
+});
+
+describe("roomCommentAnswer", () => {
+  const max = ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH;
+
+  it("keeps an agent's markdown, without hidden characters, cut at a line or a word", () => {
+    expect(roomCommentAnswer("  Done.\r\n\n- **one**​\n- two\n")).toBe("Done.\n\n- **one**\n- two");
+    const first = "a".repeat(max - 200);
+    const atLine = roomCommentAnswer(`${first}\n${"b".repeat(300)}`);
+    expect(atLine).toBe(`${first}…`);
+    const words = roomCommentAnswer(`intro\n${"word ".repeat(400)}`);
+    expect(words.endsWith(" word…")).toBe(true);
+    expect(words.length).toBeLessThanOrEqual(max);
+  });
+
+  it("closes a code block the cut leaves open", () => {
+    const answer = roomCommentAnswer(`Here:\n\`\`\`ts\n${"const a = 1;\n".repeat(200)}\`\`\``);
+    expect(answer.endsWith("…\n```")).toBe(true);
+    expect(answer.length).toBeLessThanOrEqual(max);
   });
 });
 

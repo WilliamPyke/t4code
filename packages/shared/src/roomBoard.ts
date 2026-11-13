@@ -3,10 +3,12 @@ import {
   ROOM_BOARD_MAX_ARTIFACTS,
   ROOM_BOARD_MAX_EDGES,
   ROOM_BOARD_MAX_NOTES,
+  ROOM_BOARD_MAX_REACTIONS,
   ROOM_BOARD_MAX_REPLIES,
   ROOM_BOARD_MAX_THREADS,
   ROOM_BOX_CARD_LABELS_MAX,
   ROOM_BOX_CONTEXT_KIND,
+  ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH,
   isRoomBoardUrl,
   roomBoardCardRef,
   roomBoardNoteRef,
@@ -24,6 +26,7 @@ import {
   type RoomBoardContextCard,
   type RoomBoardEdge,
   type RoomBoardNote,
+  type RoomBoardReaction,
   type RoomBoardSize,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -31,6 +34,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import { replaceComposerContextReferences } from "./composerContextReferences.ts";
+import { sanitizeLinkedPrompt } from "./promptLinks.ts";
 
 export const ROOM_BOARD_FULL = "This board has as many notes as it holds. Remove one first.";
 export const ROOM_COMMENT_THREAD_FULL = `A comment thread holds ${ROOM_BOARD_MAX_REPLIES} replies. Start a new one.`;
@@ -123,6 +127,10 @@ function putNote(
   if (change.assignee?.guestId !== undefined && !scope.hasPerson(change.assignee.guestId)) {
     return Result.fail("A task can only be assigned to someone in the room.");
   }
+  const pinned = existing === undefined ? change.pinnedTo : existing.pinnedTo;
+  if (change.color !== undefined && (kind !== undefined || pinned !== undefined)) {
+    return Result.fail("Only a note can have a colour.");
+  }
   // An artifact's content, a task's answer and a thread box's turns come only from the owner's
   // server, never a change.
   const base: RoomBoardNote =
@@ -141,10 +149,11 @@ function putNote(
         : { quote: change.quote }),
       ...(kind === "comment" ? { createdAt: at } : {}),
     } satisfies RoomBoardNote);
-  const { done: _done, assignee: _assignee, size: _size, ...rest } = base;
+  const { done: _done, assignee: _assignee, size: _size, color: _color, ...rest } = base;
   const done = change.done ?? base.done === true;
   const assignee = change.assignee === undefined ? base.assignee : change.assignee;
   const size = change.size ?? base.size;
+  const color = change.color ?? base.color;
   return Result.succeed({
     ...rest,
     text: change.text,
@@ -153,6 +162,7 @@ function putNote(
     ...(done ? { done } : {}),
     ...(assignee === undefined || assignee === null ? {} : { assignee }),
     ...(size === undefined ? {} : { size }),
+    ...(color === undefined ? {} : { color }),
   });
 }
 
@@ -166,7 +176,8 @@ const sameNote = (left: RoomBoardNote, right: RoomBoardNote) =>
   left.done === right.done &&
   left.assignee?.guestId === right.assignee?.guestId &&
   (left.assignee === undefined) === (right.assignee === undefined) &&
-  sameSize(left.size, right.size);
+  sameSize(left.size, right.size) &&
+  left.color === right.color;
 
 /**
  * Whether `person` (null for the room's owner) may remove a card or rename a thread box: the owner
@@ -360,6 +371,29 @@ export function applyRoomBoardChange(
         withNote(board, note, change.resolved ? { ...rest, resolved: true } : rest),
       );
     }
+    case "note.react": {
+      const note = board.notes.find((candidate) => candidate.id === change.noteId);
+      if (note === undefined || note.kind === "comment") {
+        return Result.fail("This card is not on the board.");
+      }
+      const reactions = note.reactions ?? [];
+      const mine = (reaction: RoomBoardReaction) =>
+        reaction.emoji === change.emoji && (reaction.guestId ?? null) === author;
+      const { reactions: _reactions, ...rest } = note;
+      if (reactions.some(mine)) {
+        const kept = reactions.filter((reaction) => !mine(reaction));
+        return Result.succeed(
+          withNote(board, note, kept.length === 0 ? rest : { ...rest, reactions: kept }),
+        );
+      }
+      if (reactions.length >= ROOM_BOARD_MAX_REACTIONS) {
+        return Result.fail("This card has as many reactions as it holds.");
+      }
+      const reaction = { emoji: change.emoji, ...(author === null ? {} : { guestId: author }) };
+      return Result.succeed(
+        withNote(board, note, { ...rest, reactions: [...reactions, reaction] }),
+      );
+    }
   }
 }
 
@@ -545,6 +579,28 @@ export function roomBoxExcerpt(text: string, max: number): string {
   return plain.length <= max
     ? plain
     : `${plain.slice(0, max - 1).replace(/[\uD800-\uDBFF]$/, "")}…`;
+}
+
+const FENCE_LINE = /^ {0,3}(?:`{3,}|~{3,})/gm;
+
+/**
+ * What an agent's reply posts in a comment thread: its markdown without hidden characters, cut
+ * at a line or a word break to what the thread keeps. A code block the cut leaves open is closed.
+ */
+export function roomCommentAnswer(reply: string): string {
+  const text = sanitizeLinkedPrompt(reply).text;
+  const max = ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH;
+  if (text.length <= max) return text;
+  // Room for "…" and a closing fence.
+  const head = text.slice(0, max - 5);
+  const line = head.lastIndexOf("\n");
+  const word = head.search(/\s\S*$/);
+  const end = line >= max / 2 ? line : word >= max / 2 ? word : head.length;
+  const cut = `${head
+    .slice(0, end)
+    .replace(/[\uD800-\uDBFF]$/, "")
+    .trimEnd()}…`;
+  return (cut.match(FENCE_LINE)?.length ?? 0) % 2 === 1 ? `${cut}\n\`\`\`` : cut;
 }
 
 const HTML_DOCUMENT = /^(?:<!doctype html|<html)/i;

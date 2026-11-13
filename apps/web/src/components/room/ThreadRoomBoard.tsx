@@ -371,6 +371,7 @@ export function ThreadRoomBoard({
             <RoomBoard
               title={title}
               room={share}
+              shareId={share?.id}
               online={presence?.online ?? []}
               messages={boardMessages(
                 items.map((projected) => projected.item),

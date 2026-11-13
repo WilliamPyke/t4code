@@ -10,6 +10,7 @@ import {
   ROOM_BOARD_QUOTE_MAX_LENGTH,
   type RoomBoard,
   type RoomBoardNote,
+  type RoomBoardReply,
   type ThreadGuestMessage,
 } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -17,10 +18,13 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   BOARD_MAX_ZOOM,
   BOARD_MIN_ZOOM,
+  BOARD_HISTORY_MAX,
   BOARD_PROMPT_MAX_CARDS,
+  BOARD_SEEN_COMMENTS_MAX,
   EMPTY_ROOM_BOARD,
   INITIAL_BOARD_VIEW,
   NO_BOARD_EDITS,
+  type BoardHistoryEntry,
   type BoardPoint,
   type BoardPresence,
   type BoardRect,
@@ -34,6 +38,8 @@ import {
   boardCommentAskBoxes,
   boardCommentPromptCard,
   boardCommentReplying,
+  boardCommentsSeen,
+  boardCommentUnread,
   boardArtifactWriting,
   boardBoxAgentLabel,
   boardBoxName,
@@ -43,24 +49,35 @@ import {
   boardCardBox,
   boardChangeOf,
   boardChangeQueue,
+  boardChangeQueueKey,
   boardCommentLineTo,
   boardCommentPanelSpot,
   boardConnector,
   boardCursorAt,
   boardCursorColor,
   boardDraftIsPage,
+  boardEditKey,
+  boardGroupMove,
+  boardHistoryChanges,
+  boardHistoryWith,
+  boardItemsInRect,
+  boardItemTarget,
   boardItemRects,
   boardMessages,
   boardNewNoteSize,
+  boardNewestReplyAt,
   boardNoteBox,
   boardOwnBoxFor,
   boardPanelMaxWidth,
   boardPinScale,
   boardProgressLine,
   boardProgressPhase,
+  boardReactionChips,
   boardPromptContext,
   boardReplyQuote,
   boardRestoreLabel,
+  boardSelectionItems,
+  boardSelectionRemoval,
   boardThreadBoxes,
   boardUrlIn,
   boardViewportOf,
@@ -85,6 +102,7 @@ import {
   roomCodeStatus,
   roomFetchCommand,
   screenToBoard,
+  settleBoardEdits,
   settleBoardValue,
   visibleBoardRect,
   zoomBoardAt,
@@ -246,6 +264,12 @@ describe("resolveBoard", () => {
     const removed = putBoardEdit(stored, typing, target, null, false);
     expect(resolveBoard(stored, removed).notes).toEqual([]);
     expect(boardChangeOf(target, null)).toEqual({ type: "note.remove", noteId: "n" });
+    // A colour shows until the room's copy has it, and is sent with the note.
+    const green = { ...written, color: "green" as const };
+    const coloured = putBoardEdit(stored, NO_BOARD_EDITS, target, green, false);
+    expect(settleBoardEdits(stored, coloured)).toBe(coloured);
+    expect(resolveBoard(stored, coloured).notes).toEqual([green]);
+    expect(boardChangeOf(target, green)).toMatchObject({ type: "note.put", color: "green" });
   });
 
   it("draws an arrow at once, and a note taken off takes its arrows", () => {
@@ -276,6 +300,46 @@ describe("resolveBoard", () => {
     const gone = putBoardEdit(linked, drawn, { kind: "note", id: "n" }, null, false);
     expect(resolveBoard(linked, gone).edges).toEqual([]);
     expect(boardChangeOf(arrow, null)).toEqual({ type: "edge.remove", edgeId: "e" });
+  });
+
+  it("never shows an edit again once the room's copy moved past it and came back", () => {
+    const note = { id: "n", text: "Ship", x: 0, y: 0 };
+    const stored: RoomBoard = { positions: { thread: { x: 0, y: 0 } }, notes: [note] };
+    const value = { id: "e", from: "note:n", to: "card:thread" };
+    const drawn = putBoardEdit(stored, NO_BOARD_EDITS, { kind: "edge", id: "e" }, value, false);
+    const moved = putBoardEdit(stored, drawn, thread, { x: 40, y: 0 }, false);
+    expect(settleBoardEdits(stored, moved)).toBe(moved);
+    // The room takes both, then the owner deletes the line and someone moves the card back.
+    const taken: RoomBoard = { ...stored, positions: { thread: { x: 40, y: 0 } }, edges: [value] };
+    const settled = settleBoardEdits(taken, moved);
+    expect(settled).toEqual(NO_BOARD_EDITS);
+    expect(resolveBoard(stored, settled)).toMatchObject({
+      positions: { thread: { x: 0, y: 0 } },
+      edges: [],
+    });
+  });
+
+  it("shows a line drawn again over the one going away, in the queue the removal went in", () => {
+    const note = { id: "n", text: "Ship", x: 0, y: 0 };
+    const old = { id: "e", from: "note:n", to: "card:thread" };
+    const stored: RoomBoard = { positions: {}, notes: [note], edges: [old] };
+    const again = { id: "f", from: "note:n", to: "card:thread" };
+    const removed = putBoardEdit(stored, NO_BOARD_EDITS, { kind: "edge", id: "e" }, null, false);
+    const redrawn = putBoardEdit(stored, removed, { kind: "edge", id: "f" }, again, false);
+    expect(resolveBoard(stored, redrawn).edges).toEqual([again]);
+    // Drawn first and removed after, the order the edits sit in does not hide it either.
+    const reversed = putBoardEdit(
+      stored,
+      putBoardEdit(stored, NO_BOARD_EDITS, { kind: "edge", id: "f" }, again, false),
+      { kind: "edge", id: "e" },
+      null,
+      false,
+    );
+    expect(resolveBoard(stored, reversed).edges).toEqual([again]);
+    expect(boardChangeQueueKey(stored, { kind: "edge", id: "e" }, null)).toBe(
+      boardChangeQueueKey(stored, { kind: "edge", id: "f" }, again),
+    );
+    expect(boardChangeQueueKey(stored, thread, { x: 1, y: 1 })).toBe("card:thread");
   });
 
   it("resizes a card or a note while held, within the room's bounds, and sends it on release", () => {
@@ -361,12 +425,17 @@ describe("resolveBoard", () => {
       true,
     );
     const replies = [{ id: "r", text: "Not yet", at: "2026-11-13T00:00:00.000Z" }];
-    const answered: RoomBoard = { positions: {}, notes: [{ ...pin, replies, resolved: true }] };
+    const reactions = [{ emoji: "👍" as const }];
+    const answered: RoomBoard = {
+      positions: {},
+      notes: [{ ...pin, replies, resolved: true, reactions }],
+    };
     expect(resolveBoard(answered, dragging).notes[0]).toEqual({
       ...pin,
       x: 40,
       replies,
       resolved: true,
+      reactions,
     });
   });
 
@@ -1411,5 +1480,236 @@ describe("comment pins", () => {
       to: `note:n${index}`,
     }));
     expect(boardCommentLineTo({ ...board, edges }, "note:box")).toBeNull();
+  });
+});
+
+describe("unread comment threads", () => {
+  const sam = GuestId.make("sam");
+  const reply = (id: string, at: string, fields: Partial<RoomBoardReply> = {}): RoomBoardReply => ({
+    id,
+    text: id,
+    at: `2026-11-13T10:0${at}:00.000Z`,
+    ...fields,
+  });
+  const thread = (replies: ReadonlyArray<RoomBoardReply>): RoomBoardNote => ({
+    id: "c",
+    text: "Ship it?",
+    x: 0,
+    y: 0,
+    kind: "comment",
+    replies,
+  });
+
+  it("has a reply newer than when this viewer last had it open, unless the viewer wrote it", () => {
+    const seen = "2026-11-13T10:02:00.000Z";
+    const rows: ReadonlyArray<readonly [ReadonlyArray<RoomBoardReply>, string | null, boolean]> = [
+      [[], null, false],
+      [[reply("old", "1", { guestId: sam })], null, false],
+      [[reply("new", "3", { guestId: sam })], null, true],
+      // Their own reply never makes it unread, a guest's or the owner's.
+      [[reply("mine", "3", { guestId: sam })], "sam", false],
+      [[reply("owners", "3")], null, false],
+      [[reply("owners", "3")], "sam", true],
+      // An agent's answer does, even their own agent's.
+      [[reply("agent", "3", { agent: { turnId: "run", boxId: "thread" } })], null, true],
+    ];
+    for (const [replies, viewer, unread] of rows) {
+      expect(boardCommentUnread(thread(replies), viewer, seen)).toBe(unread);
+    }
+    // Never opened here: any reply of someone else's is new.
+    expect(boardCommentUnread(thread([reply("old", "1", { guestId: sam })]), null, undefined)).toBe(
+      true,
+    );
+  });
+
+  it("remembers the newest reply of the thread that was open, within a cap", () => {
+    const note = thread([reply("a", "3"), reply("b", "1")]);
+    const at = boardNewestReplyAt(note);
+    expect(at).toBe("2026-11-13T10:03:00.000Z");
+    const seen = boardCommentsSeen({}, "share/c", at);
+    expect(seen).toEqual({ "share/c": at });
+    expect(boardCommentsSeen(seen, "share/c", at)).toBe(seen);
+    expect(boardCommentsSeen(seen, "share/d", undefined)).toBe(seen);
+    const full = Object.fromEntries(
+      Array.from({ length: BOARD_SEEN_COMMENTS_MAX }, (_, index) => [
+        `share/${index}`,
+        new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(),
+      ]),
+    );
+    const kept = boardCommentsSeen(full, "share/c", at);
+    expect(Object.keys(kept)).toHaveLength(BOARD_SEEN_COMMENTS_MAX);
+    expect(kept["share/c"]).toBe(at);
+    expect(kept["share/0"]).toBeUndefined();
+  });
+});
+
+describe("selecting several cards", () => {
+  const sam = GuestId.make("sam");
+  const board: RoomBoard = {
+    positions: {},
+    notes: [
+      { id: "mine", text: "A", x: 10, y: 10 },
+      { id: "sams", text: "B", x: 300, y: 10, guestId: sam },
+      { id: "pin", text: "Why?", x: 50, y: 50, kind: "comment" },
+    ],
+  };
+  const positions = { thread: { x: 0, y: 400 } };
+
+  it("selects what a marquee touches, edges included", () => {
+    const items = [
+      { ref: "note:mine", rect: { x: 10, y: 10, width: 100, height: 100 } },
+      { ref: "note:sams", rect: { x: 300, y: 10, width: 100, height: 100 } },
+      { ref: "card:thread", rect: { x: 0, y: 400, width: 320, height: 200 } },
+    ];
+    expect(boardItemsInRect(items, { x: 100, y: 100, width: 200, height: 0 })).toEqual([
+      "note:mine",
+      "note:sams",
+    ]);
+    expect(boardItemsInRect(items, { x: 150, y: 150, width: 100, height: 100 })).toEqual([]);
+    expect(boardItemsInRect(items, { x: -50, y: 300, width: 60, height: 120 })).toEqual([
+      "card:thread",
+    ]);
+  });
+
+  it("moves every selected card and note together, one change each, and leaves pins out", () => {
+    const refs = ["note:mine", "card:thread", "note:pin", "note:gone", "line:x"];
+    const items = boardSelectionItems(board, positions, refs);
+    expect(items.map(({ target }) => boardEditKey(target))).toEqual(["note:mine", "card:thread"]);
+    const moved = boardGroupMove(items, 25.4, -10);
+    expect(
+      moved.map(({ target, value }) => boardChangeOf(target, settleBoardValue(value))),
+    ).toEqual([
+      { type: "note.put", noteId: "mine", text: "A", x: 35, y: 0 },
+      { type: "card.move", cardId: "thread", x: 25, y: 390 },
+    ]);
+    expect(boardItemTarget("card:guest:sam")).toEqual({ kind: "card", id: "guest:sam" });
+    expect(boardItemTarget("edge:e")).toBeNull();
+  });
+
+  it("deletes only the notes the viewer may, and counts the ones it leaves", () => {
+    const refs = ["note:mine", "note:sams", "card:thread"];
+    expect(boardSelectionRemoval(board, refs, null)).toEqual({
+      noteIds: ["mine", "sams"],
+      left: 0,
+    });
+    expect(boardSelectionRemoval(board, refs, "sam")).toEqual({ noteIds: ["sams"], left: 1 });
+  });
+});
+
+describe("undo and redo", () => {
+  const note = { id: "n", text: "Ship", x: 0, y: 0 };
+  const line = { id: "e", from: "note:n", to: "card:thread" };
+  const board: RoomBoard = { positions: { thread: { x: 0, y: 0 } }, notes: [note], edges: [line] };
+  const noteTarget = { kind: "note", id: "n" } as const;
+  const card = { kind: "card", id: "thread" } as const;
+  const edge = { kind: "edge", id: "e" } as const;
+
+  it("takes back and makes again each kind of change, while the board still shows it", () => {
+    const rows: ReadonlyArray<
+      readonly [string, BoardHistoryEntry, RoomBoard, ReadonlyArray<unknown> | null]
+    > = [
+      [
+        "a move",
+        [{ target: card, before: { x: 10, y: 10 }, after: { x: 0, y: 0 } }],
+        board,
+        [{ type: "card.move", cardId: "thread", x: 10, y: 10 }],
+      ],
+      [
+        "an edit, back to no colour",
+        [{ target: noteTarget, before: note, after: { ...note, text: "Go", color: "pink" } }],
+        { ...board, notes: [{ ...note, text: "Go", color: "pink" }] },
+        [{ type: "note.put", noteId: "n", text: "Ship", x: 0, y: 0, color: "yellow" }],
+      ],
+      [
+        "adding a note",
+        [{ target: noteTarget, before: null, after: note }],
+        board,
+        [{ type: "note.remove", noteId: "n" }],
+      ],
+      [
+        "drawing a line",
+        [{ target: edge, before: null, after: line }],
+        board,
+        [{ type: "edge.remove", edgeId: "e" }],
+      ],
+      [
+        "deleting a line",
+        [{ target: edge, before: line, after: null }],
+        { ...board, edges: [] },
+        [{ type: "edge.put", edgeId: "e", from: "note:n", to: "card:thread" }],
+      ],
+      // Someone else moved the card since: nothing is taken back.
+      [
+        "a move someone else moved on",
+        [{ target: card, before: { x: 10, y: 10 }, after: { x: 5, y: 5 } }],
+        board,
+        null,
+      ],
+      // An agent wrote into the artifact this person added: taking it off would lose that.
+      [
+        "adding a card an agent then wrote into",
+        [{ target: noteTarget, before: null, after: note }],
+        {
+          ...board,
+          notes: [
+            {
+              ...note,
+              artifact: { body: "#", turnId: "t", updatedAt: "2026-11-13T00:00:00.000Z" },
+            },
+          ],
+        },
+        null,
+      ],
+    ];
+    for (const [, entry, now, changes] of rows) {
+      const undo = boardHistoryChanges(now, entry, "undo");
+      expect(undo?.map(({ target, value }) => boardChangeOf(target, value)) ?? null).toEqual(
+        changes,
+      );
+    }
+    // Redo makes the change again once the board shows it taken back.
+    const moved = [{ target: card, before: { x: 10, y: 10 }, after: { x: 0, y: 0 } }];
+    expect(boardHistoryChanges(board, moved, "redo")).toBeNull();
+    expect(
+      boardHistoryChanges({ ...board, positions: { thread: { x: 10, y: 10 } } }, moved, "redo"),
+    ).toEqual([{ target: card, value: { x: 0, y: 0 } }]);
+  });
+
+  it("takes back several cards moved together, and keeps the newest entries", () => {
+    const entry = [
+      { target: card, before: { x: 10, y: 10 }, after: { x: 0, y: 0 } },
+      { target: noteTarget, before: { ...note, x: 10 }, after: note },
+    ];
+    expect(boardHistoryChanges(board, entry, "undo")?.map(({ target }) => target)).toEqual([
+      noteTarget,
+      card,
+    ]);
+    let history: ReadonlyArray<BoardHistoryEntry> = [];
+    for (let index = 0; index <= BOARD_HISTORY_MAX; index++) {
+      history = boardHistoryWith(history, [
+        { target: card, before: null, after: { x: index, y: 0 } },
+      ]);
+    }
+    expect(history).toHaveLength(BOARD_HISTORY_MAX);
+    expect(history[0]?.[0]?.after).toEqual({ x: 1, y: 0 });
+  });
+});
+
+describe("boardReactionChips", () => {
+  it("shows each emoji once in a fixed order, with its count, who, and whether it is yours", () => {
+    const sam = GuestId.make("sam");
+    const people = { guests: [{ id: sam, name: "Sam" }], viewer: sam, ownerName: "Theo" };
+    expect(
+      boardReactionChips(
+        [{ emoji: "🎉" }, { emoji: "👍", guestId: sam }, { emoji: "🎉", guestId: sam }],
+        people,
+      ),
+    ).toEqual([
+      { emoji: "👍", count: 1, mine: true, names: "You" },
+      { emoji: "🎉", count: 2, mine: true, names: "Theo, You" },
+    ]);
+    expect(boardReactionChips([{ emoji: "👀" }], { ...people, viewer: null })).toEqual([
+      { emoji: "👀", count: 1, mine: true, names: "You" },
+    ]);
   });
 });

@@ -37,7 +37,6 @@ import {
   ROOM_BOX_PROGRESS_DETAIL_MAX_LENGTH,
   ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH,
   ROOM_BOX_PROMPT_MAX_LENGTH,
-  ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH,
   type RoomBoxProgress,
   type RoomArtifactRead,
   type RoomBoardChange,
@@ -66,7 +65,7 @@ import {
 import { chatMarkdownImageSources } from "@t3tools/shared/markdownPipeline";
 import { buildGuestLink, buildShortGuestLink } from "@t3tools/shared/guestLinks";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
-import { roomArtifactBody, roomBoxExcerpt } from "@t3tools/shared/roomBoard";
+import { roomArtifactBody, roomCommentAnswer } from "@t3tools/shared/roomBoard";
 import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 import * as NodeOS from "node:os";
 
@@ -1672,10 +1671,7 @@ const make = Effect.gen(function* () {
     const answer =
       postedComment === undefined || boxId === undefined
         ? ""
-        : roomBoxExcerpt(
-            sanitizeLinkedPrompt(postedComment.text).text,
-            ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH,
-          );
+        : roomCommentAnswer(postedComment.text);
     const comment =
       postedComment === undefined || answer === ""
         ? undefined

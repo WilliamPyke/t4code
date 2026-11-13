@@ -181,18 +181,22 @@ function boardWithoutGuest(board: RoomBoard, guestId: GuestId): RoomBoard {
       ...withoutCards,
       notes: board.notes.flatMap((note) => {
         if (note.guestId === guestId) return [];
-        const theirs = note.replies?.some((reply) => reply.guestId === guestId) === true;
+        const theirs = [...(note.replies ?? []), ...(note.reactions ?? [])].some(
+          (entry) => entry.guestId === guestId,
+        );
         if (!theirs && note.assignee?.guestId !== guestId && note.answer?.guestId !== guestId) {
           return [note];
         }
-        const { assignee, answer, replies, ...rest } = note;
+        const { assignee, answer, replies, reactions, ...rest } = note;
         const kept = replies?.filter((reply) => reply.guestId !== guestId) ?? [];
+        const keptReactions = reactions?.filter((reaction) => reaction.guestId !== guestId) ?? [];
         return [
           {
             ...rest,
             ...(assignee === undefined || assignee.guestId === guestId ? {} : { assignee }),
             ...(answer === undefined || answer.guestId === guestId ? {} : { answer }),
             ...(kept.length === 0 ? {} : { replies: kept }),
+            ...(keptReactions.length === 0 ? {} : { reactions: keptReactions }),
           },
         ];
       }),

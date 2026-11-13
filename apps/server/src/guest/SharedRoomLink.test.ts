@@ -723,7 +723,7 @@ it.effect(
           model: "GPT-5.1 Codex",
           boxId: "thread",
         } as never);
-        // A run asked from a comment thread posts its reply there as prose, once it finished.
+        // A run asked from a comment thread posts its markdown there, once it finished.
         assert.deepEqual(yield* Queue.take(answers), {
           type: "thread.room-comment.answer",
           commandId: "server:room-comment:run:comment",
@@ -731,7 +731,7 @@ it.effect(
           shareId,
           noteId: "note:ask",
           turnId: "run:comment",
-          text: "Yes It is fixed now.",
+          text: "## Yes\n\nIt is **fixed** now.",
           boxId: "thread",
           model: "GPT-5.1 Codex",
         } as never);
@@ -925,7 +925,7 @@ it.effect(
           shareId,
           noteId: "note:ask",
           turnId: "run:comment",
-          text: "Yes, dark enough.",
+          text: "Yes, **dark** enough.",
           boxId: "box:plan",
           model: "GPT-5.1 Codex",
         } as never);
@@ -1145,7 +1145,7 @@ it.effect(
         assert.equal(askedRunning?.turn.commentId, "note:ask");
         assert.deepEqual(askedTurn?.turn.comment, {
           noteId: "note:ask",
-          text: "Yes It is dark enough.",
+          text: "## Yes\n\nIt is **dark** enough.",
         });
       }).pipe(Effect.provide(layer));
     }),

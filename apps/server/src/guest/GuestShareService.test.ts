@@ -1158,7 +1158,7 @@ it.effect("shows a guest's own thread box running on their machine, and its turn
       [
         {
           id: "agent:run:1",
-          text: "Yes, dark.",
+          text: "## Yes, **dark**.",
           guestId: samId,
           agent: { turnId: "run:1", boxId: "sams", model: "GPT-5.1 Codex" },
         },

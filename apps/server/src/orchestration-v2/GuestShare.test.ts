@@ -1223,8 +1223,29 @@ it.effect("keeps tasks, links, comments and arrows on the board, checked by the 
       { id: "reply:sam", text: "Why?", guestId: sam, at: now },
     ]);
 
-    // A removed guest's cards, comments, replies and arrows go; tasks they had are left with no
-    // one.
+    // A reaction is its sender's: one naming someone else is still Alex's own.
+    const forgedReaction = decodeChange({
+      type: "note.react",
+      noteId: "task",
+      emoji: "👍",
+      guestId: sam,
+    });
+    yield* change(alex, Option.getOrThrow(forgedReaction));
+    yield* change(sam, { type: "note.react", noteId: "task", emoji: "👍" });
+    yield* change(null, { type: "note.react", noteId: "task", emoji: "🎉" });
+    const reactionsOf = Effect.map(
+      board,
+      ({ board }) => board?.notes.find((note) => note.id === "task")?.reactions,
+    );
+    assert.deepEqual(yield* reactionsOf, [
+      { emoji: "👍", guestId: alex },
+      { emoji: "👍", guestId: sam },
+      { emoji: "🎉" },
+    ]);
+    assert.isTrue(yield* refused(change(sam, { type: "note.react", noteId: "talk", emoji: "👀" })));
+
+    // A removed guest's cards, comments, replies, reactions and arrows go; tasks they had are left
+    // with no one.
     yield* change(sam, arrow("a6", "note:task", `card:guest:${alex}`));
     yield* orchestrator.dispatch({
       type: "thread.guest.remove",
@@ -1238,6 +1259,7 @@ it.effect("keeps tasks, links, comments and arrows on the board, checked by the 
       ["task", "owner-task", "talk"],
     );
     assert.deepEqual(yield* repliesOf, [{ id: "reply:sam", text: "Why?", guestId: sam, at: now }]);
+    assert.deepEqual(yield* reactionsOf, [{ emoji: "👍", guestId: sam }, { emoji: "🎉" }]);
     assert.isUndefined(after?.notes[0]?.assignee);
     assert.deepEqual(after?.edges, []);
   }).pipe(Effect.provide(layerTest)),

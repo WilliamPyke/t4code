@@ -367,6 +367,7 @@ export const ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH = 1_200;
 export const RoomBoardReply = Schema.Struct({
   /** The client that adds the reply names it, or the owner's server for an agent's. */
   id: RoomBoardNoteId,
+  /** A person's is plain text; an agent's is markdown, and plain prose from an older server. */
   text: Schema.String.check(Schema.isMaxLength(ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH)),
   /** The guest who wrote it, or whose agent did. Absent on the owner's and their agent's. */
   guestId: Schema.optional(GuestId),
@@ -387,6 +388,33 @@ export const RoomBoardReply = Schema.Struct({
   ),
 });
 export type RoomBoardReply = typeof RoomBoardReply.Type;
+
+/** The colours a plain note can be. Absent is yellow. */
+export const ROOM_BOARD_NOTE_COLORS = [
+  "yellow",
+  "green",
+  "blue",
+  "pink",
+  "purple",
+  "grey",
+] as const;
+export const RoomBoardNoteColor = Schema.Literals(ROOM_BOARD_NOTE_COLORS);
+export type RoomBoardNoteColor = typeof RoomBoardNoteColor.Type;
+
+/** The reactions anyone can leave on a card. */
+export const ROOM_BOARD_REACTIONS = ["👍", "❤️", "🎉", "👀", "✅", "❓"] as const;
+export const RoomBoardReactionEmoji = Schema.Literals(ROOM_BOARD_REACTIONS);
+export type RoomBoardReactionEmoji = typeof RoomBoardReactionEmoji.Type;
+/** Reactions one card holds, from everyone. */
+export const ROOM_BOARD_MAX_REACTIONS = 60;
+
+/** Someone's reaction on a card. */
+export const RoomBoardReaction = Schema.Struct({
+  emoji: RoomBoardReactionEmoji,
+  /** The guest who reacted. Absent on the owner's. */
+  guestId: Schema.optional(GuestId),
+});
+export type RoomBoardReaction = typeof RoomBoardReaction.Type;
 
 /**
  * A card someone added to the board: a note, unless `kind` says it is a task, a link, an
@@ -415,6 +443,8 @@ export const RoomBoardNote = Schema.Struct({
   quote: Schema.optional(Schema.String.check(Schema.isMaxLength(ROOM_BOARD_QUOTE_MAX_LENGTH))),
   /** Absent until someone resizes the card. */
   size: Schema.optional(RoomBoardSize),
+  /** A plain note's colour, once someone picked one. */
+  color: Schema.optional(RoomBoardNoteColor),
   /** What an agent wrote into an artifact. No board change sets it. */
   artifact: Schema.optional(RoomArtifactContent),
   /** A thread box's recent turns. No board change sets it; it stays when the box changes. */
@@ -427,6 +457,10 @@ export const RoomBoardNote = Schema.Struct({
   ),
   /** A comment thread someone resolved. Only `comment.resolve` sets it. */
   resolved: Schema.optional(Schema.Literal(true)),
+  /** Who reacted with what, oldest first. Only `note.react` sets them. */
+  reactions: Schema.optional(
+    Schema.Array(RoomBoardReaction).check(Schema.isMaxLength(ROOM_BOARD_MAX_REACTIONS)),
+  ),
 });
 export type RoomBoardNote = typeof RoomBoardNote.Type;
 
@@ -480,8 +514,9 @@ export const RoomBoardChange = Schema.Union([
   }),
   /**
    * Adds the note, or replaces the text and place of the one with this id. `kind`, `url`,
-   * `pinnedTo` and `quote` are kept from when it was added. Absent `size`, `done` and `assignee`
-   * stay as they were, so an older client's edit keeps them; a null `assignee` clears it.
+   * `pinnedTo` and `quote` are kept from when it was added. Absent `size`, `done`, `assignee`
+   * and `color` stay as they were, so an older client's edit keeps them; a null `assignee`
+   * clears it.
    */
   Schema.Struct({
     type: Schema.Literal("note.put"),
@@ -495,6 +530,7 @@ export const RoomBoardChange = Schema.Union([
     size: RoomBoardNote.fields.size,
     done: RoomBoardNote.fields.done,
     assignee: Schema.optional(Schema.NullOr(RoomBoardAssignee)),
+    color: RoomBoardNote.fields.color,
   }),
   /** Removes the note and its arrows. */
   Schema.Struct({ type: Schema.Literal("note.remove"), noteId: RoomBoardNote.fields.id }),
@@ -528,6 +564,12 @@ export const RoomBoardChange = Schema.Union([
     type: Schema.Literal("comment.resolve"),
     noteId: RoomBoardNote.fields.id,
     resolved: Schema.Boolean,
+  }),
+  /** Adds the sender's own reaction to a card, or takes it back if they had it. */
+  Schema.Struct({
+    type: Schema.Literal("note.react"),
+    noteId: RoomBoardNote.fields.id,
+    emoji: RoomBoardReactionEmoji,
   }),
 ]);
 export type RoomBoardChange = typeof RoomBoardChange.Type;

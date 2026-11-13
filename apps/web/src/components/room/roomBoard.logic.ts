@@ -5,6 +5,7 @@ import {
   ROOM_BOARD_MAX_EDGES,
   ROOM_BOARD_MIN_CARD_SIZE,
   ROOM_BOARD_QUOTE_MAX_LENGTH,
+  ROOM_BOARD_REACTIONS,
   ROOM_BOARD_ROOM_BOX,
   ROOM_BOARD_THREAD_CARD,
   isRoomBoardUrl,
@@ -18,6 +19,8 @@ import {
   type RoomBoardChange,
   type RoomBoardEdge,
   type RoomBoardNote,
+  type RoomBoardReaction,
+  type RoomBoardReactionEmoji,
   type RoomBoardReply,
   type RoomBoardSize,
   type RoomBoardViewport,
@@ -25,6 +28,7 @@ import {
   type RoomCodeState,
   type ThreadGuestMessage,
 } from "@t3tools/contracts";
+import { isRoomCardOwnedBy } from "@t3tools/shared/roomBoard";
 import * as Schema from "effect/Schema";
 
 /** Where the board is scrolled to and how far it is zoomed. `x`/`y` are screen pixels. */
@@ -632,11 +636,22 @@ const valueKey = (value: BoardValue | undefined): string => {
     value.done === true,
     value.assignee === undefined ? null : (value.assignee.guestId ?? ""),
     value.size === undefined ? null : `${value.size.w}x${value.size.h}`,
+    value.color ?? null,
   ]);
 };
 
 const shows = (board: RoomBoard, edit: BoardEdit) =>
   edit.held || valueKey(edit.base) === valueKey(roomCopy(board, edit.target));
+
+/**
+ * Forgets the edits the room's copy has moved past, the same edits when there are none. Run on
+ * every board the room sends: an edit kept past that would show again once the room's copy came
+ * back to its base, as when someone else deletes a line this person drew.
+ */
+export function settleBoardEdits(board: RoomBoard, edits: BoardEdits): BoardEdits {
+  const kept = Object.entries(edits).filter(([, edit]) => shows(board, edit));
+  return kept.length === Object.keys(edits).length ? edits : Object.fromEntries(kept);
+}
 
 /**
  * Records an edit, and forgets the ones the room's copy has moved past. Held while the drag or
@@ -649,9 +664,8 @@ export function putBoardEdit(
   value: BoardValue,
   held: boolean,
 ): BoardEdits {
-  const kept = Object.entries(edits).filter(([, edit]) => shows(board, edit));
   return {
-    ...Object.fromEntries(kept),
+    ...settleBoardEdits(board, edits),
     [boardEditKey(target)]: {
       target,
       value,
@@ -676,6 +690,21 @@ export function boardChangeQueue() {
     next.then(forget, forget);
     return next;
   };
+}
+
+/**
+ * The queue a change waits in. A line's is the two cards it joins, so taking a line off and
+ * drawing it again reach the room in that order, not as a duplicate of the one going away.
+ */
+export function boardChangeQueueKey(
+  board: RoomBoard,
+  target: BoardTarget,
+  value: BoardValue,
+): string {
+  if (target.kind !== "edge") return boardEditKey(target);
+  const line =
+    value !== null && "from" in value ? value : board.edges?.find((edge) => edge.id === target.id);
+  return line === undefined ? boardEditKey(target) : `line:${line.from}>${line.to}`;
 }
 
 /** Takes back an edit the server refused, unless a newer one replaced it. */
@@ -716,6 +745,7 @@ const withServerFields = (note: RoomBoardNote, room: RoomBoardNote | undefined):
     createdAt: _createdAt,
     replies: _replies,
     resolved: _resolved,
+    reactions: _reactions,
     ...own
   } = note;
   return {
@@ -726,6 +756,7 @@ const withServerFields = (note: RoomBoardNote, room: RoomBoardNote | undefined):
     ...(room?.createdAt === undefined ? {} : { createdAt: room.createdAt }),
     ...(room?.replies === undefined ? {} : { replies: room.replies }),
     ...(room?.resolved === undefined ? {} : { resolved: room.resolved }),
+    ...(room?.reactions === undefined ? {} : { reactions: room.reactions }),
   };
 };
 
@@ -735,6 +766,7 @@ export function resolveBoard(board: RoomBoard, edits: BoardEdits): RoomBoard {
   const sizes = { ...board.sizes };
   let notes = board.notes;
   let edges = board.edges ?? [];
+  const drawn: Array<RoomBoardEdge> = [];
   for (const edit of Object.values(edits)) {
     if (!shows(board, edit)) continue;
     const { target, value } = edit;
@@ -744,15 +776,17 @@ export function resolveBoard(board: RoomBoard, edits: BoardEdits): RoomBoard {
       if (value !== null && "w" in value) sizes[target.id] = { w: value.w, h: value.h };
     } else if (target.kind === "edge") {
       if (value === null) edges = edges.filter((edge) => edge.id !== target.id);
-      else if ("from" in value && !edges.some((edge) => sameLine(edge, value))) {
-        edges = replaceById(edges, value);
-      }
+      else if ("from" in value) drawn.push(value);
     } else if (value === null) {
       notes = notes.filter((note) => note.id !== target.id);
     } else if ("text" in value) {
       const room = board.notes.find((note) => note.id === target.id);
       notes = replaceById(notes, withServerFields(value, room));
     }
+  }
+  // After the lines taken off, so a line drawn again over one going away still shows.
+  for (const line of drawn) {
+    if (!edges.some((edge) => sameLine(edge, line))) edges = replaceById(edges, line);
   }
   const noteRefs = new Set(notes.map((note) => boardEditKey({ kind: "note", id: note.id })));
   const present = (ref: string) => ref.startsWith(CARD_REF) || noteRefs.has(ref);
@@ -803,6 +837,7 @@ export function boardChangeOf(target: BoardTarget, value: BoardValue): RoomBoard
     ...(value.pinnedTo === undefined ? {} : { pinnedTo: value.pinnedTo }),
     ...(value.quote === undefined ? {} : { quote: value.quote }),
     ...(value.size === undefined ? {} : { size: value.size }),
+    ...(value.color === undefined ? {} : { color: value.color }),
     ...(value.kind === "task"
       ? { done: value.done === true, assignee: value.assignee ?? null }
       : {}),
@@ -1620,4 +1655,221 @@ export function boardArtifactWriting(
   if (last === undefined) return null;
   const who = names.length === 1 ? last : `${names.slice(0, -1).join(", ")} and ${last}`;
   return sentenceStart(`${who} ${names.length === 1 ? "is" : "are"} writing…`);
+}
+
+/** How many comment threads this device remembers having seen, across every board. */
+export const BOARD_SEEN_COMMENTS_MAX = 300;
+/** When this device last had each comment thread open: its newest reply's time, by thread. */
+export type BoardSeenComments = Readonly<Record<string, string>>;
+export const boardSeenCommentKey = (shareId: string, noteId: string) => `${shareId}/${noteId}`;
+
+export const boardNewestReplyAt = (note: RoomBoardNote) =>
+  (note.replies ?? []).reduce<string | undefined>(
+    (newest, reply) =>
+      newest === undefined || Date.parse(reply.at) > Date.parse(newest) ? reply.at : newest,
+    undefined,
+  );
+
+/**
+ * Whether a comment thread has a reply this viewer (null for the owner) has not seen: anyone
+ * else's or any agent's, newer than when they last had it open. Their own replies never count.
+ */
+export function boardCommentUnread(
+  note: RoomBoardNote,
+  viewer: string | null,
+  seenAt: string | undefined,
+): boolean {
+  const seen = seenAt === undefined ? Number.NEGATIVE_INFINITY : Date.parse(seenAt);
+  return (note.replies ?? []).some(
+    (reply) =>
+      (reply.agent !== undefined || (reply.guestId ?? null) !== viewer) &&
+      Date.parse(reply.at) > seen,
+  );
+}
+
+/**
+ * What this device remembers once a thread was open with its newest reply from `at`, keeping
+ * the threads with the newest replies up to the cap. The same record when that changes nothing.
+ */
+export function boardCommentsSeen(
+  seen: BoardSeenComments,
+  key: string,
+  at: string | undefined,
+): BoardSeenComments {
+  const before = seen[key];
+  if (at === undefined || (before !== undefined && Date.parse(before) >= Date.parse(at))) {
+    return seen;
+  }
+  const entries = Object.entries({ ...seen, [key]: at });
+  if (entries.length <= BOARD_SEEN_COMMENTS_MAX) return Object.fromEntries(entries);
+  return Object.fromEntries(
+    entries
+      .toSorted(([, left], [, right]) => Date.parse(right) - Date.parse(left))
+      .slice(0, BOARD_SEEN_COMMENTS_MAX),
+  );
+}
+
+/** The card or note a board item's ref names (`card:<id>` or `note:<id>`), or null. */
+export function boardItemTarget(ref: string): BoardTarget | null {
+  const split = ref.indexOf(":");
+  const kind = ref.slice(0, split);
+  const id = ref.slice(split + 1);
+  if (split < 0 || id === "") return null;
+  return kind === "card" || kind === "note" ? { kind, id } : null;
+}
+
+/** The items a marquee touches, of those drawn on the board, in board pixels. */
+export function boardItemsInRect(
+  items: ReadonlyArray<{ readonly ref: string; readonly rect: BoardRect }>,
+  area: BoardRect,
+): Array<string> {
+  return items
+    .filter(
+      ({ rect }) =>
+        rect.x <= area.x + area.width &&
+        rect.x + rect.width >= area.x &&
+        rect.y <= area.y + area.height &&
+        rect.y + rect.height >= area.y,
+    )
+    .map(({ ref }) => ref);
+}
+
+/** A selected card or note and where it is now. */
+export interface BoardSelected {
+  readonly target: BoardTarget;
+  readonly value: BoardPoint | RoomBoardNote;
+}
+
+/**
+ * The selected cards and notes still on the board, where each is now. Comment pins open their
+ * thread and stay out of a selection.
+ */
+export function boardSelectionItems(
+  board: RoomBoard,
+  positions: Readonly<Record<string, BoardPoint>>,
+  refs: Iterable<string>,
+): Array<BoardSelected> {
+  return [...refs].flatMap((ref) => {
+    const target = boardItemTarget(ref);
+    if (target === null) return [];
+    if (target.kind === "card") {
+      const at = positions[target.id];
+      return at === undefined ? [] : [{ target, value: at }];
+    }
+    const note = board.notes.find((candidate) => candidate.id === target.id);
+    return note === undefined || note.kind === "comment" ? [] : [{ target, value: note }];
+  });
+}
+
+/** Every selected item moved by the same amount, in board pixels, so they land together. */
+export const boardGroupMove = (
+  items: ReadonlyArray<BoardSelected>,
+  dx: number,
+  dy: number,
+): Array<BoardSelected> =>
+  items.map(({ target, value }) => ({
+    target,
+    value: { ...value, x: value.x + dx, y: value.y + dy },
+  }));
+
+/**
+ * What Delete takes off the board of a selection: the notes this viewer (null for the owner) may
+ * remove, and how many it leaves because they are someone else's. The room's own cards stay
+ * and are not counted.
+ */
+export function boardSelectionRemoval(
+  board: RoomBoard,
+  refs: Iterable<string>,
+  viewer: string | null,
+): { readonly noteIds: ReadonlyArray<string>; readonly left: number } {
+  const notes = boardSelectionItems(board, {}, refs).flatMap(({ value }) =>
+    "id" in value ? [value] : [],
+  );
+  const noteIds = notes.filter((note) => isRoomCardOwnedBy(note, viewer)).map((note) => note.id);
+  return { noteIds, left: notes.length - noteIds.length };
+}
+
+/** How many of this viewer's own board changes they can take back. */
+export const BOARD_HISTORY_MAX = 50;
+
+/** One card, note or line before and after one of this viewer's changes; null is not there. */
+export interface BoardStep {
+  readonly target: BoardTarget;
+  readonly before: BoardValue;
+  readonly after: BoardValue;
+}
+/** What one action of this viewer's changed: a drag of several cards is one. */
+export type BoardHistoryEntry = ReadonlyArray<BoardStep>;
+
+/** The card, note or line as the board shows it now, or null. */
+export const boardValueOf = (board: RoomBoard, target: BoardTarget): BoardValue =>
+  roomCopy(board, target) ?? null;
+
+// A note's colour cannot be cleared, so going back to none is going back to yellow.
+const withColorOf = (value: BoardValue, other: BoardValue): BoardValue =>
+  value !== null &&
+  other !== null &&
+  "text" in value &&
+  "text" in other &&
+  value.color === undefined &&
+  other.color !== undefined
+    ? { ...value, color: "yellow" }
+    : value;
+
+// What only the owner's server writes into a card: taking back adding it would lose it.
+const hasServerContent = (value: BoardValue) =>
+  value !== null &&
+  "text" in value &&
+  [value.artifact, value.thread, value.answer, value.replies].some((field) => field !== undefined);
+
+/**
+ * The changes that take an entry back (`undo`) or make it again (`redo`), or null when the board
+ * has moved on: someone changed one of its cards since, or a card added has gained what an agent
+ * wrote. Taking back never undoes anyone else's change.
+ */
+export function boardHistoryChanges(
+  board: RoomBoard,
+  entry: BoardHistoryEntry,
+  direction: "undo" | "redo",
+): Array<{ readonly target: BoardTarget; readonly value: BoardValue }> | null {
+  const steps = direction === "undo" ? entry.toReversed() : entry;
+  const changes: Array<{ readonly target: BoardTarget; readonly value: BoardValue }> = [];
+  for (const { target, before, after } of steps) {
+    const [from, to] = direction === "undo" ? [after, before] : [before, after];
+    const now = boardValueOf(board, target);
+    if (valueKey(now) !== valueKey(from)) return null;
+    if (to === null && hasServerContent(now)) return null;
+    changes.push({ target, value: withColorOf(to, from) });
+  }
+  return changes;
+}
+
+/** The history with one more entry, the oldest dropped past the cap. */
+export const boardHistoryWith = (
+  history: ReadonlyArray<BoardHistoryEntry>,
+  entry: BoardHistoryEntry,
+): ReadonlyArray<BoardHistoryEntry> => [...history, entry].slice(-BOARD_HISTORY_MAX);
+
+/** A card's reactions as its chips show them: each emoji once, in the fixed order, with who. */
+export function boardReactionChips(
+  reactions: ReadonlyArray<RoomBoardReaction>,
+  people: BoardPeople,
+): Array<{
+  readonly emoji: RoomBoardReactionEmoji;
+  readonly count: number;
+  readonly mine: boolean;
+  readonly names: string;
+}> {
+  return ROOM_BOARD_REACTIONS.flatMap((emoji) => {
+    const by = reactions.filter((reaction) => reaction.emoji === emoji);
+    if (by.length === 0) return [];
+    return [
+      {
+        emoji,
+        count: by.length,
+        mine: by.some((reaction) => (reaction.guestId ?? null) === people.viewer),
+        names: by.map((reaction) => boardPersonName(people, reaction.guestId)).join(", "),
+      },
+    ];
+  });
 }

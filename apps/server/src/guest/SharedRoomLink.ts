@@ -23,7 +23,6 @@ import {
   type RoomBoxProgress,
   ROOM_BOX_PROMPT_MAX_LENGTH,
   ROOM_BOX_REPLY_MAX_LENGTH,
-  ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH,
   ROOM_TASK_CONTEXT_KIND,
   ROOM_UPDATES_MAX_CHARS,
   RoomTaskContextPayload,
@@ -55,6 +54,7 @@ import {
   roomArtifactRequestOf,
   roomBoxExcerpt,
   roomCardLabelsOf,
+  roomCommentAnswer,
   roomCommentRequestOf,
   roomRunPromptText,
   roomRunReplyText,
@@ -214,15 +214,12 @@ function artifactOfRun(
   return { noteId, body, ...(truncated ? { truncated } : {}) };
 }
 
-/** What a finished run posts in the comment thread it was asked to answer: its reply as prose. */
+/** What a finished run posts in the comment thread it was asked to answer: its reply's markdown. */
 function commentOfRun(
   noteId: string | undefined,
   items: ReadonlyArray<OrchestrationV2TurnItem>,
 ): NonNullable<GuestTurnRequest["comment"]> | undefined {
-  const text =
-    noteId === undefined
-      ? ""
-      : roomBoxExcerpt(roomRunReplyText(items), ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH);
+  const text = noteId === undefined ? "" : roomCommentAnswer(roomRunReplyText(items));
   return noteId === undefined || text === "" ? undefined : { noteId, text };
 }
 

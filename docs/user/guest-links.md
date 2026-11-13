@@ -56,6 +56,23 @@ opens it in a new tab; T Code does not load the page. To draw an arrow, drag the
 edge onto another card; click an arrow to delete it. Drag a card's bottom-right corner to resize
 it; everyone sees the new size.
 
+A note can be one of six colours: choose the palette on it. Anyone can recolour a note, and your
+next notes take the colour you picked last. React to a note, task, link, artifact or thread box
+with the smiley on it; reactions show under the card with how many, and clicking one adds or takes
+back your own. When the owner removes a guest, that guest's reactions go too.
+
+Hold Shift and click cards to select several, or hold Shift and drag across empty board to select
+everything the rectangle touches. Drag any selected card to move them all together. Delete (or
+Backspace) removes the selected cards you may delete after you confirm; cards that are someone
+else's stay, and the board says how many it left. Escape or **Clear** ends the selection. Only you
+see what you selected.
+
+Ctrl+Z (Cmd+Z on a Mac) undoes your own last change on the board, and Ctrl+Shift+Z or Ctrl+Y
+redoes it; the arrows in the toolbar do the same. Undo covers moving and resizing cards, a note's
+text and colour, adding a card, and drawing or deleting a line. It does not bring back a card you
+deleted. If someone else has changed that card since, the undo is skipped and the board says so,
+so you never undo another person's work. Undo history lasts while the board is open.
+
 To turn a note into a message, drag it onto the thread's card or choose **Use as message** on it.
 Its text lands in your message box, after anything you had written, and the note stays on the
 board. Nothing is sent until you send it, and a guest's message still waits for the owner. A guest
@@ -112,7 +129,8 @@ thread boxes.
 To talk about something on the board, choose **Comment**, click where the comment belongs, write
 it and press Enter. It shows as a pin with your initial; click a pin to open its thread, where
 anyone in the room can reply (Shift+Enter starts a new line). Everyone sees replies as they land.
-Drag a pin to move it. A thread holds up to 30 replies.
+A dot on a pin means someone replied since you last opened that thread on this device. Drag a pin
+to move it. A thread holds up to 30 replies.
 
 When a thread is settled, choose **Resolve**. Resolved threads are hidden: **Resolved** in the
 board's toolbar shows them, and **Reopen** brings one back. Anyone can resolve or reopen a thread.
@@ -127,7 +145,8 @@ holds all the lines it can. Moving a pin later does not change its lines.
 To bring an agent into a thread, type your question in the reply field (or leave it empty) and
 choose the bot button beside Send, then one of your thread boxes. Your question goes in as your
 reply, and that box's agent gets the whole thread and answers it. Its answer lands in the thread
-as a short reply marked with whose agent wrote it and the model, and everyone in the room sees it,
+with its formatting, cut to about 1,200 characters, marked with whose agent wrote it and the model,
+and everyone in the room sees it,
 along with a line while the agent works. You can only ask your own agent: the owner can ask the
 room thread's card or any of their boxes; a guest can ask once a machine of theirs joined the room
 and they have a thread box of their own there. The person whose agent it was, or the owner, can

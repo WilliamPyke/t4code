@@ -569,6 +569,7 @@ function GuestThreadSession({
           <RoomBoard
             title={view.title}
             room={view}
+            shareId={share.shareId}
             online={online}
             messages={boardMessages(
               projection.visibleTurnItems.map((row) => row.item),

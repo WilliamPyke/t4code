@@ -4,6 +4,7 @@ import {
   type RoomBoardNote,
   type RoomBoardReply,
 } from "@t3tools/contracts";
+import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
 import { isRoomCardOwnedBy } from "@t3tools/shared/roomBoard";
 import {
   ArrowUpIcon,
@@ -26,6 +27,7 @@ import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 
 import { formatRecentTimestamp } from "../../timestampFormat";
+import ChatMarkdown from "../ChatMarkdown";
 import { useInlineActionConfirm } from "../pullRequest/useInlineActionConfirm";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
@@ -108,10 +110,13 @@ export function CommentPin({
   onDrag,
   onDrop,
   onToggle,
+  unread,
 }: {
   readonly note: RoomBoardNote;
   readonly people: BoardPeople;
   readonly open: boolean;
+  /** Has a reply this viewer has not seen on this device. */
+  readonly unread: boolean;
   /** Keeps the pin a readable size on screen whatever the zoom. */
   readonly scale: number;
   /** The pin as lines name it. */
@@ -144,7 +149,7 @@ export function CommentPin({
     >
       <button
         type="button"
-        aria-label={`Comment thread from ${author}${replies === 0 ? "" : `, ${replies} ${replies === 1 ? "reply" : "replies"}`}${note.resolved === true ? ", resolved" : ""}`}
+        aria-label={`Comment thread from ${author}${replies === 0 ? "" : `, ${replies} ${replies === 1 ? "reply" : "replies"}`}${unread ? ", new replies" : ""}${note.resolved === true ? ", resolved" : ""}`}
         aria-expanded={open}
         className={cn(
           "size-8 cursor-pointer touch-none overflow-hidden rounded-full rounded-bl-none border-2 border-background shadow-md",
@@ -179,6 +184,12 @@ export function CommentPin({
         <Avatar people={people} guestId={note.guestId} large />
       </button>
       <AgentAnswering noteId={note.id} />
+      {unread ? (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute -top-0.5 -left-0.5 size-2.5 rounded-full border-2 border-background bg-primary"
+        />
+      ) : null}
       {replies === 0 ? null : (
         <span
           aria-hidden
@@ -248,7 +259,19 @@ function CommentEntry({
           </Button>
         )}
       </div>
-      <p className="ps-6.5 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</p>
+      {agent === undefined ? (
+        <p className="ps-6.5 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</p>
+      ) : (
+        // An agent's answer is markdown from someone's machine, so without raw HTML.
+        <div className="min-w-0 ps-6.5 text-sm [overflow-wrap:anywhere]">
+          <ChatMarkdown
+            text={text}
+            cwd={undefined}
+            lineBreaks={shouldPreserveAssistantLineBreaks(text)}
+            parseRawHtml={false}
+          />
+        </div>
+      )}
     </li>
   );
 }
