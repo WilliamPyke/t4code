@@ -1,6 +1,7 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { requestCustomSnooze } from "../components/CustomSnoozeDialog";
 import { openGuestShareDialog } from "../components/chat/guestShareDialogState";
+import { roomBoardLocation } from "../components/room/roomBoardNavigation";
 import {
   type AtomCommandResult,
   isAtomCommandInterrupted,
@@ -261,6 +262,9 @@ export function useThreadActionMenu(input: {
           return;
         case "share-guest":
           openGuestShareDialog(threadRef);
+          return;
+        case "open-board":
+          void router.navigate(roomBoardLocation(threadRef));
           return;
         case "turn-into-project": {
           const result = await turnThreadIntoProject(threadRef);

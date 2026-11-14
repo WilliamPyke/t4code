@@ -1,4 +1,5 @@
-import { GUEST_RENDER_ROUTE, GUEST_SHARE_PARAM } from "@t3tools/contracts";
+import { type GuestShareEndpoint, guestShareRequest } from "@t3tools/client-runtime/rpc";
+import { GUEST_RENDER_ROUTE } from "@t3tools/contracts";
 import {
   type HtmlRenderReference,
   HTML_RENDER_COLUMN_WIDTH,
@@ -15,18 +16,19 @@ import { useHtmlRenderTheme } from "~/hooks/useHtmlRenderTheme";
 import { observeResize } from "~/lib/observeResize";
 
 /**
- * A visual the agent published, as the guest sees it. The server sends it with a sandbox CSP and
- * the frame is sandboxed too, so the page runs scripts in an opaque origin. It can size itself
- * and ask to open a web link; it cannot reach the guest's session.
+ * A visual the agent published, as the guest sees it. The page is fetched with the guest's
+ * token and shown from a blob URL, which belongs to this app's origin: the frame's sandbox (no
+ * `allow-same-origin`) is what gives the page an opaque origin, so it must stay. The page can
+ * size itself and ask to open a web link; it cannot reach the guest's token or this app.
  */
 export function GuestHtmlRender({
   itemId,
   reference,
-  shareId,
+  endpoint,
 }: {
   readonly itemId: string;
   readonly reference: HtmlRenderReference;
-  readonly shareId: string;
+  readonly endpoint: GuestShareEndpoint;
 }) {
   const theme = useHtmlRenderTheme();
   const boxRef = useRef<HTMLDivElement>(null);
@@ -34,10 +36,25 @@ export function GuestHtmlRender({
   const [width, setWidth] = useState(HTML_RENDER_COLUMN_WIDTH);
   const [contentHeight, setContentHeight] = useState<number>();
   // The theme rides in the fragment for the first paint; later changes are posted.
-  const [src] = useState(
-    () =>
-      `${GUEST_RENDER_ROUTE}?${GUEST_SHARE_PARAM}=${encodeURIComponent(shareId)}&item=${encodeURIComponent(itemId)}${htmlRenderThemeFragment(theme)}`,
-  );
+  const [fragment] = useState(() => htmlRenderThemeFragment(theme));
+  const [page, setPage] = useState<string | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- fetches the render with the guest's token and revokes its blob URL on cleanup
+  useEffect(() => {
+    let url: string | null = null;
+    let live = true;
+    void guestShareRequest(endpoint, GUEST_RENDER_ROUTE, { params: { item: itemId } })
+      .then((response) => (response.ok ? response.text() : null))
+      .then((html) => {
+        if (!live || html === null) return;
+        url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+        setPage(url);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+      if (url !== null) URL.revokeObjectURL(url);
+    };
+  }, [endpoint, itemId]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- measures the frame box and follows its width with a ResizeObserver before paint
   useLayoutEffect(() => {
     const box = boxRef.current;
@@ -86,7 +103,7 @@ export function GuestHtmlRender({
     >
       <iframe
         ref={frameRef}
-        src={src}
+        src={page === null ? "about:blank" : `${page}${fragment}`}
         title={reference.title}
         sandbox="allow-scripts allow-forms allow-popups allow-downloads"
         className="block size-full rounded-lg border border-border"

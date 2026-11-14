@@ -143,6 +143,7 @@ import {
   useEnvironmentIdentities,
   useConnectedEnvironmentIds,
   useEnvironmentMachines,
+  useGuestOnly,
   usePrimaryEnvironmentId,
 } from "../state/environments";
 import {
@@ -164,6 +165,7 @@ import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
 import { openGuestShareDialog } from "./chat/guestShareDialogState";
+import { roomBoardLocation } from "./room/roomBoardNavigation";
 import {
   buildThreadRouteParams,
   resolveActiveThreadRouteRef,
@@ -184,6 +186,7 @@ import {
   filterSidebarV2VisibleThreads,
   groupSidebarThreadsByProject,
   sidebarFolderExpansionKeys,
+  boardBoxThreadKeys,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
   deleteSelectedThreadEntries,
@@ -252,6 +255,9 @@ import {
   useComboboxFilter,
 } from "./ui/combobox";
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
+import { SharedWithMeSection } from "./sidebar/SharedWithMeSection";
+import { TeamsSection } from "./sidebar/TeamsSection";
+import { BoardsSection } from "./sidebar/BoardsSection";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { TooltipProvider } from "./ui/tooltip";
@@ -476,7 +482,7 @@ function useSidebarThreads(input: {
   const settledVisibleCount =
     settledTail.scopeKey === projectScopeKey ? settledTail.count : SETTLED_TAIL_INITIAL_COUNT;
 
-  const partition = partitionSidebarThreads({
+  const partitioned = partitionSidebarThreads({
     threads,
     scopedProjectKeys,
     delegatedUnderParent,
@@ -487,6 +493,21 @@ function useSidebarThreads(input: {
     sortActiveBySend: folderGroups !== null,
     clockKey: `${nowMinute}:${snoozeWakeClock}:${inboxReturnsVersion}`,
   });
+  // Thread boxes live on their board. Search still lists them; a pinned or open one keeps its row.
+  const boardBoxKeys = boardBoxThreadKeys(threads);
+  const onBoardOnly = (thread: EnvironmentThreadShell) => {
+    const key = threadShellKey(thread);
+    return boardBoxKeys.has(key) && key !== routeRowThreadKey;
+  };
+  const offBoards = (list: readonly EnvironmentThreadShell[]) =>
+    list.some(onBoardOnly) ? list.filter((thread) => !onBoardOnly(thread)) : list;
+  const partition = {
+    ...partitioned,
+    activeThreads: offBoards(partitioned.activeThreads),
+    workingThreads: offBoards(partitioned.workingThreads),
+    snoozedThreads: offBoards(partitioned.snoozedThreads),
+    settledThreads: offBoards(partitioned.settledThreads),
+  };
 
   const { pinnedThreads, activeThreads, workingThreads, snoozedThreads, settledThreads } =
     partition;
@@ -566,11 +587,11 @@ function useSidebarThreads(input: {
     threads,
     workingShelfEnabled,
     searchableThreads: [
-      ...pinnedThreads,
-      ...activeThreads,
-      ...workingThreads,
-      ...snoozedThreads,
-      ...settledThreads,
+      ...partitioned.pinnedThreads,
+      ...partitioned.activeThreads,
+      ...partitioned.workingThreads,
+      ...partitioned.snoozedThreads,
+      ...partitioned.settledThreads,
     ],
     settledVisibleCount,
     settledCount,
@@ -1026,6 +1047,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [searchHighlightKey, setSearchHighlightKey] = useState<string | null>(null);
   const connectedEnvironmentIds = useConnectedEnvironmentIds();
+  const guestOnly = useGuestOnly();
   const queuePendingFileDrop = useSidebarPendingFileDropStore((s) => s.queuePendingFileDrop);
   const clearPendingFileDrop = useSidebarPendingFileDropStore((s) => s.clearPendingFileDrop);
   const [renamingThreadRef, setRenamingThreadRef] = useState<ScopedThreadRef | null>(null);
@@ -1445,6 +1467,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     setSelectionAnchor(scopedThreadKey(threadRef));
     if (isMobile) {
       setOpenMobile(false);
+    }
+    // A board's thread opens its board, with the conversation beside it.
+    const shell = readThreadShell(threadRef);
+    if (shell?.guestShared === true || shell?.hasRoomBoard === true) {
+      return router.navigate(roomBoardLocation(threadRef));
     }
     return router.navigate({
       to: "/$environmentId/$threadId",
@@ -2771,6 +2798,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           case "share-guest":
             openGuestShareDialog(threadRef);
             return;
+          case "open-board":
+            void router.navigate(roomBoardLocation(threadRef));
+            return;
           case "regenerate-title": {
             if (isRegeneratingTitle) return;
             const result = await updateThreadMetadata({
@@ -2999,6 +3029,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         className="min-h-full"
         fixedHeader={
           <SidebarGroup className="z-[1]">
+            <BoardsSection canStart={!guestOnly} />
+            <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">Threads</p>
             <SidebarThreadHeader
               hasProjects={projectGroups.length > 0}
               projectScope={
@@ -3204,6 +3236,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               }
               onNewProject={openAddProjectCommandPalette}
               onNewThread={handleNewThreadClick}
+              newThreadHidden={guestOnly}
               newThreadDisabled={projects.length === 0}
               newThreadShortcutLabel={newThreadShortcutLabel}
               newThreadInProjectShortcutLabel={newThreadInProjectShortcutLabel}
@@ -3229,6 +3262,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           </SidebarGroup>
         }
       >
+        {isSearchingThreads ? null : <SharedWithMeSection />}
+        {isSearchingThreads ? null : <TeamsSection />}
         <SidebarGroup className="flex-1" role="presentation">
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
@@ -3645,6 +3680,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             </TooltipProvider>
           ) : null}
           {!isSearchingThreads &&
+          !guestOnly &&
           !hasProjectFolders &&
           visibleDraftSessionCount === 0 &&
           pinnedThreads.length +

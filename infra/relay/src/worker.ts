@@ -71,6 +71,9 @@ import * as ManagedTunnelLimits from "./environments/ManagedTunnelLimits.ts";
 import * as T3ChatAccounts from "./t3chat/T3ChatAccounts.ts";
 import * as MobileRegistrations from "./agentActivity/MobileRegistrations.ts";
 import * as HookForwarder from "./hooks/HookForwarder.ts";
+import * as GuestLinks from "./guestLinks/GuestLinks.ts";
+import * as TeamProfiles from "./teams/TeamProfiles.ts";
+import * as Teams from "./teams/Teams.ts";
 import * as HeldHooks from "./hooks/HeldHooks.ts";
 import * as HookInbox from "./hooks/HookInbox.ts";
 import * as HookInboxObject from "./hooks/HookInboxObject.ts";
@@ -104,6 +107,8 @@ const layerRelayApi = Layer.mergeAll(
   RelayHttpApi.layerTokenApi,
   RelayHttpApi.layerDpopClientApi,
   RelayHttpApi.layerServerApi,
+  RelayHttpApi.layerGuestLinksApi,
+  RelayHttpApi.layerTeamsApi,
 );
 
 const CloudMintKeyPair = Alchemy.KeyPair("CloudMintKeyPair");
@@ -216,6 +221,34 @@ export const layer = Api.make(
         period: MobileTelemetry.MOBILE_TELEMETRY_RATE_LIMIT.periodSeconds,
       },
     });
+    const guestLinkRateLimit = yield* Cloudflare.RateLimit("GUEST_LINK_RATE_LIMIT", {
+      namespaceId: 1004,
+      simple: {
+        limit: GuestLinks.GUEST_LINK_RESOLVE_RATE_LIMIT.limit,
+        period: GuestLinks.GUEST_LINK_RESOLVE_RATE_LIMIT.periodSeconds,
+      },
+    });
+    const teamRateLimit = yield* Cloudflare.RateLimit("TEAM_RATE_LIMIT", {
+      namespaceId: 1005,
+      simple: {
+        limit: Teams.TEAM_RATE_LIMIT.limit,
+        period: Teams.TEAM_RATE_LIMIT.periodSeconds,
+      },
+    });
+    const teamBoardRateLimit = yield* Cloudflare.RateLimit("TEAM_BOARD_RATE_LIMIT", {
+      namespaceId: 1006,
+      simple: {
+        limit: Teams.TEAM_BOARD_RATE_LIMIT.limit,
+        period: Teams.TEAM_BOARD_RATE_LIMIT.periodSeconds,
+      },
+    });
+    const teamBoardReadRateLimit = yield* Cloudflare.RateLimit("TEAM_BOARD_READ_RATE_LIMIT", {
+      namespaceId: 1007,
+      simple: {
+        limit: Teams.TEAM_BOARD_READ_RATE_LIMIT.limit,
+        period: Teams.TEAM_BOARD_READ_RATE_LIMIT.periodSeconds,
+      },
+    });
     const mobileSourceMaps = yield* Cloudflare.R2.ReadBucket(observability.mobileSourceMaps);
     const mobileTelemetryToken = yield* observability.mobileTelemetryIngestToken.token;
     const mobileTracesUrl = yield* observability.traces.otelTracesEndpoint;
@@ -292,6 +325,9 @@ export const layer = Api.make(
           EnvironmentPublishSignatures.layer,
           ManagedEndpointReaper.layer,
           HeldHooks.layer,
+          GuestLinks.layer,
+          Teams.layer,
+          TeamProfiles.layer,
         ),
       ),
       Layer.provideMerge(
@@ -425,7 +461,27 @@ export const layer = Api.make(
     );
 
     const layerApp = Layer.mergeAll(
-      layerRelayApi,
+      layerRelayApi.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(GuestLinks.GuestLinkRateLimiter, {
+              allow: allowWith(guestLinkRateLimit, "relay.guest_links.rate_limiter_failed_open"),
+            }),
+            Layer.succeed(Teams.TeamRateLimiter, {
+              allow: allowWith(teamRateLimit, "relay.teams.rate_limiter_failed_open"),
+            }),
+            Layer.succeed(Teams.TeamBoardRateLimiter, {
+              allow: allowWith(teamBoardRateLimit, "relay.team_boards.rate_limiter_failed_open"),
+            }),
+            Layer.succeed(Teams.TeamBoardReadRateLimiter, {
+              allow: allowWith(
+                teamBoardReadRateLimit,
+                "relay.team_board_reads.rate_limiter_failed_open",
+              ),
+            }),
+          ),
+        ),
+      ),
       HookForwarder.layerApi.pipe(
         Layer.provide(HookForwarder.layer),
         Layer.provide(layerHookRateLimiter),

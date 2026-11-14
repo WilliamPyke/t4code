@@ -2,7 +2,9 @@ import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  buildJoinLink,
   buildNewThreadLink,
+  parseJoinLink,
   parseNewThreadLink,
   parseThreadLinkPrompt,
   promptLinkAppPath,
@@ -118,6 +120,67 @@ describe("link round trips", () => {
     const deepLink = promptLinkDeepLink(path!);
     expect(deepLink).toBe("t3code://threads/env-1/mcp%3A1");
     expect(promptLinkAppPath(deepLink)).toBe(path);
+  });
+
+  it("carries a shared thread's host and token from the hosted app into the desktop app", () => {
+    const link = buildJoinLink({ host: "sam.t3.test", token: "payload.signature" });
+    const path = promptLinkAppPath(link);
+    expect(path).toBe("/join?host=sam.t3.test&token=payload.signature");
+    const deepLink = promptLinkDeepLink(path!);
+    expect(deepLink).toBe("t3code://join?host=sam.t3.test&token=payload.signature");
+    expect(promptLinkAppPath(deepLink)).toBe(path);
+    expect(parseJoinLink(new URL(link).search)).toEqual({
+      ok: true,
+      value: { host: "sam.t3.test", token: "payload.signature" },
+    });
+    expect(parseJoinLink("?host=sam.t3.test").ok).toBe(false);
+
+    // A task taken to the user's own agent comes along as a draft, without hidden characters.
+    const task = buildJoinLink({
+      host: "sam.t3.test",
+      token: "payload.signature",
+      task: { shareId: "share-1", taskId: "task-1", text: "Fix​ the login" },
+    });
+    const viaApp = promptLinkAppPath(promptLinkDeepLink(promptLinkAppPath(task)!))!;
+    expect(parseJoinLink(new URL(viaApp, "https://app.invalid").search)).toEqual({
+      ok: true,
+      value: {
+        host: "sam.t3.test",
+        token: "payload.signature",
+        task: {
+          shareId: "share-1",
+          taskId: "task-1",
+          prompt: { text: "Fix the login", hiddenCharacters: 1 },
+        },
+      },
+    });
+    expect(parseJoinLink("?host=h&token=t&task=task-1&prompt=Fix").ok).toBe(false);
+
+    // So does what someone asked of an artifact card, which names the card instead of a task.
+    const artifact = buildJoinLink({
+      host: "sam.t3.test",
+      token: "payload.signature",
+      artifact: { shareId: "share-1", artifactId: "note-1", text: "Make it blue" },
+    });
+    expect(parseJoinLink(new URL(artifact).search)).toEqual({
+      ok: true,
+      value: {
+        host: "sam.t3.test",
+        token: "payload.signature",
+        artifact: {
+          shareId: "share-1",
+          artifactId: "note-1",
+          prompt: { text: "Make it blue", hiddenCharacters: 0 },
+        },
+      },
+    });
+    for (const search of [
+      "?host=h&token=t&artifact=note-1&prompt=Go",
+      "?host=h&token=t&share=s&artifact=note-1",
+      "?host=h&token=t&share=s&artifact=note-1&task=task-1&prompt=Go",
+    ]) {
+      expect(parseJoinLink(search).ok).toBe(false);
+    }
   });
 
   it("maps app scheme and hosted links to in-app paths, and nothing else", () => {

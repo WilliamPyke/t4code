@@ -28,6 +28,7 @@ import type {
   PreviewAnnotationPayload,
   ThreadContextRecord,
   EnvironmentContextRecord,
+  RoomUpdatesContextRecord,
   ResolvedKeybindingsConfig,
   RuntimeMode,
   RuntimeRequestId,
@@ -223,12 +224,19 @@ import {
 } from "./composerSubmission";
 import { ComposerPromptLengthValidation } from "./ComposerPromptLengthValidation";
 import { pendingDraftWork } from "./pendingDraftWork";
+import { RoomArtifactContextChip } from "./RoomBoardContextChips";
+import {
+  dropRoomArtifactDraft,
+  dropRoomTaskDraft,
+  useRoomArtifactDraft,
+  useRoomTaskDraft,
+} from "./roomTaskDraft";
 import { importComposerThreadAttachment } from "./composerThreadImport";
 import { observeResize } from "~/lib/observeResize";
 
 const isEnvironmentRequestInvalidError = Schema.is(EnvironmentRequestInvalidError);
 import { toastManager } from "../ui/toast";
-import { BuildingIcon, PlayIcon } from "lucide-react";
+import { BuildingIcon, ListTodoIcon, PanelsTopLeftIcon, PlayIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { useManagedPolicy } from "../../state/managedPolicy";
 import { hasProviderSetup } from "./ProviderStatusBanner";
@@ -321,6 +329,7 @@ export interface ChatComposerHandle {
     reviewComments: ReviewCommentContext[];
     threadContexts: ThreadContextRecord[];
     environmentContexts: EnvironmentContextRecord[];
+    roomUpdatesContexts: RoomUpdatesContextRecord[];
     selectedPromptEffort: string | null;
     selectedModelSelection: ModelSelection;
     multipleModelSelections: ReadonlyArray<ModelSelection> | null;
@@ -678,6 +687,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerReviewComments = composerDraft.reviewComments;
   const composerThreadContexts = attachmentDraft.threadContexts;
   const composerEnvironmentContexts = composerDraft.environmentContexts;
+  const composerRoomUpdatesContexts = composerDraft.roomUpdatesContexts;
   const {
     pendingSnapShotAnimations,
     pendingSnapShotIds,
@@ -730,6 +740,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     previewAnnotations: composerPreviewAnnotations,
     threadContexts: composerThreadContexts,
     environmentContexts: composerEnvironmentContexts,
+    roomUpdatesContexts: composerRoomUpdatesContexts,
     images: composerImages,
     files: composerFiles,
     uploadsByImageId,
@@ -1262,6 +1273,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const setComposerDraftEnvironmentContexts = useComposerDraftStore(
     (store) => store.setEnvironmentContexts,
   );
+  const setComposerDraftRoomUpdatesContexts = useComposerDraftStore(
+    (store) => store.setRoomUpdatesContexts,
+  );
   const buildContextClipboardFragment = (contextIds: ReadonlyArray<string>): string | null => {
     const wanted = new Set(contextIds);
     const copiedFiles = new Map<string, File>();
@@ -1279,6 +1293,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         .map(terminalContextRecord),
       ...composerThreadContexts.filter((record) => wanted.has(record.contextId)),
       ...composerEnvironmentContexts.filter((record) => wanted.has(record.contextId)),
+      ...composerRoomUpdatesContexts.filter((record) => wanted.has(record.contextId)),
       ...composerReviewComments
         .filter((c) => wanted.has(reviewCommentContextId(c.id)))
         .map(reviewCommentContextRecord),
@@ -1630,6 +1645,28 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       restoredEnvironments.length > 0
     ) {
       setComposerDraftEnvironmentContexts(composerDraftTarget, nextEnvironments);
+    }
+
+    const liveRoomUpdateIds = new Set<string>(
+      composerRoomUpdatesContexts.map((record) => record.contextId),
+    );
+    const restoredRoomUpdates = [...referenced].flatMap((contextId) => {
+      if (liveRoomUpdateIds.has(contextId)) return [];
+      const record = retained.roomUpdates.get(contextId);
+      return record ? [record] : [];
+    });
+    const nextRoomUpdates = [
+      ...composerRoomUpdatesContexts.filter((record) => referenced.has(record.contextId)),
+      ...restoredRoomUpdates,
+    ];
+    for (const record of composerRoomUpdatesContexts) {
+      if (!referenced.has(record.contextId)) retained.roomUpdates.set(record.contextId, record);
+    }
+    if (
+      nextRoomUpdates.length !== composerRoomUpdatesContexts.length ||
+      restoredRoomUpdates.length > 0
+    ) {
+      setComposerDraftRoomUpdatesContexts(composerDraftTarget, nextRoomUpdates);
     }
 
     for (const comment of composerReviewComments) {
@@ -2436,13 +2473,46 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       getModelDisabledReason={getModelDisabledReason}
     />
   );
+  const roomTask = useRoomTaskDraft(routeThreadRef);
+  const roomArtifact = useRoomArtifactDraft(routeThreadRef);
+  const roomBannerItems: readonly ComposerBannerStackItem[] = [
+    ...(roomTask === undefined
+      ? []
+      : [
+          {
+            id: "room-task",
+            variant: "info" as const,
+            icon: <ListTodoIcon />,
+            title: "Sending this answers a task on the board",
+            description: <span className="line-clamp-2">{roomTask.text}</span>,
+            dismissLabel: "Do not answer the task",
+            onDismiss: () => dropRoomTaskDraft(routeThreadRef),
+          },
+        ]),
+    // The card's content goes to the agent with the message, so it is shown before Send.
+    ...(roomArtifact === undefined
+      ? []
+      : [
+          {
+            id: "room-artifact",
+            variant: "info" as const,
+            icon: <PanelsTopLeftIcon />,
+            title: `Your agent's reply replaces "${roomArtifact.record.title}" on the board`,
+            description: <RoomArtifactContextChip record={roomArtifact.record} />,
+            dismissLabel: "Do not fill the artifact",
+            onDismiss: () => dropRoomArtifactDraft(routeThreadRef),
+          },
+        ]),
+  ];
+  const ownBannerItems =
+    roomBannerItems.length === 0 ? props.bannerItems : [...props.bannerItems, ...roomBannerItems];
   // An open question owns the space above the composer. Only a machine problem,
   // which is why an answer could not go through, stays beside it.
   const bannerItems: readonly ComposerBannerStackItem[] =
     runtimeModeCeilingDenial === undefined || activePendingProgress
-      ? props.bannerItems
+      ? ownBannerItems
       : [
-          ...props.bannerItems,
+          ...ownBannerItems,
           {
             id: "managed-runtime-mode",
             variant: "warning",
@@ -3064,6 +3134,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         reviewComments: composerReviewComments,
         threadContexts: composerThreadContexts,
         environmentContexts: composerEnvironmentContexts,
+        roomUpdatesContexts: composerRoomUpdatesContexts,
         selectedPromptEffort,
         selectedModelSelection,
         multipleModelSelections:
@@ -3118,6 +3189,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       composerReviewComments,
       composerThreadContexts,
       composerEnvironmentContexts,
+      composerRoomUpdatesContexts,
       focusComposer,
       environmentId,
       primaryEnvironmentId,

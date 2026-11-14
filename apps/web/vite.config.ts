@@ -23,7 +23,8 @@ import { thirdPartyLicensesPlugin } from "../../scripts/lib/third-party-licenses
 import { tailwindPlugins } from "./vite/tailwind";
 import { warmBundledDevPlugin } from "./vite/warmBundledDev";
 
-const repoEnv = loadRepoEnv();
+// Tests render without the sign-in provider, so a developer's own .env must not switch it on.
+const repoEnv: ReturnType<typeof loadRepoEnv> = process.env.VITEST ? {} : loadRepoEnv();
 Object.assign(process.env, repoEnv);
 
 // Signal single-origin dev explicitly; loadRepoEnv can restore deleted URL keys from .env.
@@ -42,6 +43,7 @@ const configuredRelayTracingUrl = repoEnv.VITE_RELAY_OTLP_TRACES_URL?.trim() || 
 const configuredRelayTracingDataset = repoEnv.VITE_RELAY_OTLP_TRACES_DATASET?.trim() || "";
 const configuredRelayTracingToken = repoEnv.VITE_RELAY_OTLP_TRACES_TOKEN?.trim() || "";
 const configuredHostedAppChannel = process.env.VITE_HOSTED_APP_CHANNEL?.trim() || "";
+const configuredGuestHostZone = process.env.VITE_GUEST_HOST_ZONE?.trim() || "";
 const configuredReleaseChannel =
   process.env.T3CODE_BUILT_DEV === "1" ? "dev" : process.env.VITE_RELEASE_CHANNEL?.trim() || "";
 const configuredAppVersion = process.env.APP_VERSION?.trim() || pkg.version;
@@ -51,7 +53,10 @@ const configuredDesktopUpdateRepository =
   "";
 const configuredFeatureSecrets = process.env.T3CODE_FEATURE_SECRETS?.trim() || "";
 const configuredHostedAppUrl = (() => {
-  const explicitHostedAppUrl = process.env.VITE_HOSTED_APP_URL?.trim();
+  // A server run from source names its hosted app in T3CODE_HOSTED_APP_URL; its own web app
+  // follows it, so guest links to that deployment's machines open here too.
+  const explicitHostedAppUrl =
+    process.env.VITE_HOSTED_APP_URL?.trim() || process.env.T3CODE_HOSTED_APP_URL?.trim();
   if (explicitHostedAppUrl) {
     return explicitHostedAppUrl;
   }
@@ -141,6 +146,32 @@ const browserTestProject = {
         // position starts hovered. test/browserSetup.ts parks it off the page before each test.
         resetPointer: async ({ page }) => {
           await page.mouse.move(-1, -1);
+        },
+        // userEvent has no held mouse, so a press, moves and keys mid-drag go through Playwright.
+        // Points are in the test frame's own pixels.
+        mouse: async (
+          { page, frame },
+          steps: ReadonlyArray<
+            | { readonly type: "down" | "up" | "move"; readonly x: number; readonly y: number }
+            | { readonly type: "key"; readonly key: string }
+          >,
+        ) => {
+          const element = await (await frame()).frameElement();
+          const box = await element.boundingBox();
+          const width = await element.evaluate((node) =>
+            node instanceof Element ? node.clientWidth : 0,
+          );
+          if (box === null || width === 0) throw new Error("The test frame is not on screen");
+          const scale = box.width / width;
+          for (const step of steps) {
+            if (step.type === "key") {
+              await page.keyboard.press(step.key);
+              continue;
+            }
+            await page.mouse.move(box.x + step.x * scale, box.y + step.y * scale, { steps: 4 });
+            if (step.type === "down") await page.mouse.down();
+            if (step.type === "up") await page.mouse.up();
+          }
         },
       },
     },
@@ -314,6 +345,7 @@ export default defineConfig(() => {
       "import.meta.env.VITE_RELAY_OTLP_TRACES_TOKEN": JSON.stringify(configuredRelayTracingToken),
       "import.meta.env.VITE_HOSTED_APP_URL": JSON.stringify(configuredHostedAppUrl ?? ""),
       "import.meta.env.VITE_HOSTED_APP_CHANNEL": JSON.stringify(configuredHostedAppChannel),
+      "import.meta.env.VITE_GUEST_HOST_ZONE": JSON.stringify(configuredGuestHostZone),
       "import.meta.env.T3CODE_DESKTOP_UPDATE_REPOSITORY": JSON.stringify(
         configuredDesktopUpdateRepository,
       ),

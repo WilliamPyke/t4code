@@ -181,6 +181,96 @@ export function buildNewThreadLink(input: {
   return url.toString();
 }
 
+/**
+ * A task card someone took from a room to their own agent: the room's share, the card, and its
+ * text, which lands as a draft in the thread joined from that room.
+ */
+export interface JoinLinkTask {
+  readonly shareId: string;
+  readonly taskId: string;
+  readonly prompt: LinkedPrompt;
+}
+
+/**
+ * An artifact card someone took from a room to their own agent: the room's share, the card, and
+ * what they asked for, which lands as a draft in the thread joined from that room with the card's
+ * current content attached. The reply then fills the card.
+ */
+export interface JoinLinkArtifact {
+  readonly shareId: string;
+  readonly artifactId: string;
+  readonly prompt: LinkedPrompt;
+}
+
+/** A shared thread to bring to this machine: its owner's host and a guest's handoff token. */
+export interface JoinLink {
+  readonly host: string;
+  readonly token: string;
+  readonly task?: JoinLinkTask;
+  readonly artifact?: JoinLinkArtifact;
+}
+
+export function parseJoinLink(search: string): PromptLinkResult<JoinLink> {
+  const params = new URLSearchParams(search);
+  const host = optionalParam(params, "host");
+  const token = optionalParam(params, "token");
+  if (host === null || token === null) {
+    return { ok: false, error: "This link does not say which shared thread to open." };
+  }
+  const taskId = optionalParam(params, "task");
+  const artifactId = optionalParam(params, "artifact");
+  if (taskId === null && artifactId === null) return { ok: true, value: { host, token } };
+  const shareId = optionalParam(params, "share");
+  const prompt = readPrompt(params);
+  if (!prompt.ok) return prompt;
+  const cardId = taskId ?? artifactId ?? "";
+  if (
+    shareId === null ||
+    prompt.value === null ||
+    cardId.length > 64 ||
+    (taskId !== null && artifactId !== null)
+  ) {
+    return {
+      ok: false,
+      error: `This link names ${taskId === null ? "an artifact" : "a task"} T Code cannot read.`,
+    };
+  }
+  const card = { shareId, prompt: prompt.value };
+  return {
+    ok: true,
+    value:
+      taskId === null
+        ? { host, token, artifact: { ...card, artifactId: cardId } }
+        : { host, token, task: { ...card, taskId } },
+  };
+}
+
+export function buildJoinLink(input: {
+  readonly host: string;
+  readonly token: string;
+  readonly origin?: string;
+  readonly task?: { readonly shareId: string; readonly taskId: string; readonly text: string };
+  readonly artifact?: {
+    readonly shareId: string;
+    readonly artifactId: string;
+    readonly text: string;
+  };
+}): string {
+  const url = new URL("/join", input.origin ?? DEFAULT_HOSTED_APP_URL);
+  url.searchParams.set("host", input.host);
+  url.searchParams.set("token", input.token);
+  if (input.task) {
+    url.searchParams.set("share", input.task.shareId);
+    url.searchParams.set("task", input.task.taskId);
+    url.searchParams.set("prompt", input.task.text);
+  } else if (input.artifact) {
+    url.searchParams.set("share", input.artifact.shareId);
+    url.searchParams.set("artifact", input.artifact.artifactId);
+    url.searchParams.set("prompt", input.artifact.text);
+  }
+  return url.toString();
+}
+
 const APP_SCHEME = /^t3code(?:-[a-z]+)?:$/;
 const THREAD_PATH = /^\/([^/]+)\/([^/]+)\/?$/;
 
@@ -191,14 +281,14 @@ export function promptLinkAppPath(
   if (!URL.canParse(value)) return null;
   const url = new URL(value);
   if (APP_SCHEME.test(url.protocol)) {
-    if (url.host === "new" && (url.pathname === "" || url.pathname === "/")) {
-      return `/new${url.search}`;
+    if ((url.host === "new" || url.host === "join") && /^\/?$/.test(url.pathname)) {
+      return `/${url.host}${url.search}`;
     }
     const thread = url.host === "threads" ? THREAD_PATH.exec(url.pathname) : null;
     return thread ? `/${thread[1]}/${thread[2]}${url.search}` : null;
   }
   if (!URL.canParse(hostedAppUrl) || url.origin !== new URL(hostedAppUrl).origin) return null;
-  if (url.pathname === "/new") return `/new${url.search}`;
+  if (url.pathname === "/new" || url.pathname === "/join") return `${url.pathname}${url.search}`;
   // The web app's own thread route is a link only with a prompt, so reloading a tab never asks.
   const thread = url.pathname.startsWith("/threads/")
     ? THREAD_PATH.exec(url.pathname.slice("/threads".length))
@@ -210,6 +300,9 @@ export function promptLinkAppPath(
 
 export function promptLinkDeepLink(appPath: string, scheme = "t3code"): string {
   const url = new URL(appPath, "https://app.invalid");
-  const host = url.pathname === "/new" ? "new" : `threads${url.pathname}`;
+  const host =
+    url.pathname === "/new" || url.pathname === "/join"
+      ? url.pathname.slice(1)
+      : `threads${url.pathname}`;
   return `${scheme}://${host}${url.search}`;
 }

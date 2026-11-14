@@ -29,15 +29,113 @@ vocabulary gives these grants a familiar meaning.
 
 ### Guest links are not sessions
 
-A [guest link](../user/guest-links.md) gives one browser read access to one
-thread and a way to propose messages. Its tokens are HMACs of the thread and
-share id under a server key ([GuestShareService](../../apps/server/src/guest/GuestShareService.ts)),
+A [guest link](../user/guest-links.md) gives a few browsers read access to one
+thread and a way to propose messages. Its tokens are HMACs of the thread, share,
+and guest id under a server key ([GuestShareService](../../apps/server/src/guest/GuestShareService.ts)),
 so nothing secret is stored. The share in the thread projection is the only
 state: replacing, closing, or archiving it revokes every token, and the
-orchestrator's serial commands make redeeming and sending happen once. Guest
+orchestrator's serial commands cap who joins and make each send happen once. Guest
 tokens never enter `SessionStore`, so no RPC, WebSocket, or MCP path can accept
 one. Guest routes also require T3 Connect to still serve the link's hostname;
 the request's Host header is not checked, because a LAN client can forge it.
+
+With a hosted app, the server also asks its relay for a readable name for the invite
+([GuestLinkNames](../../apps/server/src/guest/GuestLinkNames.ts)). That is the one place an
+invite is stored: the relay keeps host and invite until the link expires, and anyone who can
+guess a live name can join, so the relay counts lookups per address. An invite the owner
+replaced or closed still resolves and is then refused by the owner's server.
+
+A guest's page can be on another origin than the owner's host: the hosted app
+opens guest links when the owner's server is told about it
+(`T3CODE_HOSTED_APP_URL`). The session cookie is `SameSite=Strict` and cannot
+cross origins, so a redeem that asks gets the token in its body and the session
+routes take it as a bearer. That widens nothing: the bearer is the cookie's
+value, each route still names its share and drops a bearer signed for another,
+and the routes stay uncredentialed for CORS. In the client the share is an
+environment whose session is built on those routes
+([guestSession](../../packages/client-runtime/src/rpc/guestSession.ts)). It
+answers the config, the shell and the one thread, and every other RPC fails
+there without a request, so the environment API never sees a guest token. The
+hosted app keeps the token in page storage, which any script on that origin can
+read: it must stay a guest's token, good for one thread and a day. The `host` a
+link names is untrusted, and the page follows it only into the deployment's own
+tunnel zone ([guestLinks](../../packages/shared/src/guestLinks.ts)), because it
+sends that host a name and then holds a token for it.
+
+A guest can also take the thread to their own T3 Code. The guest page asks for a
+handoff token, a signed claim like the session's that lasts ten minutes and opens
+only the thread's export, and passes it with this host's name to the guest's own
+app. The guest's server then reads the export
+([SharedThreadJoin](../../apps/server/src/guest/SharedThreadJoin.ts)) and creates
+a thread of its own with that history. The export and room routes are the guest
+routes a server calls, so they take a bearer token, not the cookie. The host in
+such a link is untrusted: the joining server calls only a public-looking https
+name, never follows a redirect with a token, and asks the user first. The export
+names the repository by its key, never its remote URL, which can hold a
+credential.
+
+The export also carries a room token, a third kind of signed claim. It lasts as
+long as the share and does two things: post a turn the guest ran on their own
+machine, as text, for the room to read, and read what the room said after a
+cursor. The guest's server keeps it in its secret
+store, not on the thread, and posts each finished run
+([SharedRoomLink](../../apps/server/src/guest/SharedRoomLink.ts)). The owner's
+side stores a few such turns on the share, bounded in count, size, and rate, and
+only shows them. A posted turn must never start a run or become a message in the
+owner's thread: a plan sign-in covers the account holder's own prompts, and that
+text was written on someone else's machine. A room that has ended answers 410,
+which disconnects the guest's thread; a tunnel that is down or a beta that is off
+answers 403, which may pass.
+
+The same rule holds in the other direction. What the room said reaches the
+guest's machine only when its user asks (`sharedThread.catchUp`), and only as
+text the client attaches to that user's next message as a `room-updates` context
+record. Nothing on that path may dispatch a message or start a run: the joiner's
+plan covers the joiner's prompts, not the room's. Both servers bound and
+sanitize the text, since each is untrusted to the other, and the prompt
+projection labels it as other people's words. Advancing the cursor on fetch, not
+on send, is deliberate: a chip the user removes is a choice not to pass those
+updates on.
+
+A guest's message normally reaches the agent only when the owner sends it. The
+owner can trust one guest, and then the server sends that guest's messages
+itself, but only while the thread's provider is signed in with an API key
+(`providerAllowsDirectGuestSend`). That check is about provider terms, not
+security: a plan sign-in covers only the account holder's own prompts. Add a
+driver to it only after reading that provider's terms.
+
+A thread shared to a team is joined as an account, not a name. The relay lists the share for
+the team's members only when the sharing machine's linked account is in the team, and it signs
+a five-minute member assertion (`RELAY_TEAM_MEMBER_TYP`) with the cloud mint key, addressed to
+that machine's environment. The owner's server checks it offline with the mint public key it
+stored when it linked ([GuestTeamShares](../../apps/server/src/guest/GuestTeamShares.ts)), so
+no new secret is shared and the relay never holds a guest session. A team share refuses the bare
+invite, keys each guest by user id so a member keeps one guest record, and keeps a removed
+member's id out. The session it issues ends after a day; the web app asks for a fresh assertion
+when a member opens the thread after that, and never does for a plain guest link. Within that day
+the owner's server asks the relay who is in the team, at most once a minute per team, through a
+server-authenticated route that answers only a machine listing a live thread on that team as a
+linked member. A session whose member is gone is removed as the owner removing them would, except
+that the id is not kept out: the assertion already gates rejoining, so someone added back can
+join again. When the relay cannot answer, sessions stay, so a flaky link never ejects a team.
+
+A guest's typed name is not an identity. A guest can prove a GitHub account with
+the web redirect flow ([GuestSignIn](../../apps/server/src/guest/GuestSignIn.ts)):
+the server reads the login and id, then drops the token. It is not the device
+flow, because GitHub's device page shows the approver the IP and location of the
+machine that asked for the code, which is the owner's. The callback arrives
+without the guest session (that cookie is `SameSite=Strict`), so a one-time
+`state` held in memory names the session, and a separate `SameSite=Lax` cookie
+must match it: otherwise a guest could pass their GitHub link to someone else and
+be recorded as that person. A page on the hosted app cannot store that cookie
+from a fetch, so it posts a form to the owner's host instead, a navigation whose
+answer sets the cookie and redirects to GitHub. That route takes the post only
+from the hosted app's origin: a form any page could post would let an attacker
+walk a victim's browser through the attacker's own sign-in, which is the attack
+the cookie exists to stop. The callback then returns the browser to the hosted
+app, an address the server holds, never one the request names. The owner's saved
+contributors are matched by login the first time and by id after that, because a
+login can be renamed away and taken by someone else.
 
 ### MCP clients are a separate audience
 

@@ -37,6 +37,7 @@ import {
 import type {
   BearerConnectionTarget,
   ConnectionTarget,
+  GuestConnectionTarget,
   PreparedConnection,
   PrimaryConnectionTarget,
   RelayConnectionTarget,
@@ -50,6 +51,7 @@ import {
 } from "./compatibility.ts";
 import { credentialConnectionId } from "./routes.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
+import { GuestShareAccess } from "../rpc/guestSession.ts";
 
 export class ConnectionResolver extends Context.Service<
   ConnectionResolver,
@@ -263,6 +265,20 @@ const makeSshBroker = Effect.fn("clientRuntime.connection.broker.makeSsh")(funct
   });
 });
 
+/**
+ * A shared thread needs no session and has no descriptor to check: the owner's guest routes
+ * take the share's token, or the share's cookie when the page is on the owner's own host.
+ */
+const prepareGuest = (target: GuestConnectionTarget, token: string | null) =>
+  ({
+    environmentId: target.environmentId,
+    label: target.label,
+    httpBaseUrl: target.httpBaseUrl,
+    socketUrl: "",
+    httpAuthorization: token === null ? null : { _tag: "Bearer", token },
+    target,
+  }) satisfies PreparedConnection;
+
 /** @public */
 export const make = Effect.gen(function* () {
   const primary = yield* makePrimaryBroker();
@@ -270,6 +286,7 @@ export const make = Effect.gen(function* () {
   const relay = yield* makeRelayBroker();
   const ssh = yield* makeSshBroker();
   const httpClient = yield* HttpClient.HttpClient;
+  const guestAccess = yield* GuestShareAccess;
 
   const authorize = Effect.fn("clientRuntime.connection.broker.authorize")(function* (
     entry: ConnectionCatalogEntry,
@@ -279,6 +296,12 @@ export const make = Effect.gen(function* () {
       "connection.environment.id": target.environmentId,
       "connection.target.kind": target._tag,
     });
+    if (target._tag === "GuestConnectionTarget") {
+      return yield* new ConnectionBlockedError({
+        reason: "unsupported",
+        detail: `${target.label} is a shared thread and has no server to update.`,
+      });
+    }
     const authorized: PreparedConnection & {
       readonly descriptor?: ExecutionEnvironmentDescriptor;
     } = yield* (() => {
@@ -314,6 +337,10 @@ export const make = Effect.gen(function* () {
   const prepare = Effect.fn("clientRuntime.connection.broker.prepare")(function* (
     entry: ConnectionCatalogEntry,
   ) {
+    if (entry.target._tag === "GuestConnectionTarget") {
+      const joined = yield* guestAccess.share(entry.target.shareId);
+      return prepareGuest(entry.target, Option.getOrNull(joined)?.token ?? null);
+    }
     const { prepared, descriptor } = yield* authorize(entry);
     const compatibilityError = orchestrationProtocolCompatibilityError(descriptor);
     if (compatibilityError !== null) {

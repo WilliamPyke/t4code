@@ -58,6 +58,8 @@ import * as RelayHttpApi from "./Api.ts";
 import * as RelayConfiguration from "../Config.ts";
 import * as RelayDb from "../db.ts";
 import * as EnvironmentCredentials from "../environments/EnvironmentCredentials.ts";
+import * as GuestLinks from "../guestLinks/GuestLinks.ts";
+import * as Teams from "../teams/Teams.ts";
 import * as HeldHooks from "../hooks/HeldHooks.ts";
 import * as HookInbox from "../hooks/HookInbox.ts";
 import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
@@ -106,6 +108,7 @@ describe("managed endpoint provisioning errors", () => {
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
           Layer.mock(RelayDb.RelayTransactions, {}),
           Layer.mock(HookInbox.HookInbox, {}),
+          Layer.mock(Teams.Teams, {}),
         ),
       ),
       Layer.provide(
@@ -225,6 +228,7 @@ describe("device listing compatibility", () => {
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
           Layer.mock(RelayDb.RelayTransactions, {}),
           Layer.mock(HookInbox.HookInbox, {}),
+          Layer.mock(Teams.Teams, {}),
         ),
       ),
       Layer.provide(
@@ -312,6 +316,7 @@ describe("Cloudflare rate-limit retry hint", () => {
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
           Layer.mock(RelayDb.RelayTransactions, {}),
           Layer.mock(HookInbox.HookInbox, {}),
+          Layer.mock(Teams.Teams, {}),
         ),
       ),
       Layer.provide(
@@ -524,6 +529,7 @@ function layerRelayUnlinkTest(input?: {
     Layer.mock(HookInbox.HookInbox, {
       clear: input?.clearInbox ?? (() => Effect.void),
     }),
+    Layer.mock(Teams.Teams, { unlistEnvironment: () => Effect.void }),
     Layer.succeed(
       RelayDb.RelayTransactions,
       RelayDb.RelayTransactions.of({
@@ -1421,7 +1427,14 @@ describe("relay routing fallback", () => {
                 Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
               ),
             ),
-            Layer.provide([layerPublisher, layerSignatures, Layer.mock(HeldHooks.HeldHooks, {})]),
+            Layer.provide([
+              layerPublisher,
+              layerSignatures,
+              Layer.mock(HeldHooks.HeldHooks, {}),
+              Layer.mock(GuestLinks.GuestLinks, {}),
+              Layer.mock(Teams.Teams, {}),
+              Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
+            ]),
           ),
         ),
         Layer.provide(layerAuth),

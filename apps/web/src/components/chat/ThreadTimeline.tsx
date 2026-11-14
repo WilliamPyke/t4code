@@ -9,6 +9,7 @@ import {
   resolveThreadSwitchTimeline,
   timelineHasEphemeralPreviewUrls,
 } from "../ChatView.logic";
+import { OwnerRoomReplies } from "../room/ThreadRoomBoard";
 import { MessagesTimeline } from "./MessagesTimeline";
 
 /**
@@ -54,5 +55,9 @@ export function ThreadTimeline({
     }
     rememberReadyThreadTimeline({ threadKey: activeThreadKey, entries });
   }, [activeThreadKey, detailLoading, entries]);
-  return <MessagesTimeline {...timelineProps} timelineEntries={displayedEntries} />;
+  return (
+    <OwnerRoomReplies threadRef={threadDetailRef}>
+      <MessagesTimeline {...timelineProps} timelineEntries={displayedEntries} />
+    </OwnerRoomReplies>
+  );
 }

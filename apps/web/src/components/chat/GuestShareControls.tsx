@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { guestEnvironmentId } from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -6,23 +7,49 @@ import {
 import {
   AuthOrchestrationOperateScope,
   type ChatAttachment,
+  GUEST_SHARE_LIFETIME_DAYS,
+  GUEST_SHARE_MAX_GUESTS,
+  type GuestShareLifetimeDays,
+  guestContributorFor,
+  guestMessageAuthorName,
+  type GuestId,
   type GuestMessageId,
+  guestShareStatusLabel,
+  type ModelSelection,
+  providerAllowsDirectGuestSend,
   type ScopedThreadRef,
+  type SharedThreadCatchUpResult,
+  type ThreadGuest,
   type ThreadGuestShare,
 } from "@t3tools/contracts";
-import { CheckIcon, CopyIcon, UserIcon } from "lucide-react";
+import {
+  roomCatchUpFailureMessage,
+  roomCatchUpOutcome,
+  roomSummaryOutcome,
+} from "@t3tools/client-runtime/room-catch-up";
+import { useNavigate } from "@tanstack/react-router";
+import { CheckIcon, CopyIcon, RadioIcon, UserIcon } from "lucide-react";
 import { useState } from "react";
 
+import { useComposerDraftStore } from "~/composerDraftStore";
+import { guestSharesAtom } from "~/guest/guestShares";
+import { useComposerHandleContext } from "~/composerHandleContext";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { ensureLocalApi } from "~/localApi";
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useQuietThreadProjection } from "~/state/entities";
+import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "~/hooks/useSettings";
+import { useEnvironmentProviders } from "~/state/environments";
 import { serverEnvironment } from "~/state/server";
+import { useEnvironmentQuery } from "~/state/query";
 import { useEnvironmentScope } from "~/state/session";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { cn } from "~/lib/utils";
 import { useOrchestrationCommand } from "~/state/use-orchestration-command";
+import { useTeams } from "~/teams/teams";
+import { MemberAvatar } from "../teams/MemberAvatar";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -34,15 +61,37 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
+import {
+  Menu,
+  MenuCheckboxItem,
+  MenuGroup,
+  MenuGroupLabel,
+  MenuItem,
+  MenuPopup,
+  MenuSeparator,
+  MenuTrigger,
+} from "../ui/menu";
 import { useAssetUrls } from "~/assets/assetUrls";
 import { type ChatFileAttachment, isImageAttachment } from "../../types";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { GuestMessageAttachments } from "./GuestMessageAttachments";
 import { GuestMessageName, guestBubbleClassName } from "./guestMessageStyle";
+import { roomBoardLocation } from "../room/roomBoardNavigation";
+import { GuestTurnList } from "./GuestTurnList";
+import { linkEndsLabel, linkEndsSoon, linkLifetimeDays } from "./guestLinkTiming";
 import { guestShareDialogThreadAtom } from "./guestShareDialogState";
+import { guestMessageArtifactTitle, guestMessageBoxTitle } from "./roomBoardPrompt";
 
 function useThreadGuestShare(threadRef: ScopedThreadRef | null): ThreadGuestShare | null {
   return useQuietThreadProjection(threadRef)?.projection.thread.guestShare ?? null;
+}
+
+/** Ending a link nobody joined loses nothing, so only a joined one asks first. */
+async function confirmEndingLink(share: ThreadGuestShare | null, message: string) {
+  const joined = share?.guests?.length ?? (share?.guestName ? 1 : 0);
+  if (joined === 0) return true;
+  return ensureLocalApi().dialogs.confirm(message, { variant: "destructive" });
 }
 
 export function GuestShareDialogHost() {
@@ -61,7 +110,13 @@ type CreateState =
   | { readonly status: "idle" }
   | { readonly status: "creating" }
   | { readonly status: "created"; readonly url: string }
+  | { readonly status: "shared"; readonly teamName: string }
   | { readonly status: "failed"; readonly message: string };
+
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+const lifetimeLabel = (days: GuestShareLifetimeDays) => (days === 1 ? "1 day" : `${days} days`);
+const cardCount = (count: number) => (count === 1 ? "1 card" : `${count} cards`);
 
 function GuestShareDialog({
   threadRef,
@@ -70,24 +125,121 @@ function GuestShareDialog({
   readonly threadRef: ScopedThreadRef;
   readonly onClose: () => void;
 }) {
-  const activeShare = useThreadGuestShare(threadRef);
+  const thread = useQuietThreadProjection(threadRef)?.projection.thread;
+  const activeShare = thread?.guestShare ?? null;
+  const board = activeShare?.board ?? thread?.roomBoard?.board ?? null;
   const canCreate = useAtomValue(
     serverEnvironment.createGuestShare.permissionAtom(threadRef.environmentId),
   );
   const createGuestShare = useAtomCommand(serverEnvironment.createGuestShare, {
     reportFailure: false,
   });
+  const clearRoomBoard = useOrchestrationCommand(threadEnvironment.clearRoomBoard, {
+    label: "clear room board",
+  });
   const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "guest link" });
   const [state, setState] = useState<CreateState>({ status: "idle" });
+  const [days, setDays] = useState<GuestShareLifetimeDays>(GUEST_SHARE_LIFETIME_DAYS[0]);
 
-  const create = async () => {
-    setState({ status: "creating" });
-    const result = await createGuestShare({
+  const nowMinute = useNowMinute();
+  const nowMs = Date.parse(`${nowMinute}:00.000Z`);
+  const live = activeShare !== null && activeShare.expiresAt.slice(0, 16) > nowMinute;
+  const sharedTeam = live ? (activeShare.team ?? null) : null;
+  const joinable = live && sharedTeam === null && activeShare.joinsClosed !== true;
+  const endsSoon = joinable && linkEndsSoon(activeShare.expiresAt, nowMs);
+  // Extending only ever makes a link last longer.
+  const extendChoices = joinable
+    ? GUEST_SHARE_LIFETIME_DAYS.filter(
+        (choice) => nowMs + choice * DAY_MS > Date.parse(activeShare.expiresAt) + HOUR_MS,
+      )
+    : [];
+  // A replacement lasts as long as the link it replaces did, unless another length is picked.
+  const currentLifetime =
+    activeShare === null
+      ? undefined
+      : linkLifetimeDays(activeShare.createdAt, activeShare.expiresAt, GUEST_SHARE_LIFETIME_DAYS);
+  const replaceChoices = GUEST_SHARE_LIFETIME_DAYS.toSorted(
+    (left, right) => Number(right === currentLifetime) - Number(left === currentLifetime),
+  );
+  const stopSharing = useStopSharing(threadRef);
+  const { teams } = useTeams();
+
+  const clearBoard = async () => {
+    const confirmed = await ensureLocalApi().dialogs.confirm(
+      [
+        "Clear the board?",
+        "Every card, arrow and comment thread on it is removed for everyone. This cannot be undone.",
+      ].join("\n"),
+      { variant: "destructive" },
+    );
+    if (!confirmed) return;
+    await clearRoomBoard({
       environmentId: threadRef.environmentId,
       input: { threadId: threadRef.threadId },
     });
+  };
+
+  const extend = async (to: GuestShareLifetimeDays) => {
+    setState({ status: "creating" });
+    const result = await createGuestShare({
+      environmentId: threadRef.environmentId,
+      input: { threadId: threadRef.threadId, extend: true, days: to },
+    });
     if (result._tag === "Success") {
-      setState({ status: "created", url: result.value.url });
+      setState({ status: "created", url: result.value.shortUrl ?? result.value.url });
+      return;
+    }
+    if (isAtomCommandInterrupted(result)) {
+      setState({ status: "idle" });
+      return;
+    }
+    const error = squashAtomCommandFailure(result);
+    setState({
+      status: "failed",
+      message: error instanceof Error ? error.message : "Could not extend the guest link.",
+    });
+  };
+
+  const create = async (
+    replace: boolean,
+    team?: { readonly id: string; readonly name: string },
+    lifetime: GuestShareLifetimeDays = days,
+  ) => {
+    // Moving between a guest link and a team ends what the thread had.
+    const ending = replace || (team === undefined ? sharedTeam !== null : live);
+    if (
+      ending &&
+      !(await confirmEndingLink(
+        activeShare,
+        team !== undefined
+          ? [
+              `Share with ${team.name} instead?`,
+              "Everyone in the thread now loses access at once. Members of the team join from its page.",
+            ].join("\n")
+          : [
+              sharedTeam !== null ? "Make a guest link instead?" : "Replace the guest link?",
+              "Everyone on the current link loses access at once. A new link is made, and you need to send it again to everyone you want in the thread. The board stays as it is.",
+            ].join("\n"),
+      ))
+    ) {
+      return;
+    }
+    setState({ status: "creating" });
+    const result = await createGuestShare({
+      environmentId: threadRef.environmentId,
+      input: {
+        threadId: threadRef.threadId,
+        replace: replace || ending,
+        ...(team === undefined ? { days: lifetime } : { teamId: team.id }),
+      },
+    });
+    if (result._tag === "Success") {
+      const shared = result.value.share.team;
+      setState(
+        shared !== undefined
+          ? { status: "shared", teamName: shared.name }
+          : { status: "created", url: result.value.shortUrl ?? result.value.url },
+      );
       return;
     }
     if (isAtomCommandInterrupted(result)) {
@@ -110,10 +262,11 @@ function GuestShareDialog({
     >
       <DialogPopup className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Share with guest</DialogTitle>
+          <DialogTitle>Share with guests</DialogTitle>
           <DialogDescription>
-            The guest sees the thread as you do, including command output and the agent&apos;s
-            reasoning. Each message they send waits for you.
+            Guests see the thread as you do, including command output and the agent&apos;s
+            reasoning, and can copy the conversation to their own T Code. Each message they send
+            waits for you.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -130,13 +283,88 @@ function GuestShareDialog({
                 {isCopied ? "Copied" : "Copy"}
               </Button>
             </div>
+          ) : state.status === "shared" || sharedTeam !== null ? (
+            <p className="text-muted-foreground text-sm">
+              Shared with{" "}
+              {state.status === "shared" ? state.teamName : (sharedTeam?.name ?? "the team")}. Its
+              members open it from the team&apos;s page as their own accounts, for 90 days.
+            </p>
           ) : (
             <p className="text-muted-foreground text-sm">
-              {activeShare !== null
-                ? "A new link ends the current one."
-                : "The link works once and expires in 24 hours."}
+              {joinable
+                ? "This thread already has a link. Show it to invite more people, or replace it to end it for everyone who has it."
+                : activeShare !== null && live
+                  ? "No one new can join with the current link. A new link ends it."
+                  : `Up to ${GUEST_SHARE_MAX_GUESTS} people can join with the link.`}
             </p>
           )}
+          {state.status !== "shared" && sharedTeam === null ? (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              {joinable ? (
+                <span className={endsSoon ? "text-warning" : "text-muted-foreground"}>
+                  {linkEndsLabel(activeShare.expiresAt, nowMs)}
+                  {endsSoon ? ". Extend it to keep everyone on it." : "."}
+                </span>
+              ) : state.status === "created" ? null : (
+                <>
+                  <span className="text-muted-foreground">Lasts</span>
+                  <ToggleGroup
+                    aria-label="How long the link lasts"
+                    value={[String(days)]}
+                    onValueChange={(next) => {
+                      const chosen = GUEST_SHARE_LIFETIME_DAYS.find(
+                        (choice) => String(choice) === next[0],
+                      );
+                      if (chosen !== undefined) setDays(chosen);
+                    }}
+                  >
+                    {GUEST_SHARE_LIFETIME_DAYS.map((choice) => (
+                      <Toggle key={choice} value={String(choice)}>
+                        {lifetimeLabel(choice)}
+                      </Toggle>
+                    ))}
+                  </ToggleGroup>
+                </>
+              )}
+              {extendChoices.length > 0 ? (
+                <Menu>
+                  <MenuTrigger
+                    render={
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={!canCreate || state.status === "creating"}
+                      />
+                    }
+                  >
+                    Extend link
+                  </MenuTrigger>
+                  <MenuPopup align="start">
+                    <MenuGroup>
+                      <MenuGroupLabel>Lasts from now</MenuGroupLabel>
+                      {extendChoices.map((choice) => (
+                        <MenuItem key={choice} onClick={() => void extend(choice)}>
+                          {lifetimeLabel(choice)}
+                        </MenuItem>
+                      ))}
+                    </MenuGroup>
+                  </MenuPopup>
+                </Menu>
+              ) : null}
+            </div>
+          ) : null}
+          {board !== null && board.notes.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="text-muted-foreground">
+                {activeShare === null
+                  ? `The board has ${cardCount(board.notes.length)}. Everyone who joins sees it.`
+                  : `The board has ${cardCount(board.notes.length)}. It stays when the link changes.`}
+              </span>
+              <Button size="xs" variant="outline" onClick={() => void clearBoard()}>
+                Clear board
+              </Button>
+            </div>
+          ) : null}
           {state.status === "failed" ? (
             <p role="alert" className="text-destructive text-xs">
               {state.message}
@@ -144,26 +372,96 @@ function GuestShareDialog({
           ) : null}
         </DialogPanel>
         <DialogFooter>
-          {state.status === "created" ? (
+          {state.status === "created" || state.status === "shared" ? (
             <Button size="sm" onClick={onClose}>
               Done
             </Button>
           ) : (
             <>
+              {/* Ending the share is set apart on the left, away from the way forward. */}
+              {activeShare === null ? null : (
+                <div className="grid sm:me-auto">
+                  <Button
+                    variant="ghost-destructive"
+                    size="sm"
+                    onClick={() => void stopSharing.stop(activeShare)}
+                    disabled={stopSharing.closing || state.status === "creating"}
+                  >
+                    Stop sharing
+                  </Button>
+                </div>
+              )}
               <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
                 onClick={onClose}
                 disabled={state.status === "creating"}
               >
                 Cancel
               </Button>
+              {teams !== null && teams.length > 0 ? (
+                <Menu>
+                  <MenuTrigger
+                    render={
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!canCreate || state.status === "creating"}
+                      />
+                    }
+                  >
+                    {sharedTeam === null ? "Share with a team" : "Share with another team"}
+                  </MenuTrigger>
+                  <MenuPopup align="end">
+                    {teams
+                      .filter((team) => team.id !== sharedTeam?.id)
+                      .map((team) => (
+                        <MenuItem key={team.id} onClick={() => void create(false, team)}>
+                          {team.name}
+                        </MenuItem>
+                      ))}
+                  </MenuPopup>
+                </Menu>
+              ) : null}
+              {joinable ? (
+                <Menu>
+                  <MenuTrigger
+                    render={
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!canCreate || state.status === "creating"}
+                      />
+                    }
+                  >
+                    Replace link
+                  </MenuTrigger>
+                  <MenuPopup align="end">
+                    <MenuGroup>
+                      <MenuGroupLabel>The new link lasts</MenuGroupLabel>
+                      {replaceChoices.map((choice) => (
+                        <MenuItem key={choice} onClick={() => void create(true, undefined, choice)}>
+                          {choice === currentLifetime
+                            ? `${lifetimeLabel(choice)}, as now`
+                            : lifetimeLabel(choice)}
+                        </MenuItem>
+                      ))}
+                    </MenuGroup>
+                  </MenuPopup>
+                </Menu>
+              ) : null}
               <Button
                 size="sm"
-                onClick={() => void create()}
+                onClick={() => void create(false)}
                 disabled={!canCreate || state.status === "creating"}
               >
-                {state.status === "creating" ? "Creating..." : "Create link"}
+                {state.status === "creating"
+                  ? "Working..."
+                  : joinable
+                    ? "Show link"
+                    : sharedTeam !== null
+                      ? "Make a guest link"
+                      : "Create link"}
               </Button>
             </>
           )}
@@ -173,30 +471,39 @@ function GuestShareDialog({
   );
 }
 
-/** Header status for a shared thread, with the way to end the share. */
-export function GuestShareIndicator({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
+/**
+ * Header status for a shared thread, with the way to end the share. `onBoard` leaves out the way
+ * to the board it is shown on.
+ */
+export function GuestShareIndicator({
+  threadRef,
+  onBoard = false,
+}: {
+  readonly threadRef: ScopedThreadRef;
+  readonly onBoard?: boolean;
+}) {
   const share = useThreadGuestShare(threadRef);
-  const closeGuestShare = useOrchestrationCommand(threadEnvironment.closeGuestShare, {
-    label: "stop guest share",
-  });
-  const [closing, setClosing] = useState(false);
+  const stopSharing = useStopSharing(threadRef);
+  const navigate = useNavigate();
   if (share === null) return null;
   return (
     <div className="flex shrink-0 items-center gap-1 text-muted-foreground text-xs">
       <UserIcon aria-hidden className="size-3.5" />
-      <GuestShareStatus share={share} />
+      <GuestShareStatus share={share} threadRef={threadRef} />
+      {onBoard ? null : (
+        <Button
+          size="xs"
+          variant="ghost-muted"
+          onClick={() => void navigate(roomBoardLocation(threadRef))}
+        >
+          Board
+        </Button>
+      )}
       <Button
         size="xs"
         variant="ghost-muted"
-        disabled={closing}
-        onClick={async () => {
-          setClosing(true);
-          await closeGuestShare({
-            environmentId: threadRef.environmentId,
-            input: { threadId: threadRef.threadId },
-          });
-          setClosing(false);
-        }}
+        disabled={stopSharing.closing}
+        onClick={() => void stopSharing.stop(share)}
       >
         Stop sharing
       </Button>
@@ -204,13 +511,359 @@ export function GuestShareIndicator({ threadRef }: { readonly threadRef: ScopedT
   );
 }
 
-function GuestShareStatus({ share }: { readonly share: ThreadGuestShare }) {
+/** Ends a thread's share for everyone on it, once the owner confirms. */
+function useStopSharing(threadRef: ScopedThreadRef) {
+  const closeGuestShare = useOrchestrationCommand(threadEnvironment.closeGuestShare, {
+    label: "stop guest share",
+  });
+  const [closing, setClosing] = useState(false);
+  const stop = async (share: ThreadGuestShare) => {
+    const confirmed = await confirmEndingLink(
+      share,
+      [
+        "Stop sharing this thread?",
+        share.team === undefined
+          ? "Everyone on the guest link loses access at once, and the link stops working. The board is kept for when you share again."
+          : `Everyone in it loses access at once, and ${share.team.name} no longer lists it. The board is kept for when you share again.`,
+      ].join("\n"),
+    );
+    if (!confirmed) return;
+    setClosing(true);
+    await closeGuestShare({
+      environmentId: threadRef.environmentId,
+      input: { threadId: threadRef.threadId },
+    });
+    setClosing(false);
+  };
+  return { closing, stop };
+}
+
+function GuestShareStatus({
+  share,
+  threadRef,
+}: {
+  readonly share: ThreadGuestShare;
+  readonly threadRef: ScopedThreadRef;
+}) {
   const nowMinute = useNowMinute();
   // The share stays on the thread after it expires, until the owner clears it.
   if (share.expiresAt.slice(0, 16) <= nowMinute) return <span>Guest link expired</span>;
+  const label =
+    share.team === undefined
+      ? guestShareStatusLabel(share)
+      : (share.guests ?? []).length === 0
+        ? `Shared with ${share.team.name}`
+        : `${share.team.name}: ${guestShareStatusLabel(share)}`;
+  // Only a server that lists guests can remove one or say who is viewing.
+  const guests = share.guests ?? [];
+  if (guests.length === 0) return <span>{label}</span>;
   return (
-    <span>{share.guestName !== null ? `${share.guestName} is a guest` : "Guest link active"}</span>
+    <Menu>
+      <MenuTrigger render={<Button size="xs" variant="ghost-muted" />}>{label}</MenuTrigger>
+      <MenuPopup align="end" width="content">
+        <GuestList
+          guests={guests}
+          joinsClosed={share.joinsClosed === true}
+          team={share.team !== undefined}
+          threadRef={threadRef}
+        />
+      </MenuPopup>
+    </Menu>
   );
+}
+
+/**
+ * Who joined and who has the thread open now. For each guest: whether their messages go to the
+ * agent without a Send from the owner, and the way to remove them.
+ */
+function GuestList({
+  guests,
+  joinsClosed,
+  team,
+  threadRef,
+}: {
+  readonly guests: ReadonlyArray<ThreadGuest>;
+  readonly joinsClosed: boolean;
+  readonly team: boolean;
+  readonly threadRef: ScopedThreadRef;
+}) {
+  // Subscribed only while the list is open, so an idle shared thread streams nothing extra.
+  const { data: presence } = useEnvironmentQuery(
+    serverEnvironment.guestPresence({
+      environmentId: threadRef.environmentId,
+      input: { threadId: threadRef.threadId },
+    }),
+  );
+  const canOperate = useEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope);
+  const removeGuest = useOrchestrationCommand(threadEnvironment.removeGuest, {
+    label: "remove guest",
+  });
+  const setGuestTrust = useOrchestrationCommand(threadEnvironment.setGuestTrust, {
+    label: "change guest sending",
+  });
+  // The server decides this again on every guest message; here it only explains the switch.
+  const instanceId =
+    useQuietThreadProjection(threadRef)?.projection.thread.modelSelection.instanceId;
+  const directAllowed = providerAllowsDirectGuestSend(
+    useEnvironmentProviders()
+      .get(threadRef.environmentId)
+      ?.find((provider) => provider.instanceId === instanceId),
+  );
+  const contributors = useEnvironmentSettings(
+    threadRef.environmentId,
+    (settings) => settings.guestContributors,
+  );
+  const updateSettings = useUpdateEnvironmentSettings(threadRef.environmentId);
+  const target = (guestId: GuestId) => ({ threadId: threadRef.threadId, guestId });
+  const setApproved = (guest: ThreadGuest, approved: boolean) => {
+    const { account } = guest;
+    if (account === undefined) return;
+    const saved = guestContributorFor(contributors, account);
+    updateSettings({
+      guestContributors: approved
+        ? [...contributors.filter((contributor) => contributor !== saved), account]
+        : contributors.filter((contributor) => contributor !== saved),
+    });
+    // Approving someone who is already here should not wait for their next link.
+    if (approved && guest.trusted !== true) {
+      void setGuestTrust({
+        environmentId: threadRef.environmentId,
+        input: { ...target(guest.id), trusted: true },
+      });
+    }
+  };
+  return (
+    <>
+      {guests.map((guest) => (
+        <MenuGroup key={guest.id}>
+          <MenuGroupLabel>
+            <span className="flex items-center gap-1.5">
+              {guest.member === undefined ? null : (
+                <MemberAvatar name={guest.name} avatarUrl={guest.member.avatarUrl} />
+              )}
+              {guest.account === undefined ? guest.name : `${guest.name} (@${guest.account.login})`}
+              {presence?.online.includes(guest.id) ? " · viewing now" : ""}
+            </span>
+          </MenuGroupLabel>
+          <MenuCheckboxItem
+            checked={guest.trusted === true}
+            // Turning it off always works; turning it on needs a provider that allows it.
+            disabled={!canOperate || (!directAllowed && guest.trusted !== true)}
+            closeOnClick={false}
+            aria-label={`Send ${guest.name}'s messages without asking`}
+            onCheckedChange={(trusted) =>
+              void setGuestTrust({
+                environmentId: threadRef.environmentId,
+                input: { ...target(guest.id), trusted },
+              })
+            }
+          >
+            Send without asking
+          </MenuCheckboxItem>
+          {guest.account === undefined ? null : (
+            <MenuCheckboxItem
+              checked={guestContributorFor(contributors, guest.account) !== undefined}
+              disabled={!canOperate}
+              closeOnClick={false}
+              aria-label={`Approve ${guest.account.login} on every link`}
+              onCheckedChange={(approved) => setApproved(guest, approved)}
+            >
+              Approved contributor
+            </MenuCheckboxItem>
+          )}
+          <MenuItem
+            variant="destructive"
+            disabled={!canOperate}
+            aria-label={`Remove ${guest.name}`}
+            onClick={() =>
+              void removeGuest({
+                environmentId: threadRef.environmentId,
+                input: target(guest.id),
+              })
+            }
+          >
+            Remove
+          </MenuItem>
+          <MenuSeparator />
+        </MenuGroup>
+      ))}
+      <p className="max-w-64 px-2 py-1.5 text-muted-foreground text-xs">
+        {directAllowed
+          ? "Send without asking runs a guest's messages with this thread's permissions before you read them."
+          : "Send without asking needs Claude or Codex signed in with an API key. A plan covers only your own prompts."}{" "}
+        {team
+          ? "A removed member cannot open this thread again."
+          : joinsClosed
+            ? "No one new can join with this link."
+            : "Removing a guest also stops new people joining."}{" "}
+        A guest who signs in with GitHub can be approved for every link.
+      </p>
+    </>
+  );
+}
+
+/** The turns guests ran on their own machines, at the end of the owner's timeline. */
+export function GuestTurns({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
+  const share = useThreadGuestShare(threadRef);
+  return share === null ? null : <GuestTurnList roster={share} turns={share.turns ?? []} />;
+}
+
+/**
+ * On a thread joined from someone's room: says its turns are shown there, with the way to read
+ * what the room said since and the way to stop.
+ */
+export function RoomLinkIndicator({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
+  const roomLink = useQuietThreadProjection(threadRef)?.projection.thread.roomLink ?? null;
+  const canLeave = useAtomValue(
+    serverEnvironment.leaveSharedRoom.permissionAtom(threadRef.environmentId),
+  );
+  const leaveSharedRoom = useAtomCommand(serverEnvironment.leaveSharedRoom, "leave room");
+  const canCatchUp = useAtomValue(
+    serverEnvironment.catchUpSharedRoom.permissionAtom(threadRef.environmentId),
+  );
+  const catchUpSharedRoom = useAtomCommand(serverEnvironment.catchUpSharedRoom, "catch up");
+  const composerRef = useComposerHandleContext();
+  const nowMinute = useNowMinute();
+  const [leaving, setLeaving] = useState(false);
+  const [catchUp, setCatchUp] = useState<"idle" | "working" | string>("idle");
+  const navigate = useNavigate();
+  // The room as this app keeps it, when it joined from here: its thread opens on the board.
+  const room =
+    useAtomValue(guestSharesAtom).find((share) => share.shareId === roomLink?.shareId) ?? null;
+  // The server clears an ended link when it next posts a turn or catches up.
+  if (roomLink === null || roomLink.expiresAt.slice(0, 16) <= nowMinute) return null;
+  // Both buttons catch up and share one status line; `use` returns what it says.
+  const catchUpThen = async (use: (result: SharedThreadCatchUpResult) => string) => {
+    setCatchUp("working");
+    const result = await catchUpSharedRoom({
+      environmentId: threadRef.environmentId,
+      input: { threadId: threadRef.threadId },
+    });
+    if (result._tag === "Failure") {
+      setCatchUp(
+        isAtomCommandInterrupted(result)
+          ? "idle"
+          : roomCatchUpFailureMessage(squashAtomCommandFailure(result)),
+      );
+      return;
+    }
+    setCatchUp(use(result.value));
+  };
+  return (
+    <div className="flex shrink-0 items-center gap-1 text-muted-foreground text-xs">
+      <RadioIcon aria-hidden className="size-3.5" />
+      <span>Your turns show in the room</span>
+      {catchUp === "idle" || catchUp === "working" ? null : <span role="status">· {catchUp}</span>}
+      {room === null ? null : (
+        <Button
+          size="xs"
+          variant="ghost-muted"
+          onClick={() =>
+            void navigate({
+              to: "/$environmentId/$threadId",
+              params: {
+                environmentId: guestEnvironmentId(room.shareId),
+                threadId: room.threadId,
+              },
+            })
+          }
+        >
+          Board
+        </Button>
+      )}
+      <Button
+        size="xs"
+        variant="ghost-muted"
+        disabled={!canCatchUp || catchUp === "working"}
+        onClick={() =>
+          void catchUpThen((value) => {
+            const { record, status } = roomCatchUpOutcome(value);
+            // Only attached: the user reads the chip and sends the message themselves.
+            if (record !== null) {
+              useComposerDraftStore.getState().addRoomUpdatesContexts(threadRef, [record]);
+            }
+            return status;
+          })
+        }
+      >
+        Catch up
+      </Button>
+      <Button
+        size="xs"
+        variant="ghost-muted"
+        disabled={!canCatchUp || catchUp === "working"}
+        onClick={() =>
+          void catchUpThen((value) => {
+            // Only a draft: the user reads, edits and sends the request to their own agent.
+            const store = useComposerDraftStore.getState();
+            const outcome = roomSummaryOutcome(
+              value,
+              store.getComposerDraft(threadRef)?.prompt ?? "",
+            );
+            if (outcome.record !== null && outcome.prompt !== null) {
+              store.setPrompt(threadRef, outcome.prompt);
+              // Appended after the request, which refers to it as attached.
+              store.addRoomUpdatesContexts(threadRef, [outcome.record], { insertAtCaret: false });
+              // After the editor has taken the new prompt, so the caret lands at its end.
+              window.requestAnimationFrame(() => composerRef?.current?.focusAtEnd());
+            }
+            return outcome.status;
+          })
+        }
+      >
+        Summarize what I missed
+      </Button>
+      <Button
+        size="xs"
+        variant="ghost-muted"
+        disabled={!canLeave || leaving}
+        onClick={async () => {
+          setLeaving(true);
+          await leaveSharedRoom({
+            environmentId: threadRef.environmentId,
+            input: { threadId: threadRef.threadId },
+          });
+          setLeaving(false);
+        }}
+      >
+        Leave room
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Sends or dismisses a guest's waiting message, as the timeline and the board's thread boxes both
+ * offer it, and which ones are on their way.
+ */
+export function useGuestMessageResolver(threadRef: ScopedThreadRef) {
+  const canOperate = useEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope);
+  const resolveGuestMessage = useOrchestrationCommand(threadEnvironment.resolveGuestMessage, {
+    label: "resolve guest message",
+  });
+  const [busyIds, setBusyIds] = useState<ReadonlySet<GuestMessageId>>(new Set());
+  const resolve = async (
+    guestMessageId: GuestMessageId,
+    decision: "send" | "dismiss",
+    modelSelection: ModelSelection | undefined,
+  ) => {
+    setBusyIds((ids) => new Set(ids).add(guestMessageId));
+    await resolveGuestMessage({
+      environmentId: threadRef.environmentId,
+      input: {
+        threadId: threadRef.threadId,
+        guestMessageId,
+        decision,
+        ...(modelSelection === undefined ? {} : { modelSelection }),
+      },
+    });
+    setBusyIds((ids) => {
+      const next = new Set(ids);
+      next.delete(guestMessageId);
+      return next;
+    });
+  };
+  return { canOperate, busyIds, resolve };
 }
 
 /**
@@ -219,19 +872,18 @@ function GuestShareStatus({ share }: { readonly share: ThreadGuestShare }) {
  */
 export function GuestPendingMessages({
   threadRef,
+  modelSelection,
   onImageExpand,
   onFileOpen,
 }: {
   readonly threadRef: ScopedThreadRef;
+  /** The composer's model, when the owner picked one that differs from the thread's. */
+  readonly modelSelection: ModelSelection | undefined;
   readonly onImageExpand: (preview: ExpandedImagePreview) => void;
   readonly onFileOpen: (attachment: ChatFileAttachment) => void;
 }) {
   const share = useThreadGuestShare(threadRef);
-  const canOperate = useEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope);
-  const resolveGuestMessage = useOrchestrationCommand(threadEnvironment.resolveGuestMessage, {
-    label: "resolve guest message",
-  });
-  const [busyIds, setBusyIds] = useState<ReadonlySet<GuestMessageId>>(new Set());
+  const { canOperate, busyIds, resolve: resolveMessage } = useGuestMessageResolver(threadRef);
   const pending = share?.messages.filter((message) => message.status === "pending") ?? [];
   // The files are the thread's attachments, which the owner's environment serves like any other.
   const images = pending.flatMap((message) => message.attachments ?? []).filter(isImageAttachment);
@@ -246,7 +898,6 @@ export function GuestPendingMessages({
     }),
   );
   if (share === null || pending.length === 0) return null;
-  const guestName = share.guestName ?? "Guest";
   const openImage = (attachment: ChatAttachment) => {
     const preview = buildExpandedImagePreview(
       images.map((image) => ({ ...image, previewUrl: imageUrlById.get(image.id) ?? "" })),
@@ -255,18 +906,8 @@ export function GuestPendingMessages({
     if (preview) onImageExpand(preview);
   };
 
-  const resolve = async (guestMessageId: GuestMessageId, decision: "send" | "dismiss") => {
-    setBusyIds((ids) => new Set(ids).add(guestMessageId));
-    await resolveGuestMessage({
-      environmentId: threadRef.environmentId,
-      input: { threadId: threadRef.threadId, guestMessageId, decision },
-    });
-    setBusyIds((ids) => {
-      const next = new Set(ids);
-      next.delete(guestMessageId);
-      return next;
-    });
-  };
+  const resolve = (guestMessageId: GuestMessageId, decision: "send" | "dismiss") =>
+    resolveMessage(guestMessageId, decision, modelSelection);
 
   return (
     <ol
@@ -276,6 +917,9 @@ export function GuestPendingMessages({
     >
       {pending.map((message) => {
         const busy = busyIds.has(message.id);
+        const guestName = guestMessageAuthorName(share, message);
+        const artifactTitle = guestMessageArtifactTitle(share.board, message);
+        const boxTitle = guestMessageBoxTitle(share.board, message);
         return (
           <li key={message.id} className="flex flex-col items-end gap-1">
             <GuestMessageName name={guestName} />
@@ -297,6 +941,16 @@ export function GuestPendingMessages({
                 </p>
               ) : null}
             </div>
+            {boxTitle === null ? null : (
+              <p className="me-1 max-w-[80%] text-xs text-muted-foreground">
+                {`Asked from ${boxTitle} on the board. Sending this runs it in that box's own conversation.`}
+              </p>
+            )}
+            {artifactTitle === null ? null : (
+              <p className="me-1 max-w-[80%] text-xs text-muted-foreground">
+                {`Sending this gives your agent the artifact "${artifactTitle}", and its reply replaces it on the board.`}
+              </p>
+            )}
             {canOperate ? (
               <div className="flex items-center gap-1 pe-1">
                 <Button

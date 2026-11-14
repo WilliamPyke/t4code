@@ -70,21 +70,27 @@ export function guestHostImageType(path: string): string | null {
 }
 
 /**
- * Whether an agent reply shows the image at `path`, so the guest already sees it. `imageSources`
- * lets the caller reuse a reply's parse across requests.
+ * The path on the host of the image an agent reply shows as `path`, so the guest already sees
+ * it, or null if none does. `imageSources` lets the caller reuse a reply's parse across requests.
+ * `shown` is how an image source reads in the copy of the reply the asker has.
  */
-export function repliesShowImage<Reply extends { readonly text: string }>(
+export function shownImageHostPath<Reply extends { readonly text: string }>(
   path: string,
   replies: ReadonlyArray<Reply>,
   imageSources: (reply: Reply) => ReadonlyArray<string> = (reply) =>
     chatMarkdownImageSources(reply.text),
-) {
-  // Parsing is the slow part; a reply with no image syntax shows no image.
-  return replies.some(
-    (reply) =>
-      (reply.text.includes("![") || /<img/i.test(reply.text)) &&
-      imageSources(reply).some((source) => markdownDestinationHostPath(source) === path),
-  );
+  shown: (source: string) => string = (source) => source,
+): string | null {
+  for (const reply of replies) {
+    // Parsing is the slow part; a reply with no image syntax shows no image.
+    if (!reply.text.includes("![") && !/<img/i.test(reply.text)) continue;
+    for (const source of imageSources(reply)) {
+      const hostPath = markdownDestinationHostPath(source);
+      if (hostPath === null) continue;
+      if (hostPath === path || markdownDestinationHostPath(shown(source)) === path) return hostPath;
+    }
+  }
+  return null;
 }
 
 /**

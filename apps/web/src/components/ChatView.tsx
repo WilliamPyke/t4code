@@ -175,7 +175,7 @@ import {
 } from "../previewMiniPlayerStore";
 import { threadPullRequestPanelTarget } from "./pullRequest/pullRequestDetail.logic";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
-import { GuestPendingMessages } from "./chat/GuestShareControls";
+import { GuestPendingMessages, GuestTurns } from "./chat/GuestShareControls";
 import { useDeviceState } from "~/state/device";
 import { BranchToolbar, type BranchToolbarHandle } from "./BranchToolbar";
 import { ComposerContextPermissions } from "./ComposerContextPermissions";
@@ -2782,7 +2782,7 @@ export default function ChatView(props: ChatViewProps) {
         : serverConfig === null
           ? "Side chats are not ready yet. Try again in a moment."
           : serverConfig.environment.capabilities.sideChats !== true
-            ? "Update this environment's T3 Code server to use side chats."
+            ? "Update this environment's T Code server to use side chats."
             : sideChatsOffered && !isServerThread
               ? "Side chats start after the first message."
               : sideChat.available &&
@@ -2964,7 +2964,10 @@ export default function ChatView(props: ChatViewProps) {
       message.status === "pending" ? [message.id] : [],
     ) ?? [];
   const pendingGuestMessageCount = pendingGuestMessageIds.length;
-  const pendingGuestMessageKey = pendingGuestMessageIds.join(",");
+  // Turns guests ran on their own machines join the same footer, so they scroll the same way.
+  const guestTurnIds =
+    serverProjection?.thread.guestShare?.turns?.map((turn) => `${turn.guestId}:${turn.id}`) ?? [];
+  const pendingGuestMessageKey = [...pendingGuestMessageIds, ...guestTurnIds].join(",");
   const previousPendingGuestMessagesRef = useRef({
     threadKey: routeThreadKey,
     key: pendingGuestMessageKey,
@@ -3082,6 +3085,7 @@ export default function ChatView(props: ChatViewProps) {
     !hasThreadNow &&
     threadStatusLine === null &&
     pendingGuestMessageCount === 0 &&
+    guestTurnIds.length === 0 &&
     !hasQueuedTurns ? null : (
       <>
         {pendingHandoff === null ? null : (
@@ -3102,9 +3106,13 @@ export default function ChatView(props: ChatViewProps) {
           goal={goalNow}
         />
         {threadStatusLine}
+        {guestTurnIds.length > 0 && isServerThread && activeThread ? (
+          <GuestTurns threadRef={scopeThreadRef(activeThread.environmentId, activeThread.id)} />
+        ) : null}
         {pendingGuestMessageCount > 0 && isServerThread && activeThread ? (
           <GuestPendingMessages
             threadRef={scopeThreadRef(activeThread.environmentId, activeThread.id)}
+            modelSelection={composerSelectedModelSelection ?? undefined}
             onImageExpand={onExpandTimelineImageStable}
             onFileOpen={openFileAttachmentStable}
           />

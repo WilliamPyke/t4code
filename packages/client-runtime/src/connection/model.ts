@@ -1,4 +1,4 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { RelayEnvironmentEndpointFailure } from "@t3tools/contracts/relay";
 import * as Schema from "effect/Schema";
 
@@ -39,11 +39,26 @@ export class SshConnectionTarget extends Schema.TaggedClass<SshConnectionTarget>
   },
 ) {}
 
+/**
+ * One thread someone shared from their host, read over that host's guest routes. It is not a
+ * session there: no socket, no RPC, and the only credential is the share's guest token.
+ */
+export class GuestConnectionTarget extends Schema.TaggedClass<GuestConnectionTarget>()(
+  "GuestConnectionTarget",
+  {
+    ...ConnectionTargetBase,
+    httpBaseUrl: Schema.String,
+    shareId: Schema.String,
+    threadId: ThreadId,
+  },
+) {}
+
 export const ConnectionTarget = Schema.Union([
   PrimaryConnectionTarget,
   BearerConnectionTarget,
   RelayConnectionTarget,
   SshConnectionTarget,
+  GuestConnectionTarget,
 ]);
 export type ConnectionTarget = typeof ConnectionTarget.Type;
 
@@ -75,7 +90,7 @@ export const ConnectionBlockedReason = Schema.Literals([
 ]);
 export type ConnectionBlockedReason = typeof ConnectionBlockedReason.Type;
 
-/** A part of the path to an environment: this device, T3 Connect, the host's tunnel, or T3 Code on the host. */
+/** A part of the path to an environment: this device, T Connect, the host's tunnel, or T Code on the host. */
 export const ConnectionHop = Schema.Literals(["device", "relay", "tunnel", "server"]);
 export type ConnectionHop = typeof ConnectionHop.Type;
 
@@ -93,7 +108,7 @@ export type ConnectionFailureCause = typeof ConnectionFailureCause.Type;
 /**
  * Where and why a failure happened, when the code that saw it knows. See
  * `presentConnectionDiagnosis`. `via` names the route when the hop alone does
- * not: T3 Code on the host can fail behind the tunnel or on a direct route.
+ * not: T Code on the host can fail behind the tunnel or on a direct route.
  */
 const ConnectionFailureFields = {
   hop: Schema.optionalKey(ConnectionHop),

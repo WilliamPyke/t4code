@@ -62,6 +62,13 @@ export const RPC_REQUIRED_SCOPES = {
   [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.subscribeCommandOutput]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.subscribePromptSuggestion]: AuthOrchestrationReadScope,
+  [WS_METHODS.guestShareSubscribePresence]: AuthOrchestrationReadScope,
+  [WS_METHODS.guestShareSubscribeRoomAgents]: AuthOrchestrationReadScope,
+  [WS_METHODS.guestShareSubscribeRoomCursors]: AuthOrchestrationReadScope,
+  // A file's diff of a thread, as getFullThreadDiff reads one.
+  [WS_METHODS.guestShareCodePatch]: AuthOrchestrationReadScope,
+  [WS_METHODS.guestShareBoardSummaries]: AuthOrchestrationReadScope,
+  [WS_METHODS.sharedThreadBoxPatch]: AuthOrchestrationReadScope,
   [WS_METHODS.projectsMutate]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverProbe]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetConfig]: AuthOrchestrationReadScope,

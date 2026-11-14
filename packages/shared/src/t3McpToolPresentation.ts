@@ -31,6 +31,7 @@ export type T3McpToolSummaryAction =
   | "thread-transfers"
   | "thread-organize"
   | "thread-update"
+  | "room-catch-up"
   | "queue-list"
   | "queue-read"
   | "queue-edit"
@@ -289,6 +290,10 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   run_scheduled_task_now: tool(
     ["Run", "Running", "Requested a run of", "a scheduled task"],
     "schedule-run",
+  ),
+  t3_room_catch_up: tool(
+    ["Catch up on", "Catching up on", "Caught up on", "the shared room"],
+    "room-catch-up",
   ),
   t3_queue: tool(["Manage", "Managing", "Managed", "queued messages"], "queue-edit"),
   t3_pending_request: tool(

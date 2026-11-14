@@ -101,6 +101,14 @@ vp run --filter t3code-relay deploy -- --stage prod
 vp run --filter t3code-relay deploy -- --env-file .env.local
 ```
 
+To run without PlanetScale, set `RELAY_DATABASE_URL` to a Postgres you run yourself. The deploy
+then provisions no database, branch or role, and every stage that sets the same address shares
+that database. Apply migrations before each deploy:
+
+```sh
+vp run db:migrate:external
+```
+
 Alchemy defaults personal deployments to the `dev_$USER` stage. Relay custom domains apply the same
 DNS-safe sanitization as Alchemy physical resource names, so `prod` uses
 `relay.<RELAY_API_ZONE_NAME>` and `dev_julius` uses

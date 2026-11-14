@@ -15,6 +15,7 @@ import {
   ContextHandoffId,
   ContextTransferId,
   EventId,
+  GuestId,
   GuestMessageId,
   GuestShareId,
   IsoDateTime,
@@ -43,7 +44,26 @@ import {
 } from "./baseSchemas.ts";
 import { AuthMcpClientAccess } from "./auth.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
-import { ThreadGuestShare } from "./guestShare.ts";
+import {
+  GuestAccount,
+  GuestShareTeam,
+  GuestTeamMember,
+  GuestTurnRequest,
+  RoomArtifactContent,
+  RoomBoardChange,
+  RoomBoardNote,
+  RoomBoardReply,
+  RoomBoxTurn,
+  RoomCodeChanges,
+  RoomCodeDiffSummary,
+  RoomPullRequestRead,
+  RoomTaskContextPayload,
+  SharedThreadMessage,
+  ThreadGuestMessage,
+  ThreadGuestShare,
+  ThreadRoomBoard,
+  ThreadRoomLink,
+} from "./guestShare.ts";
 import { StoredThreadTags, ThreadTag } from "./threadTags.ts";
 import {
   OrchestrationSearchThreadsInput,
@@ -486,6 +506,10 @@ export const OrchestrationV2AppThread = Schema.Struct({
   lastSnoozeWakeAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
   guestShare: Schema.optional(Schema.NullOr(ThreadGuestShare)),
+  /** The room's board while the thread is not shared; the next share takes it. */
+  roomBoard: Schema.optional(Schema.NullOr(ThreadRoomBoard)),
+  /** Set while this thread, joined from someone's room, shows its turns there. */
+  roomLink: Schema.optional(Schema.NullOr(ThreadRoomLink)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -582,7 +606,7 @@ export function parseGoalCommand(message: {
   }
 }
 
-/** Why T3 Code sent this `/compact` on its own, or undefined for one someone asked for. */
+/** Why T Code sent this `/compact` on its own, or undefined for one someone asked for. */
 export function idleCompactionOf(
   message: CompactionMessageFields,
 ): OrchestrationV2IdleCompaction | undefined {
@@ -1303,7 +1327,7 @@ export const OrchestrationV2Notification = Schema.Struct({
 });
 export type OrchestrationV2Notification = typeof OrchestrationV2Notification.Type;
 
-/** Why T3 Code compacted a thread on its own, on the `/compact` it sent. */
+/** Why T Code compacted a thread on its own, on the `/compact` it sent. */
 export const OrchestrationV2IdleCompaction = Schema.Literals(["beforeCacheExpires", "onReturn"]);
 export type OrchestrationV2IdleCompaction = typeof OrchestrationV2IdleCompaction.Type;
 
@@ -2132,6 +2156,12 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   pendingRuntimeRequest: Schema.NullOr(OrchestrationV2PendingRuntimeRequestSummary),
   /** Guest messages waiting for the owner to send or dismiss. Absent from older servers. */
   pendingGuestMessageCount: Schema.optional(NonNegativeInt),
+  /** The thread has a guest link or a team share, even an expired one, so it has a board. */
+  guestShared: Schema.optional(Schema.Boolean),
+  /** The thread keeps a board while it is not shared. Absent from older servers. */
+  hasRoomBoard: Schema.optional(Schema.Boolean),
+  /** The owner's threads in thread boxes on this thread's board. Absent when there are none. */
+  boardBoxThreadIds: Schema.optional(Schema.Array(ThreadId)),
   latestVisibleMessage: Schema.NullOr(OrchestrationV2LatestVisibleMessageSummary),
   latestUserMessageAt: Schema.NullOr(Schema.DateTimeUtc),
   /** Excludes wakes and agent messages that advance latestUserMessageAt through the user role. */
@@ -2952,6 +2982,17 @@ export const OrchestrationV2Command = Schema.Union([
     linkOrigin: Schema.optional(OrchestrationV2LinkOrigin),
     /** Only the server sets this, with `linkOrigin`, for a linked environment's delegated task. */
     delegatedFrom: Schema.optional(OrchestrationV2DelegatedFrom),
+    /**
+     * Only the server sets this: a conversation from elsewhere that the thread starts with. The
+     * first turn hands it to the agent as history, the way an imported session's is.
+     */
+    importedHistory: Schema.optional(
+      Schema.Struct({
+        messages: Schema.Array(SharedThreadMessage),
+        /** Shown above the messages, to say where they came from. */
+        notice: Schema.String,
+      }),
+    ),
     importedNativeThread: Schema.optional(
       Schema.Struct({
         ref: Schema.Struct({
@@ -2973,11 +3014,34 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
   }),
+  /** Removes every card, arrow and comment thread from the thread's board, shared or kept. */
+  Schema.Struct({
+    type: Schema.Literal("thread.room-board.clear"),
+    commandId: CommandId,
+    threadId: ThreadId,
+  }),
   Schema.Struct({
     type: Schema.Literal("thread.guest-message.dismiss"),
     commandId: CommandId,
     threadId: ThreadId,
     guestMessageId: GuestMessageId,
+  }),
+  /** Lets a guest's messages reach the agent without the owner sending each one, or stops it. */
+  Schema.Struct({
+    type: Schema.Literal("thread.guest.trust"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    guestId: GuestId,
+    trusted: Schema.Boolean,
+  }),
+  /** Removes one guest and closes the link to new guests, so they cannot join again. */
+  Schema.Struct({
+    type: Schema.Literal("thread.guest.remove"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    guestId: GuestId,
+    /** A team member who is no longer in the team: joining again already needs the team. */
+    membershipEnded: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.unarchive"),
@@ -3409,7 +3473,7 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
 
 // Excluded from dispatchCommand so only the server can send these.
 const OrchestrationV2InternalCommand = Schema.Union([
-  // Guest share commands the server issues after checking T3 Connect and the guest token.
+  // Guest share commands the server issues after checking T Connect and the guest token.
   Schema.Struct({
     type: Schema.Literal("thread.guest-share.open"),
     commandId: CommandId,
@@ -3417,22 +3481,201 @@ const OrchestrationV2InternalCommand = Schema.Union([
     shareId: GuestShareId,
     host: TrimmedNonEmptyString,
     expiresAt: IsoDateTime,
+    team: Schema.optional(GuestShareTeam),
+  }),
+  /** Moves the end of a guest link people can still join, keeping everyone on it. */
+  Schema.Struct({
+    type: Schema.Literal("thread.guest-share.extend"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    expiresAt: IsoDateTime,
   }),
   Schema.Struct({
     type: Schema.Literal("thread.guest-share.redeem"),
     commandId: CommandId,
     threadId: ThreadId,
     shareId: GuestShareId,
+    guestId: GuestId,
     guestName: TrimmedNonEmptyString,
+    member: Schema.optional(GuestTeamMember),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.guest.identify"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    guestId: GuestId,
+    account: GuestAccount,
+    /** The account is one of the owner's saved contributors. */
+    trusted: Schema.Boolean,
   }),
   Schema.Struct({
     type: Schema.Literal("thread.guest-message.submit"),
     commandId: CommandId,
     threadId: ThreadId,
     shareId: GuestShareId,
+    /** Absent for the one guest of a link made before several could join. */
+    guestId: Schema.optional(GuestId),
     guestMessageId: GuestMessageId,
     text: Schema.String,
     attachments: Schema.optional(Schema.Array(ChatAttachment)),
+    /** The server sends this message itself, right after recording it. */
+    direct: Schema.optional(Schema.Boolean),
+    /** An artifact card on the share's board that the reply should fill. */
+    artifactId: ThreadGuestMessage.fields.artifactId,
+    /** The guest's own thread box the message is for. */
+    boxId: ThreadGuestMessage.fields.boxId,
+    /** The cards written into the text, as the server labelled them from its board. */
+    cards: ThreadGuestMessage.fields.cards,
+    cardRefs: ThreadGuestMessage.fields.cardRefs,
+  }),
+  /** Shows a turn a guest ran on their own machine. It changes the share and nothing else. */
+  Schema.Struct({
+    type: Schema.Literal("thread.guest-turn.post"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    guestId: GuestId,
+    turn: GuestTurnRequest,
+  }),
+  /** Changes one card or note on the room's board. It changes the share and nothing else. */
+  Schema.Struct({
+    type: Schema.Literal("thread.guest-board.change"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    /** The guest who made the change, or null for the owner. */
+    author: Schema.NullOr(GuestId),
+    change: RoomBoardChange,
+  }),
+  /** Answers a task card with the owner's own turn. It changes the share and nothing else. */
+  Schema.Struct({
+    type: Schema.Literal("thread.room-task.answer"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    taskId: RoomTaskContextPayload.fields.taskId,
+    turn: Schema.Struct({ id: GuestTurnRequest.fields.id, reply: GuestTurnRequest.fields.reply }),
+  }),
+  /** Writes the owner's own turn into an artifact card. It changes the share and nothing else. */
+  Schema.Struct({
+    type: Schema.Literal("thread.room-artifact.fill"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    noteId: RoomBoardNote.fields.id,
+    turnId: RoomArtifactContent.fields.turnId,
+    body: RoomArtifactContent.fields.body,
+    truncated: RoomArtifactContent.fields.truncated,
+    /** The guest whose message the turn answered, when the owner sent one. */
+    askedBy: RoomArtifactContent.fields.askedBy,
+    prompt: RoomArtifactContent.fields.prompt,
+    cards: RoomArtifactContent.fields.cards,
+    boxId: RoomArtifactContent.fields.boxId,
+    model: RoomArtifactContent.fields.model,
+  }),
+  /**
+   * Posts the owner's own agent's turn as a reply in the comment thread it was asked from. It
+   * changes the share and nothing else.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.room-comment.answer"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    noteId: RoomBoardNote.fields.id,
+    turnId: RoomArtifactContent.fields.turnId,
+    text: RoomBoardReply.fields.text,
+    boxId: RoomBoardNote.fields.id,
+    model: RoomArtifactContent.fields.model,
+  }),
+  /**
+   * Records the owner's thread behind one of their thread boxes, or with null forgets it. It
+   * changes the share and nothing else. With `box`, the box is added with the link, so an existing
+   * thread never lands on the board half linked; `turn` is its thread's last finished turn.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.room-box.link"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    boxId: RoomBoardNote.fields.id,
+    boxThreadId: Schema.NullOr(ThreadId),
+    box: Schema.optional(
+      Schema.Struct({
+        text: RoomBoardNote.fields.text,
+        x: RoomBoardNote.fields.x,
+        y: RoomBoardNote.fields.y,
+        turn: Schema.optional(RoomBoxTurn),
+      }),
+    ),
+  }),
+  /** Shows a finished turn of a thread box's own thread on the box. It changes the share only. */
+  Schema.Struct({
+    type: Schema.Literal("thread.room-box.turn"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    boxId: RoomBoardNote.fields.id,
+    turn: RoomBoxTurn,
+  }),
+  /**
+   * Shows what one of the owner's thread boxes' threads changed in every code window the box has a
+   * line to. It changes the share only.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.room-box.changes"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    boxId: RoomBoardNote.fields.id,
+    turnId: RoomCodeChanges.fields.turnId,
+    changes: RoomCodeDiffSummary,
+  }),
+  /**
+   * Shows what the owner's server last read of a pull request window's pull request, while the
+   * window still names that `url`. It changes the share only.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.room-pull-request.read"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    noteId: RoomBoardNote.fields.id,
+    url: TrimmedNonEmptyString,
+    read: RoomPullRequestRead,
+  }),
+  /**
+   * Marks the lines that carried these cards into a thread box, or the artifact it rewrites, sent:
+   * the owner's server dispatches it once it took the owner's prompt. It changes the share only.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.room-cards.sent"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    boxId: RoomBoardNote.fields.id,
+    artifactId: Schema.optional(RoomBoardNote.fields.id),
+    cardRefs: Schema.Array(Schema.String.check(Schema.isMaxLength(170))),
+  }),
+  /**
+   * Marks a guest's waiting message sent as `sentAs` in its thread box's own thread, or with null
+   * puts it back to waiting when that send failed. It changes the share and nothing else.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.guest-message.route"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    guestMessageId: GuestMessageId,
+    sentAs: Schema.NullOr(MessageId),
+  }),
+  /** Connects a thread joined from a room to it, or with null ends that. */
+  Schema.Struct({
+    type: Schema.Literal("thread.room-link.set"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    roomLink: Schema.NullOr(ThreadRoomLink),
   }),
   /** Moves a thread to a project rooted at the folder it already works in, so its cwd never changes. */
   Schema.Struct({

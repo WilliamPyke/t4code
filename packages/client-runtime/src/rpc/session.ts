@@ -46,6 +46,7 @@ import {
   withoutEnvironmentThemes,
 } from "../state/serverConfigProjection.ts";
 import { environmentMismatchError } from "../connection/errors.ts";
+import { connectGuestSession, GuestShareAccess, GuestShareFetch } from "./guestSession.ts";
 
 const SOCKET_OPEN_TIMEOUT = "15 seconds";
 
@@ -162,7 +163,7 @@ function mapSessionRpcError(
   }
 }
 
-/** Over T3 Connect the relay already reached the host, so a socket that drops failed between this device and the tunnel. */
+/** Over T Connect the relay already reached the host, so a socket that drops failed between this device and the tunnel. */
 function socketFailureLocation(via: "relay" | "direct") {
   return { hop: via === "relay" ? "tunnel" : "server", via } as const;
 }
@@ -172,6 +173,9 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
   options: RpcSessionOptions = {},
 ) {
   const webSocketConstructor = yield* Socket.WebSocketConstructor;
+  // Read where the platform provides them; a connect runs on the supervisor's fiber.
+  const guestAccess = yield* GuestShareAccess;
+  const guestFetch = yield* GuestShareFetch;
   const serverConfigInput: ServerConfigSubscriptionInput = {
     ...(options.environmentThemes === true ? { environmentThemes: true } : {}),
     ...(options.usageLimitSources === true ? { usageLimitSources: true } : {}),
@@ -185,6 +189,14 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
   });
 
   const connect = Effect.fnUntraced(function* (connection: PreparedConnection) {
+    // A shared thread has no socket: its session reads the owner's guest routes.
+    if (connection.target._tag === "GuestConnectionTarget") {
+      const guest = yield* connectGuestSession(connection, connection.target).pipe(
+        Effect.provideService(GuestShareAccess, guestAccess),
+        Effect.provideService(GuestShareFetch, guestFetch),
+      );
+      return guest.session;
+    }
     const via = connection.target._tag === "RelayConnectionTarget" ? "relay" : "direct";
     const networkHint = via === "relay" ? ` ${NETWORK_BLOCKING_HINT}` : "";
     const mapRpcError = (error: Parameters<typeof mapSessionRpcError>[0]) =>

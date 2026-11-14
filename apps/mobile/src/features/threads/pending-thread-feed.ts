@@ -1,4 +1,5 @@
 import {
+  guestMessageAuthorName,
   isCompactionCommandMessage,
   type ThreadGuestMessage,
   type ThreadGuestShare,
@@ -105,14 +106,13 @@ export function appendGuestPendingMessages(
 ): ReadonlyArray<ThreadFeedRow> {
   const pending = share?.messages.filter((message) => message.status === "pending") ?? [];
   if (share === null || pending.length === 0) return presentedFeed;
-  const guestName = share.guestName ?? "Guest";
   return [
     ...presentedFeed,
     ...pending.map((message): GuestPendingFeedEntry => ({
       type: "guest-pending",
       id: `guest-pending:${message.id}`,
       createdAt: message.submittedAt,
-      guestName,
+      guestName: guestMessageAuthorName(share, message),
       message,
     })),
   ];

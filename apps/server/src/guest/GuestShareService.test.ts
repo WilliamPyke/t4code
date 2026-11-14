@@ -1,3 +1,5 @@
+import * as NodeOS from "node:os";
+import * as NodeURL from "node:url";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -5,7 +7,10 @@ import {
   ChatAttachmentId,
   CommandId,
   EventId,
+  type GuestAccount,
+  type GuestId,
   GuestShareId,
+  type GuestShareView,
   type GuestStreamEvent,
   MessageId,
   type OrchestrationV2ThreadHistoryPage,
@@ -13,10 +18,17 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  type PullRequestDetail,
+  PullRequestUnavailableError,
+  ROOM_BOARD_ROOM_BOX,
+  ROOM_CODE_PATCH_MAX_LENGTH,
   RunId,
+  type ServerProvider,
   ThreadId,
+  type VcsStatusResult,
   TurnItemId,
 } from "@t3tools/contracts";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -26,6 +38,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -38,10 +51,14 @@ import {
   sweepStalePendingAttachments,
 } from "../attachmentStore.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as GuestLinkNames from "./GuestLinkNames.ts";
+import * as GuestTeamShares from "./GuestTeamShares.ts";
+import * as GuestSignIn from "./GuestSignIn.ts";
 import { CloudManagedEndpointRuntime } from "../cloud/ManagedEndpointRuntime.ts";
 import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as CommandOutputHub from "../orchestration-v2/CommandOutputHub.ts";
 import * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
 import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
@@ -51,10 +68,18 @@ import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ResourceCleanupService from "../orchestration-v2/ResourceCleanupService.ts";
 import * as ProviderReplayHarness from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
+import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
+import * as CheckpointDiffQuery from "../checkpointing/CheckpointDiffQuery.ts";
 import * as GuestShareService from "./GuestShareService.ts";
+import * as RoomBoxes from "./RoomBoxes.ts";
+import * as RoomCodeDiffs from "./RoomCodeDiffs.ts";
+import * as RoomPullRequests from "./RoomPullRequests.ts";
+import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 
 const instanceId = ProviderInstanceId.make("codex");
 const adapter = {
@@ -86,9 +111,103 @@ const layerConnect = Layer.mock(CloudManagedEndpointRuntime)({
     protocol: "http2",
   })),
 });
-const layerProviders = Layer.mock(ProviderRegistry.ProviderRegistry)({
-  getProviders: Effect.succeed([]),
+// The providers the fake registry reports. Tests set how the thread's provider is signed in.
+// The GitHub account the next finished sign-in proves. Null means GitHub refuses the code.
+const githubAccount = Ref.makeUnsafe<GuestAccount | null>(null);
+// The fake state is the session it was started for, so finishing needs no table.
+const layerLinkNames = Layer.mock(GuestLinkNames.GuestLinkNames)({
+  register: () => Effect.succeed("tulip-otter-harbor"),
 });
+// The relay's side of team shares. A fake assertion is `member:<team>:<user>:<name>`; the real
+// signature check is GuestTeamShares' own test.
+const teamListings = Ref.makeUnsafe<ReadonlyMap<string, string>>(new Map());
+// The accounts the relay says have left their team.
+const formerMembers = Ref.makeUnsafe<ReadonlySet<string>>(new Set());
+const layerTeamShares = Layer.mock(GuestTeamShares.GuestTeamShares)({
+  isMember: (_teamId, userId) => Effect.map(Ref.get(formerMembers), (gone) => !gone.has(userId)),
+  register: (input) =>
+    Ref.update(teamListings, (listed) => new Map(listed).set(input.threadId, input.teamId)).pipe(
+      Effect.as(input.teamId === "team-core" ? "Core" : null),
+    ),
+  unregister: (threadId) =>
+    Ref.update(teamListings, (listed) => {
+      const next = new Map(listed);
+      next.delete(threadId);
+      return next;
+    }),
+  verifyMember: (token) => {
+    const [kind, teamId = "", userId = "", name = ""] = token.split(":");
+    return Effect.succeed(
+      kind === "member"
+        ? Option.some({
+            iss: "https://relay.test",
+            aud: "t3-env:test",
+            sub: userId,
+            jti: token,
+            iat: 0,
+            exp: 300,
+            teamId,
+            userId,
+            name,
+            avatarUrl: `https://img.test/${userId}.png`,
+          })
+        : Option.none(),
+    );
+  },
+});
+const layerSignIn = Layer.mock(GuestSignIn.GuestSignIn)({
+  enabled: true,
+  start: ({ session, redirectUri }) =>
+    Effect.succeed({ state: Buffer.from(session).toString("base64url"), url: redirectUri }),
+  finish: ({ state }) =>
+    Effect.flatMap(Ref.get(githubAccount), (account) =>
+      account === null
+        ? Effect.fail(new GuestSignIn.GuestSignInError({ reason: "failed" }))
+        : Effect.succeed({ session: Buffer.from(state, "base64url").toString(), account }),
+    ),
+});
+const providers = Ref.makeUnsafe<ReadonlyArray<ServerProvider>>([]);
+const layerProviders = Layer.mock(ProviderRegistry.ProviderRegistry)({
+  getProviders: Ref.get(providers),
+});
+// What git says about the shared thread's checkout. Null means it has no repository to share.
+const checkout = Ref.makeUnsafe<{ readonly branch: string; readonly synced: boolean } | null>(null);
+const layerCheckout = Layer.mergeAll(
+  Layer.mock(ProjectService.ProjectService)({
+    getById: () => Effect.succeedSome({ workspaceRoot: "/repo" } as never),
+  }),
+  Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
+    resolve: () =>
+      Effect.map(Ref.get(checkout), (facts) =>
+        facts === null
+          ? null
+          : {
+              canonicalKey: "github.com/acme/app",
+              locator: {
+                source: "git-remote" as const,
+                remoteName: "origin",
+                remoteUrl: "https://token@github.com/acme/app.git",
+              },
+            },
+      ),
+  }),
+  Layer.mock(GitWorkflow.GitWorkflowService)({
+    status: () =>
+      Effect.map(
+        Ref.get(checkout),
+        (facts) =>
+          ({
+            isRepo: facts !== null,
+            refName: facts?.branch ?? null,
+            hasUpstream: facts?.synced === true,
+            aheadCount: 0,
+            behindCount: 0,
+            hasWorkingTreeChanges: false,
+            pr: null,
+          }) as VcsStatusResult,
+      ),
+  }),
+);
 const layerConfig = ServerConfig.layerTest(process.cwd(), { prefix: "t3-guest-share-" });
 // The real cleanup also closes terminals and previews; these tests only need the files gone.
 const layerCleanup = Layer.effect(
@@ -135,13 +254,114 @@ const layerAnalytics = Layer.effectContext(
     );
   }),
 );
+// Launching is ThreadLaunchService's own test; this makes a box's thread with the same commands.
+const layerLaunches = Layer.effect(
+  ThreadLaunch.ThreadLaunchService,
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    return ThreadLaunch.ThreadLaunchService.of({
+      launch: (input) =>
+        Effect.gen(function* () {
+          const threadId = input.threadId ?? ThreadId.make(`thread:${input.commandId}`);
+          const strategy = input.workspaceStrategy;
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            commandId: input.commandId,
+            threadId,
+            projectId: input.projectId,
+            title: input.title,
+            modelSelection: input.modelSelection,
+            runtimeMode: input.runtimeMode,
+            interactionMode: input.interactionMode,
+            branch: strategy.branch ?? null,
+            worktreePath: strategy.type === "existing_worktree" ? strategy.worktreePath : null,
+            createdBy: input.createdBy,
+            creationSource: input.creationSource,
+          });
+          const message = input.initialMessage;
+          if (message !== undefined) {
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make(`${input.commandId}:initial-message`),
+              threadId,
+              messageId: message.messageId ?? MessageId.make(`${input.commandId}:message`),
+              text: message.text,
+              attachments: [...message.attachments],
+              ...(message.context === undefined ? {} : { context: message.context }),
+              modelSelection: input.modelSelection,
+              dispatchMode: { type: "queue_after_active" },
+              createdBy: input.createdBy,
+              creationSource: input.creationSource,
+            });
+          }
+          return {
+            threadId,
+            projection: yield* orchestrator.getThreadProjection(threadId),
+            resumed: false,
+          };
+        }).pipe(Effect.orDie),
+      checkWorktreeBase: () => Effect.void,
+      retryPreparation: () => Effect.die("Not used by thread boxes"),
+      prepareRun: () => Effect.void,
+    });
+  }),
+);
+// What git says the shared thread changed. Reading checkpoints is CheckpointDiffQuery's own test.
+const threadDiff = Ref.makeUnsafe("");
+const layerDiffs = Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({
+  getFullThreadDiff: (input) =>
+    Effect.map(Ref.get(threadDiff), (diff) => ({ ...input, fromTurnCount: 0, diff })),
+  getTurnDiff: (input) => Effect.map(Ref.get(threadDiff), (diff) => ({ ...input, diff })),
+});
+// What the owner's GitHub sign-in reads, and every read and refresh asked of it.
+const pullRequestCalls = Ref.makeUnsafe<ReadonlyArray<string>>([]);
+const pullRequestFailure = Ref.makeUnsafe<PullRequestService.PullRequestError | null>(null);
+const layerPullRequests = Layer.mock(PullRequestService.PullRequestService)({
+  invalidate: () => Ref.update(pullRequestCalls, (calls) => [...calls, "invalidate"]),
+  detail: (ref) =>
+    Ref.update(pullRequestCalls, (calls) => [
+      ...calls,
+      `${ref.host}/${ref.repository}#${ref.number}`,
+    ]).pipe(
+      Effect.andThen(Ref.get(pullRequestFailure)),
+      Effect.flatMap((failure) =>
+        failure === null
+          ? Effect.succeed({
+              title: "Fix login",
+              state: "open",
+              isDraft: true,
+              headBranch: "fix-login",
+              baseBranch: "main",
+              changedFiles: 3,
+              additions: 40,
+              deletions: 2,
+              updatedAt: "2026-11-12T10:00:00.000Z",
+              checks: [
+                { name: "lint", status: "failure", description: null, url: null },
+                { name: "test", status: "success", description: null, url: null },
+                { name: "e2e", status: "pending", description: null, url: null },
+              ],
+            } as unknown as PullRequestDetail)
+          : Effect.fail(failure),
+      ),
+    ),
+  // Commits it cannot count are left out, not a failed read.
+  activity: () => Effect.fail(new PullRequestUnavailableError({ reason: "provider-unsupported" })),
+});
 const layerTest = GuestShareService.layer.pipe(
+  Layer.provideMerge(RoomBoxes.layer.pipe(Layer.provide(layerLaunches))),
+  Layer.provideMerge(RoomCodeDiffs.layer.pipe(Layer.provide(layerDiffs))),
+  Layer.provideMerge(RoomPullRequests.layer.pipe(Layer.provide(layerPullRequests))),
   Layer.provideMerge(
     CommandOutputHub.layer.pipe(
       Layer.provideMerge(layerOrchestration.pipe(Layer.provide(layerCleanup))),
     ),
   ),
   Layer.provide(layerProviders),
+  Layer.provide(layerCheckout),
+  Layer.provide(layerSignIn),
+  Layer.provide(layerLinkNames),
+  Layer.provide(layerTeamShares),
   Layer.provideMerge(ServerSettings.layerTest({ guestSharingEnabled: true })),
   Layer.provide(layerConnect),
   Layer.provideMerge(layerAnalytics),
@@ -152,8 +372,14 @@ const layerTest = GuestShareService.layer.pipe(
 
 const threadId = ThreadId.make("thread:guest-share-service");
 
-const shareThreadFor = Effect.fn(function* (threadId: ThreadId) {
+const shareThreadFor = Effect.fn(function* (
+  threadId: ThreadId,
+  worktreePath: string | null = null,
+  linkStart = "https://env.t3.test/guest#",
+) {
   yield* Ref.set(hostname, "env.t3.test");
+  yield* Ref.set(providers, []);
+  yield* Ref.set(checkout, null);
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   yield* orchestrator.dispatch({
     type: "thread.create",
@@ -165,25 +391,45 @@ const shareThreadFor = Effect.fn(function* (threadId: ThreadId) {
     runtimeMode: "full-access",
     interactionMode: "default",
     branch: null,
-    worktreePath: null,
+    worktreePath,
     createdBy: "user",
     creationSource: "web",
   });
   const guestShares = yield* GuestShareService.GuestShareService;
   const { url } = yield* guestShares.create({ threadId });
-  assert.isTrue(url.startsWith("https://env.t3.test/guest#"));
+  assert.isTrue(url.startsWith(linkStart));
   const credential = url.slice(url.indexOf("#") + 1);
   return { orchestrator, guestShares, credential };
 });
 const shareThread = shareThreadFor(threadId);
 
-it.effect("spends an invite once and ends the guest stream when the owner stops sharing", () =>
+it.effect("lets each browser join an invite as its own guest until the owner stops sharing", () =>
   Effect.gen(function* () {
     const { orchestrator, guestShares, credential } = yield* shareThread;
     const { token: session } = yield* guestShares.redeem({ credential, name: "Sam" });
-    const again = yield* Effect.exit(guestShares.redeem({ credential, name: "Eve" }));
-    assert.isTrue(Exit.isFailure(again));
-    // The browser that joined can come back without the spent invite.
+    const eve = yield* guestShares.redeem({ credential, name: "Eve" });
+    assert.notEqual(eve.token, session);
+    const taken = yield* Effect.flip(guestShares.redeem({ credential, name: "sam" }));
+    assert.equal(taken.reason, "name_taken");
+    // Each guest's page names them, lists everyone, and shows what the others asked.
+    yield* guestShares.submit(session, { shareId: eve.shareId, text: "Sam's question" }, []);
+    yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+      guestOwnerName: "  Will  ",
+    });
+    const [eveView] = Array.from(
+      yield* Stream.runCollect(Stream.take(yield* guestShares.stream(eve.token), 1)),
+    );
+    if (eveView?.type !== "view") return assert.fail("Expected the share view first.");
+    assert.equal(eveView.view.guestName, "Eve");
+    assert.equal(eveView.view.ownerName, "Will");
+    assert.deepEqual(
+      eveView.view.guests.map((guest) => guest.name),
+      ["Sam", "Eve"],
+    );
+    const [asked] = eveView.view.messages;
+    assert.equal(asked?.text, "Sam's question");
+    assert.notEqual(asked?.guestId, eveView.view.guestId);
+    // The browser that joined can come back without joining again.
     assert.isTrue(Exit.isSuccess(yield* Effect.exit(guestShares.check(session))));
     // An invite token is not a session token.
     assert.isTrue(Exit.isFailure(yield* Effect.exit(guestShares.stream(credential))));
@@ -196,12 +442,1198 @@ it.effect("spends an invite once and ends the guest stream when the owner stops 
     });
     const received = Array.from(yield* Stream.runCollect(events));
     assert.deepEqual(
-      received.map((event) => (event.type === "thread" ? event.item.kind : event.type)),
+      received
+        .filter((event) => !["presence", "agents", "cursors"].includes(event.type))
+        .map((event) => (event.type === "thread" ? event.item.kind : event.type)),
       ["view", "snapshot", "ended"],
     );
     assert.isTrue(Exit.isFailure(yield* Effect.exit(guestShares.stream(session))));
     assert.isTrue(Exit.isFailure(yield* Effect.exit(guestShares.check(session))));
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(guestShares.check(eve.token))));
   }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("says who has the page open, and ends the page of a guest the owner removes", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const eve = yield* guestShares.redeem({ credential, name: "Eve" });
+    const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+    const [samId, eveId] = thread.guestShare!.guests!.map((guest) => guest.id) as [
+      GuestId,
+      GuestId,
+    ];
+
+    const online = yield* Queue.unbounded<ReadonlyArray<string>>();
+    yield* Stream.runForEach(guestShares.presence(threadId), (presence) =>
+      Queue.offer(online, presence.online.toSorted()),
+    ).pipe(Effect.forkScoped);
+    assert.deepEqual(yield* Queue.take(online), []);
+
+    yield* Stream.runDrain(yield* guestShares.stream(sam.token)).pipe(Effect.forkScoped);
+    assert.deepEqual(yield* Queue.take(online), [samId]);
+    const evePage = yield* Stream.runCollect(yield* guestShares.stream(eve.token)).pipe(
+      Effect.forkScoped,
+    );
+    assert.deepEqual(yield* Queue.take(online), [samId, eveId].toSorted());
+
+    yield* orchestrator.dispatch({
+      type: "thread.guest.remove",
+      commandId: CommandId.make("remove-eve"),
+      threadId,
+      guestId: eveId,
+    });
+    assert.equal(Array.from(yield* Fiber.join(evePage)).at(-1)?.type, "ended");
+    assert.deepEqual(yield* Queue.take(online), [samId]);
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(guestShares.check(eve.token))));
+    assert.isTrue(Exit.isSuccess(yield* Effect.exit(guestShares.check(sam.token))));
+    const closed = yield* Effect.flip(guestShares.redeem({ credential, name: "Eve again" }));
+    assert.equal(closed.reason, "closed");
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("lets the owner and each guest change the board everyone on the link sees", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const eve = yield* guestShares.redeem({ credential, name: "Eve" });
+    const samId = (yield* orchestrator.getThreadRecords(threadId, [])).thread.guestShare!
+      .guests![0]!.id;
+    const boards = yield* Queue.unbounded<NonNullable<GuestShareView["board"]>>();
+    yield* Stream.runForEach(yield* guestShares.stream(eve.token), (event) =>
+      event.type === "view" && event.view.board !== undefined
+        ? Queue.offer(boards, event.view.board)
+        : Effect.void,
+    ).pipe(Effect.forkScoped);
+
+    yield* guestShares.changeBoard(
+      { session: sam.token },
+      { type: "note.put", noteId: "note:1", text: "Hid\u200Bden", x: 4, y: 8 },
+    );
+    // The other guest's open page gets the note, signed, without characters nobody can see.
+    assert.deepEqual((yield* Queue.take(boards)).notes, [
+      { id: "note:1", text: "Hidden", x: 4, y: 8, guestId: samId },
+    ]);
+    yield* guestShares.changeBoard(
+      { threadId },
+      { type: "card.move", cardId: "thread", x: 40, y: 80 },
+    );
+    assert.deepEqual((yield* Queue.take(boards)).positions, { thread: { x: 40, y: 80 } });
+    // A reply on a comment thread is signed and cleaned the same way.
+    yield* guestShares.changeBoard(
+      { session: sam.token },
+      { type: "note.put", noteId: "talk", text: "Ship it?", x: 0, y: 0, kind: "comment" },
+    );
+    yield* Queue.take(boards);
+    yield* guestShares.changeBoard(
+      { session: eve.token },
+      { type: "comment.reply", noteId: "talk", replyId: "reply:1", text: "Not​ yet" },
+    );
+    const [reply] = (yield* Queue.take(boards)).notes.at(-1)?.replies ?? [];
+    assert.deepInclude(reply, { id: "reply:1", text: "Not yet" });
+    assert.notEqual(reply?.guestId, samId);
+
+    // Only a guest's session writes: not the invite, and not the token their own machine holds.
+    const remove = { type: "note.remove", noteId: "note:1" } as const;
+    const room = (yield* guestShares.exportThread((yield* guestShares.handoff(sam.token)).token))
+      .room!;
+    for (const token of [credential, room.token]) {
+      assert.equal(
+        (yield* Effect.flip(guestShares.changeBoard({ session: token }, remove))).reason,
+        "invalid",
+      );
+    }
+    yield* orchestrator.dispatch({
+      type: "thread.guest.remove",
+      commandId: CommandId.make("remove-sam-board"),
+      threadId,
+      guestId: samId,
+    });
+    assert.equal(
+      (yield* Effect.flip(guestShares.changeBoard({ session: sam.token }, remove))).reason,
+      "inactive",
+    );
+    yield* orchestrator.dispatch({
+      type: "thread.guest-share.close",
+      commandId: CommandId.make("close-board"),
+      threadId,
+    });
+    assert.equal(
+      (yield* Effect.flip(guestShares.changeBoard({ session: eve.token }, remove))).reason,
+      "inactive",
+    );
+    // The owner keeps working on the board the thread keeps.
+    yield* guestShares.changeBoard({ threadId }, remove);
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("sends a trusted guest's message itself only while the provider is on an API key", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const joined = yield* orchestrator.getThreadRecords(threadId, []);
+    const samId = joined.thread.guestShare!.guests![0]!.id;
+    const signedInWith = (type: string) =>
+      Ref.set(providers, [
+        { instanceId, driver: "codex", auth: { status: "authenticated", type }, models: [] },
+      ] as unknown as ReadonlyArray<ServerProvider>);
+    const trust = (trusted: boolean) =>
+      orchestrator.dispatch({
+        type: "thread.guest.trust",
+        commandId: CommandId.make(`trust:${trusted}`),
+        threadId,
+        guestId: samId,
+        trusted,
+      });
+    const ask = (text: string) => guestShares.submit(sam.token, { shareId: sam.shareId, text }, []);
+    const state = orchestrator.getThreadRecords(threadId, ["messages"]).pipe(
+      Effect.map(({ thread, messages }) => ({
+        waiting: thread.guestShare!.messages.map((message) => message.status),
+        sent: messages.map((message) => message.text),
+      })),
+    );
+
+    // An API key alone is not enough: the owner has to trust the guest.
+    yield* signedInWith("apiKey");
+    yield* ask("First");
+    // Nor is trust alone: a plan sign-in covers only the owner's own prompts.
+    yield* trust(true);
+    yield* signedInWith("chatgpt");
+    yield* ask("Second");
+    assert.deepEqual(yield* state, { waiting: ["pending", "pending"], sent: [] });
+
+    yield* signedInWith("apiKey");
+    yield* ask("Third");
+    assert.deepEqual(yield* state, {
+      waiting: ["pending", "pending", "sent"],
+      sent: ["Message from guest Sam, sent without the owner reading it:\n\nThird"],
+    });
+    const [opened] = Array.from(
+      yield* Stream.runCollect(Stream.take(yield* guestShares.stream(sam.token), 1)),
+    );
+    assert.isTrue(opened?.type === "view" && opened.view.direct);
+
+    // A message for an artifact card goes the same way, with the card this board has.
+    yield* guestShares.changeBoard(
+      { threadId },
+      { type: "note.put", noteId: "plan", text: "Plan", x: 0, y: 0, kind: "artifact" },
+    );
+    const forCard = (artifactId: string) =>
+      guestShares.submit(sam.token, { shareId: sam.shareId, text: "Draw it", artifactId }, []);
+    assert.equal((yield* Effect.flip(forCard("gone"))).reason, "artifact_gone");
+    yield* forCard("plan");
+    const drawn = (yield* orchestrator.getThreadRecords(threadId, ["messages"])).messages.at(-1);
+    assert.deepInclude(drawn?.context?.records[0], { kind: "room-artifact", noteId: "plan" });
+
+    yield* trust(false);
+    yield* ask("Fourth");
+    assert.equal((yield* state).waiting.at(-1), "pending");
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("trusts a guest who signs in as a saved contributor, and no one else", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    yield* settings.updateSettings({ guestContributors: [{ login: "Sam-Dev" }] });
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const eve = yield* guestShares.redeem({ credential, name: "Eve" });
+    const guests = orchestrator
+      .getThreadRecords(threadId, [])
+      .pipe(Effect.map(({ thread }) => thread.guestShare!.guests!));
+
+    /** The guest starts, and GitHub sends the browser that holds `cookie` back. */
+    const signIn = Effect.fn(function* (token: string, cookieOf = (cookie: string) => cookie) {
+      const started = yield* guestShares.signIn(token);
+      const cookie = cookieOf(started.cookie);
+      const state = started.cookie.split(".")[1]!;
+      return {
+        ...started,
+        location: yield* guestShares.signInFinish({ state, code: "code", cookie }),
+      };
+    });
+    const page = `/guest?share=${sam.shareId}`;
+
+    // GitHub refusing the code records no one.
+    yield* Ref.set(githubAccount, null);
+    const refused = yield* signIn(sam.token);
+    // GitHub sends the guest back to the host the link is served from.
+    assert.equal(refused.url, "https://env.t3.test/api/guest/sign-in/callback");
+    assert.equal(refused.location, `${page}&sign_in=failed`);
+
+    // Nor does a callback from a browser that did not start the sign-in: Eve cannot have
+    // someone else approve on GitHub and be recorded as them.
+    yield* Ref.set(githubAccount, { login: "sam-dev", id: 7 });
+    const eveStarted = yield* guestShares.signIn(eve.token);
+    assert.equal(
+      (yield* signIn(sam.token, () => eveStarted.cookie)).location,
+      `${page}&sign_in=failed`,
+    );
+    assert.equal((yield* signIn(sam.token, () => "")).location, "/guest?sign_in=failed");
+    assert.equal(
+      yield* guestShares.signInFinish({ state: null, code: "code", cookie: eveStarted.cookie }),
+      `${page}&sign_in=failed`,
+    );
+    assert.deepEqual(
+      (yield* guests).map(({ account }) => account),
+      [undefined, undefined],
+    );
+
+    assert.equal((yield* signIn(sam.token)).location, page);
+    // With no hosted app configured, no page on another origin can start a sign-in.
+    assert.equal(
+      (yield* Effect.flip(
+        guestShares.signInFromHostedApp({ session: sam.token, origin: "https://app.t3.codes" }),
+      )).reason,
+      "invalid",
+    );
+    // Someone else's account is recorded, but their messages still wait for the owner.
+    yield* Ref.set(githubAccount, { login: "eve", id: 8 });
+    yield* signIn(eve.token);
+    assert.deepEqual(
+      (yield* guests).map(({ account, trusted }) => ({ account, trusted })),
+      [
+        { account: { login: "sam-dev", id: 7 }, trusted: true },
+        { account: { login: "eve", id: 8 }, trusted: undefined },
+      ],
+    );
+    // The saved login now names that one account, whoever holds the login later.
+    assert.deepEqual((yield* settings.getSettings).guestContributors, [
+      { login: "sam-dev", id: 7 },
+    ]);
+    const mallory = yield* guestShares.redeem({ credential, name: "Mallory" });
+    yield* Ref.set(githubAccount, { login: "sam-dev", id: 99 });
+    yield* signIn(mallory.token);
+    assert.isUndefined((yield* guests)[2]?.trusted);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+const layerHostedApp = layerTest.pipe(
+  Layer.provide(
+    ConfigProvider.layer(
+      ConfigProvider.fromEnv({ env: { T3CODE_HOSTED_APP_URL: "https://app.t3.test" } }),
+    ),
+  ),
+);
+
+it.effect("opens links on a configured hosted app, and returns a guest who signs in there", () =>
+  Effect.gen(function* () {
+    const { guestShares, credential } = yield* shareThreadFor(
+      ThreadId.make("thread:guest-share-hosted"),
+      null,
+      "https://app.t3.test/guest?host=env.t3.test#",
+    );
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    // Any other page could walk someone else's browser through Sam's sign-in.
+    for (const origin of ["https://evil.test", "https://env.t3.test", "null", null]) {
+      assert.equal(
+        (yield* Effect.flip(guestShares.signInFromHostedApp({ session: sam.token, origin })))
+          .reason,
+        "invalid",
+      );
+    }
+    yield* Ref.set(githubAccount, { login: "sam-dev", id: 7 });
+    const started = yield* guestShares.signInFromHostedApp({
+      session: sam.token,
+      origin: "https://app.t3.test",
+    });
+    const state = started.cookie.split(".")[1]!;
+    const page = `https://app.t3.test/guest?host=env.t3.test&share=${sam.shareId}`;
+    // The browser still has to hold the cookie for this state; the mark finishes nothing.
+    assert.equal(
+      yield* guestShares.signInFinish({
+        state,
+        code: "code",
+        cookie: `${sam.shareId}.other.hosted`,
+      }),
+      `${page}&sign_in=failed`,
+    );
+    assert.equal(
+      yield* guestShares.signInFinish({ state, code: "code", cookie: started.cookie }),
+      page,
+    );
+    // A sign-in started on the owner's host still returns there.
+    const local = yield* guestShares.signIn(sam.token);
+    assert.equal(
+      yield* guestShares.signInFinish({ state, code: "code", cookie: local.cookie }),
+      `/guest?share=${sam.shareId}`,
+    );
+  }).pipe(Effect.provide(layerHostedApp)),
+);
+
+it.effect("makes a link last as long as the owner chose, and extends it for everyone on it", () =>
+  Effect.gen(function* () {
+    const linkThread = ThreadId.make("thread:guest-share-lifetime");
+    const { guestShares, credential } = yield* shareThreadFor(
+      linkThread,
+      null,
+      "https://app.t3.test/guest?host=env.t3.test#",
+    );
+    const start = DateTime.toEpochMillis(yield* DateTime.now);
+    const endsIn = (share: { readonly expiresAt: string }) =>
+      (Date.parse(share.expiresAt) - start) / (24 * 60 * 60 * 1000);
+    const week = yield* guestShares.create({ threadId: linkThread, replace: true, days: 7 });
+    assert.equal(endsIn(week.share), 7);
+    assert.isDefined(week.shortUrl);
+    assert.notEqual(week.url.slice(week.url.indexOf("#") + 1), credential);
+    // A shorter end leaves the link as it is.
+    const unchanged = yield* guestShares.create({ threadId: linkThread, extend: true, days: 1 });
+    assert.equal(unchanged.share.expiresAt, week.share.expiresAt);
+
+    // An open page checks the room every few seconds, so the clock crosses a one-day link's end.
+    const day = yield* guestShares.create({ threadId: linkThread, replace: true, days: 1 });
+    const dayCredential = day.url.slice(day.url.indexOf("#") + 1);
+    const sam = yield* guestShares.redeem({ credential: dayCredential, name: "Sam" });
+    const room = (yield* guestShares.exportThread((yield* guestShares.handoff(sam.token)).token))
+      .room!;
+    const pageEnded = yield* Ref.make(false);
+    const page = yield* Stream.runForEach(yield* guestShares.stream(sam.token), (event) =>
+      event.type === "ended" ? Ref.set(pageEnded, true) : Effect.void,
+    ).pipe(Effect.forkChild);
+    const longer = yield* guestShares.create({ threadId: linkThread, extend: true, days: 7 });
+    assert.equal(longer.share.id, day.share.id);
+    assert.equal(endsIn(longer.share), 7);
+    // The relay keeps the readable name only until the link first ended, so it goes out in full.
+    assert.isUndefined(longer.shortUrl);
+    assert.equal(longer.url, day.url);
+
+    // Sam joined before it was extended, and stays on it past the old end, page open and all.
+    yield* TestClock.adjust("25 hours");
+    yield* guestShares.check(sam.token);
+    assert.isFalse(yield* Ref.get(pageEnded));
+    const end = yield* guestShares.postTurn(room.token, {
+      id: "run:late",
+      prompt: "Still here?",
+      reply: "Yes.",
+    });
+    assert.equal(end, longer.share.expiresAt);
+    yield* TestClock.adjust("6 days");
+    assert.equal((yield* Effect.flip(guestShares.check(sam.token))).reason, "inactive");
+    yield* Fiber.join(page);
+    assert.isTrue(yield* Ref.get(pageEnded));
+  }).pipe(Effect.provide(layerHostedApp)),
+);
+
+it.effect("hands a guest a short-lived token that only reads the thread's export", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("owner-message"),
+      threadId,
+      messageId: MessageId.make("message:owner"),
+      text: "Fix the login bug",
+      attachments: [],
+      dispatchMode: { type: "defer_start" },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    yield* Ref.set(checkout, { branch: "fix/login", synced: false });
+
+    const { token } = yield* guestShares.handoff(sam.token);
+    // A route takes a bearer only for the share it names, and only a session is one.
+    assert.equal(yield* guestShares.sessionShareId(sam.token), sam.shareId);
+    for (const other of [token, `${sam.token}x`, credential, ""]) {
+      assert.isNull(yield* guestShares.sessionShareId(other));
+    }
+    const exported = yield* guestShares.exportThread(token);
+    assert.equal(exported.title, "Review me");
+    assert.deepEqual(
+      exported.messages.map((message) => [message.role, message.text]),
+      [["user", "Fix the login bug"]],
+    );
+    // The repository is named, but its remote URL can hold a credential and stays here.
+    assert.deepEqual(exported.checkout, {
+      repositoryKey: "github.com/acme/app",
+      branch: "fix/login",
+      synced: false,
+    });
+    assert.notInclude(JSON.stringify(exported), "token@");
+
+    // Neither token stands in for the other.
+    assert.equal((yield* Effect.flip(guestShares.check(token))).reason, "invalid");
+    assert.equal((yield* Effect.flip(guestShares.exportThread(sam.token))).reason, "invalid");
+    assert.equal((yield* Effect.flip(guestShares.handoff(token))).reason, "invalid");
+
+    yield* TestClock.adjust("11 minutes");
+    assert.equal((yield* Effect.flip(guestShares.exportThread(token))).reason, "inactive");
+    // A fresh one works until the owner removes the guest.
+    const fresh = yield* guestShares.handoff(sam.token);
+    const joined = yield* orchestrator.getThreadRecords(threadId, []);
+    yield* orchestrator.dispatch({
+      type: "thread.guest.remove",
+      commandId: CommandId.make("remove-sam"),
+      threadId,
+      guestId: joined.thread.guestShare!.guests![0]!.id,
+    });
+    assert.equal((yield* Effect.flip(guestShares.exportThread(fresh.token))).reason, "inactive");
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("lets a guest's own machine post its turns to the room, and nothing else", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const { token: handoff } = yield* guestShares.handoff(sam.token);
+    const room = (yield* guestShares.exportThread(handoff)).room;
+    assert.isDefined(room);
+    const token = room!.token;
+    // The guest's own app gets their session for the same thread, to read the room with.
+    assert.equal(room!.threadId, threadId);
+    yield* guestShares.check(room!.session!);
+    const turn = (id: string) => ({ id, prompt: " Why? ", reply: "The token\u200B expires." });
+    const share = Effect.map(
+      orchestrator.getThreadRecords(threadId, ["runs", "messages"]),
+      (records) => ({ ...records, turns: records.thread.guestShare?.turns ?? [] }),
+    );
+
+    yield* guestShares.postTurn(token, turn("run:1"));
+    yield* guestShares.postTurn(token, turn("run:1"));
+    const shown = yield* share;
+    // Once, with the characters nobody can see removed.
+    assert.deepEqual(
+      shown.turns.map(({ id, prompt, reply }) => ({ id, prompt, reply })),
+      [{ id: "run:1", prompt: "Why?", reply: "The token expires." }],
+    );
+    // The owner's thread got no message and ran nothing.
+    assert.lengthOf(shown.runs, 0);
+    assert.lengthOf(shown.messages, 0);
+
+    // A room token is not a session or a handoff token, and neither of those posts a turn.
+    assert.equal((yield* Effect.flip(guestShares.check(token))).reason, "invalid");
+    assert.equal((yield* Effect.flip(guestShares.exportThread(token))).reason, "invalid");
+    assert.equal((yield* Effect.flip(guestShares.handoff(token))).reason, "invalid");
+    for (const other of [sam.token, handoff]) {
+      assert.equal(
+        (yield* Effect.flip(guestShares.postTurn(other, turn("run:2")))).reason,
+        "invalid",
+      );
+    }
+    assert.equal(
+      (yield* Effect.flip(guestShares.postTurn(token, { ...turn("run:2"), reply: " " }))).reason,
+      "empty",
+    );
+
+    // It also reads what the room said: never its own turns, and another guest's machine reads
+    // them. A session or a handoff token reads nothing.
+    assert.deepEqual((yield* guestShares.roomUpdates(token, null)).updates, []);
+    for (const other of [sam.token, handoff]) {
+      assert.equal((yield* Effect.flip(guestShares.roomUpdates(other, null))).reason, "invalid");
+    }
+    const alex = yield* guestShares.redeem({ credential, name: "Alex" });
+    const alexRoom = (yield* guestShares.exportThread(
+      (yield* guestShares.handoff(alex.token)).token,
+    )).room!;
+    const seen = yield* guestShares.roomUpdates(alexRoom.token, null);
+    assert.deepEqual(
+      seen.updates.map(({ author, name, text }) => ({ author, name, text })),
+      [
+        { author: "guest", name: "Sam", text: "Why?" },
+        { author: "guest_agent", name: "Sam", text: "The token expires." },
+      ],
+    );
+    assert.isFalse(seen.truncated);
+    assert.deepEqual((yield* guestShares.roomUpdates(alexRoom.token, seen.cursor)).updates, []);
+    // Reading changed nothing in the owner's thread.
+    assert.lengthOf((yield* share).runs, 0);
+
+    // Six posts a minute, counting the two above.
+    for (const id of ["run:2", "run:3", "run:4", "run:5"]) {
+      yield* guestShares.postTurn(token, turn(id));
+    }
+    assert.equal(
+      (yield* Effect.flip(guestShares.postTurn(token, turn("run:6")))).reason,
+      "too_fast",
+    );
+    yield* TestClock.adjust("61 seconds");
+    yield* guestShares.postTurn(token, turn("run:6"));
+    assert.lengthOf((yield* share).turns, 6);
+
+    // It outlives the handoff token. A tunnel that is down may come back, so that is not the
+    // end; the owner removing the guest is.
+    yield* TestClock.adjust("11 minutes");
+    yield* guestShares.postTurn(token, turn("run:7"));
+    yield* Ref.set(hostname, "other.t3.test");
+    assert.equal(
+      (yield* Effect.flip(guestShares.postTurn(token, turn("run:8")))).reason,
+      "inactive",
+    );
+    yield* Ref.set(hostname, "env.t3.test");
+    yield* orchestrator.dispatch({
+      type: "thread.guest.remove",
+      commandId: CommandId.make("remove-sam-room"),
+      threadId,
+      guestId: shown.turns[0]!.guestId,
+    });
+    assert.equal((yield* Effect.flip(guestShares.postTurn(token, turn("run:8")))).reason, "ended");
+    assert.equal((yield* Effect.flip(guestShares.roomUpdates(token, null))).reason, "ended");
+    // Twenty reads a minute for the guest who is still in.
+    for (let read = 0; read < 20; read++) yield* guestShares.roomUpdates(alexRoom.token, null);
+    assert.equal(
+      (yield* Effect.flip(guestShares.roomUpdates(alexRoom.token, null))).reason,
+      "too_fast",
+    );
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("shows the room a guest's agent while its turn runs, and never stores it", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const eve = yield* guestShares.redeem({ credential, name: "Eve" });
+    const token = (yield* guestShares.exportThread((yield* guestShares.handoff(sam.token)).token))
+      .room!.token;
+    const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+    const samId = thread.guestShare!.guests![0]!.id;
+    const room = { threadId, shareId: thread.guestShare!.id };
+
+    const owner = yield* Queue.unbounded<ReadonlyArray<unknown>>();
+    yield* Stream.runForEach(guestShares.roomAgents(room), (event) =>
+      Queue.offer(owner, event.running),
+    ).pipe(Effect.forkScoped);
+    const guest = yield* Queue.unbounded<ReadonlyArray<unknown>>();
+    yield* Stream.runForEach(yield* guestShares.stream(eve.token), (event) =>
+      event.type === "agents" ? Queue.offer(guest, event.running) : Effect.void,
+    ).pipe(Effect.forkScoped);
+    assert.deepEqual(yield* Queue.take(owner), []);
+    assert.deepEqual(yield* Queue.take(guest), []);
+
+    const running = (id: string) => ({
+      id,
+      state: "running" as const,
+      prompt: "Fix\n the​ login",
+    });
+    yield* guestShares.postActivity(token, running("run:1"));
+    const shown = [{ guestId: samId, prompt: "Fix the login" }];
+    assert.deepEqual(yield* Queue.take(owner), shown);
+    assert.deepEqual(yield* Queue.take(guest), shown);
+    // The finished turn clears it.
+    yield* guestShares.postTurn(token, { id: "run:1", prompt: "Fix the login", reply: "Done." });
+    assert.deepEqual(yield* Queue.take(owner), []);
+
+    // A turn that stops without one clears it too, but not a stop for an older turn.
+    yield* guestShares.postActivity(token, running("run:2"));
+    assert.deepEqual(yield* Queue.take(owner), shown);
+    yield* guestShares.postActivity(token, { id: "run:1", state: "idle" });
+    yield* guestShares.postActivity(token, { id: "run:2", state: "idle" });
+    assert.deepEqual(yield* Queue.take(owner), []);
+
+    // A machine that stops saying anything stops showing as running.
+    yield* guestShares.postActivity(token, running("run:3"));
+    assert.deepEqual(yield* Queue.take(owner), shown);
+    yield* TestClock.adjust("11 minutes");
+    assert.deepEqual(yield* Queue.take(owner), []);
+
+    // The room sees where the guest's code is, and the task their agent is on only when the card
+    // is a task that is theirs to take.
+    const put = (noteId: string, fields: object) =>
+      guestShares.changeBoard(
+        { threadId },
+        { type: "note.put", noteId, text: "Fix login", x: 0, y: 0, ...fields },
+      );
+    yield* put("task", { kind: "task", assignee: { guestId: samId } });
+    yield* put("eves", { kind: "task", assignee: { guestId: thread.guestShare!.guests![1]!.id } });
+    yield* put("note", {});
+    const code = { branch: "fix/login", synced: false, ahead: 1, behind: 0 };
+    yield* guestShares.postActivity(token, { ...running("run:5"), taskId: "task", code });
+    assert.deepEqual(yield* Queue.take(owner), [{ ...shown[0], taskId: "task", code }]);
+    for (const taskId of ["eves", "note", "gone"]) {
+      yield* guestShares.postActivity(token, { ...running(`run:${taskId}`), taskId });
+      assert.deepEqual(yield* Queue.take(owner), shown);
+      yield* guestShares.postActivity(token, { ...running(`run:task-${taskId}`), taskId: "task" });
+      assert.deepEqual(yield* Queue.take(owner), [{ ...shown[0], taskId: "task" }]);
+    }
+    // And the artifact card its reply will fill, when the card is one on this board.
+    yield* put("plan", { kind: "artifact" });
+    yield* guestShares.postActivity(token, { ...running("run:plan"), artifactId: "plan" });
+    assert.deepEqual(yield* Queue.take(owner), [{ ...shown[0], artifactId: "plan" }]);
+    yield* guestShares.postActivity(token, { ...running("run:not-plan"), artifactId: "note" });
+    assert.deepEqual(yield* Queue.take(owner), shown);
+
+    // A guest's board says where the owner's code is too, once git does.
+    yield* Ref.set(checkout, { branch: "fix/login", synced: true });
+    const ownerCode = yield* Queue.unbounded<unknown>();
+    yield* Stream.runForEach(yield* guestShares.stream(eve.token), (event) =>
+      event.type === "agents" && event.owner !== undefined
+        ? Queue.offer(ownerCode, event.owner)
+        : Effect.void,
+    ).pipe(Effect.forkScoped);
+    yield* TestClock.adjust("30 seconds");
+    assert.deepEqual(yield* Queue.take(ownerCode), {
+      branch: "fix/login",
+      synced: true,
+      ahead: 0,
+      behind: 0,
+    });
+    // Nothing of it reached the thread record.
+    const after = (yield* orchestrator.getThreadRecords(threadId, [])).thread;
+    assert.deepEqual(
+      after.guestShare?.turns?.map((turn) => turn.id),
+      ["run:1"],
+    );
+
+    // A session is not a room token, and a removed guest's machine shows nothing.
+    assert.equal(
+      (yield* Effect.flip(guestShares.postActivity(sam.token, running("run:4")))).reason,
+      "invalid",
+    );
+    yield* orchestrator.dispatch({
+      type: "thread.guest.remove",
+      commandId: CommandId.make("remove-sam-activity"),
+      threadId,
+      guestId: samId,
+    });
+    assert.equal(
+      (yield* Effect.flip(guestShares.postActivity(token, running("run:4")))).reason,
+      "ended",
+    );
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("lets a guest's own machine read an artifact card and fill it with its turn", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const token = (yield* guestShares.exportThread((yield* guestShares.handoff(sam.token)).token))
+      .room!.token;
+    const put = (noteId: string, fields: object = {}) =>
+      guestShares.changeBoard(
+        { threadId },
+        { type: "note.put", noteId, text: "Plan", x: 0, y: 0, ...fields },
+      );
+    yield* put("plan", { kind: "artifact" });
+    yield* put("note");
+    const card = Effect.map(
+      orchestrator.getThreadRecords(threadId, ["runs", "messages"]),
+      (records) => ({
+        ...records,
+        plan: records.thread.guestShare?.board?.notes.find((note) => note.id === "plan"),
+      }),
+    );
+
+    const read = Effect.map(guestShares.roomArtifact(token, "plan"), ({ title, body }) => ({
+      title,
+      body,
+    }));
+    assert.deepEqual(yield* read, { title: "Plan", body: undefined });
+    // Only an artifact on this board, and only for the room token of someone in the room.
+    for (const noteId of ["note", "gone"]) {
+      assert.equal(
+        (yield* Effect.flip(guestShares.roomArtifact(token, noteId))).reason,
+        "artifact_gone",
+      );
+    }
+    assert.equal(
+      (yield* Effect.flip(guestShares.roomArtifact(sam.token, "plan"))).reason,
+      "invalid",
+    );
+
+    const page = "<!doctype html><html><body>Hi</body></html>";
+    yield* guestShares.postTurn(token, {
+      id: "run:1",
+      prompt: "Draw it",
+      reply: "Here it is.",
+      artifact: { noteId: "plan", body: `Here:\n\`\`\`html\n${page}\u200B\n\`\`\`` },
+    });
+    const filled = yield* card;
+    const samId = filled.thread.guestShare!.guests![0]!.id;
+    // The card holds the page alone, as from any reply, and says whose agent wrote it.
+    assert.deepInclude(filled.plan?.artifact, { body: page, guestId: samId, turnId: "run:1" });
+    assert.deepEqual(yield* read, { title: "Plan", body: page });
+    // A card that is not an artifact here takes nothing; the turn still shows.
+    yield* guestShares.postTurn(token, {
+      id: "run:2",
+      prompt: "Draw it",
+      reply: "Done.",
+      artifact: { noteId: "note", body: "# Other" },
+    });
+    const after = yield* card;
+    assert.deepEqual(after.plan?.artifact, filled.plan?.artifact);
+    assert.lengthOf(after.thread.guestShare?.turns ?? [], 2);
+    // Nothing reached the owner's agent.
+    assert.lengthOf(after.runs, 0);
+    assert.lengthOf(after.messages, 0);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("opens a code window's file for the room only as the board shows it, redacted", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const owner = { threadId };
+    const change =
+      (by: { readonly threadId: ThreadId } | { readonly session: string }) =>
+      (change: Parameters<typeof guestShares.changeBoard>[1]) =>
+        guestShares.changeBoard(by, change);
+    const code = (noteId: string) =>
+      ({ type: "note.put", noteId, text: noteId, x: 0, y: 0, kind: "code" }) as const;
+    for (const noteId of ["code", "loose", "his"]) yield* change(owner)(code(noteId));
+    yield* change(owner)({ type: "note.put", noteId: "note", text: "Hi", x: 0, y: 0 });
+    yield* change({ session: sam.token })({
+      type: "note.put",
+      noteId: "sams",
+      text: "Sam",
+      x: 0,
+      y: 0,
+      kind: "thread",
+    });
+    yield* change(owner)({ type: "edge.put", edgeId: "e1", from: "card:thread", to: "note:code" });
+    yield* change(owner)({ type: "edge.put", edgeId: "e2", from: "note:sams", to: "note:his" });
+    const share = Effect.map(
+      orchestrator.getThreadRecords(threadId, []),
+      ({ thread }) => thread.guestShare!,
+    );
+    const samId = (yield* share).guests![0]!.id;
+    const summary = {
+      files: [
+        { path: "src/a.ts", additions: 1, deletions: 0 },
+        { path: "big.txt", additions: 1, deletions: 0, lastTurn: { additions: 1, deletions: 0 } },
+      ],
+      additions: 2,
+      deletions: 0,
+      turnCount: 1,
+    };
+    yield* orchestrator.dispatch({
+      type: "thread.room-box.changes",
+      commandId: CommandId.make("changes:room"),
+      threadId,
+      shareId: sam.shareId,
+      boxId: ROOM_BOARD_ROOM_BOX,
+      turnId: "run:1",
+      changes: summary,
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.guest-turn.post",
+      commandId: CommandId.make("changes:sam"),
+      threadId,
+      shareId: sam.shareId,
+      guestId: samId,
+      turn: { id: "sam:run:1", prompt: "Go", reply: "Done", boxId: "sams", changes: summary },
+    });
+    const home = NodeOS.homedir();
+    const patch = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -0,0 +1 @@",
+      `+const config = "${home}/secrets.json"; // and /repo/src/a.ts`,
+    ].join("\n");
+    const big = `diff --git a/big.txt b/big.txt\n@@ -0,0 +1 @@\n+${"x".repeat(ROOM_CODE_PATCH_MAX_LENGTH)}`;
+    yield* Ref.set(threadDiff, `${patch}\n${big}`);
+    const read = (
+      noteId: string,
+      path = "src/a.ts",
+      scope: "thread" | "turn" = "thread",
+      by: { readonly threadId: ThreadId } | { readonly session: string } = {
+        session: sam.token,
+      },
+    ) => guestShares.codePatch(by, { noteId, path, scope });
+
+    // The guest gets the owner's paths as the rest of the shared thread shows them.
+    const opened = yield* read("code");
+    assert.equal(opened.path, "src/a.ts");
+    assert.include(opened.patch, `"~/secrets.json"; // and repo/src/a.ts`);
+    assert.notInclude(opened.patch, home);
+    // The owner reads their own machine as it is.
+    assert.include((yield* read("code", "src/a.ts", "thread", owner)).patch, home);
+    // Too large to show says so instead of sending it.
+    assert.deepEqual(yield* read("code", "big.txt", "turn"), { path: "big.txt" });
+    const refused = (noteId: string, path?: string, scope?: "thread" | "turn") =>
+      Effect.map(Effect.flip(read(noteId, path, scope)), (error) => error.reason);
+    // Only a file the window lists, of the box it has a line from, kept on this machine.
+    assert.deepEqual(
+      [
+        yield* refused("gone"),
+        yield* refused("note"),
+        yield* refused("loose"),
+        yield* refused("code", "src/other.ts"),
+        yield* refused("code", "src/a.ts", "turn"),
+        yield* refused("his"),
+      ],
+      ["window_gone", "window_gone", "unavailable", "unavailable", "unavailable", "elsewhere"],
+    );
+    // A guest reads 30 files a minute at most, the 8 above among them.
+    let reads = 8;
+    while (Exit.isSuccess(yield* Effect.exit(read("code")))) reads += 1;
+    assert.equal(reads, 30);
+    assert.equal(yield* refused("code"), "too_fast");
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("reads a pull request window with the owner's sign-in, at most every so often", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const pullRequests = yield* RoomPullRequests.RoomPullRequests;
+    yield* Ref.set(pullRequestCalls, []);
+    yield* Ref.set(pullRequestFailure, null);
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const url = "https://github.com/acme/app/pull/12";
+    yield* guestShares.changeBoard(
+      { session: sam.token },
+      { type: "note.put", noteId: "pr", text: "", x: 0, y: 0, kind: "pull-request", url },
+    );
+    yield* pullRequests.drain;
+    const shown = Effect.map(
+      orchestrator.getThreadRecords(threadId, []),
+      ({ thread }) => thread.guestShare!.board!.notes.find((note) => note.id === "pr")!.pullRequest,
+    );
+    // Added by a guest, read once by the owner's server, for the whole room.
+    assert.deepEqual((yield* shown)?.pullRequest, {
+      title: "Fix login",
+      state: "draft",
+      headBranch: "fix-login",
+      baseBranch: "main",
+      changedFiles: 3,
+      additions: 40,
+      deletions: 2,
+      checks: { passing: 1, failing: 1, pending: 1, failingNames: ["lint"] },
+      updatedAt: "2026-11-12T10:00:00.000Z",
+    });
+    assert.deepEqual(yield* Ref.get(pullRequestCalls), ["github.com/acme/app#12"]);
+
+    // Moving it reads nothing; a refresh this soon after one reads nothing either.
+    yield* guestShares.changeBoard(
+      { session: sam.token },
+      { type: "note.put", noteId: "pr", text: "", x: 40, y: 0, kind: "pull-request", url },
+    );
+    yield* guestShares.refreshPullRequest({ session: sam.token }, "pr");
+    yield* pullRequests.drain;
+    assert.lengthOf(yield* Ref.get(pullRequestCalls), 1);
+
+    // Later, it asks GitHub afresh; without the owner's sign-in the window says so.
+    yield* Ref.set(
+      pullRequestFailure,
+      new PullRequestUnavailableError({ reason: "cli-unauthenticated" }),
+    );
+    yield* TestClock.adjust(RoomPullRequests.ROOM_PULL_REQUEST_REFRESH_MS);
+    yield* guestShares.refreshPullRequest({ threadId }, "pr");
+    yield* pullRequests.drain;
+    assert.deepEqual((yield* Ref.get(pullRequestCalls)).slice(1), [
+      "invalidate",
+      "github.com/acme/app#12",
+    ]);
+    const failed = yield* shown;
+    assert.equal(failed?.problem, "signed_out");
+    assert.isUndefined(failed?.pullRequest);
+    // A note that is not a pull request window is never read.
+    yield* guestShares.changeBoard(
+      { session: sam.token },
+      { type: "note.put", noteId: "idea", text: url, x: 0, y: 0 },
+    );
+    yield* TestClock.adjust(RoomPullRequests.ROOM_PULL_REQUEST_REFRESH_MS);
+    yield* guestShares.refreshPullRequest({ session: sam.token }, "idea");
+    yield* pullRequests.drain;
+    assert.lengthOf(yield* Ref.get(pullRequestCalls), 3);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("shows a guest's own thread box running on their machine, and its turn on the box", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const token = (yield* guestShares.exportThread((yield* guestShares.handoff(sam.token)).token))
+      .room!.token;
+    const put = (by: { threadId: ThreadId } | { session: string }, noteId: string, kind: string) =>
+      guestShares.changeBoard(by, {
+        type: "note.put",
+        noteId,
+        text: "Card",
+        x: 0,
+        y: 0,
+        kind: kind as "thread",
+      });
+    yield* put({ session: sam.token }, "sams", "thread");
+    yield* put({ threadId }, "owners", "thread");
+    yield* put({ threadId }, "plan", "artifact");
+    yield* put({ threadId }, "ask", "comment");
+    const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+    const samId = thread.guestShare!.guests![0]!.id;
+    const live = yield* Queue.unbounded<unknown>();
+    yield* Stream.runForEach(
+      guestShares.roomAgents({ threadId, shareId: thread.guestShare!.id }),
+      (event) => Queue.offer(live, { running: event.running.length, boxes: event.boxes }),
+    ).pipe(Effect.forkScoped);
+    assert.deepEqual(yield* Queue.take(live), { running: 0, boxes: [] });
+
+    const running = {
+      id: "run:1",
+      state: "running" as const,
+      prompt: "Make it\n dark",
+      artifactId: "plan",
+      phase: "writing" as const,
+      preview: "# Dark",
+      draft: "# Dark",
+      model: "GPT-5.1 Codex",
+      commentId: "ask",
+    };
+    // The box shows the run, as the guest's agent's, and the guest's agent card does not.
+    yield* guestShares.postActivity(token, { ...running, boxId: "sams" });
+    const shown = yield* Queue.take(live);
+    assert.deepEqual(shown, {
+      running: 0,
+      boxes: [
+        {
+          boxId: "sams",
+          guestId: samId,
+          artifactId: "plan",
+          commentId: "ask",
+          phase: "writing",
+          preview: "# Dark",
+          draft: "# Dark",
+          startedAt: "1970-01-01T00:00:00.000Z",
+          model: "GPT-5.1 Codex",
+          prompt: "Make it dark",
+        },
+      ],
+    });
+    // Someone else's box shows nothing: the run is the guest's agent's own, as before.
+    yield* guestShares.postActivity(token, { ...running, id: "run:2", boxId: "owners" });
+    assert.deepInclude(yield* Queue.take(live), { running: 1 });
+    yield* guestShares.postActivity(token, { id: "run:2", state: "idle" });
+    yield* Queue.take(live);
+
+    const turn = {
+      prompt: "Make it dark",
+      reply: "Done, it is dark now.",
+      artifact: { noteId: "plan", body: "# Dark" },
+      cards: ["Note from Eve"],
+      model: "GPT-5.1 Codex",
+      // Taken from the text again, so a guest's machine can post no more than an answer.
+      comment: { noteId: "ask", text: "## Yes,\u200b **dark**." },
+    };
+    yield* guestShares.postTurn(token, { ...turn, id: "run:1", boxId: "sams" });
+    // The finished turn ends the run on the box.
+    assert.deepEqual(yield* Queue.take(live), { running: 0, boxes: [] });
+    const notes = Effect.map(orchestrator.getThreadRecords(threadId, []), ({ thread: after }) => ({
+      share: after.guestShare!,
+      note: (id: string) => after.guestShare!.board!.notes.find((note) => note.id === id),
+    }));
+    const after = yield* notes;
+    assert.deepEqual(
+      after.note("sams")?.thread?.turns.map(({ at: _at, ...shownTurn }) => shownTurn),
+      [
+        {
+          id: "run:1",
+          prompt: "Make it dark",
+          cards: ["Note from Eve"],
+          model: "GPT-5.1 Codex",
+          reply: "Done, it is dark now.",
+          guestId: samId,
+        },
+      ],
+    );
+    // The artifact says which box wrote it, from what, and whose agent.
+    assert.deepInclude(after.note("plan")?.artifact, {
+      body: "# Dark",
+      guestId: samId,
+      boxId: "sams",
+      prompt: "Make it dark",
+      cards: ["Note from Eve"],
+      model: "GPT-5.1 Codex",
+    });
+    // The comment thread gets the answer as Sam's agent's, from the box that ran it.
+    assert.deepEqual(
+      after.note("ask")?.replies?.map(({ at: _at, ...reply }) => reply),
+      [
+        {
+          id: "agent:run:1",
+          text: "## Yes, **dark**.",
+          guestId: samId,
+          agent: { turnId: "run:1", boxId: "sams", model: "GPT-5.1 Codex" },
+        },
+      ],
+    );
+    // A box's turn is the box's conversation, not one of the room's turns.
+    assert.isUndefined(after.share.turns);
+    // A turn for someone else's box is one of the room's turns, and shows on no box.
+    yield* guestShares.postTurn(token, { ...turn, id: "run:3", boxId: "owners" });
+    const other = yield* notes;
+    assert.isUndefined(other.note("owners")?.thread);
+    // Nor does it answer a comment thread: only the guest's own box does.
+    assert.lengthOf(other.note("ask")?.replies ?? [], 1);
+    assert.deepEqual(
+      other.share.turns?.map((posted) => posted.id),
+      ["run:3"],
+    );
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("shows each person's pointer on the board to everyone else while they have it open", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const eve = yield* guestShares.redeem({ credential, name: "Eve" });
+    const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+    const [samId, eveId] = thread.guestShare!.guests!.map((guest) => guest.id) as [
+      GuestId,
+      GuestId,
+    ];
+    const room = { threadId, shareId: thread.guestShare!.id };
+    const at = (x: number) => ({ x, y: 1 });
+
+    // A guest's pointer counts only while their page is open, and the owner's only while they
+    // read the room's pointers.
+    assert.equal(
+      (yield* Effect.flip(guestShares.moveCursor({ session: sam.token }, at(1)))).reason,
+      "inactive",
+    );
+    assert.equal((yield* Effect.flip(guestShares.moveCursor(room, at(1)))).reason, "inactive");
+
+    const seenBy = <E extends { readonly type: string }>(events: Stream.Stream<E>) =>
+      Effect.gen(function* () {
+        const queue = yield* Queue.unbounded<ReadonlyArray<unknown>>();
+        const fiber = yield* Stream.runForEach(events, (event) =>
+          "cursors" in event && Array.isArray(event.cursors)
+            ? Queue.offer(queue, event.cursors)
+            : Effect.void,
+        ).pipe(Effect.forkScoped);
+        // The first event says the stream is open, and its page counted.
+        assert.deepEqual(yield* Queue.take(queue), []);
+        return { queue, fiber };
+      });
+    const { queue: owner } = yield* seenBy(guestShares.roomCursors(room));
+    const { fiber: samPage } = yield* seenBy(yield* guestShares.stream(sam.token));
+    const { queue: evePage, fiber: evePageOpen } = yield* seenBy(
+      yield* guestShares.stream(eve.token),
+    );
+    const sam10 = { guestId: samId, ...at(10) };
+    const sam12 = { guestId: samId, ...at(12) };
+    const eve30 = { guestId: eveId, ...at(30) };
+    const byGuest = (...cursors: ReadonlyArray<{ readonly guestId: string }>) =>
+      cursors.toSorted((left, right) => left.guestId.localeCompare(right.guestId));
+
+    yield* guestShares.moveCursor({ session: sam.token }, at(10));
+    assert.deepEqual(yield* Queue.take(owner), [sam10]);
+    assert.deepEqual(yield* Queue.take(evePage), [sam10]);
+    // Nobody is sent their own pointer.
+    yield* guestShares.moveCursor(room, at(20));
+    yield* guestShares.moveCursor({ session: eve.token }, at(30));
+    assert.deepEqual(yield* Queue.take(evePage), [at(20), sam10]);
+    assert.deepEqual(yield* Queue.take(owner), byGuest(sam10, eve30));
+
+    // Twenty moves a second from one guest; a pointer leaving is never refused.
+    for (let move = 1; move < 20; move++) {
+      yield* guestShares.moveCursor({ session: sam.token }, at(10));
+    }
+    assert.equal(
+      (yield* Effect.flip(guestShares.moveCursor({ session: sam.token }, at(11)))).reason,
+      "too_fast",
+    );
+    yield* guestShares.moveCursor({ session: sam.token }, null);
+    assert.deepEqual(yield* Queue.take(evePage), [at(20)]);
+    assert.deepEqual(yield* Queue.take(owner), [eve30]);
+
+    // Closing the page takes its pointer off at once, and a pointer left still expires.
+    yield* TestClock.adjust("2 seconds");
+    yield* guestShares.moveCursor({ session: sam.token }, at(12));
+    assert.deepEqual(yield* Queue.take(evePage), [at(20), sam12]);
+    assert.deepEqual(yield* Queue.take(owner), byGuest(sam12, eve30));
+    yield* Fiber.interrupt(samPage);
+    assert.deepEqual(yield* Queue.take(evePage), [at(20)]);
+    assert.deepEqual(yield* Queue.take(owner), [eve30]);
+    yield* TestClock.adjust("61 seconds");
+    assert.deepEqual(yield* Queue.take(owner), []);
+
+    // A guest the owner removes, or a link that ended, moves nothing.
+    yield* orchestrator.dispatch({
+      type: "thread.guest.remove",
+      commandId: CommandId.make("remove-eve-cursor"),
+      threadId,
+      guestId: eveId,
+    });
+    yield* Fiber.join(evePageOpen);
+    assert.equal(
+      (yield* Effect.flip(guestShares.moveCursor({ session: eve.token }, at(1)))).reason,
+      "inactive",
+    );
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect(
+  "shows what someone drags to the others with their pointer, until it ends or expires",
+  () =>
+    Effect.gen(function* () {
+      const { orchestrator, guestShares, credential } = yield* shareThread;
+      const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+      const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+      const samId = thread.guestShare!.guests![0]!.id;
+      const room = { threadId, shareId: thread.guestShare!.id };
+      const cursorsSeenBy = <E extends { readonly type: string }>(events: Stream.Stream<E>) =>
+        Effect.gen(function* () {
+          const queue = yield* Queue.unbounded<unknown>();
+          yield* Stream.runForEach(events, (event) =>
+            "cursors" in event ? Queue.offer(queue, event.cursors) : Effect.void,
+          ).pipe(Effect.forkScoped);
+          assert.deepEqual(yield* Queue.take(queue), []);
+          return queue;
+        });
+      const owner = yield* cursorsSeenBy(guestShares.roomCursors(room));
+      const samPage = yield* cursorsSeenBy(yield* guestShares.stream(sam.token));
+      const drag = {
+        items: [
+          { ref: "note:a", x: 40, y: 50 },
+          { ref: "card:thread", w: 400 },
+        ],
+      };
+
+      yield* guestShares.moveCursor({ session: sam.token }, { x: 1, y: 1 }, undefined, drag);
+      assert.deepEqual(yield* Queue.take(owner), [{ guestId: samId, x: 1, y: 1, drag }]);
+      // The next pointer post without one ends it; a drag let go says where it landed first.
+      const landed = { ...drag, done: true as const };
+      yield* guestShares.moveCursor({ session: sam.token }, { x: 2, y: 1 }, undefined, landed);
+      assert.deepEqual(yield* Queue.take(owner), [{ guestId: samId, x: 2, y: 1, drag: landed }]);
+      yield* guestShares.moveCursor({ session: sam.token }, { x: 3, y: 1 });
+      assert.deepEqual(yield* Queue.take(owner), [{ guestId: samId, x: 3, y: 1 }]);
+      // A drag its page stopped posting, as when the tab closed mid-drag, ends in two seconds;
+      // the pointer stays until it expires or its stream closes.
+      yield* guestShares.moveCursor({ session: sam.token }, { x: 4, y: 1 }, undefined, drag);
+      assert.deepEqual(yield* Queue.take(owner), [{ guestId: samId, x: 4, y: 1, drag }]);
+      yield* TestClock.adjust("2 seconds");
+      assert.deepEqual(yield* Queue.take(owner), [{ guestId: samId, x: 4, y: 1 }]);
+
+      // The owner's drag reaches the guest and never comes back to the owner.
+      yield* guestShares.moveCursor(room, { x: 5, y: 5 }, undefined, drag);
+      assert.deepEqual(yield* Queue.take(samPage), [{ x: 5, y: 5, drag }]);
+      // A drag nobody ends goes first, then the pointer it came with.
+      yield* TestClock.adjust("61 seconds");
+      assert.deepEqual(yield* Queue.take(samPage), [{ x: 5, y: 5 }]);
+      assert.deepEqual(yield* Queue.take(samPage), []);
+      assert.deepEqual(yield* Queue.take(owner), []);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("shows each person's view of the board to the others until they close it", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+    const samId = thread.guestShare!.guests![0]!.id;
+    const room = { threadId, shareId: thread.guestShare!.id };
+    const viewsSeenBy = <E extends { readonly type: string }>(events: Stream.Stream<E>) =>
+      Effect.gen(function* () {
+        const queue = yield* Queue.unbounded<unknown>();
+        yield* Stream.runForEach(events, (event) =>
+          "views" in event ? Queue.offer(queue, event.views) : Effect.void,
+        ).pipe(Effect.forkScoped);
+        assert.deepEqual(yield* Queue.take(queue), []);
+        return queue;
+      });
+    const owner = yield* viewsSeenBy(guestShares.roomCursors(room));
+    const samPage = yield* viewsSeenBy(yield* guestShares.stream(sam.token));
+    const view = { x: 400, y: -20, zoom: 1.25 };
+
+    yield* guestShares.moveCursor({ session: sam.token }, { x: 1, y: 1 }, view);
+    assert.deepEqual(yield* Queue.take(owner), [{ guestId: samId, ...view }]);
+    // The pointer leaving the board leaves the view; closing the board takes it.
+    yield* guestShares.moveCursor({ session: sam.token }, null);
+    assert.deepEqual(yield* Queue.take(owner), [{ guestId: samId, ...view }]);
+    yield* guestShares.moveCursor({ session: sam.token }, null, null);
+    assert.deepEqual(yield* Queue.take(owner), []);
+
+    yield* guestShares.moveCursor(room, null, view);
+    assert.deepEqual(yield* Queue.take(samPage), [view]);
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
 
 it.effect("counts a guest joining and sending, without their name or text", () =>
@@ -253,6 +1685,75 @@ it.effect("streams the owner's thread events after the share and a snapshot", ()
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("hides the owner's paths, project and provider from a guest's snapshot and events", () =>
+  Effect.gen(function* () {
+    const worktree = String.raw`C:\Users\pykew\hackathon\matchbox`;
+    const { orchestrator, guestShares, credential } = yield* shareThreadFor(threadId, worktree);
+    const { token: session } = yield* guestShares.redeem({ credential, name: "Sam" });
+    const say = (id: string, text: string) =>
+      orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(id),
+        threadId,
+        messageId: MessageId.make(`message:${id}`),
+        text,
+        attachments: [],
+        dispatchMode: { type: "defer_start" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+    const before = "Read C:/Users/pykew/hackathon/matchbox/src/x.ts and /repo/README.md";
+    yield* say("before", before);
+    const events = yield* guestShares.stream(session);
+    yield* say("after", String.raw`Now c:\users\pykew\hackathon\matchbox2\y.ts`);
+    yield* orchestrator.dispatch({
+      type: "thread.guest-share.close",
+      commandId: CommandId.make("close-after-paths"),
+      threadId,
+    });
+    const received = Array.from(yield* Stream.runCollect(events));
+    const snapshot = received.flatMap((event) =>
+      event.type === "thread" && event.item.kind === "snapshot" ? [event.item.projection] : [],
+    )[0];
+    if (snapshot === undefined) return assert.fail("Expected a snapshot.");
+    assert.deepInclude(snapshot.thread, {
+      title: "Review me",
+      worktreePath: null,
+      projectId: ProjectId.make("shared"),
+      providerInstanceId: ProviderInstanceId.make("shared"),
+      modelSelection: { instanceId: ProviderInstanceId.make("shared"), model: "gpt-5.1-codex" },
+    });
+    assert.doesNotHaveAnyKeys(snapshot.thread, ["pullRequests", "guestShare", "tags"]);
+    const texts = (items: ReadonlyArray<OrchestrationV2TurnItem>) =>
+      items.flatMap((item) => (item.type === "user_message" ? [item.text] : []));
+    assert.deepEqual(texts(snapshot.visibleTurnItems.map((row) => row.item)), [
+      "Read matchbox/src/x.ts and repo/README.md",
+    ]);
+    const later = received.flatMap((event) =>
+      event.type === "thread" && event.item.kind === "event" ? [event.item.event] : [],
+    );
+    // A queued message has no row yet; it arrives as the message itself.
+    assert.deepEqual(
+      later.flatMap((event) => (event.type === "message.updated" ? [event.payload.text] : [])),
+      [String.raw`Now ~\hackathon\matchbox2\y.ts`],
+    );
+    const sent = JSON.stringify(received).toLowerCase();
+    for (const hidden of ["pykew", "/repo", "project:guest-share-service"]) {
+      assert.notInclude(sent, hidden);
+    }
+    // The driver is also "codex", so the instance id is checked by its keys.
+    assert.match(sent, /instanceid":"shared"/);
+    assert.notMatch(sent, /instanceid":"(?!shared")/);
+    // The owner's own reads are untouched.
+    const own = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
+    assert.equal(own.thread.worktreePath, worktree);
+    assert.include(
+      own.messages.map((message) => message.text),
+      before,
+    );
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("starts a stream with the runs and items already in the thread", () =>
   Effect.gen(function* () {
     const { orchestrator, guestShares, credential } = yield* shareThread;
@@ -286,7 +1787,9 @@ it.effect("starts a stream with the runs and items already in the thread", () =>
 it.effect("redeems only a short invite whose signature and share id are both current", () =>
   Effect.gen(function* () {
     const { guestShares, credential: replaced } = yield* shareThread;
-    const { url } = yield* guestShares.create({ threadId });
+    const again = yield* guestShares.create({ threadId });
+    assert.equal(again.url.slice(again.url.indexOf("#") + 1), replaced);
+    const { url } = yield* guestShares.create({ threadId, replace: true });
     const credential = url.slice(url.indexOf("#") + 1);
     assert.match(credential, /^[\w-]{22}\.[\w-]{22}$/);
 
@@ -516,7 +2019,7 @@ it.effect("gives the guest a command's detail and output, but no file diffs", ()
       assert.deepInclude(change, { type: "file_change", fileName });
       assert.doesNotHaveAnyKeys(change, ["diffStr", "oldStr", "newStr"]);
     }
-    const frames = Array.from(
+    const frames: ReadonlyArray<unknown> = Array.from(
       yield* Stream.runCollect(yield* guestShares.commandOutput(session, command)),
     );
     assert.deepEqual(frames, [
@@ -1047,7 +2550,7 @@ it.effect("serves an image on the host only when an agent reply the guest sees s
     const { orchestrator, guestShares } = yield* shareThread;
     const runId = yield* ownerRun;
     const fileSystem = yield* FileSystem.FileSystem;
-    const directory = yield* fileSystem.makeTempDirectoryScoped();
+    const directory = (yield* fileSystem.makeTempDirectoryScoped()).replaceAll("\\", "/");
     const shot = `${directory}/my shot.png`;
     const fileUrl = `${directory}/file-url.png`;
     const page = `${directory}/page.png`;
@@ -1106,7 +2609,7 @@ it.effect("serves an image on the host only when an agent reply the guest sees s
       events: [
         item("item:agent-images", 1, {
           type: "assistant_message",
-          text: `Done: ![Shot](<${shot}>) ![Other](file://${encodeURI(fileUrl)}) ![Page](${page})`,
+          text: `Done: ![Shot](<${shot}>) ![Other](${NodeURL.pathToFileURL(fileUrl).href}) ![Page](${page})`,
         }),
         // A guest's sent message is a user message; it must not open files on the host.
         item("item:guest-image", 2, { type: "user_message", text: `![Mine](${fromUser})` }),
@@ -1298,7 +2801,7 @@ it.effect("keeps a connected guest's images while other shares come and go", () 
     }
 
     // A new link on the thread starts empty: its guest gets nothing the last guest was sent.
-    const { url } = yield* guestShares.create({ threadId });
+    const { url } = yield* guestShares.create({ threadId, replace: true });
     const next = yield* guestShares.redeem({
       credential: url.slice(url.indexOf("#") + 1),
       name: "Kim",
@@ -1307,4 +2810,357 @@ it.effect("keeps a connected guest's images while other shares come and go", () 
     yield* Stream.runDrain(Stream.take(yield* guestShares.stream(next.token), 2));
     assert.equal((yield* guestShares.media(next.token, shot)).mimeType, "image/png");
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("joins a team share only with a member assertion, as one guest per member", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares } = yield* shareThread;
+    const { url, share } = yield* guestShares.create({ threadId, teamId: "team-core" });
+    assert.deepEqual(share.team, { id: "team-core", name: "Core" });
+    assert.equal((yield* Ref.get(teamListings)).get(threadId), "team-core");
+    assert.isAbove(Date.parse(share.expiresAt) - Date.parse(share.createdAt), 80 * 86_400_000);
+    const credential = url.slice(url.indexOf("#") + 1);
+
+    // The bare credential, a forged assertion, or one for another team lets no one in.
+    for (const memberAssertion of [undefined, "forged", "member:team-other:u-ann:Ann"]) {
+      const refused = yield* Effect.flip(
+        guestShares.redeem({
+          credential,
+          name: "Ann",
+          ...(memberAssertion === undefined ? {} : { memberAssertion }),
+        }),
+      );
+      assert.equal(refused.reason, "team_member_required");
+    }
+
+    const ann = yield* guestShares.redeem({
+      credential,
+      name: "typed name is ignored",
+      memberAssertion: "member:team-core:u-ann:Ann Lee",
+    });
+    // Another browser, another day: the same guest, not a second one.
+    const again = yield* guestShares.redeem({
+      credential,
+      name: "Ann",
+      memberAssertion: "member:team-core:u-ann:Ann Lee",
+    });
+    const namesake = yield* guestShares.redeem({
+      credential,
+      name: "Ann",
+      memberAssertion: "member:team-core:u-other:Ann Lee",
+    });
+    const guests = (yield* orchestrator.getThreadRecords(threadId, [])).thread.guestShare!.guests!;
+    assert.deepEqual(
+      guests.map((guest) => [guest.name, guest.member]),
+      [
+        ["Ann Lee", { userId: "u-ann", avatarUrl: "https://img.test/u-ann.png" }],
+        ["Ann Lee 2", { userId: "u-other", avatarUrl: "https://img.test/u-other.png" }],
+      ],
+    );
+    assert.isTrue(Exit.isSuccess(yield* Effect.exit(guestShares.check(again.token))));
+    assert.isTrue(Exit.isSuccess(yield* Effect.exit(guestShares.check(ann.token))));
+
+    // Removing a member keeps that account out without closing the share to the rest.
+    yield* orchestrator.dispatch({
+      type: "thread.guest.remove",
+      commandId: CommandId.make("remove-ann"),
+      threadId,
+      guestId: guests[0]!.id,
+    });
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(guestShares.check(ann.token))));
+    const removed = yield* Effect.flip(
+      guestShares.redeem({
+        credential,
+        name: "Ann",
+        memberAssertion: "member:team-core:u-ann:Ann",
+      }),
+    );
+    assert.equal(removed.reason, "removed");
+    assert.isTrue(Exit.isSuccess(yield* Effect.exit(guestShares.check(namesake.token))));
+    const newcomer = yield* guestShares.redeem({
+      credential,
+      name: "Bo",
+      memberAssertion: "member:team-core:u-bo:Bo",
+    });
+
+    // A member's session ends after a day; their app joins again with a fresh assertion.
+    yield* TestClock.adjust("25 hours");
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(guestShares.check(newcomer.token))));
+
+    // A guest link replacing the team share stops its listing on the team.
+    yield* guestShares.create({ threadId });
+    assert.isFalse((yield* Ref.get(teamListings)).has(threadId));
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("refuses a team share the relay would not list", () =>
+  Effect.gen(function* () {
+    const { guestShares } = yield* shareThread;
+    const failed = yield* Effect.flip(guestShares.create({ threadId, teamId: "team-elsewhere" }));
+    assert.equal(failed.reason, "team_unavailable");
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect(
+  "removes a member who left the team at their next request, and lets them back later",
+  () =>
+    Effect.gen(function* () {
+      yield* Ref.set(formerMembers, new Set());
+      const { orchestrator, guestShares } = yield* shareThread;
+      const { url } = yield* guestShares.create({ threadId, teamId: "team-core" });
+      const credential = url.slice(url.indexOf("#") + 1);
+      const join = (userId: string, name: string) =>
+        guestShares.redeem({
+          credential,
+          name,
+          memberAssertion: `member:team-core:${userId}:${name}`,
+        });
+      const share = orchestrator
+        .getThreadRecords(threadId, [])
+        .pipe(Effect.map(({ thread }) => thread.guestShare!));
+      const ann = yield* join("u-ann", "Ann");
+      const bo = yield* join("u-bo", "Bo");
+
+      yield* Ref.set(formerMembers, new Set(["u-ann"]));
+      assert.equal((yield* Effect.flip(guestShares.check(ann.token))).reason, "inactive");
+      const after = yield* share;
+      assert.deepEqual(
+        after.guests?.map((guest) => guest.name),
+        ["Bo"],
+      );
+      // Only the team keeps them out now, so rejoining needs no word from the owner.
+      assert.isUndefined(after.removedMembers);
+      assert.isTrue(Exit.isSuccess(yield* Effect.exit(guestShares.check(bo.token))));
+
+      yield* Ref.set(formerMembers, new Set());
+      const back = yield* join("u-ann", "Ann");
+      assert.isTrue(Exit.isSuccess(yield* Effect.exit(guestShares.check(back.token))));
+      assert.deepEqual(
+        (yield* share).guests?.map((guest) => guest.name),
+        ["Bo", "Ann"],
+      );
+    }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect(
+  "runs the owner's thread box in a thread of its own, made once where the room works",
+  () =>
+    Effect.gen(function* () {
+      const roomThreadId = ThreadId.make("thread:room-boxes");
+      const { orchestrator, guestShares, credential } = yield* shareThreadFor(
+        roomThreadId,
+        "/work/tree",
+      );
+      const boxes = yield* RoomBoxes.RoomBoxes;
+      const owner = { threadId: roomThreadId };
+      const put = (noteId: string, kind: "thread" | "artifact" | "comment", text: string) =>
+        ({ type: "note.put", noteId, text, x: 0, y: 0, kind }) as const;
+      yield* guestShares.changeBoard(owner, put("box:1", "thread", "Landing page"));
+      yield* guestShares.changeBoard(owner, put("art:1", "artifact", "Hero"));
+      yield* guestShares.changeBoard(owner, put("c:1", "comment", "Is the hero right?"));
+      const roomShare = orchestrator
+        .getThreadRecords(roomThreadId, [])
+        .pipe(Effect.map(({ thread }) => thread.guestShare!));
+
+      const { boxThreadId } = yield* boxes.prompt({
+        threadId: roomThreadId,
+        boxId: "box:1",
+        text: "Make the hero",
+        cards: [{ label: "Note from Sam", author: "guest", name: "Sam", text: "Dark mode" }],
+        artifactId: "art:1",
+      });
+      assert.notEqual(boxThreadId, roomThreadId);
+      assert.deepEqual((yield* roomShare).boardThreads, { "box:1": boxThreadId });
+      const made = yield* orchestrator.getThreadRecords(boxThreadId, ["messages"]);
+      assert.deepInclude(made.thread, {
+        title: "Landing page",
+        worktreePath: "/work/tree",
+        projectId: ProjectId.make("project:guest-share-service"),
+      });
+      const [asked] = made.messages;
+      assert.isTrue(asked?.text.startsWith("Make the hero\n\n[Board · 1 card]("));
+      assert.deepEqual(
+        asked?.context?.records.map((record) => record.kind),
+        ["room-cards", "room-artifact", "room-box"],
+      );
+      assert.deepInclude(asked?.context?.records[1], {
+        noteId: "art:1",
+        threadId: roomThreadId,
+        boxId: "box:1",
+      });
+      // The room thread's own card runs in the room thread. A comment thread to answer is asked
+      // only of one that is a comment thread on the board.
+      const inRoom = yield* boxes.prompt({
+        threadId: roomThreadId,
+        boxId: "thread",
+        text: "Hi",
+        commentId: "art:1",
+      });
+      assert.equal(inRoom.boxThreadId, roomThreadId);
+      const roomAsked = (yield* orchestrator.getThreadRecords(roomThreadId, [
+        "messages",
+      ])).messages.find((message) => message.text === "Hi");
+      assert.isDefined(roomAsked);
+      assert.isUndefined(roomAsked?.context);
+      // Prompted again, the box keeps its thread.
+      // A card that says which it is gets its label and author from the board; one gone is not sent.
+      // The owner's cards carry the name they show guests.
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+        guestOwnerName: " Will ",
+      });
+      const again = yield* boxes.prompt({
+        threadId: roomThreadId,
+        boxId: "box:1",
+        text: "More",
+        cards: [
+          { ref: "note:art:1", label: "Artifact from You", author: "guest", text: "Hero" },
+          { ref: "note:gone", label: "Note from You", author: "owner", text: "Gone" },
+        ],
+        commentId: "c:1",
+      });
+      assert.equal(again.boxThreadId, boxThreadId);
+      const both = (yield* orchestrator.getThreadRecords(boxThreadId, ["messages"])).messages;
+      assert.lengthOf(both, 2);
+      assert.deepEqual(
+        both[1]?.context?.records.map((record) => record.kind),
+        ["room-cards", "room-comment", "room-box"],
+      );
+      assert.deepInclude(both[1]?.context?.records[1], {
+        noteId: "c:1",
+        threadId: roomThreadId,
+        boxId: "box:1",
+      });
+      assert.deepInclude(both[1]?.context?.records[0], {
+        kind: "room-cards",
+        cards: [
+          {
+            ref: "note:art:1",
+            label: 'Artifact "Hero"',
+            author: "owner",
+            name: "Will",
+            text: "Hero",
+          },
+        ],
+      });
+
+      // A guest's box is run by their own requests, which the owner sends.
+      const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+      yield* guestShares.changeBoard({ session: sam.token }, put("box:sam", "thread", "Sam's"));
+      const theirs = yield* Effect.flip(
+        boxes.prompt({ threadId: roomThreadId, boxId: "box:sam", text: "Mine now" }),
+      );
+      assert.equal(theirs.reason, "not_yours");
+
+      // Removing the box forgets its thread and leaves it.
+      yield* guestShares.changeBoard(owner, { type: "note.remove", noteId: "box:1" });
+      assert.isUndefined((yield* roomShare).boardThreads);
+      const kept = yield* orchestrator.getThreadRecords(boxThreadId, []);
+      assert.isNull(kept.thread.deletedAt);
+      const gone = yield* Effect.flip(
+        boxes.prompt({ threadId: roomThreadId, boxId: "box:1", text: "Still there?" }),
+      );
+      assert.equal(gone.reason, "box_gone");
+    }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect(
+  "sends a guest's request for their own box in that box's thread, with only server-built text",
+  () =>
+    Effect.gen(function* () {
+      const roomThreadId = ThreadId.make("thread:guest-boxes");
+      const { orchestrator, guestShares, credential } = yield* shareThreadFor(roomThreadId);
+      const boxes = yield* RoomBoxes.RoomBoxes;
+      const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+      const eve = yield* guestShares.redeem({ credential, name: "Eve" });
+      yield* guestShares.changeBoard(
+        { session: sam.token },
+        { type: "note.put", noteId: "box:sam", text: "Sam's page", x: 0, y: 0, kind: "thread" },
+      );
+      yield* guestShares.changeBoard(
+        { threadId: roomThreadId },
+        { type: "note.put", noteId: "art:1", text: "Page", x: 0, y: 0, kind: "artifact" },
+      );
+      const ask = (who: typeof sam, text: string, boxId: string) =>
+        guestShares.submit(
+          who.token,
+          {
+            shareId: who.shareId,
+            text,
+            boxId,
+            artifactId: "art:1",
+            cardRefs: ["note:art:1", "note:box:sam", "note:missing"],
+          },
+          [],
+        );
+      // Someone else's box, and one that is not on the board, take nothing.
+      assert.equal((yield* Effect.flip(ask(eve, "Mine?", "box:sam"))).reason, "box_not_yours");
+      assert.equal((yield* Effect.flip(ask(sam, "Where?", "box:none"))).reason, "box_gone");
+      yield* ask(sam, "Make it dark", "box:sam");
+      const room = orchestrator.getThreadRecords(roomThreadId, ["messages"]);
+      const waiting = (yield* room).thread.guestShare!.messages[0]!;
+      assert.deepInclude(waiting, { status: "pending", boxId: "box:sam", artifactId: "art:1" });
+      // Labelled from the board, so they read the same to everyone.
+      assert.deepEqual(waiting.cards, ['Artifact "Page"', `Thread box "Sam's page"`]);
+
+      yield* boxes.sendGuestMessage({ threadId: roomThreadId, guestMessageId: waiting.id }, "web");
+      const afterSend = yield* room;
+      const sent = afterSend.thread.guestShare!.messages[0]!;
+      const boxThreadId = afterSend.thread.guestShare!.boardThreads!["box:sam"]!;
+      assert.equal(sent.status, "sent");
+      // It ran in the box's thread, never the room thread.
+      assert.lengthOf(afterSend.messages, 0);
+      const [delivered] = (yield* orchestrator.getThreadRecords(boxThreadId, ["messages"]))
+        .messages;
+      assert.equal(sent.sentAs, delivered?.id);
+      assert.isTrue(
+        delivered?.text.startsWith("Message from guest Sam, sent by the owner:\n\nMake it dark"),
+      );
+      assert.isUndefined(delivered?.context?.guest);
+      assert.deepEqual(
+        delivered?.context?.records.map((record) => record.kind),
+        ["room-artifact", "room-box"],
+      );
+      assert.deepInclude(delivered?.context?.records[0], {
+        noteId: "art:1",
+        threadId: roomThreadId,
+        boxId: "box:sam",
+      });
+      // Sending again finds nothing waiting.
+      const twice = yield* Effect.flip(
+        boxes.sendGuestMessage({ threadId: roomThreadId, guestMessageId: waiting.id }, "web"),
+      );
+      assert.equal(twice.reason, "not_pending");
+      // A guest never sees the owner's thread behind a box, or which message it was sent as.
+      const [opened] = Array.from(
+        yield* Stream.runCollect(Stream.take(yield* guestShares.stream(sam.token), 1)),
+      );
+      if (opened?.type !== "view") return assert.fail("Expected the share view first.");
+      assert.notProperty(opened.view, "boardThreads");
+      assert.notProperty(opened.view.messages[0], "sentAs");
+      assert.equal(opened.view.messages[0]?.boxId, "box:sam");
+
+      // Once the box is gone, a request for it goes to the room thread like any other.
+      yield* ask(sam, "Still dark?", "box:sam");
+      yield* guestShares.changeBoard(
+        { threadId: roomThreadId },
+        { type: "note.remove", noteId: "box:sam" },
+      );
+      const later = (yield* room).thread.guestShare!.messages.at(-1)!;
+      yield* boxes.sendGuestMessage({ threadId: roomThreadId, guestMessageId: later.id }, "web");
+      const [inRoom] = (yield* room).messages;
+      assert.isTrue(inRoom?.text.startsWith("Message from guest Sam, sent by the owner:"));
+      assert.equal(inRoom?.context?.guest?.guestMessageId, later.id);
+
+      // The owner's Dismiss goes the same way as Send, and only once.
+      yield* ask(sam, "Never mind", "thread");
+      const unwanted = (yield* room).thread.guestShare!.messages.at(-1)!;
+      const dismiss = boxes.resolveGuestMessage({
+        threadId: roomThreadId,
+        guestMessageId: unwanted.id,
+        decision: "dismiss",
+      });
+      yield* dismiss;
+      assert.equal((yield* room).thread.guestShare!.messages.at(-1)?.status, "dismissed");
+      assert.equal((yield* Effect.flip(dismiss)).reason, "not_pending");
+    }).pipe(Effect.provide(layerTest)),
 );

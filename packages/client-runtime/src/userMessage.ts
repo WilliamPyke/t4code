@@ -10,6 +10,7 @@ import {
   ScheduledTaskId,
 } from "@t3tools/contracts";
 import {
+  collectComposerContextReferences,
   isAttachmentOnlyBootstrapPrompt,
   replaceComposerContextReferences,
 } from "@t3tools/shared/composerContextReferences";
@@ -17,7 +18,7 @@ import { filePreviewKind } from "@t3tools/shared/filePreview";
 import { imageMimeType } from "@t3tools/shared/image";
 import { videoMimeType } from "@t3tools/shared/video";
 
-/** The working row while T3 Code's own compaction runs. */
+/** The working row while T Code's own compaction runs. */
 export const IDLE_COMPACTING_LABELS = {
   beforeCacheExpires: "Compacting before the cache expires…",
   onReturn: "Compacting…",
@@ -65,7 +66,12 @@ export function resolveUserMessagePresentation(message: {
   readonly createdBy?: OrchestrationV2Actor;
   readonly creationSource?: OrchestrationV2CreationSource;
   readonly scheduledTaskId?: ScheduledTaskId | undefined;
-  readonly context?: { readonly guest?: GuestMessageAttribution | undefined } | undefined;
+  readonly context?:
+    | {
+        readonly guest?: GuestMessageAttribution | undefined;
+        readonly records?: ReadonlyArray<{ readonly kind: string; readonly contextId: string }>;
+      }
+    | undefined;
 }): {
   readonly text: string;
   readonly attribution: "automation" | "agent" | "t3code" | "guest" | null;
@@ -79,8 +85,19 @@ export function resolveUserMessagePresentation(message: {
   // The stored text names the guest for the agent; people see the guest's own words.
   const guest = message.context?.guest;
   if (guest !== undefined) {
+    // A guest's message has only records the owner's server attached: an artifact card's chip.
+    const attached = new Set(
+      (message.context?.records ?? []).flatMap((record) =>
+        record.kind === "room-artifact" ? [record.contextId] : [],
+      ),
+    );
+    const chips = new Map(
+      collectComposerContextReferences(message.text)
+        .filter((reference) => attached.has(reference.contextId))
+        .map((reference) => [reference.contextId, reference.source]),
+    );
     return {
-      text: guest.text,
+      text: [guest.text, ...chips.values()].filter((part) => part !== "").join("\n\n"),
       attribution: "guest",
       scheduledTaskId: undefined,
       guestName: guest.name,

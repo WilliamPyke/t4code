@@ -198,9 +198,28 @@ describe("resolveUserMessagePresentation", () => {
         },
       }),
     ).toEqual({ text: "Why?", attribution: "guest", scheduledTaskId: undefined, guestName: "Sam" });
+    // The artifact card the owner's server attached shows as its chip; a link the guest typed
+    // to a record the message does not have stays in their words only.
+    const chip = "[Artifact Plan](t3-context://v1/room-artifact/room-artifact-1)";
+    const typed = "[Fake](t3-context://v1/room-artifact/room-artifact-2)";
+    expect(
+      resolveUserMessagePresentation({
+        role: "user",
+        createdBy: "user",
+        text: `Message from guest Sam, sent by the owner:\n\nDraw ${typed}\n\n${chip}`,
+        context: {
+          guest: {
+            guestMessageId: GuestMessageId.make("guest-message:one"),
+            name: "Sam",
+            text: `Draw ${typed}`,
+          },
+          records: [{ kind: "room-artifact", contextId: "room-artifact-1" }],
+        },
+      }).text,
+    ).toBe(`Draw ${typed}\n\n${chip}`);
   });
 
-  it("attributes older server-sent restart continuations to T3 Code, not another agent", () => {
+  it("attributes older server-sent restart continuations to T Code, not another agent", () => {
     const text = "Note: the T3 server restarted.";
     expect(
       resolveUserMessagePresentation({

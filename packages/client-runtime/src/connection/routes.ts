@@ -31,6 +31,8 @@ export function connectionRouteId(target: ConnectionTarget): string {
       return "primary";
     case "RelayConnectionTarget":
       return RELAY_ROUTE_ID;
+    case "GuestConnectionTarget":
+      return `guest:${target.shareId}`;
     case "BearerConnectionTarget":
     case "SshConnectionTarget":
       return target.connectionId;
@@ -66,7 +68,12 @@ export function routeEntry(
 }
 
 export function routeHttpBaseUrl(route: ConnectionRoute): string | null {
-  if (route.target._tag === "PrimaryConnectionTarget") return route.target.httpBaseUrl;
+  if (
+    route.target._tag === "PrimaryConnectionTarget" ||
+    route.target._tag === "GuestConnectionTarget"
+  ) {
+    return route.target.httpBaseUrl;
+  }
   const profile = Option.getOrNull(route.profile);
   return profile?._tag === "BearerConnectionProfile" ? profile.httpBaseUrl : null;
 }
@@ -87,6 +94,8 @@ export function connectionRouteKind(route: ConnectionRoute): ConnectionRouteKind
       return "relay";
     case "SshConnectionTarget":
       return "ssh";
+    case "GuestConnectionTarget":
+      return "public";
     case "PrimaryConnectionTarget":
     case "BearerConnectionTarget": {
       const hostname = routeHostname(route);
@@ -163,7 +172,7 @@ function routeAddressKey(route: ConnectionRoute): string | null {
 export function connectionRouteLabel(route: ConnectionRoute): string {
   switch (connectionRouteKind(route)) {
     case "relay":
-      return "T3 Connect";
+      return "T Connect";
     case "loopback":
       return "This device";
     case "lan":
@@ -406,7 +415,7 @@ export function isLearned(route: ConnectionRoute): boolean {
 
 /**
  * A learned route borrows the credential of the route it was learned over, so
- * it cannot outlive that route: removing T3 Connect also removes routes learned
+ * it cannot outlive that route: removing T Connect also removes routes learned
  * through it, and removing a paired address removes routes that borrow its
  * token.
  */

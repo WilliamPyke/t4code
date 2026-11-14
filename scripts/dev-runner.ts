@@ -88,6 +88,27 @@ const BUILT_DEV_ARGS = [
 ] as const;
 
 type DevMode = keyof typeof MODE_ARGS;
+
+// `--steady`: the server's own script runs `node src/bin.ts` without `--watch`.
+const STEADY_SERVER_ARGS = ["run", "--filter=t3", "dev:steady"] as const;
+
+/**
+ * The Vite+ runs a mode starts, each with `runArgs` after it. With `steady`, the server runs on
+ * its own without restarting on file changes, beside a run of everything else unchanged.
+ */
+export function devRunArgs(
+  mode: DevMode,
+  options: { readonly built: boolean; readonly steady: boolean },
+  runArgs: ReadonlyArray<string>,
+): ReadonlyArray<ReadonlyArray<string>> {
+  const base: ReadonlyArray<string> = options.built ? BUILT_DEV_ARGS : MODE_ARGS[mode];
+  if (!options.steady || !base.includes("--filter=t3")) return [[...base, ...runArgs]];
+  const others = base.filter((arg) => arg !== "--filter=t3");
+  return [
+    ...(others.some((arg) => arg.startsWith("--filter=")) ? [[...others, ...runArgs]] : []),
+    [...STEADY_SERVER_ARGS, ...runArgs],
+  ];
+}
 // Only backend ports honor --host/T3CODE_HOST; web ports stay loopback.
 type PortAvailabilityCheck<R = never> = (
   port: number,
@@ -683,6 +704,7 @@ interface DevRunnerCliInput {
   readonly share: boolean;
   readonly seed?: boolean | undefined;
   readonly built: boolean;
+  readonly steady?: boolean | undefined;
   readonly runArgs: ReadonlyArray<string>;
 }
 
@@ -862,10 +884,30 @@ export const runDevRunnerWithInput = Effect.fn("dev-runner.runDevRunnerWithInput
     env,
   });
 
-  const args = [...(built ? BUILT_DEV_ARGS : MODE_ARGS[input.mode]), ...input.runArgs];
+  const steady = input.steady === true;
+  if (steady) {
+    yield* Effect.logInfo(
+      input.mode === "dev:web" || input.mode === "dev:desktop"
+        ? `[dev-runner] --steady has no effect for ${input.mode} (no dev server process).`
+        : "[dev-runner] steady: the server does not restart when files change. Restart this command to pick up changes.",
+    );
+  }
+  const runs = devRunArgs(input.mode, { built, steady }, input.runArgs);
+  // Every run lives as long as the others: the first to fail ends them all.
+  yield* Effect.forEach(runs, (args) => runVp(input.mode, args, env), {
+    concurrency: "unbounded",
+    discard: true,
+  });
+});
+
+const runVp = Effect.fn("dev-runner.runVp")(function* (
+  mode: DevMode,
+  args: ReadonlyArray<string>,
+  env: Record<string, string | undefined>,
+) {
   const spawnCommand = yield* resolveSpawnCommand("vp", args, { env });
   const processContext = {
-    mode: input.mode,
+    mode,
     executable: "vp" as const,
     argumentCount: args.length,
     shell: spawnCommand.shell,
@@ -975,6 +1017,12 @@ const devRunnerCli = Command.make("dev-runner", {
       "With --share: serve a production web build from the backend instead of the Vite dev server. Rebuilds on change, no HMR, much smaller remote loads.",
     ),
     Flag.withDefault(false),
+  ),
+  steady: Flag.Boolean("steady").pipe(
+    Flag.withDescription(
+      "Run the server without restarting it when files change (equivalent to T3CODE_DEV_STEADY=1), for using T Code rather than developing it. Restart the command to pick up changes.",
+    ),
+    Flag.withFallbackConfig(optionalBooleanConfig("T3CODE_DEV_STEADY")),
   ),
   runArgs: Argument.String("run-arg").pipe(
     Argument.withDescription("Additional Vite+ run args (pass after `--`)."),

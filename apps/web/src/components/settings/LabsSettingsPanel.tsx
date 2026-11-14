@@ -1,10 +1,13 @@
 import { useAuth } from "@clerk/react";
 import { Link } from "@tanstack/react-router";
-import { managedCapabilityDenial } from "@t3tools/contracts";
+import { GUEST_NAME_MAX_LENGTH, managedCapabilityDenial } from "@t3tools/contracts";
+import { XIcon } from "lucide-react";
+import { type FormEvent, useState } from "react";
 
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
@@ -19,7 +22,7 @@ export function LabsSettingsPanel() {
     <SettingsPageContainer>
       <SettingsSection id="beta" title="Beta">
         <BoringSidebarRow />
-        {/* Clerk is only mounted when this build has T3 Connect. */}
+        {/* Clerk is only mounted when this build has T Connect. */}
         {hasCloudPublicConfig() ? <GuestLinksRowWithSignIn /> : <GuestLinksRow />}
         <LinkedEnvironmentsRow />
         <PromptSuggestionsRow />
@@ -75,7 +78,7 @@ function BoringSidebarMultilineRow() {
   );
 }
 
-/** Signed out of T3 Connect, the row offers to sign in instead of its switch. */
+/** Signed out of T Connect, the row offers to sign in instead of its switch. */
 function GuestLinksRowWithSignIn() {
   const { isSignedIn } = useAuth();
   const { openAuthPrompt } = useT3ConnectAuthPrompt();
@@ -84,7 +87,7 @@ function GuestLinksRowWithSignIn() {
   return (
     <SettingsRow
       {...searchableSetting("guest-links")}
-      description="Share a thread with a guest who watches it live in a browser and sends messages you approve. Sign in to T3 Connect to use guest links."
+      description="Share a thread with a guest who watches it live in a browser and sends messages you approve. Sign in to T Connect to use guest links."
       control={
         <Button size="sm" variant="outline" onClick={openAuthPrompt}>
           Sign in
@@ -99,7 +102,7 @@ function GuestLinksRow() {
   const updateSettings = useUpdateScopedSettings();
   const scope = useOptionalSettingsScope();
   const primaryPolicy = usePrimaryManagedPolicy();
-  // Guests arrive through T3 Connect, so a policy that turns Connect off turns this off too.
+  // Guests arrive through T Connect, so a policy that turns Connect off turns this off too.
   const connectDenial = firstManagedDenial(
     scope
       ? scope.connectedEnvironments.map((environment) => environment.serverConfig?.managedPolicy)
@@ -111,12 +114,12 @@ function GuestLinksRow() {
       serverScoped
       {...searchableSetting("guest-links")}
       settingKeys={["guestSharingEnabled"]}
-      // Turning guest links off still works without T3 Connect.
+      // Turning guest links off still works without T Connect.
       managed={settings.guestSharingEnabled ? undefined : connectDenial}
       description={
         <>
           Share a thread with a guest who watches it live in a browser and sends messages you
-          approve. Needs T3 Connect: sign in and link this machine in{" "}
+          approve. Needs T Connect: sign in and link this machine in{" "}
           <Link to="/settings/access" className="underline underline-offset-2">
             Sharing & access
           </Link>
@@ -131,7 +134,114 @@ function GuestLinksRow() {
           aria-label="Guest links"
         />
       }
-    />
+    >
+      {settings.guestSharingEnabled ? (
+        <div className="mt-2 mb-2 border-l-2 border-border/60 ps-3">
+          <GuestOwnerName />
+          <GuestContributors />
+        </div>
+      ) : null}
+    </SettingsRow>
+  );
+}
+
+/** The name guests see over the threads this machine shares. Saved when the field loses focus. */
+function GuestOwnerName() {
+  const saved = useScopedSettings((settings) => settings.guestOwnerName);
+  const updateSettings = useUpdateScopedSettings();
+  const [draft, setDraft] = useState<string | null>(null);
+  const save = () => {
+    const name = draft?.trim();
+    if (name !== undefined && name !== saved) updateSettings({ guestOwnerName: name });
+    setDraft(null);
+  };
+  return (
+    <form
+      className="flex flex-col gap-2 py-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        save();
+      }}
+    >
+      <p className="text-xs text-muted-foreground">
+        Name shown to guests: it labels your threads in their sidebar. Leave it empty to show no
+        name.
+      </p>
+      <div className="max-w-sm">
+        <Input
+          size="sm"
+          value={draft ?? saved}
+          maxLength={GUEST_NAME_MAX_LENGTH}
+          placeholder="Your name"
+          aria-label="Name shown to guests"
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={save}
+        />
+      </div>
+    </form>
+  );
+}
+
+/** GitHub usernames whose messages go to the agent without a Send, once they sign in. */
+function GuestContributors() {
+  const contributors = useScopedSettings((settings) => settings.guestContributors);
+  const updateSettings = useUpdateScopedSettings();
+  const [draft, setDraft] = useState("");
+  const login = draft.trim().replace(/^@/, "");
+  const known = contributors.some(
+    (contributor) => contributor.login.toLowerCase() === login.toLowerCase(),
+  );
+  const add = (event: FormEvent) => {
+    event.preventDefault();
+    if (login === "" || known) return;
+    updateSettings({ guestContributors: [...contributors, { login }] });
+    setDraft("");
+  };
+  return (
+    <div className="flex flex-col gap-2 py-2">
+      <p className="text-xs text-muted-foreground">
+        Approved contributors: a guest who signs in with one of these GitHub accounts has their
+        messages sent without asking, on threads whose provider uses an API key. Removing someone
+        applies to links they join later.
+      </p>
+      {contributors.length === 0 ? null : (
+        <ul className="flex flex-wrap gap-1.5">
+          {contributors.map((contributor) => (
+            <li
+              key={contributor.login.toLowerCase()}
+              className="flex items-center gap-1 rounded-md border border-border ps-2 text-xs"
+            >
+              @{contributor.login}
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                aria-label={`Remove ${contributor.login}`}
+                onClick={() =>
+                  updateSettings({
+                    guestContributors: contributors.filter((other) => other !== contributor),
+                  })
+                }
+              >
+                <XIcon />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form className="flex max-w-sm items-center gap-2" onSubmit={add}>
+        <Input
+          size="sm"
+          value={draft}
+          maxLength={GUEST_NAME_MAX_LENGTH}
+          placeholder="GitHub username"
+          aria-label="GitHub username to approve"
+          onChange={(event) => setDraft(event.target.value)}
+        />
+        <Button type="submit" size="sm" variant="outline" disabled={login === "" || known}>
+          Add
+        </Button>
+      </form>
+    </div>
   );
 }
 
@@ -213,7 +323,7 @@ function SimlockHostsRow() {
           <Link to="/settings/devices" className="underline underline-offset-2">
             Devices
           </Link>
-          . An alpha that may change or break. T3 Code never installs Simlock.
+          . An alpha that may change or break. T Code never installs Simlock.
         </>
       }
       control={

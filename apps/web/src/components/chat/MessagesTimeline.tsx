@@ -137,6 +137,7 @@ import { useThreadFindPositionReader } from "./useThreadFindPositionReader";
 import { ThreadActivityAnnouncer } from "./ThreadActivityAnnouncer";
 import { useStableHandoffRuns, useIncrementalTimelineRows, useStableRows } from "./useTimelineRows";
 import { useClientSettings } from "../../hooks/useSettings";
+import { RoomReplyComments, roomReplyRevealed, useRoomReplies } from "../room/RoomReplyComments";
 
 function timelineListStateFor(identity: string): {
   readonly identity: string;
@@ -738,6 +739,19 @@ const ConversationTimeline = memo(function ConversationTimeline({
     restoreReady,
     viewportRef,
   ]);
+
+  const revealReply = useRoomReplies((state) => state.reveal);
+  const revealRowIndex =
+    revealReply === null
+      ? -1
+      : rows.findIndex((row) => row.kind === "message" && row.message.id === revealReply);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls LegendList to the reply the room's board asked to see, once its row has loaded
+  useEffect(() => {
+    if (revealRowIndex === -1) return;
+    roomReplyRevealed();
+    navigateTimeline();
+    void listRef.current?.scrollToIndex({ index: revealRowIndex, animated: false, viewOffset: 24 });
+  }, [listRef, navigateTimeline, revealRowIndex]);
 
   const [timelineViewportElement, setTimelineViewportElement] = useState<HTMLDivElement | null>(
     null,
@@ -1476,6 +1490,13 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "message" && row.message.role === "user" ? <UserMessageRow row={row} /> : null}
       {row.kind === "message" && row.message.role === "assistant" ? (
         <AssistantTimelineRow row={row} />
+      ) : null}
+      {row.kind === "message" && row.message.role !== "system" && row.projectedItem ? (
+        <RoomReplyComments
+          messageId={row.message.id}
+          text={row.message.text}
+          align={row.message.role === "user" ? "end" : "start"}
+        />
       ) : null}
       {row.kind === "assistant-meta" ? <AssistantMetaTimelineRow row={row} /> : null}
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}

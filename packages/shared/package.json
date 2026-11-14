@@ -211,6 +211,10 @@
       "types": "./src/relayJwt.ts",
       "import": "./src/relayJwt.ts"
     },
+    "./roomBoard": {
+      "types": "./src/roomBoard.ts",
+      "import": "./src/roomBoard.ts"
+    },
     "./oauthScope": {
       "types": "./src/oauthScope.ts",
       "import": "./src/oauthScope.ts"
@@ -282,6 +286,10 @@
     "./threadLinks": {
       "types": "./src/threadLinks.ts",
       "import": "./src/threadLinks.ts"
+    },
+    "./guestLinks": {
+      "types": "./src/guestLinks.ts",
+      "import": "./src/guestLinks.ts"
     },
     "./composerContextReferences": {
       "types": "./src/composerContextReferences.ts",

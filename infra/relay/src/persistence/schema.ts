@@ -1,3 +1,4 @@
+import type { RoomBoard } from "@t3tools/contracts";
 import type {
   RelayAgentActivityAggregateState,
   RelayAgentActivityState,
@@ -199,3 +200,99 @@ export const relayDpopProofs = pgTable(
     index("idx_relay_dpop_proofs_expires_at").on(table.expiresAt),
   ],
 );
+
+export const relayGuestLinks = pgTable(
+  "relay_guest_links",
+  {
+    name: varchar("name", { length: 64 }).primaryKey(),
+    environmentId: varchar("environment_id", { length: 191 }).notNull(),
+    host: varchar("host", { length: 255 }).notNull(),
+    credential: varchar("credential", { length: 255 }).notNull(),
+    expiresAt: varchar("expires_at", { length: 64 }).notNull(),
+    createdAt: varchar("created_at", { length: 64 }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_relay_guest_links_credential").on(table.credential),
+    index("idx_relay_guest_links_expires_at").on(table.expiresAt),
+  ],
+);
+
+export const relayTeams = pgTable("relay_teams", {
+  id: varchar("id", { length: 64 }).primaryKey(),
+  name: varchar("name", { length: 120 }).notNull(),
+  ownerUserId: varchar("owner_user_id", { length: 191 }).notNull(),
+  createdAt: varchar("created_at", { length: 64 }).notNull(),
+});
+
+/** Name and avatar are copied from the member's account each time they act on the team. */
+export const relayTeamMembers = pgTable(
+  "relay_team_members",
+  {
+    teamId: varchar("team_id", { length: 64 })
+      .notNull()
+      .references(() => relayTeams.id, { onDelete: "cascade" }),
+    userId: varchar("user_id", { length: 191 }).notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    avatarUrl: text("avatar_url"),
+    joinedAt: varchar("joined_at", { length: 64 }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.teamId, table.userId] }),
+    index("idx_relay_team_members_user").on(table.userId),
+  ],
+);
+
+export const relayTeamInvites = pgTable(
+  "relay_team_invites",
+  {
+    name: varchar("name", { length: 64 }).primaryKey(),
+    teamId: varchar("team_id", { length: 64 })
+      .notNull()
+      .references(() => relayTeams.id, { onDelete: "cascade" }),
+    createdByUserId: varchar("created_by_user_id", { length: 191 }).notNull(),
+    expiresAt: varchar("expires_at", { length: 64 }).notNull(),
+    createdAt: varchar("created_at", { length: 64 }).notNull(),
+  },
+  (table) => [
+    index("idx_relay_team_invites_team").on(table.teamId),
+    index("idx_relay_team_invites_expires_at").on(table.expiresAt),
+  ],
+);
+
+/** A thread shared to a team. The credential joins it only with a member assertion. */
+export const relayTeamThreads = pgTable(
+  "relay_team_threads",
+  {
+    environmentId: varchar("environment_id", { length: 191 }).notNull(),
+    threadId: varchar("thread_id", { length: 255 }).notNull(),
+    teamId: varchar("team_id", { length: 64 })
+      .notNull()
+      .references(() => relayTeams.id, { onDelete: "cascade" }),
+    shareId: varchar("share_id", { length: 64 }).notNull(),
+    title: text("title").notNull(),
+    host: varchar("host", { length: 255 }).notNull(),
+    credential: varchar("credential", { length: 255 }).notNull(),
+    ownerUserId: varchar("owner_user_id", { length: 191 }).notNull(),
+    expiresAt: varchar("expires_at", { length: 64 }).notNull(),
+    updatedAt: varchar("updated_at", { length: 64 }).notNull(),
+    /** Set while the machine has guest links off; the listing comes back when they are on. */
+    hidden: boolean("hidden").notNull().default(false),
+  },
+  (table) => [
+    primaryKey({ columns: [table.environmentId, table.threadId] }),
+    index("idx_relay_team_threads_team").on(table.teamId),
+    index("idx_relay_team_threads_expires_at").on(table.expiresAt),
+  ],
+);
+
+/** A team's one board. `version` counts the changes, so concurrent writers both land. */
+export const relayTeamBoards = pgTable("relay_team_boards", {
+  teamId: varchar("team_id", { length: 64 })
+    .primaryKey()
+    .references(() => relayTeams.id, { onDelete: "cascade" }),
+  board: jsonb("board").$type<RoomBoard>().notNull(),
+  /** Each person the notes name, by user id, so people who left keep their name on them. */
+  names: jsonb("names").$type<Readonly<Record<string, string>>>().notNull().default({}),
+  version: integer("version").notNull(),
+  updatedAt: varchar("updated_at", { length: 64 }).notNull(),
+});

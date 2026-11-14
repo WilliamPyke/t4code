@@ -94,6 +94,8 @@ import {
   PersistChatAttachmentsError,
   RpcClientId,
   EnvironmentAuthorizationError,
+  RoomBoardChangeError,
+  RoomCodePatchError,
   type ProjectId,
   type ProviderDriverKind,
   type ProviderInstanceId,
@@ -128,6 +130,9 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as GuestShareService from "./guest/GuestShareService.ts";
+import * as RoomBoxes from "./guest/RoomBoxes.ts";
+import * as SharedRoomLink from "./guest/SharedRoomLink.ts";
+import * as SharedThreadJoin from "./guest/SharedThreadJoin.ts";
 import {
   bufferShellLiveStream,
   coalesceShellApplicationEvents,
@@ -1449,6 +1454,9 @@ export const layerWsRpc = (
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const secretRequests = yield* SecretRequests.SecretRequests;
       const guestShares = yield* GuestShareService.GuestShareService;
+      const sharedThreads = yield* SharedThreadJoin.SharedThreadJoin;
+      const sharedRooms = yield* SharedRoomLink.SharedRoomLink;
+      const roomBoxes = yield* RoomBoxes.RoomBoxes;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -2369,6 +2377,83 @@ export const layerWsRpc = (
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.rotateWebhookToken(input)),
           ),
+        [WS_METHODS.guestShareSubscribePresence]: (input) => guestShares.presence(input.threadId),
+        [WS_METHODS.guestShareSubscribeRoomAgents]: (input) => guestShares.roomAgents(input),
+        [WS_METHODS.guestShareSubscribeRoomCursors]: (input) => guestShares.roomCursors(input),
+        // A pointer that does not land changes nothing anyone relies on.
+        [WS_METHODS.guestShareMoveCursor]: ({ at, view, drag, ...room }) =>
+          guestShares.moveCursor(room, at, view, drag).pipe(Effect.ignore),
+        [WS_METHODS.guestShareChangeBoard]: (input) =>
+          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+            Effect.andThen(guestShares.changeBoard({ threadId: input.threadId }, input.change)),
+            Effect.mapError(
+              ({ reason }) =>
+                new RoomBoardChangeError({
+                  reason:
+                    reason === "inactive" ? reason : reason === "board_full" ? "full" : "rejected",
+                }),
+            ),
+          ),
+        [WS_METHODS.guestShareRefreshPullRequest]: (input) =>
+          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+            Effect.andThen(
+              guestShares.refreshPullRequest({ threadId: input.threadId }, input.noteId),
+            ),
+            Effect.mapError(
+              ({ reason }) =>
+                new RoomBoardChangeError({ reason: reason === "inactive" ? reason : "rejected" }),
+            ),
+          ),
+        [WS_METHODS.guestSharePromptBox]: (input) =>
+          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+            Effect.andThen(roomBoxes.prompt(input)),
+          ),
+        [WS_METHODS.guestShareAddBoxThread]: (input) =>
+          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+            Effect.andThen(roomBoxes.addThread(input)),
+          ),
+        [WS_METHODS.guestShareResolveMessage]: (input) =>
+          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+            Effect.andThen(roomBoxes.resolveGuestMessage(input)),
+          ),
+        [WS_METHODS.sharedThreadPreview]: (input) => sharedThreads.preview(input),
+        [WS_METHODS.sharedThreadJoin]: (input) =>
+          Effect.annotateCurrentSpan({
+            "orchestration_v2.command_id": input.commandId,
+            "orchestration_v2.project_id": input.projectId,
+          }).pipe(Effect.andThen(sharedThreads.join(input))),
+        [WS_METHODS.sharedThreadLeave]: (input) =>
+          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+            Effect.andThen(sharedRooms.leave(input.threadId)),
+          ),
+        [WS_METHODS.sharedThreadCatchUp]: (input) =>
+          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+            Effect.andThen(sharedRooms.catchUp(input.threadId)),
+          ),
+        [WS_METHODS.sharedThreadTakeTask]: (input) =>
+          Effect.map(sharedRooms.takeTask(input.host, input.shareId, input.taskId), (threadId) => ({
+            threadId,
+          })),
+        [WS_METHODS.sharedThreadTakeArtifact]: (input) =>
+          sharedRooms.takeArtifact(input.host, input.shareId, input.artifactId),
+        [WS_METHODS.sharedThreadPromptBox]: (input) => sharedRooms.promptBox(input),
+        [WS_METHODS.sharedThreadLinkBox]: (input) =>
+          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+            Effect.andThen(sharedRooms.linkBox(input)),
+          ),
+        [WS_METHODS.sharedThreadFindRoom]: (input) =>
+          sharedRooms.findRoom(input.host, input.shareId),
+        [WS_METHODS.sharedThreadBoxPatch]: (input) => sharedRooms.boxPatch(input),
+        [WS_METHODS.guestShareCodePatch]: ({ threadId, ...request }) =>
+          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": threadId }).pipe(
+            Effect.andThen(guestShares.codePatch({ threadId }, request)),
+            Effect.catchTags({
+              GuestShareAccessError: () =>
+                Effect.fail(new RoomCodePatchError({ reason: "inactive" })),
+            }),
+          ),
+        [WS_METHODS.guestShareBoardSummaries]: ({ threadIds }) =>
+          guestShares.boardSummaries(threadIds),
         [WS_METHODS.guestShareCreate]: (input) =>
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(guestShares.create(input)),
