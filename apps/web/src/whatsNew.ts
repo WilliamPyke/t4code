@@ -13,6 +13,26 @@ export interface WhatsNewEntry {
 export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
   {
     date: "2026-11-14",
+    title: "Agents that work on the board, votes and catch-up",
+    items: [
+      "Ask the agent in a thread box, or in the board's own thread, to work on the board: “turn these notes into tasks”, “group the notes by theme”, “summarise the board into a note”. Its cards say which agent made them.",
+      "Vote on a note or task: the +1 that shows when you point at it, Alt+V (Option+V) on what you have selected, or Vote in the right-click menu. Point at the count to see who voted.",
+      "Sort by votes puts the most voted first: in a section's menu, or for a selection.",
+      "Back on a board after a while? “N changes since you were here” steps you through what other people added or changed.",
+    ],
+  },
+  {
+    date: "2026-11-14",
+    title: "A steadier board, on any screen",
+    items: [
+      "A thread box keeps its size while its agent replies: the reply scrolls inside it and stays on the newest text.",
+      "The minimap shows where everyone's pointer is, as a dot in their colour.",
+      "A request a guest sends from their side panel now waits on the board's thread card too, with Send, Dismiss and the model to run it on.",
+      "Boards work on a phone: drag with one finger, pinch to zoom, and find Section, Link, Code and Pull request under More in the toolbar. The conversation opens as a sheet over the board.",
+    ],
+  },
+  {
+    date: "2026-11-14",
     title: "Boards are home",
     items: [
       "T Code now opens on Boards: every board you have, with a live preview, who is on it and when it last changed. Ctrl+Alt+G (Cmd+Option+G) goes there from anywhere.",
@@ -130,7 +150,8 @@ export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
 
 const SEEN_KEY = "t-code:whats-new-seen";
 const SeenSchema = Schema.NullOr(Schema.String);
-const LATEST = WHATS_NEW[0]?.date ?? "";
+// The count makes a second entry on the same day show as unread too.
+const LATEST = `${WHATS_NEW[0]?.date ?? ""}#${String(WHATS_NEW.length).padStart(4, "0")}`;
 
 /** Whether this browser has entries it has not seen yet, and a way to mark them seen. */
 export function useWhatsNewSeen() {

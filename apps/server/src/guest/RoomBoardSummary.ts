@@ -29,17 +29,34 @@ const CARD: RoomBoardSize = { w: 320, h: 240 };
 const ROOM_THREAD_CARD: RoomBoardSize = { w: 320, h: 420 };
 const NOTE: RoomBoardSize = { w: 192, h: 144 };
 const PIN: RoomBoardSize = { w: 32, h: 32 };
+const SECTION: RoomBoardSize = { w: 640, h: 420 };
 const NOTE_SIZES: Partial<Record<NonNullable<RoomBoardNote["kind"]>, RoomBoardSize>> = {
   artifact: { w: 380, h: 400 },
   thread: { w: 340, h: 460 },
   code: { w: 560, h: 420 },
+  "pull-request": { w: 360, h: 300 },
   comment: PIN,
 };
 // Where the board puts its own thread's card before anyone moves it.
-const ROOM_THREAD_ORIGIN = { x: 80, y: 72 };
+export const ROOM_THREAD_ORIGIN = { x: 80, y: 72 };
+
+/** A card's size as the board draws it, or about, until someone resizes it. */
+export const roomBoardNoteSize = (
+  note: Pick<RoomBoardNote, "kind" | "size" | "section">,
+): RoomBoardSize =>
+  note.size ??
+  (note.section === true
+    ? SECTION
+    : note.kind === undefined
+      ? NOTE
+      : (NOTE_SIZES[note.kind] ?? NOTE));
+
+/** The room thread's own card's size, as the board draws it until someone resizes it. */
+export const roomThreadCardSize = (board: RoomBoard | undefined): RoomBoardSize =>
+  board?.sizes?.[ROOM_BOARD_THREAD_CARD] ?? ROOM_THREAD_CARD;
 
 function noteShape(note: RoomBoardNote): RoomBoardSummaryShape {
-  const size = note.size ?? (note.kind === undefined ? NOTE : (NOTE_SIZES[note.kind] ?? NOTE));
+  const size = roomBoardNoteSize(note);
   return {
     x: note.x,
     y: note.y,
@@ -74,7 +91,7 @@ export function summarizeRoomBoard(
     };
   });
   if (positions[ROOM_BOARD_THREAD_CARD] === undefined) {
-    const size = board?.sizes?.[ROOM_BOARD_THREAD_CARD] ?? ROOM_THREAD_CARD;
+    const size = roomThreadCardSize(board ?? undefined);
     cardShapes.unshift({ ...ROOM_THREAD_ORIGIN, w: size.w, h: size.h, kind: "thread" });
   }
   const noteShapes = notes.map(noteShape);

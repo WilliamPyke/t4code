@@ -22,6 +22,7 @@ import {
   boardBounds,
   visibleBoardRect,
 } from "./roomBoard.logic";
+import { useBoardPointers } from "./roomBoardLive";
 
 const MINIMAP_SIZE: BoardSize = { width: 192, height: 128 };
 /** Below this window width the minimap starts hidden, until someone shows it. */
@@ -104,6 +105,26 @@ function MinimapCard({ item }: { readonly item: MinimapItem }) {
 }
 
 /**
+ * Everyone else's pointers as dots in their colour. Reads the live store itself, so a pointer
+ * moving renders only these few circles; `scale` keeps them the same size at any zoom.
+ */
+function MinimapPointers({ scale }: { readonly scale: number }) {
+  const pointers = useBoardPointers();
+  return pointers.map((pointer) => (
+    <circle
+      key={pointer.key}
+      cx={pointer.x}
+      cy={pointer.y}
+      r={3 / scale}
+      fill={pointer.color}
+      stroke="var(--color-card)"
+      strokeWidth={1}
+      vectorEffect="non-scaling-stroke"
+    />
+  ));
+}
+
+/**
  * A small map of the whole board in the corner: every card as a plain rect and the part in view
  * as an outline. Pressing it moves the view there, and dragging pans it.
  */
@@ -142,6 +163,7 @@ export function BoardMinimap({
   const viewport = visibleBoardRect(view, area);
   const frame = held?.frame ?? minimapFrame(content, viewport, MINIMAP_SIZE);
   const viewRect = minimapRect(frame, viewport);
+  const worldTransform = `translate(${frame.offset.x} ${frame.offset.y}) scale(${frame.scale}) translate(${-frame.world.x} ${-frame.world.y})`;
 
   const boardPointOf = (event: PointerEvent<SVGSVGElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -183,9 +205,7 @@ export function BoardMinimap({
         onPointerUp={() => setHeld(null)}
         onPointerCancel={() => setHeld(null)}
       >
-        <g
-          transform={`translate(${frame.offset.x} ${frame.offset.y}) scale(${frame.scale}) translate(${-frame.world.x} ${-frame.world.y})`}
-        >
+        <g transform={worldTransform}>
           <MinimapCards items={items} drawn={minimapKey(items)} />
         </g>
         <rect
@@ -199,6 +219,9 @@ export function BoardMinimap({
           stroke="var(--color-primary)"
           strokeWidth={1}
         />
+        <g transform={worldTransform}>
+          <MinimapPointers scale={frame.scale} />
+        </g>
       </svg>
     </BoardFloat>
   );

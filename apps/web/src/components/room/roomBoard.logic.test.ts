@@ -131,6 +131,7 @@ import {
   settleBoardValue,
   visibleBoardRect,
   openingBoardView,
+  pinchBoardView,
   selectionBarSpot,
   wheelZoomFactor,
   zoomBoardAt,
@@ -148,6 +149,31 @@ describe("zoomBoardAt", () => {
 
     expect(zoomBoardAt(INITIAL_BOARD_VIEW, anchor, 100).zoom).toBe(BOARD_MAX_ZOOM);
     expect(zoomBoardAt(INITIAL_BOARD_VIEW, anchor, 0.001).zoom).toBe(BOARD_MIN_ZOOM);
+  });
+
+  it("pinches: zooms by the fingers' spread and keeps the point between them under them", () => {
+    const start = { x: -120, y: 35, zoom: 1 };
+    const from = [
+      { x: 100, y: 200 },
+      { x: 200, y: 200 },
+    ] as const;
+    const held = screenToBoard(start, { x: 150, y: 200 });
+    // Spread to twice as far apart, with the midpoint moved 30px right and 10px down.
+    const pinched = pinchBoardView(start, from, [
+      { x: 80, y: 210 },
+      { x: 280, y: 210 },
+    ]);
+    expect(pinched.zoom).toBe(2);
+    expect(screenToBoard(pinched, { x: 180, y: 210 }).x).toBeCloseTo(held.x);
+    expect(screenToBoard(pinched, { x: 180, y: 210 }).y).toBeCloseTo(held.y);
+    // Fingers that only move together pan; a pinch never zooms past the limits.
+    expect(pinchBoardView(start, from, [from[0], from[1]])).toEqual(start);
+    expect(
+      pinchBoardView(start, from, [
+        { x: 0, y: 200 },
+        { x: 2000, y: 200 },
+      ]).zoom,
+    ).toBe(BOARD_MAX_ZOOM);
   });
 });
 
@@ -1905,7 +1931,7 @@ describe("thread boxes", () => {
     expect(boardThreadBoxTitle(threadTitle)).toBe(title);
   });
 
-  it("finds the requests waiting on each box, and none from the room thread's composer", () => {
+  it("finds the requests waiting on each box, with side-panel requests on the room thread", () => {
     const message = (id: string, fields: Partial<ThreadGuestMessage>): ThreadGuestMessage => ({
       id: GuestMessageId.make(id),
       text: id,
@@ -1922,18 +1948,18 @@ describe("thread boxes", () => {
       message("second", { boxId: "b2", artifactId: "art" }),
     ];
     expect(boardBoxRequests(messages, "b2").map((each) => each.id)).toEqual(["first", "second"]);
-    expect(boardBoxRequests(messages, "thread").map((each) => each.id)).toEqual(["room"]);
+    expect(boardBoxRequests(messages, "thread").map((each) => each.id)).toEqual(["plain", "room"]);
     expect(boardBoxRequests(messages, "b1")).toEqual([]);
     // A guest's card lists only what no box on the board shows.
     const boxes = boardThreadBoxes(shared, "Launch");
-    expect(boardGuestWaiting(messages, sam, boxes).map((each) => each.id)).toEqual(["plain"]);
+    expect(boardGuestWaiting(messages, sam, boxes)).toEqual([]);
     expect(boardGuestWaiting(messages, eve, boxes)).toEqual([]);
     // Its box was removed: the request shows on the guest's card again.
     expect(
       boardGuestWaiting(messages, sam, boardThreadBoxes(EMPTY_ROOM_BOARD, "Launch")).map(
         (each) => each.id,
       ),
-    ).toEqual(["plain", "first", "second"]);
+    ).toEqual(["first", "second"]);
   });
 
   it("reuses the viewer's own box that already rewrites an artifact for Attach my agent", () => {
@@ -2381,6 +2407,13 @@ describe("selecting several cards", () => {
       { ref: "note:c", x: 0, y: 124 },
       { ref: "note:d", x: 174, y: 124 },
     ]);
+    // An order of its own, as Sort by votes gives, fills the same grid in that order.
+    expect(boardTidy(items, [], (inOrder) => inOrder.toReversed())).toEqual([
+      { ref: "note:d", x: 0, y: 0 },
+      { ref: "note:c", x: 174, y: 0 },
+      { ref: "note:b", x: 0, y: 104 },
+      { ref: "note:a", x: 174, y: 104 },
+    ]);
     // Something else where the grid would go moves it clear.
     const tidied = boardTidy(items, [{ x: 0, y: 0, width: 400, height: 300 }]);
     for (const { ref, x, y } of tidied) {
@@ -2698,13 +2731,30 @@ describe("boardMenuEntries", () => {
     expect(boardMenuEntries({ kind: "card", note: evesLink }, looker)).toEqual(["copy-link"]);
   });
 
-  it("deletes a selection only when some of it is the viewer's own", () => {
+  it("deletes a selection only when some of it is the viewer's own, and votes only on a room's", () => {
     const both = { kind: "selection", notes: [samsNote, evesBox], count: 2 } as const;
-    expect(boardMenuEntries(both, guest)).toEqual(["duplicate", "copy", "tidy", "group", "delete"]);
+    expect(boardMenuEntries(both, guest)).toEqual([
+      "duplicate",
+      "copy",
+      "tidy",
+      "sort-votes",
+      "vote",
+      "group",
+      "delete",
+    ]);
     const evesOnly = { kind: "selection", notes: [evesBox, evesLink], count: 3 } as const;
-    expect(boardMenuEntries(evesOnly, guest)).toEqual(["duplicate", "copy", "tidy", "group"]);
+    expect(boardMenuEntries(evesOnly, guest)).toEqual([
+      "duplicate",
+      "copy",
+      "tidy",
+      "sort-votes",
+      "vote",
+      "group",
+    ]);
     expect(boardMenuEntries(evesOnly, owner)).toContain("delete");
     expect(boardMenuEntries(both, { ...guest, canAdd: false })).not.toContain("group");
+    expect(boardMenuEntries(both, { ...guest, roomBoard: false })).not.toContain("vote");
+    expect(boardMenuEntries(both, { ...guest, roomBoard: false })).not.toContain("sort-votes");
     expect(boardMenuEntries(both, looker)).toEqual([]);
   });
 });

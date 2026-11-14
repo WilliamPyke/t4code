@@ -49,9 +49,17 @@ export function dropHeldPointer(): boolean {
   return true;
 }
 
+// `last` is where the pointer was at its previous move: touch pointers in Safari report no
+// `movementX`, so how far it went is measured from client points.
 const presses = new WeakMap<
   Element,
-  { readonly x: number; readonly y: number; readonly on: EventTarget; moved: boolean }
+  {
+    readonly x: number;
+    readonly y: number;
+    readonly on: EventTarget;
+    moved: boolean;
+    last: { x: number; y: number };
+  }
 >();
 
 /**
@@ -87,19 +95,27 @@ export function dragHandlers(
         y: event.clientY,
         on: event.target,
         moved: false,
+        last: { x: event.clientX, y: event.clientY },
       });
     },
     onPointerMove: (event: PointerEvent<HTMLElement>) => {
       if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
       const press = presses.get(event.currentTarget);
-      if (press === undefined || press.moved) {
+      if (press === undefined) {
         onMove(event.movementX, event.movementY, event);
+        return;
+      }
+      if (press.moved) {
+        const { x, y } = press.last;
+        press.last = { x: event.clientX, y: event.clientY };
+        onMove(event.clientX - x, event.clientY - y, event);
         return;
       }
       const dx = event.clientX - press.x;
       const dy = event.clientY - press.y;
       if (Math.hypot(dx, dy) < CLICK_SLOP) return;
       press.moved = true;
+      press.last = { x: event.clientX, y: event.clientY };
       onMove(dx, dy, event);
     },
     onPointerUp: release,

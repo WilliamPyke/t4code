@@ -43,6 +43,22 @@ export function BoardFloat({ className, ...props }: ComponentProps<"div">) {
   );
 }
 
+/**
+ * A card's body that scrolls on its own and stays at its newest text while it grows, so a
+ * streaming reply never stretches the card. `column-reverse` anchors the scroll to the bottom;
+ * `mb-auto` keeps short content at the top of a card taller than it.
+ */
+export function BoardScrollTail({ className, children }: ComponentProps<"div">) {
+  return (
+    <div
+      data-board-scroll
+      className={cn("flex min-h-0 flex-col-reverse overflow-y-auto", className)}
+    >
+      <div className="mb-auto flex flex-col gap-2">{children}</div>
+    </div>
+  );
+}
+
 export type BoardChipTone = "primary" | "success" | "warning" | "error" | "info" | "neutral";
 
 const CHIP_TONES: Readonly<Record<BoardChipTone, string>> = {

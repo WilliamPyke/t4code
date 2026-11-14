@@ -177,7 +177,7 @@ function putNote(
   // A card edited since a prompt carried it goes with the next one again.
   const edited =
     existing !== undefined && (change.text !== existing.text || done !== (existing.done === true));
-  return Result.succeed({
+  const next: RoomBoardNote = {
     ...rest,
     ...(edited ? { editedAt: at } : {}),
     text: change.text,
@@ -187,21 +187,30 @@ function putNote(
     ...(assignee === undefined || assignee === null ? {} : { assignee }),
     ...(size === undefined ? {} : { size }),
     ...(color === undefined ? {} : { color }),
-  });
+  };
+  // Moving or resizing a card is not changing it, for whoever catches up on the board later.
+  return Result.succeed(
+    existing !== undefined && sameContent(existing, next)
+      ? next
+      : { ...next, changed: { at, ...(author === null ? {} : { guestId: author }) } },
+  );
 }
 
 const sameSize = (left: RoomBoardSize | undefined, right: RoomBoardSize | undefined) =>
   left?.w === right?.w && left?.h === right?.h;
 
-const sameNote = (left: RoomBoardNote, right: RoomBoardNote) =>
+const sameContent = (left: RoomBoardNote, right: RoomBoardNote) =>
   left.text === right.text &&
-  left.x === right.x &&
-  left.y === right.y &&
   left.done === right.done &&
   left.assignee?.guestId === right.assignee?.guestId &&
   (left.assignee === undefined) === (right.assignee === undefined) &&
-  sameSize(left.size, right.size) &&
   left.color === right.color;
+
+const sameNote = (left: RoomBoardNote, right: RoomBoardNote) =>
+  sameContent(left, right) &&
+  left.x === right.x &&
+  left.y === right.y &&
+  sameSize(left.size, right.size);
 
 /**
  * Whether `person` (null for the room's owner) may remove a card or rename a thread box: the owner

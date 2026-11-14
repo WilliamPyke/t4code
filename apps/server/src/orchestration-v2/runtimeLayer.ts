@@ -4,6 +4,7 @@ import * as GuestLinkNames from "../guest/GuestLinkNames.ts";
 import * as GuestTeamShares from "../guest/GuestTeamShares.ts";
 import * as GuestSignIn from "../guest/GuestSignIn.ts";
 import * as CheckpointDiffQuery from "../checkpointing/CheckpointDiffQuery.ts";
+import * as RoomBoardAgent from "../guest/RoomBoardAgent.ts";
 import * as RoomBoxes from "../guest/RoomBoxes.ts";
 import * as RoomCodeDiffs from "../guest/RoomCodeDiffs.ts";
 import * as RoomPullRequests from "../guest/RoomPullRequests.ts";
@@ -417,6 +418,9 @@ export const layerProduction = Layer.mergeAll(
   layerSecretRequestsProvided,
   layerSharedRoomLinkProvided,
   layerRoomBoxesProvided,
+  RoomBoardAgent.layer.pipe(
+    Layer.provide(Layer.merge(layerOrchestratorProvided, layerRoomBoxesProvided)),
+  ),
   SharedThreadJoin.layer.pipe(
     Layer.provide(Layer.merge(layerThreadLaunchProvided, layerSharedRoomLinkProvided)),
   ),

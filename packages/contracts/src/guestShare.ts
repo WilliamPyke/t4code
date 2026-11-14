@@ -528,6 +528,13 @@ export const RoomBoardReply = Schema.Struct({
 });
 export type RoomBoardReply = typeof RoomBoardReply.Type;
 
+/** A thread box's agent that changed the board: `ROOM_BOARD_ROOM_BOX` for the room thread. */
+export const RoomBoardAgentMark = Schema.Struct({
+  boxId: RoomBoardNoteId,
+  model: Schema.optional(RoomBoxModelName),
+});
+export type RoomBoardAgentMark = typeof RoomBoardAgentMark.Type;
+
 /** The colours a plain note can be. Absent is yellow. */
 export const ROOM_BOARD_NOTE_COLORS = [
   "yellow",
@@ -606,6 +613,11 @@ export const RoomBoardNote = Schema.Struct({
   createdAt: Schema.optional(IsoDateTime),
   /** When its text or a task's status last changed, as the server took it. */
   editedAt: Schema.optional(IsoDateTime),
+  /**
+   * Who added it or last changed what it says (text, status, assignee, colour), and when, as the
+   * server took it. No guest is the owner. Absent on cards from before it was kept.
+   */
+  changed: Schema.optional(Schema.Struct({ at: IsoDateTime, guestId: Schema.optional(GuestId) })),
   /** A comment thread's replies, oldest first. Only the comment changes set them. */
   replies: Schema.optional(
     Schema.Array(RoomBoardReply).check(Schema.isMaxLength(ROOM_BOARD_MAX_REPLIES)),
@@ -616,6 +628,8 @@ export const RoomBoardNote = Schema.Struct({
   reactions: Schema.optional(
     Schema.Array(RoomBoardReaction).check(Schema.isMaxLength(ROOM_BOARD_MAX_REACTIONS)),
   ),
+  /** The owner's thread box whose agent added it. Only the owner's server sets it. */
+  agent: Schema.optional(RoomBoardAgentMark),
 });
 export type RoomBoardNote = typeof RoomBoardNote.Type;
 

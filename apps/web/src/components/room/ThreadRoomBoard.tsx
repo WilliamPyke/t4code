@@ -311,11 +311,7 @@ export function ThreadRoomBoard({
   };
   const requests = useGuestMessageResolver(threadRef);
   const resolveRequest = (message: ThreadGuestMessage, decision: "send" | "dismiss") =>
-    void requests.resolve(
-      message.id,
-      decision,
-      message.boxId === undefined ? undefined : boxSelection(message.boxId),
-    );
+    void requests.resolve(message.id, decision, boxSelection(message.boxId ?? ROOM_BOARD_ROOM_BOX));
   const thread = structure?.thread ?? null;
   const projectId = thread?.projectId ?? null;
   const project = useProject(

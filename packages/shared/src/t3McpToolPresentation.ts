@@ -32,6 +32,9 @@ export type T3McpToolSummaryAction =
   | "thread-organize"
   | "thread-update"
   | "room-catch-up"
+  | "board-read"
+  | "board-add"
+  | "board-update"
   | "queue-list"
   | "queue-read"
   | "queue-edit"
@@ -295,6 +298,9 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     ["Catch up on", "Catching up on", "Caught up on", "the shared room"],
     "room-catch-up",
   ),
+  t3_board_read: tool(["Read", "Reading", "Read", "the board"], "board-read"),
+  t3_board_add: tool(["Add to", "Adding to", "Added to", "the board"], "board-add"),
+  t3_board_update: tool(["Change", "Changing", "Changed", "the board"], "board-update"),
   t3_queue: tool(["Manage", "Managing", "Managed", "queued messages"], "queue-edit"),
   t3_pending_request: tool(
     ["Handle", "Handling", "Handled", "pending questions"],

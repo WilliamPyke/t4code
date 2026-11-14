@@ -18,6 +18,7 @@ import {
   ROOM_BOARD_MAX_NOTES,
   ROOM_BOARD_MAX_REPLIES,
   ROOM_TASK_ANSWER_MAX_LENGTH,
+  type RoomBoardAgentMark,
   RoomBoardChange,
   ThreadId,
   unsharedRoomId,
@@ -403,6 +404,7 @@ it.effect("answers a task with the turn of the guest it is for, and no other car
       done: true,
       assignee: {},
       answer: { excerpt: "Owner did run:owner.", turnId: "run:owner" },
+      changed: { at: DateTime.formatIso(yield* DateTime.now) },
     });
     assert.lengthOf(after.thread.guestShare?.turns ?? [], 5);
     assert.isUndefined(after.notes.get("note")?.answer);
@@ -1344,8 +1346,15 @@ it.effect("keeps one board for the room, changed a card or a note at a time", ()
           y: 9,
           guestId: sam,
           editedAt: DateTime.formatIso(yield* DateTime.now),
+          changed: { at: DateTime.formatIso(yield* DateTime.now), guestId: alex },
         },
-        { id: "note:owner", text: "Not yet", x: 3, y: 4 },
+        {
+          id: "note:owner",
+          text: "Not yet",
+          x: 3,
+          y: 4,
+          changed: { at: DateTime.formatIso(yield* DateTime.now) },
+        },
       ],
     });
     // Shown only: nothing for the agent, no run, and the thread keeps its place in the list.
@@ -1491,6 +1500,7 @@ it.effect("keeps tasks, links, comments and arrows on the board, checked by the 
     assert.isTrue(yield* refused(change(sam, arrow("a5", "card:guest:nobody", "card:thread"))));
 
     const arranged = yield* board;
+    const stamped = DateTime.formatIso(yield* DateTime.now);
     assert.deepEqual(arranged.board?.notes, [
       {
         id: "link",
@@ -1500,6 +1510,7 @@ it.effect("keeps tasks, links, comments and arrows on the board, checked by the 
         guestId: sam,
         kind: "link",
         url: "https://github.com/acme/app/pull/1",
+        changed: { at: stamped, guestId: sam },
       },
       {
         id: "task",
@@ -1510,10 +1521,27 @@ it.effect("keeps tasks, links, comments and arrows on the board, checked by the 
         kind: "task",
         done: true,
         assignee: { guestId: alex },
-        editedAt: DateTime.formatIso(yield* DateTime.now),
+        editedAt: stamped,
+        changed: { at: stamped },
       },
-      { id: "comment", text: "Why 15 minutes?", x: 0, y: 0, guestId: alex, pinnedTo: "message:1" },
-      { id: "owner-task", text: "", x: 0, y: 0, kind: "task", assignee: {} },
+      {
+        id: "comment",
+        text: "Why 15 minutes?",
+        x: 0,
+        y: 0,
+        guestId: alex,
+        pinnedTo: "message:1",
+        changed: { at: stamped, guestId: alex },
+      },
+      {
+        id: "owner-task",
+        text: "",
+        x: 0,
+        y: 0,
+        kind: "task",
+        assignee: {},
+        changed: { at: stamped },
+      },
     ]);
     assert.deepEqual(
       arranged.board?.edges?.map((edge) => edge.id),
@@ -1843,7 +1871,12 @@ it.effect("lets the owner work on a board while the thread is not shared", () =>
     const next = (label: string) => CommandId.make(`${label}:${commands++}`);
     const thread = Effect.map(orchestrator.getThreadRecords(threadId, []), (r) => r.thread);
     const own = unsharedRoomId(threadId);
-    const change = (room: GuestShareId, author: GuestId | null, change: RoomBoardChange) =>
+    const change = (
+      room: GuestShareId,
+      author: GuestId | null,
+      change: RoomBoardChange,
+      agent?: RoomBoardAgentMark,
+    ) =>
       orchestrator.dispatch({
         type: "thread.guest-board.change",
         commandId: next("board"),
@@ -1851,6 +1884,7 @@ it.effect("lets the owner work on a board while the thread is not shared", () =>
         shareId: room,
         author,
         change,
+        ...(agent === undefined ? {} : { agent }),
       });
     yield* orchestrator.dispatch({
       type: "thread.guest-share.close",
@@ -1863,6 +1897,17 @@ it.effect("lets the owner work on a board while the thread is not shared", () =>
     assert.deepEqual(
       (yield* thread).roomBoard?.board.notes.map((note) => note.id),
       ["plan"],
+    );
+    // A box's agent marks the notes it adds as its own, and none it only edits.
+    const agent = { boxId: "box", model: "Haiku" };
+    yield* change(own, null, { type: "note.put", noteId: "idea", text: "Idea", x: 0, y: 0 }, agent);
+    yield* change(own, null, { type: "note.put", noteId: "plan", text: "Plan", x: 9, y: 9 }, agent);
+    assert.deepEqual(
+      (yield* thread).roomBoard?.board.notes.map((note) => [note.id, note.agent]),
+      [
+        ["plan", undefined],
+        ["idea", agent],
+      ],
     );
     // Only the owner works on it, and not under the ended share's id.
     assert.isTrue(

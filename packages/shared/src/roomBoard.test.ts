@@ -106,7 +106,14 @@ describe("applyRoomBoardChange", () => {
     };
     // Anyone may colour a note, as anyone may edit its text.
     const green = applied(owners, put("n", { text: "Hi", color: "green" }));
-    expect(green.notes[0]).toEqual({ id: "n", text: "Hi", x: 0, y: 0, color: "green" });
+    expect(green.notes[0]).toEqual({
+      id: "n",
+      text: "Hi",
+      x: 0,
+      y: 0,
+      color: "green",
+      changed: { at, guestId: sam },
+    });
     expect(applied(green, put("n", { text: "Hi" }))).toBe(green);
     expect(applied(green, put("n", { text: "Hi", color: "green" }))).toBe(green);
     expect(applied(green, put("n", { text: "Hi", color: "blue" })).notes[0]?.color).toBe("blue");
@@ -294,6 +301,7 @@ describe("applyRoomBoardChange", () => {
       guestId: sam,
       kind: "pull-request",
       url,
+      changed: { at, guestId: sam },
     });
     for (let index = 1; index < ROOM_BOARD_MAX_PULL_REQUESTS; index++) {
       board = applied(board, put(`pr${index}`, { kind: "pull-request", url }));
@@ -362,6 +370,7 @@ describe("applyRoomBoardChange", () => {
       guestId: sam,
       section: true,
       color: "green",
+      changed: { at, guestId: sam },
     });
     expect(applied(framed, put("s", { text: "Plan" })).notes[0]?.section).toBe(true);
     expect(applied(EMPTY_ROOM_BOARD, put("n", { text: "Hi" })).notes[0]?.section).toBeUndefined();
@@ -540,6 +549,7 @@ describe("applyRoomBoardChange", () => {
         guestId: sam,
         kind: "comment",
         createdAt: at,
+        changed: { at, guestId: sam },
       },
     );
 
@@ -629,6 +639,22 @@ describe("applyRoomBoardChange", () => {
     );
     expect(Result.getOrThrow(moved).notes[0]?.editedAt).toBe(at);
     expect(applied(board, put("t", { text: "Ship", done: true })).notes[1]?.editedAt).toBe(at);
+
+    // Who added or last changed a card, and when; a move or a resize keeps it.
+    expect(edited.notes[0]?.changed).toEqual({ at, guestId: sam });
+    expect(Result.getOrThrow(moved).notes[0]?.changed).toEqual({ at, guestId: sam });
+    const resized = applied(edited, put("n", { text: "Hello", size: { w: 300, h: 200 } }));
+    expect(resized.notes[0]?.changed).toEqual({ at, guestId: sam });
+    const byOwner = (board: RoomBoard, change: RoomBoardChange) =>
+      Result.getOrThrow(applyRoomBoardChange(board, scope, null, change, later)).notes;
+    expect(byOwner(EMPTY_ROOM_BOARD, put("new"))[0]?.changed).toEqual({ at: later });
+    expect(byOwner(board, put("n", { text: "Hi", color: "blue" }))[0]?.changed).toEqual({
+      at: later,
+    });
+    expect(
+      byOwner(board, put("t", { text: "Ship", assignee: { guestId: sam } }))[1]?.changed,
+    ).toEqual({ at: later });
+    expect(byOwner(board, put("n", { text: "Hi", x: 4 }))[0]?.changed).toBeUndefined();
 
     // A line drawn by a change is never marked sent, whatever it says.
     const drawn = applied(board, {

@@ -39,11 +39,13 @@ import {
   CircleHelpIcon,
   CodeXmlIcon,
   CopyIcon,
+  EllipsisIcon,
   ExternalLinkIcon,
   FrameIcon,
   GitBranchIcon,
   LayoutGridIcon,
   LinkIcon,
+  ListOrderedIcon,
   ListTodoIcon,
   MapIcon,
   MessageCirclePlusIcon,
@@ -150,6 +152,7 @@ import {
   boardChangeOf,
   boardChangeQueue,
   boardChangeQueueKey,
+  boardCommentAgentAuthor,
   boardCommentLineTo,
   boardConnector,
   boardCursorAt,
@@ -241,6 +244,17 @@ import { BoardMinimap, useBoardMinimap } from "./BoardMinimap";
 import { WhatItDoes, WhyNot } from "./RoomBoardWhy";
 import { BoardHistoryButtons } from "./RoomBoardHistory";
 import { AddReaction, ReactionChips } from "./RoomBoardReactions";
+import { CatchUpMark, CatchUpPill, useBoardCatchUp } from "./BoardCatchUp";
+import { VoteButton, boardVoteShortcut } from "./BoardVote";
+import {
+  BOARD_VOTE,
+  boardByVotes,
+  boardVotable,
+  boardVoteCount,
+  boardVotedBy,
+  boardVoteToggles,
+  isBoardVoteKey,
+} from "./boardVotes.logic";
 import {
   BoardSelectionContext,
   SelectionBar,
@@ -261,6 +275,7 @@ import {
   isInside,
   leaveText,
 } from "./roomBoardPointer";
+import { useBoardPinch } from "./roomBoardPinch";
 import { BoardSection } from "./RoomBoardSection";
 import {
   BOARD_HOVER_CHROME_CLASS,
@@ -271,6 +286,7 @@ import {
   BoardChip,
   type BoardChipTone,
   BoardFloat,
+  BoardScrollTail,
   PersonDot,
 } from "./BoardChrome";
 import { BoxProgress, BoxRequests, BoxTurns } from "./RoomBoardThreadBox";
@@ -402,7 +418,12 @@ function scrollsInside(event: WheelEvent): boolean {
       ? event.target.closest<HTMLElement>("[data-board-scroll], textarea")
       : null;
   if (scroller === null) return false;
-  const { scrollTop, scrollLeft, scrollHeight, scrollWidth, clientHeight, clientWidth } = scroller;
+  const { scrollLeft, scrollHeight, scrollWidth, clientHeight, clientWidth } = scroller;
+  // A `column-reverse` scroller counts down from 0 at its bottom.
+  const scrollTop =
+    getComputedStyle(scroller).flexDirection === "column-reverse"
+      ? scroller.scrollTop + scrollHeight - clientHeight
+      : scroller.scrollTop;
   return (
     (event.deltaY > 0 && scrollTop + clientHeight < scrollHeight - 1) ||
     (event.deltaY < 0 && scrollTop > 0) ||
@@ -1012,6 +1033,13 @@ export function RoomBoard({
         ? draftNote
         : (commentNotes.find((note) => note.id === openComment) ?? null);
   const unread = useCommentUnread(shareId, openNote === draftNote ? null : openNote, viewer);
+  const catchUp = useBoardCatchUp(viewKey ?? shareId, board.notes, viewer);
+  const catchUpLabels = new Map(
+    catchUp.changes.map((note) => [
+      note.id,
+      `${boardPersonName(people, note.changed?.guestId)} added or changed this since you were here`,
+    ]),
+  );
   const pinScale = boardPinScale(view.zoom);
   const boxes = new Map<string, BoardBox>([
     ...Object.entries(positions).map(
@@ -1194,6 +1222,15 @@ export function RoomBoard({
     marquee.cancel();
     if (pointing) cursor.drag([]);
   };
+  useBoardPinch(surfaceRef, {
+    view: useStableCallback(() => view),
+    onStart: useStableCallback(() => {
+      if (dropHeldPointer()) cancelGesture();
+      press.current = null;
+      setFollowing(null);
+    }),
+    onView: useStableCallback((next: BoardView) => setView(next)),
+  });
   const sectionGroup = (target: BoardTarget): ReadonlyArray<BoardSelected> | null => {
     const key = boardEditKey(target);
     const known = carried.current.get(key);
@@ -1456,6 +1493,11 @@ export function RoomBoard({
             onChange({ type: "note.react", noteId: note.id, emoji }),
           )
       : undefined;
+  // A vote is the thumbs-up reaction. On several cards it votes for all, or takes them all back.
+  const voteOn = (notes: ReadonlyArray<RoomBoardNote>) => {
+    if (reactTo === undefined) return;
+    for (const note of boardVoteToggles(notes, viewer)) reactTo(note, BOARD_VOTE);
+  };
   const [minimapShown, toggleMinimap] = useBoardMinimap();
   const zoomBy = (factor: number) => {
     const area = boardAreaOf(surfaceRef.current);
@@ -1803,9 +1845,10 @@ export function RoomBoard({
     setNoteColor(color);
     for (const note of colorable) changeNote(note, (current) => ({ ...current, color }));
   };
-  const tidySelection = () => {
+  /** Lays these items out as Tidy does, most-voted first when `byVotes`, as one undo step. */
+  const tidyItems = (chosen: ReadonlyArray<BoardSelected>, byVotes = false) => {
     if (!canEdit) return;
-    const items = selectedItems.flatMap((item) => {
+    const items = chosen.flatMap((item) => {
       const element = drawnItem(boardEditKey(item.target));
       return element === null
         ? []
@@ -1817,14 +1860,42 @@ export function RoomBoard({
         "[data-board-item]:not([data-board-section])",
       ) ?? []),
     ].flatMap((element) =>
-      selected.has(element.dataset.boardItem ?? "") ? [] : [drawnRect(element)],
+      items.some((item) => item.ref === element.dataset.boardItem) ? [] : [drawnRect(element)],
     );
-    for (const { ref, x, y } of boardTidy(items, taken)) {
+    const order = byVotes
+      ? (inOrder: ReadonlyArray<(typeof items)[number]>) =>
+          boardByVotes(inOrder, ({ value }) => ("text" in value ? boardVoteCount(value) : 0))
+      : undefined;
+    for (const { ref, x, y } of boardTidy(items, taken, order)) {
       const item = items.find((candidate) => candidate.ref === ref);
       if (item === undefined) continue;
       const now = "text" in item.value ? noteNow(item.value) : item.value;
       send(item.target, settleBoardValue({ ...now, x, y }));
     }
+  };
+  const tidySelection = () => tidyItems(selectedItems);
+  const showChange = (note: RoomBoardNote) => {
+    const ref = noteRef(note.id);
+    const element = drawnItem(ref);
+    setSelection(new Set([ref]));
+    lastCard.current = ref;
+    if (element !== null) reveal(drawnRect(element));
+  };
+  const sortSelectionByVotes = () => tidyItems(selectedItems, true);
+  // What sits over a section, as dragging it would carry, sorted inside it.
+  const sortSectionByVotes = (section: RoomBoardNote) => {
+    const key = noteRef(section.id);
+    const element = drawnItem(key);
+    if (element === null) return;
+    const items = [
+      ...(surfaceRef.current?.querySelectorAll<HTMLElement>(
+        "[data-board-item]:not([data-board-pin]):not([data-board-section])",
+      ) ?? []),
+    ].map((item) => ({ ref: item.dataset.boardItem ?? "", rect: drawnRect(item) }));
+    tidyItems(
+      boardSelectionItems(shown, positions, boardItemsCentredIn(items, drawnRect(element), key)),
+      true,
+    );
   };
   const groupInSection = () => {
     const rects = [...selected].flatMap((ref) => {
@@ -1932,6 +2003,14 @@ export function RoomBoard({
   const pasteLinkInto = (note: RoomBoardNote, url: string) => {
     send({ kind: "note", id: note.id }, null);
     addLink(url, { x: note.x, y: note.y });
+  };
+  const startLinkDraft = () => {
+    setDraftKind("link");
+    setLinkDraft("");
+  };
+  const startPullRequest = () => {
+    setDraftKind("pull-request");
+    setLinkDraft("");
   };
   const submitLinkDraft = () => {
     const url = linkDraft === null ? null : draftUrl(linkDraft);
@@ -2183,6 +2262,18 @@ export function RoomBoard({
             }
           : undefined,
       actions: [
+        ...(reactTo === undefined
+          ? []
+          : section
+            ? [{ label: "Sort by votes", run: () => sortSectionByVotes(note) }]
+            : boardVotable(note)
+              ? [
+                  {
+                    label: boardVotedBy(note, viewer) ? "Remove my vote" : "Vote",
+                    run: () => voteOn([note]),
+                  },
+                ]
+              : []),
         ...(use === undefined ? [] : [{ label: "Use as message", run: use }]),
         ...(give === undefined ? [] : [{ label: "Give to my agent", run: give }]),
         ...(canDelete
@@ -2328,6 +2419,13 @@ export function RoomBoard({
         },
       },
       tidy: { label: "Tidy", run: tidySelection },
+      "sort-votes": { label: "Sort by votes", run: sortSelectionByVotes },
+      vote: {
+        label: boardVoteToggles(selectedNotes, viewer).every((one) => boardVotedBy(one, viewer))
+          ? "Remove my votes"
+          : "Vote",
+        run: () => voteOn(selectedNotes),
+      },
       group: { label: "Group in a section", run: groupInSection },
       delete: { label: "Delete", run: deleteSelection },
     };
@@ -2352,8 +2450,8 @@ export function RoomBoard({
           : { ...card, actions: card.actions.filter((action) => action.destructive !== true) },
       groups: [
         pick("add-note", "add-task", "add-section", "add-thread", "add-artifact"),
-        pick("paste", "duplicate", "copy", "copy-link"),
-        pick("tidy", "group", "select-all", "fit"),
+        pick("vote", "paste", "duplicate", "copy", "copy-link"),
+        pick("tidy", "sort-votes", "group", "select-all", "fit"),
         [
           ...(card?.actions.filter((action) => action.destructive === true) ?? []),
           ...pick("delete").map((entry) => ({ ...entry, destructive: true })),
@@ -2672,28 +2770,25 @@ export function RoomBoard({
                   </BoardTool>
                 </WhyNot>
                 {cards === undefined ? (
+                  <span className="contents @max-2xl/board:hidden">
+                    <WhyNot reason={cannotAdd}>
+                      <BoardTool
+                        label="Section"
+                        disabled={cannotAdd !== null}
+                        onClick={() => addAndType(() => addSection())}
+                      >
+                        <SquareDashedIcon />
+                      </BoardTool>
+                    </WhyNot>
+                  </span>
+                ) : null}
+                <span className="contents @max-2xl/board:hidden">
                   <WhyNot reason={cannotAdd}>
-                    <BoardTool
-                      label="Section"
-                      disabled={cannotAdd !== null}
-                      onClick={() => addAndType(() => addSection())}
-                    >
-                      <SquareDashedIcon />
+                    <BoardTool label="Link" disabled={cannotAdd !== null} onClick={startLinkDraft}>
+                      <LinkIcon />
                     </BoardTool>
                   </WhyNot>
-                ) : null}
-                <WhyNot reason={cannotAdd}>
-                  <BoardTool
-                    label="Link"
-                    disabled={cannotAdd !== null}
-                    onClick={() => {
-                      setDraftKind("link");
-                      setLinkDraft("");
-                    }}
-                  >
-                    <LinkIcon />
-                  </BoardTool>
-                </WhyNot>
+                </span>
                 {cards !== undefined ? null : <BoardToolDivider />}
                 {cards !== undefined ? null : onAddThread === undefined ? (
                   <WhyNot reason={cannotAddThread}>
@@ -2747,31 +2842,32 @@ export function RoomBoard({
                   </WhyNot>
                 ) : null}
                 {cards === undefined ? (
-                  <WhyNot reason={cannotAddCode}>
-                    <BoardTool
-                      label="Code"
-                      hint="A code window shows the changes of the thread box you draw a line from it. Everyone in the room sees its files and diffs."
-                      disabled={cannotAddCode !== null}
-                      onClick={() => addAndType(() => addCard({ kind: "code" }))}
-                    >
-                      <CodeXmlIcon />
-                    </BoardTool>
-                  </WhyNot>
+                  <span className="contents @max-2xl/board:hidden">
+                    <WhyNot reason={cannotAddCode}>
+                      <BoardTool
+                        label="Code"
+                        hint="A code window shows the changes of the thread box you draw a line from it. Everyone in the room sees its files and diffs."
+                        disabled={cannotAddCode !== null}
+                        onClick={() => addAndType(() => addCard({ kind: "code" }))}
+                      >
+                        <CodeXmlIcon />
+                      </BoardTool>
+                    </WhyNot>
+                  </span>
                 ) : null}
                 {cards === undefined ? (
-                  <WhyNot reason={cannotAddPullRequest}>
-                    <BoardTool
-                      label="Pull request"
-                      hint="Shows a GitHub pull request to the room, kept up to date by the board owner's GitHub sign-in."
-                      disabled={cannotAddPullRequest !== null}
-                      onClick={() => {
-                        setDraftKind("pull-request");
-                        setLinkDraft("");
-                      }}
-                    >
-                      <PullRequestGlyph.pullRequest />
-                    </BoardTool>
-                  </WhyNot>
+                  <span className="contents @max-2xl/board:hidden">
+                    <WhyNot reason={cannotAddPullRequest}>
+                      <BoardTool
+                        label="Pull request"
+                        hint="Shows a GitHub pull request to the room, kept up to date by the board owner's GitHub sign-in."
+                        disabled={cannotAddPullRequest !== null}
+                        onClick={startPullRequest}
+                      >
+                        <PullRequestGlyph.pullRequest />
+                      </BoardTool>
+                    </WhyNot>
+                  </span>
                 ) : null}
                 {cards !== undefined ? null : <BoardToolDivider />}
                 {cards === undefined ? (
@@ -2789,8 +2885,8 @@ export function RoomBoard({
                 ) : null}
                 {cards === undefined ? (
                   // As wide as its widest count, and kept while nothing is resolved, so the tools
-                  // never move.
-                  <span className="grid">
+                  // never move. A narrow board keeps it in More.
+                  <span className="grid @max-2xl/board:hidden">
                     <span aria-hidden className="invisible col-start-1 row-start-1 flex">
                       <Button size="sm" variant="ghost" tabIndex={-1}>
                         <CircleCheckIcon />
@@ -2818,6 +2914,58 @@ export function RoomBoard({
                     </span>
                   </span>
                 ) : null}
+                <span className="contents @2xl/board:hidden">
+                  <Menu>
+                    <MenuTrigger
+                      render={<Button size="icon" variant="ghost" aria-label="More tools" />}
+                    >
+                      <EllipsisIcon />
+                    </MenuTrigger>
+                    <MenuPopup side="top" align="end">
+                      {cards === undefined ? (
+                        <MenuItem
+                          disabled={cannotAdd !== null}
+                          onClick={() => addAndType(() => addSection())}
+                        >
+                          <SquareDashedIcon />
+                          Section
+                        </MenuItem>
+                      ) : null}
+                      <MenuItem disabled={cannotAdd !== null} onClick={startLinkDraft}>
+                        <LinkIcon />
+                        Link
+                      </MenuItem>
+                      {cards === undefined ? (
+                        <MenuItem
+                          disabled={cannotAddCode !== null}
+                          onClick={() => addAndType(() => addCard({ kind: "code" }))}
+                        >
+                          <CodeXmlIcon />
+                          Code window
+                        </MenuItem>
+                      ) : null}
+                      {cards === undefined ? (
+                        <MenuItem
+                          disabled={cannotAddPullRequest !== null}
+                          onClick={startPullRequest}
+                        >
+                          <PullRequestGlyph.pullRequest />
+                          Pull request
+                        </MenuItem>
+                      ) : null}
+                      {cards === undefined && resolvedComments > 0 ? (
+                        <MenuItem
+                          onClick={() => thenBoard(() => setShowResolved((shown) => !shown))}
+                        >
+                          <CircleCheckIcon />
+                          {showResolved
+                            ? "Hide resolved comments"
+                            : `Show resolved comments (${resolvedComments})`}
+                        </MenuItem>
+                      ) : null}
+                    </MenuPopup>
+                  </Menu>
+                </span>
               </>
             ) : (
               <form
@@ -2877,6 +3025,13 @@ export function RoomBoard({
               }}
             />
           ) : null}
+          {catchUp.changes.length === 0 ? null : (
+            <CatchUpPill
+              changes={catchUp.changes}
+              onShow={showChange}
+              onDismiss={catchUp.dismiss}
+            />
+          )}
           <BoardFloat className="gap-0.5 p-1">
             <Button
               size="icon-sm"
@@ -3107,6 +3262,11 @@ export function RoomBoard({
                 ref === null ? drawn.top + drawn.height / 2 : drawn.top + 12,
                 ref,
               );
+              return;
+            }
+            if (isBoardVoteKey(event) && isBoardKey(event.target) && selected.size > 0) {
+              event.preventDefault();
+              voteOn(selectedNotes);
               return;
             }
             // Typing on a note selected alone types into it, as a click on it would.
@@ -3575,6 +3735,7 @@ export function RoomBoard({
                     onAttachAgent={attachAgentOf(note)}
                     onPickColor={pickColor}
                     onReact={reactTo}
+                    changedLabel={catchUpLabels.get(note.id)}
                     compact={view.zoom < COMPACT_CARD_ZOOM}
                     menuOf={noteMenu}
                     box={
@@ -3667,6 +3828,12 @@ export function RoomBoard({
                 <Button size="micro" variant="ghost-muted" onClick={tidySelection}>
                   <LayoutGridIcon />
                   Tidy
+                </Button>
+              ) : null}
+              {selected.size > 1 && reactTo !== undefined ? (
+                <Button size="micro" variant="ghost-muted" onClick={sortSelectionByVotes}>
+                  <ListOrderedIcon />
+                  Sort by votes
                 </Button>
               ) : null}
               {canDuplicate ? (
@@ -3836,6 +4003,9 @@ function LineLegend() {
             <span aria-hidden className={cn(swatch, "border-muted-foreground/70")} />
             Any other line: only shows a link
           </span>
+          <span className="mt-1 border-t border-board-hairline pt-1.5">
+            {boardVoteShortcut()} votes for the selected cards, or takes your votes back
+          </span>
         </div>
       </PopoverPopup>
     </Popover>
@@ -3975,7 +4145,10 @@ function BoardNote({
   compact,
   menuOf,
   onAddNext,
+  changedLabel,
 }: {
+  /** Why it is marked as changed since this person was last here; absent when it is not. */
+  readonly changedLabel?: string | undefined;
   /** Adds a blank note beside this one, ready to type. Absent where none can be added. */
   readonly onAddNext?: (() => void) | undefined;
   /** Drawn too small for its header's buttons, which fold into one menu. */
@@ -4036,7 +4209,10 @@ function BoardNote({
   readonly codeWindow: ReactNode;
 }) {
   const target = { kind: "note", id: note.id } as const;
-  const author = boardPersonName(people, note.guestId);
+  const author =
+    note.agent === undefined
+      ? boardPersonName(people, note.guestId)
+      : boardCommentAgentAuthor({ guestId: note.guestId, agent: note.agent }, people);
   const plain = note.kind === undefined && note.pinnedTo === undefined;
   const artifact = note.kind === "artifact";
   const thread = note.kind === "thread";
@@ -4108,6 +4284,7 @@ function BoardNote({
         drag.onPointerDown(event);
       }}
     >
+      {changedLabel === undefined ? null : <CatchUpMark label={changedLabel} />}
       <div
         className={cn(
           "flex cursor-grab items-center gap-1 active:cursor-grabbing",
@@ -4195,6 +4372,13 @@ function BoardNote({
               </TooltipTrigger>
               <TooltipPopup side="top">Give to my agent, as a draft</TooltipPopup>
             </Tooltip>
+          )}
+          {compact || onReact === undefined || !paper ? null : (
+            <VoteButton
+              note={note}
+              viewer={people.viewer}
+              onVote={() => onReact(note, BOARD_VOTE)}
+            />
           )}
           {compact || onReact === undefined ? null : (
             <AddReaction onReact={(emoji) => onReact(note, emoji)} />
@@ -4403,12 +4587,11 @@ function BoardNote({
         {code || pullRequest ? codeWindow : null}
         {box === undefined ? null : (
           <>
-            <div
-              data-board-scroll
-              className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-3 pb-2"
+            <BoardScrollTail
+              className={cn("px-3 pb-2", size === undefined ? "max-h-80" : "flex-1")}
             >
               {box.body}
-            </div>
+            </BoardScrollTail>
             {box.footer === undefined ? null : (
               <div className="shrink-0 border-t border-board-hairline px-3 pt-2 pb-3">
                 {box.footer}
@@ -4624,15 +4807,9 @@ function BoardCard({
         {action}
         <BoardChip tone={boardCardKindTone(kind)}>{kind}</BoardChip>
       </header>
-      <div
-        data-board-scroll={size === undefined ? undefined : ""}
-        className={cn(
-          "flex flex-col gap-2 p-3",
-          size !== undefined && "min-h-0 flex-1 overflow-y-auto",
-        )}
-      >
+      <BoardScrollTail className={cn("p-3", size === undefined ? "max-h-80" : "flex-1")}>
         {children}
-      </div>
+      </BoardScrollTail>
       {footer === undefined ? null : (
         <div className="shrink-0 border-t border-board-hairline px-3 pt-2 pb-3">{footer}</div>
       )}
@@ -4816,8 +4993,31 @@ export function RoomCursors({
       })),
     );
   }, [live, cursors, guests]);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a board that closes takes everyone's drags off its live store
-  useEffect(() => () => live.setDraggers([]), [live]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- hands everyone's pointers to the live store, so the minimap's dots move without the board rendering
+  useEffect(() => {
+    live.setPointers(
+      cursors.flatMap((cursor) =>
+        cursor.guestId === undefined || guests.some((guest) => guest.id === cursor.guestId)
+          ? [
+              {
+                key: boardPersonKey(cursor.guestId),
+                color: boardCursorColor(guests, cursor.guestId),
+                x: cursor.x,
+                y: cursor.y,
+              },
+            ]
+          : [],
+      ),
+    );
+  }, [live, cursors, guests]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a board that closes takes everyone's drags and pointers off its live store
+  useEffect(
+    () => () => {
+      live.setDraggers([]);
+      live.setPointers([]);
+    },
+    [live],
+  );
   return cursors.map((cursor) => {
     const name =
       cursor.guestId === undefined

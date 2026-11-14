@@ -50,6 +50,7 @@ import {
   GuestTeamMember,
   GuestTurnRequest,
   RoomArtifactContent,
+  RoomBoardAgentMark,
   RoomBoardChange,
   RoomBoardNote,
   RoomBoardReply,
@@ -3548,6 +3549,8 @@ const OrchestrationV2InternalCommand = Schema.Union([
     /** The guest who made the change, or null for the owner. */
     author: Schema.NullOr(GuestId),
     change: RoomBoardChange,
+    /** The owner's box agent that made it, which a note it adds is marked with. */
+    agent: Schema.optional(RoomBoardAgentMark),
   }),
   /** Answers a task card with the owner's own turn. It changes the share and nothing else. */
   Schema.Struct({

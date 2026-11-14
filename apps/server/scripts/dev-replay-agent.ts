@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// @effect-diagnostics nodeBuiltinImport:off globalTimers:off
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalFetch:off
 /**
  * A free ACP agent for dev servers. It plays recorded ACP transcripts with simulated
  * streaming, so the real adapter, orchestration, and UI run without a paid model.
@@ -65,6 +65,11 @@ export const SCENARIOS = [
     file: `${FIXTURES}/multi_turn/registry_transcript.ndjson`,
   },
 ] as const;
+
+// Not a recording: it reads the board its thread is on through T3's MCP server and adds a task
+// for each note there, so the board's agent tools can be tried for free.
+const BOARD_SCENARIO = { id: "board-tasks", name: "Board: notes to tasks" } as const;
+const MODELS = [...SCENARIOS, BOARD_SCENARIO];
 
 // Session setup and vendor state stay out: they would replace the replay agent's own models.
 const REPLAYED_UPDATES = new Set([
@@ -171,6 +176,83 @@ function permissionRejectedToolCallId(request: LogicalFrame, answer: unknown): s
   return rejected ? params.toolCall?.toolCallId : undefined;
 }
 
+interface T3Mcp {
+  readonly url: string;
+  readonly authorization: string;
+}
+
+/** T3's MCP endpoint, from the stdio bridge's environment or an HTTP server's headers. */
+function t3McpOf(servers: unknown): T3Mcp | undefined {
+  if (!Array.isArray(servers)) return undefined;
+  for (const server of servers as ReadonlyArray<Record<string, unknown>>) {
+    const pairs = [
+      ...(Array.isArray(server.env) ? server.env : []),
+      ...(Array.isArray(server.headers) ? server.headers : []),
+    ] as ReadonlyArray<{ readonly name?: unknown; readonly value?: unknown }>;
+    const value = (name: string) =>
+      pairs.find((pair) => String(pair.name).toLowerCase() === name.toLowerCase())?.value;
+    const url = typeof server.url === "string" ? server.url : value("T3_ACP_MCP_ENDPOINT");
+    const authorization = value("Authorization") ?? value("T3_ACP_MCP_AUTHORIZATION");
+    if (typeof url === "string" && typeof authorization === "string") return { url, authorization };
+  }
+  return undefined;
+}
+
+const MCP_PROTOCOL_VERSION = "2025-06-18";
+
+/** Calls one of T3's MCP tools over HTTP and returns its structured result. */
+async function callT3Tool(mcp: T3Mcp, name: string, args: object): Promise<unknown> {
+  let session: string | null = null;
+  const post = async (body: object) => {
+    const response = await fetch(mcp.url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        authorization: mcp.authorization,
+        "mcp-protocol-version": MCP_PROTOCOL_VERSION,
+        ...(session === null ? {} : { "mcp-session-id": session }),
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", ...body }),
+    });
+    session = response.headers.get("mcp-session-id") ?? session;
+    const text = await response.text();
+    // A reply is plain JSON or one server-sent event.
+    const json = text.trimStart().startsWith("{")
+      ? text
+      : text
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice("data:".length))
+          .at(-1);
+    return json === undefined || json.trim() === ""
+      ? undefined
+      : (JSON.parse(json) as { result?: unknown; error?: { message?: string } });
+  };
+  await post({
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: MCP_PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: "t3-dev-replay", version: "1" },
+    },
+  });
+  await post({ method: "notifications/initialized" });
+  const reply = await post({ id: 2, method: "tools/call", params: { name, arguments: args } });
+  if (reply?.error !== undefined) throw new Error(reply.error.message ?? `${name} failed`);
+  const result = reply?.result as
+    | {
+        structuredContent?: unknown;
+        isError?: boolean;
+        content?: ReadonlyArray<{ type?: string; text?: string }>;
+      }
+    | undefined;
+  const text = result?.content?.find((part) => part.type === "text")?.text;
+  if (result?.isError === true) throw new Error(text ?? `${name} failed`);
+  return result?.structuredContent ?? (text === undefined ? undefined : JSON.parse(text));
+}
+
 function runAgent(): void {
   const turnsByScenario = new Map<string, ReadonlyArray<ReplayTurn>>();
   const loadTurns = (scenarioId: string) => {
@@ -186,7 +268,13 @@ function runAgent(): void {
 
   const sessions = new Map<
     string,
-    { cwd: string; model: string; promptCount: number; cancel: (() => void) | undefined }
+    {
+      cwd: string;
+      model: string;
+      promptCount: number;
+      cancel: (() => void) | undefined;
+      mcp: T3Mcp | undefined;
+    }
   >();
   const pendingAgentRequests = new Map<string, (result: unknown) => void>();
   let nextAgentRequestId = 1;
@@ -271,6 +359,71 @@ function runAgent(): void {
     }
   };
 
+  /** Reads the board through T3's tools and adds a task for each note on it, in a section. */
+  const playBoardTurn = async (sessionId: string, signal: AbortSignal) => {
+    const mcp = sessions.get(sessionId)?.mcp;
+    const update = (sessionUpdate: Record<string, unknown>) =>
+      send({ method: "session/update", params: { sessionId, update: sessionUpdate } });
+    const say = async (text: string) => {
+      for (const chunk of streamChunks(text)) {
+        await sleep(CHUNK_DELAY_MS, signal);
+        if (signal.aborted) return;
+        update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: chunk } });
+      }
+    };
+    if (mcp === undefined) {
+      return say("This replay needs T3's tools, which this session did not get.");
+    }
+    const tool = async (name: string, args: object) => {
+      const toolCallId = `${NodeCrypto.randomUUID()}-${name}`;
+      update({
+        sessionUpdate: "tool_call",
+        toolCallId,
+        title: `mcp__t3-code__${name}`,
+        kind: "other",
+        status: "in_progress",
+        rawInput: args,
+      });
+      try {
+        const output = await callT3Tool(mcp, name, args);
+        update({
+          sessionUpdate: "tool_call_update",
+          toolCallId,
+          status: "completed",
+          rawOutput: output,
+        });
+        return output;
+      } catch (error) {
+        update({ sessionUpdate: "tool_call_update", toolCallId, status: "failed" });
+        throw error;
+      }
+    };
+    try {
+      const board = (await tool("t3_board_read", {})) as
+        | { cards?: ReadonlyArray<{ kind?: string; text?: string }> }
+        | undefined;
+      const notes = (board?.cards ?? [])
+        .filter((card) => card.kind === "note" && (card.text ?? "").trim() !== "")
+        .slice(0, 20);
+      if (signal.aborted) return;
+      if (notes.length === 0) return say("There are no notes on this board to turn into tasks.");
+      const added = (await tool("t3_board_add", {
+        section: "Tasks",
+        cards: notes.map((note) => ({ text: note.text, task: true })),
+      })) as { done?: ReadonlyArray<string>; refused?: ReadonlyArray<{ reason?: string }> };
+      const refused = added.refused ?? [];
+      await say(
+        `Added ${added.done?.length ?? 0} tasks to the "Tasks" section.${
+          refused.length === 0 ? "" : ` The board refused ${refused.length}: ${refused[0]?.reason}`
+        }`,
+      );
+    } catch (error) {
+      await say(
+        `The board tools failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  };
+
   const handleRequest = async (message: JsonRpcMessage): Promise<unknown> => {
     const params = message.params ?? {};
     switch (message.method) {
@@ -291,12 +444,18 @@ function runAgent(): void {
         const sessionId =
           message.method === "session/load" ? String(params.sessionId) : NodeCrypto.randomUUID();
         const cwd = typeof params.cwd === "string" ? params.cwd : process.cwd();
-        sessions.set(sessionId, { cwd, model: SCENARIOS[0].id, promptCount: 0, cancel: undefined });
+        sessions.set(sessionId, {
+          cwd,
+          model: SCENARIOS[0].id,
+          promptCount: 0,
+          cancel: undefined,
+          mcp: t3McpOf(params.mcpServers),
+        });
         return {
           ...(message.method === "session/new" ? { sessionId } : {}),
           models: {
             currentModelId: SCENARIOS[0].id,
-            availableModels: SCENARIOS.map((scenario) => ({
+            availableModels: MODELS.map((scenario) => ({
               modelId: scenario.id,
               name: scenario.name,
             })),
@@ -305,7 +464,7 @@ function runAgent(): void {
       }
       case "session/set_model": {
         const session = sessions.get(String(params.sessionId));
-        if (!SCENARIOS.some((scenario) => scenario.id === params.modelId)) {
+        if (!MODELS.some((scenario) => scenario.id === params.modelId)) {
           throw Object.assign(new Error(`Unknown replay scenario ${String(params.modelId)}`), {
             code: -32602,
           });
@@ -320,14 +479,16 @@ function runAgent(): void {
         const sessionId = String(params.sessionId);
         const session = sessions.get(sessionId);
         if (session === undefined) throw new Error(`Unknown session ${sessionId}`);
-        const turns = loadTurns(session.model);
+        const board = session.model === BOARD_SCENARIO.id;
+        const turns = board ? [] : loadTurns(session.model);
         const turn = turns[session.promptCount % Math.max(turns.length, 1)];
         session.promptCount += 1;
         const controller = new AbortController();
         session.cancel = () => controller.abort();
         let ended: "cancelled" | undefined;
         try {
-          if (turn !== undefined) ended = await playTurn(sessionId, turn, controller.signal);
+          if (board) await playBoardTurn(sessionId, controller.signal);
+          else if (turn !== undefined) ended = await playTurn(sessionId, turn, controller.signal);
         } finally {
           session.cancel = undefined;
         }

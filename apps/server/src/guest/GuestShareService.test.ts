@@ -512,7 +512,14 @@ it.effect("lets the owner and each guest change the board everyone on the link s
     );
     // The other guest's open page gets the note, signed, without characters nobody can see.
     assert.deepEqual((yield* Queue.take(boards)).notes, [
-      { id: "note:1", text: "Hidden", x: 4, y: 8, guestId: samId },
+      {
+        id: "note:1",
+        text: "Hidden",
+        x: 4,
+        y: 8,
+        guestId: samId,
+        changed: { at: DateTime.formatIso(yield* DateTime.now), guestId: samId },
+      },
     ]);
     yield* guestShares.changeBoard(
       { threadId },

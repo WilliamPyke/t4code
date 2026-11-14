@@ -97,6 +97,7 @@ import * as ReviewService from "./review/ReviewService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as GuestShareService from "./guest/GuestShareService.ts";
+import * as RoomBoardAgent from "./guest/RoomBoardAgent.ts";
 import * as RoomBoxes from "./guest/RoomBoxes.ts";
 import * as SharedRoomLink from "./guest/SharedRoomLink.ts";
 import * as SharedThreadJoin from "./guest/SharedThreadJoin.ts";
@@ -827,6 +828,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(SharedThreadJoin.SharedThreadJoin)({}),
   Layer.mock(SharedRoomLink.SharedRoomLink)({}),
   Layer.mock(RoomBoxes.RoomBoxes)({}),
+  Layer.mock(RoomBoardAgent.RoomBoardAgent)({}),
   Layer.mock(ServerLifecycleEvents.ServerLifecycleEvents)({}),
   Layer.mock(ServerRuntimeStartup.ServerRuntimeStartup)({}),
   Layer.mock(ServerSelfUpdate.ServerSelfUpdate)({}),

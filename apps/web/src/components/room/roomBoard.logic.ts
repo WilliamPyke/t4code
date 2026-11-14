@@ -43,6 +43,8 @@ import {
 } from "@t3tools/shared/roomBoard";
 import * as Schema from "effect/Schema";
 
+import { boardVotable } from "./boardVotes.logic";
+
 /** Where the board is scrolled to and how far it is zoomed. `x`/`y` are screen pixels. */
 export interface BoardView {
   readonly x: number;
@@ -78,6 +80,27 @@ export function zoomBoardAt(view: BoardView, anchor: BoardPoint, factor: number)
   const zoom = Math.min(BOARD_MAX_ZOOM, Math.max(BOARD_MIN_ZOOM, view.zoom * factor));
   const held = screenToBoard(view, anchor);
   return { zoom, x: anchor.x - held.x * zoom, y: anchor.y - held.y * zoom };
+}
+
+/**
+ * A two-finger pinch: from the view when it began, zoomed by how far the fingers spread and
+ * moved with their midpoint, so the board point first between them stays between them.
+ */
+export function pinchBoardView(
+  start: BoardView,
+  from: readonly [BoardPoint, BoardPoint],
+  to: readonly [BoardPoint, BoardPoint],
+): BoardView {
+  const middle = ([a, b]: readonly [BoardPoint, BoardPoint]) => ({
+    x: (a.x + b.x) / 2,
+    y: (a.y + b.y) / 2,
+  });
+  const spread = ([a, b]: readonly [BoardPoint, BoardPoint]) => Math.hypot(a.x - b.x, a.y - b.y);
+  const factor = spread(from) === 0 ? 1 : spread(to) / spread(from);
+  const zoom = Math.min(BOARD_MAX_ZOOM, Math.max(BOARD_MIN_ZOOM, start.zoom * factor));
+  const held = screenToBoard(start, middle(from));
+  const now = middle(to);
+  return { zoom, x: now.x - held.x * zoom, y: now.y - held.y * zoom };
 }
 
 // A wheel's notch is about 100px, a line 16px; a trackpad's pinch sends a few pixels at a time.
@@ -2043,12 +2066,15 @@ export function boardBoxName(box: BoardThreadBox, people: BoardPeople): string {
   return box.title === "" ? `${whose} thread` : `${whose} thread "${box.title}"`;
 }
 
+/** The box a request waits on: a request from a guest's side panel waits on the room thread. */
+const requestBoxId = (message: ThreadGuestMessage): string => message.boxId ?? ROOM_BOARD_ROOM_BOX;
+
 /** The guests' requests for a box still waiting for the owner, oldest first. */
 export const boardBoxRequests = (
   messages: ReadonlyArray<ThreadGuestMessage>,
   boxId: string,
 ): ReadonlyArray<ThreadGuestMessage> =>
-  messages.filter((message) => message.status === "pending" && message.boxId === boxId);
+  messages.filter((message) => message.status === "pending" && requestBoxId(message) === boxId);
 
 /**
  * A guest's messages still waiting that no thread box shows, for their own card: a request made
@@ -2063,7 +2089,7 @@ export const boardGuestWaiting = (
     (message) =>
       message.guestId === guestId &&
       message.status === "pending" &&
-      !boxes.some((box) => box.id === message.boxId),
+      !boxes.some((box) => box.id === requestBoxId(message)),
   );
 
 /**
@@ -2371,14 +2397,14 @@ export function boardCopySkipped(
 const TIDY_GAP = 24;
 
 /**
- * Where Tidy puts these items: a grid in their reading order (by rows as they sit, then left to
- * right), as near square as it goes, each column as wide as the widest item and each row as tall
- * as its tallest, with even gaps. It starts at their top-left corner when that is clear of
- * `taken`, and else at the nearest clear spot right of or below it, never up into what is above.
+ * Where Tidy puts these items: a near-square grid in reading order (or as `order` reorders it),
+ * columns as wide as the widest item, rows as tall as their tallest, even gaps. It starts at their
+ * top-left corner when clear of `taken`, else at the nearest clear spot right of or below it.
  */
-export function boardTidy(
-  items: ReadonlyArray<{ readonly ref: string; readonly rect: BoardRect }>,
+export function boardTidy<T extends { readonly ref: string; readonly rect: BoardRect }>(
+  items: ReadonlyArray<T>,
   taken: ReadonlyArray<BoardRect>,
+  order: (inReadingOrder: ReadonlyArray<T>) => ReadonlyArray<T> = (same) => same,
 ): Array<{ readonly ref: string; readonly x: number; readonly y: number }> {
   const bounds = boardBounds(items.map(({ rect }) => rect));
   if (bounds === null) return [];
@@ -2391,7 +2417,9 @@ export function boardTidy(
       rowEnd = item.rect.y + item.rect.height / 2;
     } else row.push(item);
   }
-  const ordered = rows.flatMap((row) => row.toSorted((left, right) => left.rect.x - right.rect.x));
+  const ordered = order(
+    rows.flatMap((row) => row.toSorted((left, right) => left.rect.x - right.rect.x)),
+  );
   const columns = Math.ceil(Math.sqrt(ordered.length));
   const cell = Math.max(...ordered.map(({ rect }) => rect.width));
   const heights: Array<number> = [];
@@ -2660,6 +2688,8 @@ export type BoardMenuEntry =
   | "copy"
   | "copy-link"
   | "tidy"
+  | "sort-votes"
+  | "vote"
   | "group"
   | "delete";
 
@@ -2727,6 +2757,9 @@ export function boardMenuEntries(
     return entries;
   }
   add("tidy", rights.canEdit && on.count > 1);
+  // Votes are reactions, which only a room's board takes.
+  add("sort-votes", rights.canEdit && rights.roomBoard && on.count > 1);
+  add("vote", rights.canEdit && rights.roomBoard && notes.some(boardVotable));
   add("group", rights.canAdd && rights.roomBoard);
   add("delete", rights.canEdit && notes.some((note) => isRoomCardOwnedBy(note, rights.viewer)));
   return entries;

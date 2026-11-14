@@ -3,6 +3,17 @@ import { type CSSProperties, createContext, use, useSyncExternalStore } from "re
 
 const TICK_MS = 1_000;
 const NO_RUNNING: ReadonlyArray<RoomAgentActivity> = [];
+/** How often the minimap's pointer dots may move: they are a few pixels, so this is plenty. */
+const POINTER_STEP_MS = 200;
+const NO_POINTERS: ReadonlyArray<BoardPointer> = [];
+
+/** Someone else's pointer, in board pixels and their colour. */
+export interface BoardPointer {
+  readonly key: string;
+  readonly color: string;
+  readonly x: number;
+  readonly y: number;
+}
 
 /** How long a card someone let go is held where it landed while the stored board catches up. */
 export const BOARD_DRAG_LANDING_MS = 3_000;
@@ -146,6 +157,10 @@ export interface RoomLiveStore {
   readonly setDraggers: (draggers: ReadonlyArray<BoardDragger>) => void;
   readonly subscribeDrags: (listener: () => void) => () => void;
   readonly drag: (ref: string) => BoardLiveDrag | undefined;
+  /** Everyone else's pointers; listeners hear of them at most every `POINTER_STEP_MS`. */
+  readonly setPointers: (pointers: ReadonlyArray<BoardPointer>) => void;
+  readonly subscribePointers: (listener: () => void) => () => void;
+  readonly pointers: () => ReadonlyArray<BoardPointer>;
 }
 
 const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -164,6 +179,20 @@ export function createRoomLiveStore(): RoomLiveStore {
   let draggers: ReadonlyArray<BoardDragger> = [];
   let drags: ReadonlyMap<string, BoardLiveDrag> = new Map();
   let landingTimer: ReturnType<typeof setTimeout> | null = null;
+  const pointerListeners = new Set<() => void>();
+  let pointers = NO_POINTERS;
+  let pendingPointers: ReadonlyArray<BoardPointer> | null = null;
+  let pointerTimer: ReturnType<typeof setTimeout> | null = null;
+  const flushPointers = () => {
+    pointerTimer = null;
+    if (pendingPointers === null) return;
+    const next = pendingPointers;
+    pendingPointers = null;
+    if (sameJson(next, pointers)) return;
+    pointers = next.length === 0 ? NO_POINTERS : next;
+    for (const listener of pointerListeners) listener();
+    pointerTimer = setTimeout(flushPointers, POINTER_STEP_MS);
+  };
   const mergeDrags = () => {
     const at = Date.now();
     const next = mergeBoardDrags(drags, draggers, at);
@@ -257,6 +286,15 @@ export function createRoomLiveStore(): RoomLiveStore {
       return () => dragListeners.delete(listener);
     },
     drag: (ref) => drags.get(ref),
+    setPointers: (next) => {
+      pendingPointers = next;
+      if (pointerTimer === null) flushPointers();
+    },
+    subscribePointers: (listener) => {
+      pointerListeners.add(listener);
+      return () => pointerListeners.delete(listener);
+    },
+    pointers: () => pointers,
   };
 }
 
@@ -296,6 +334,12 @@ export function useCommentProgress(commentId: string): RoomBoxProgress | undefin
 export function useBoardLiveDrag(ref: string): BoardLiveDrag | undefined {
   const store = use(RoomLiveContext);
   return useSyncExternalStore(store.subscribeDrags, () => store.drag(ref));
+}
+
+/** Everyone else's pointers, for the minimap's dots. */
+export function useBoardPointers(): ReadonlyArray<BoardPointer> {
+  const store = use(RoomLiveContext);
+  return useSyncExternalStore(store.subscribePointers, store.pointers);
 }
 
 /** The board's clock, which ticks once a second only while a run is in flight. */

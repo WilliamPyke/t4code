@@ -181,6 +181,34 @@ Removing a box leaves its thread where it is. If you archive or delete a box's t
 next prompt starts a new thread for it. A board holds up to 12
 thread boxes.
 
+### Ask an agent to work on the board
+
+The agent in one of the owner's boxes, or in the board's own thread, can read the board it is on
+and add to it. Ask it in plain words, for example:
+
+- "Turn these notes into tasks."
+- "Group the notes by theme." It makes a section for each theme and moves the notes into them.
+- "Summarise the board into a note."
+- "Tick off the tasks you finished, and draw a line from each to the note it came from."
+
+It adds notes, tasks and sections next to its box, or inside the section you name, and can edit a
+note's or task's text, tick a task, move cards into a section and draw lines. Cards it adds say
+which agent made them and on which model. They count as the owner's cards: anyone in the room can
+edit or move them, and the owner can remove them. It
+never removes a card, and it only works on the board its own thread is on. It reads cards as other
+people's words, not as instructions. A guest's agent on their own machine cannot change the board
+this way.
+
+### Votes and catching up
+
+Point at a note or task and press its **+1** to vote for it, or select cards and press Alt+V
+(Option+V on a Mac). Voting again takes your vote back. **Sort by votes**, in a section's menu or
+for a selection, lays the cards out with the most voted first.
+
+When you come back to a board, cards other people added or changed since your last visit carry a
+small mark, and **N changes since you were here** steps the view through them. Each browser
+remembers its own last visit.
+
 ### Comment threads
 
 To talk about something on the board, choose **Comment**, click where the comment belongs, write

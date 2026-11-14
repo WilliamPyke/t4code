@@ -29,7 +29,8 @@ function writePanelWidth(width: number) {
 
 /**
  * The board with a conversation beside it. The split is dragged from the line between them and
- * kept per browser. On a narrow window the conversation covers the board. A closed panel stays
+ * kept per browser. On a narrow window the conversation is a sheet over the board, below its
+ * header. A closed panel stays
  * mounted and hidden, so its draft and scroll survive; a null one is not mounted at all.
  */
 export function BoardSplit({
@@ -97,7 +98,7 @@ export function BoardSplit({
             ref={panelRef}
             aria-label="Conversation"
             className={cn(
-              "z-20 flex min-h-0 flex-col bg-background max-md:absolute max-md:inset-0 md:w-(--board-panel-width) md:shrink-0",
+              "z-20 flex min-h-0 flex-col bg-background max-md:absolute max-md:z-40 max-md:inset-x-0 max-md:top-14 max-md:bottom-0 max-md:overflow-hidden max-md:rounded-t-xl max-md:border-t max-md:border-board-hairline max-md:shadow-board md:w-(--board-panel-width) md:shrink-0",
               !open && "hidden",
             )}
             style={
