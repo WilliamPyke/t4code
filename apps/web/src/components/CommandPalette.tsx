@@ -65,6 +65,7 @@ import {
   FolderIcon,
   FolderPlusIcon,
   LayoutGridIcon,
+  LayoutTemplateIcon,
   MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
@@ -254,7 +255,7 @@ import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
 import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
 import { openGuestShareDialog } from "./chat/guestShareDialogState";
 import { roomBoardLocation } from "./room/roomBoardNavigation";
-import { useStartNewBoard } from "./boards/newBoard";
+import { openBoardTemplates, useStartNewBoard } from "./boards/newBoard";
 import { openUseInAnotherApp } from "./mcp/UseInAnotherAppDialog";
 import { openNewTeamDialog } from "./teams/NewTeamDialog";
 import { useTeams } from "../teams/teams";
@@ -1294,6 +1295,16 @@ function OpenCommandPaletteDialog(props: {
       shortcutCommand: "boards.new",
       run: async () => {
         await startNewBoard();
+      },
+    },
+    {
+      kind: "action",
+      value: "action:new-board-template",
+      searchTerms: ["new board from template", "template", "board", "plan", "retro", "bug bash"],
+      title: "New board from template…",
+      icon: <LayoutTemplateIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        openBoardTemplates();
       },
     },
   );

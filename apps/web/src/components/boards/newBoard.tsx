@@ -5,11 +5,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-import {
-  DEFAULT_PROVIDER_INTERACTION_MODE,
-  ROOM_BOARD_THREAD_CARD,
-  type ScopedThreadRef,
-} from "@t3tools/contracts";
+import { DEFAULT_PROVIDER_INTERACTION_MODE, type ScopedThreadRef } from "@t3tools/contracts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { useNavigate } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
@@ -20,7 +16,7 @@ import { isCommandPaletteOpen, openCommandPalette } from "~/commandPaletteBus";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import { useScratchProject } from "~/hooks/useScratchProject";
 import { registerCommands } from "~/shortcuts/dispatcher";
-import { newThreadId } from "~/lib/utils";
+import { newThreadId, randomUUID } from "~/lib/utils";
 import { resolveProjectDefaultProviderModelSelection } from "~/providerInstances";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useProjects, useThreadShells } from "~/state/entities";
@@ -46,7 +42,16 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { toastManager } from "../ui/toast";
+import { BoardThumbnail } from "./BoardThumbnail";
+import { fitRoomBoardOnOpen, roomBoardViewKey } from "../room/roomBoardNavigation";
 import { nameBoardOnOpen } from "./BoardTitle";
+import {
+  BLANK_BOARD_TEMPLATE,
+  BOARD_TEMPLATES,
+  type BoardTemplate,
+  boardTemplateChanges,
+  boardTemplateShapes,
+} from "./boardTemplates";
 import {
   UNTITLED_BOARD,
   listHomeBoards,
@@ -74,11 +79,20 @@ const rememberLastProject = (project: EnvironmentProject) => {
   }
 };
 
-const pickerOpenAtom = Atom.make(false).pipe(
+// The template a board waits to be made with while the user picks its project.
+const pickerOpenAtom = Atom.make<BoardTemplate | null>(null).pipe(
   Atom.keepAlive,
   Atom.withLabel("boards:new-board-picker"),
 );
-const closePicker = () => appAtomRegistry.set(pickerOpenAtom, false);
+const closePicker = () => appAtomRegistry.set(pickerOpenAtom, null);
+
+const templatesOpenAtom = Atom.make(false).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("boards:new-board-templates"),
+);
+/** Opens the choice of what a new board starts with. */
+export const openBoardTemplates = () => appAtomRegistry.set(templatesOpenAtom, true);
+const closeTemplates = () => appAtomRegistry.set(templatesOpenAtom, false);
 
 /** Where a board opens right after it is made: full size, no conversation beside it. */
 const newBoardLocation = (ref: ScopedThreadRef) => ({
@@ -101,7 +115,10 @@ function useCreateBoard() {
   const changeBoard = useAtomCommand(serverEnvironment.changeGuestBoard, {
     reportFailure: false,
   });
-  return async (project: EnvironmentProject): Promise<boolean> => {
+  return async (
+    project: EnvironmentProject,
+    template: BoardTemplate = BLANK_BOARD_TEMPLATE,
+  ): Promise<boolean> => {
     const settings = environments.find((entry) => entry.environmentId === project.environmentId)
       ?.serverConfig?.settings;
     const projectSettings =
@@ -148,16 +165,28 @@ function useCreateBoard() {
       }
       return false;
     }
-    // An unshared board with nothing on it is not kept; placing the thread's own card keeps it.
-    await changeBoard({
-      environmentId: project.environmentId,
-      input: {
-        threadId,
-        change: { type: "card.move", cardId: ROOM_BOARD_THREAD_CARD, x: 80, y: 72 },
-      },
-    });
+    // An unshared board with nothing on it is not kept; placing the thread's own card, which
+    // every template does first, keeps it. One at a time: a line waits for the cards it joins.
+    let notes = 0;
+    for (const change of boardTemplateChanges(template, randomUUID)) {
+      const changed = await changeBoard({
+        environmentId: project.environmentId,
+        input: { threadId, change },
+      });
+      if (changed._tag === "Failure") {
+        toastManager.add({
+          type: "error",
+          title: "Some of the template is missing",
+          description: "The board was made, but not all of its cards could be added.",
+        });
+        break;
+      }
+      if (change.type === "note.put") notes += 1;
+    }
     rememberLastProject(project);
     const ref = scopeThreadRef(project.environmentId, threadId);
+    // A template's board opens showing all of it, once its cards reach this page.
+    if (notes > 0) fitRoomBoardOnOpen(roomBoardViewKey(ref), notes);
     // Typing on a new board names it; it never reaches a prompt the user has not clicked into.
     nameBoardOnOpen(ref);
     void navigate(newBoardLocation(ref));
@@ -175,18 +204,18 @@ export function useStartNewBoard() {
   const createBoard = useCreateBoard();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { scratchEnvironmentId, openScratchProject } = useScratchProject();
-  return async () => {
+  return async (template: BoardTemplate = BLANK_BOARD_TEMPLATE) => {
     const decision = newBoardProject({
       projects,
       boards: listHomeBoards({ threads, joined: [], teams: [], isOwnEnvironment: () => true }),
       lastUsed: readLastProject(),
     });
     if (decision.kind === "use") {
-      await createBoard(decision.project);
+      await createBoard(decision.project, template);
       return;
     }
     if (decision.kind === "ask") {
-      appAtomRegistry.set(pickerOpenAtom, true);
+      appAtomRegistry.set(pickerOpenAtom, template);
       return;
     }
     const environmentId = scratchEnvironmentId(primaryEnvironmentId);
@@ -195,7 +224,7 @@ export function useStartNewBoard() {
         ? null
         : await openScratchProject(environmentId, "Could not start a board");
     if (scratch !== null) {
-      await createBoard(scratch);
+      await createBoard(scratch, template);
       return;
     }
     openCommandPalette({ open: "add-project" });
@@ -204,11 +233,13 @@ export function useStartNewBoard() {
 
 /** Hosted once at the root, so every New board can ask which project when it has to. */
 export function NewBoardDialogHost() {
-  const pickerOpen = useAtomValue(pickerOpenAtom);
+  const pending = useAtomValue(pickerOpenAtom);
+  const templatesOpen = useAtomValue(templatesOpenAtom);
   return (
     <>
       <BoardShortcuts />
-      {pickerOpen ? <NewBoardProjectPicker /> : null}
+      {templatesOpen ? <NewBoardTemplatePicker /> : null}
+      {pending === null ? null : <NewBoardProjectPicker template={pending} />}
     </>
   );
 }
@@ -242,7 +273,7 @@ function BoardShortcuts() {
   return null;
 }
 
-function NewBoardProjectPicker() {
+function NewBoardProjectPicker({ template }: { readonly template: BoardTemplate }) {
   const projects = useProjects();
   const threads = useThreadShells();
   const createBoard = useCreateBoard();
@@ -277,13 +308,60 @@ function NewBoardProjectPicker() {
                   disabled={pending}
                   onClick={async () => {
                     setPending(true);
-                    const made = await createBoard(project);
+                    const made = await createBoard(project, template);
                     setPending(false);
                     if (made) closePicker();
                   }}
                 >
                   <span className="min-w-0 truncate">{project.title}</span>
                 </Button>
+              </li>
+            ))}
+          </ul>
+        </DialogPanel>
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
+/** What a new board starts with: blank, the first and focused choice, or a template. */
+function NewBoardTemplatePicker() {
+  const startNewBoard = useStartNewBoard();
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) closeTemplates();
+      }}
+    >
+      <DialogPopup className="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>New board</DialogTitle>
+          <DialogDescription>Start blank, or from a layout to fill in.</DialogDescription>
+        </DialogHeader>
+        <DialogPanel>
+          <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3" data-new-board-templates>
+            {BOARD_TEMPLATES.map((template, index) => (
+              <li key={template.id}>
+                <button
+                  type="button"
+                  // Blank is the default, so Enter makes the board New board always made.
+                  autoFocus={index === 0}
+                  className="flex h-full w-full flex-col overflow-hidden rounded-board border border-board-hairline bg-card text-start shadow-paint outline-none transition-shadow hover:shadow-board focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                  data-board-template={template.id}
+                  onClick={() => {
+                    closeTemplates();
+                    void startNewBoard(template);
+                  }}
+                >
+                  <span className="border-b border-board-hairline">
+                    <BoardThumbnail shapes={boardTemplateShapes(template)} />
+                  </span>
+                  <span className="flex flex-col gap-0.5 p-2.5">
+                    <span className="text-sm font-semibold">{template.name}</span>
+                    <span className="text-xs text-muted-foreground">{template.description}</span>
+                  </span>
+                </button>
               </li>
             ))}
           </ul>

@@ -35,22 +35,26 @@ export function RoomArtifactBody({
   if (draft !== undefined) {
     return (
       <div className="flex min-h-0 flex-1 flex-col border-t border-board-hairline">
+        {/* Reversed, so it opens at the newest text and stays there as more streams in. */}
         <div
           data-board-scroll
           data-board-text
-          className="min-h-0 flex-1 cursor-auto overflow-auto px-3 py-2"
+          aria-busy
+          className="flex min-h-0 flex-1 cursor-auto flex-col-reverse overflow-auto px-3 py-2"
           onPointerDown={stopPointer}
         >
-          {boardDraftIsPage(draft) ? (
-            <pre
-              aria-label="Page being written"
-              className="font-mono text-2xs whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]"
-            >
-              {draft}
-            </pre>
-          ) : (
-            <ChatMarkdown text={draft} cwd={undefined} />
-          )}
+          <div>
+            {boardDraftIsPage(draft) ? (
+              <pre
+                aria-label="Page being written"
+                className="font-mono text-2xs whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]"
+              >
+                {draft}
+              </pre>
+            ) : (
+              <ChatMarkdown text={draft} cwd={undefined} />
+            )}
+          </div>
         </div>
       </div>
     );

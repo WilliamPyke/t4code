@@ -38,7 +38,7 @@ import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { ensureLocalApi } from "~/localApi";
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
-import { useQuietThreadProjection } from "~/state/entities";
+import { useQuietThreadProjection, useQuietThreadShell } from "~/state/entities";
 import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "~/hooks/useSettings";
 import { useEnvironmentProviders } from "~/state/environments";
 import { serverEnvironment } from "~/state/server";
@@ -77,6 +77,7 @@ import { type ChatFileAttachment, isImageAttachment } from "../../types";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { GuestMessageAttachments } from "./GuestMessageAttachments";
 import { GuestMessageName, guestBubbleClassName } from "./guestMessageStyle";
+import { ThreadBoardModelPicker, composerDraftPick } from "../room/BoardModelPicker";
 import { roomBoardLocation } from "../room/roomBoardNavigation";
 import { GuestTurnList } from "./GuestTurnList";
 import { linkEndsLabel, linkEndsSoon, linkLifetimeDays } from "./guestLinkTiming";
@@ -877,13 +878,14 @@ export function GuestPendingMessages({
   onFileOpen,
 }: {
   readonly threadRef: ScopedThreadRef;
-  /** The composer's model, when the owner picked one that differs from the thread's. */
+  /** The composer's model, which the picker shows until the thread has loaded. */
   readonly modelSelection: ModelSelection | undefined;
   readonly onImageExpand: (preview: ExpandedImagePreview) => void;
   readonly onFileOpen: (attachment: ChatFileAttachment) => void;
 }) {
   const share = useThreadGuestShare(threadRef);
   const { canOperate, busyIds, resolve: resolveMessage } = useGuestMessageResolver(threadRef);
+  const projectId = useQuietThreadShell(threadRef)?.projectId ?? null;
   const pending = share?.messages.filter((message) => message.status === "pending") ?? [];
   // The files are the thread's attachments, which the owner's environment serves like any other.
   const images = pending.flatMap((message) => message.attachments ?? []).filter(isImageAttachment);
@@ -906,8 +908,13 @@ export function GuestPendingMessages({
     if (preview) onImageExpand(preview);
   };
 
+  // What the picker shows: the composer's pick, else the thread's own model.
   const resolve = (guestMessageId: GuestMessageId, decision: "send" | "dismiss") =>
-    resolveMessage(guestMessageId, decision, modelSelection);
+    resolveMessage(
+      guestMessageId,
+      decision,
+      composerDraftPick(useComposerDraftStore.getState().getComposerDraft(threadRef)),
+    );
 
   return (
     <ol
@@ -953,6 +960,11 @@ export function GuestPendingMessages({
             )}
             {canOperate ? (
               <div className="flex items-center gap-1 pe-1">
+                <ThreadBoardModelPicker
+                  threadRef={threadRef}
+                  projectId={projectId}
+                  fallback={modelSelection ?? null}
+                />
                 <Button
                   size="xs"
                   variant="ghost-muted"

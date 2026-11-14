@@ -1,5 +1,14 @@
+import { ROOM_BOARD_MAX_NOTES, ROOM_BOARD_THREAD_CARD, type RoomBoard } from "@t3tools/contracts";
+import { EMPTY_ROOM_BOARD, applyRoomBoardChange } from "@t3tools/shared/roomBoard";
+import * as Result from "effect/Result";
 import { describe, expect, it } from "vite-plus/test";
 
+import {
+  BLANK_BOARD_TEMPLATE,
+  BOARD_TEMPLATES,
+  boardTemplateChanges,
+  boardTemplateShapes,
+} from "./boardTemplates";
 import {
   type OwnBoardSource,
   boardThumbnail,
@@ -161,5 +170,42 @@ describe("newBoardProject", () => {
       kind: "use",
       project: b,
     });
+  });
+});
+
+describe("board templates", () => {
+  const scope = {
+    hasCard: (cardId: string) => cardId === ROOM_BOARD_THREAD_CARD,
+    hasPerson: () => false,
+  };
+
+  it.each(BOARD_TEMPLATES.map((template) => [template.name, template] as const))(
+    "%s lays out cleanly on a new board, within its limits",
+    (_name, template) => {
+      let next = 0;
+      const changes = boardTemplateChanges(template, () => `id-${(next += 1)}`);
+      const board = changes.reduce<RoomBoard>((current, change) => {
+        const after = Result.getOrThrow(
+          applyRoomBoardChange(current, scope, null, change, "2026-11-14T00:00:00.000Z"),
+        );
+        expect(after).not.toBe(current);
+        return after;
+      }, EMPTY_ROOM_BOARD);
+      const noteIds = board.notes.map((note) => note.id);
+      const edgeIds = (board.edges ?? []).map((edge) => edge.id);
+      expect(new Set([...noteIds, ...edgeIds]).size).toBe(noteIds.length + edgeIds.length);
+      expect(board.notes).toHaveLength(template.items.length);
+      expect(board.notes.length).toBeLessThanOrEqual(ROOM_BOARD_MAX_NOTES);
+      expect(board.edges ?? []).toHaveLength(template.lines.length);
+      expect(board.positions[ROOM_BOARD_THREAD_CARD]).toEqual(template.thread);
+      expect(boardTemplateShapes(template)).toHaveLength(template.items.length + 1);
+    },
+  );
+
+  it("starts a blank board exactly as before: its thread box placed and nothing else", () => {
+    expect(boardTemplateChanges(BLANK_BOARD_TEMPLATE, () => "unused")).toEqual([
+      { type: "card.move", cardId: ROOM_BOARD_THREAD_CARD, x: 80, y: 72 },
+    ]);
+    expect(BOARD_TEMPLATES[0]).toBe(BLANK_BOARD_TEMPLATE);
   });
 });

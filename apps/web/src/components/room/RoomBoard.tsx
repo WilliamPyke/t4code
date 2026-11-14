@@ -45,6 +45,7 @@ import {
   LayoutGridIcon,
   LinkIcon,
   ListTodoIcon,
+  MapIcon,
   MessageCirclePlusIcon,
   MessageSquareShareIcon,
   MessageSquareTextIcon,
@@ -160,6 +161,7 @@ import {
   boardGroupMove,
   boardHistoryChanges,
   boardHistoryWith,
+  boardStepBefore,
   boardItemsInRect,
   boardItemsCentredIn,
   boardSectionAround,
@@ -168,6 +170,7 @@ import {
   boardNoteBox,
   boardNoteMessage,
   boardNewNoteSize,
+  boardNextNoteSpot,
   boardNoteQuote,
   boardNoteSize,
   boardOwnBoxFor,
@@ -211,7 +214,12 @@ import {
   wheelZoomFactor,
   zoomBoardAt,
 } from "./roomBoard.logic";
-import { rememberRoomBoardView, rememberedRoomBoardView } from "./roomBoardNavigation";
+import {
+  forgetRoomBoardFitOnOpen,
+  rememberRoomBoardView,
+  rememberedRoomBoardView,
+  roomBoardFitAwaits,
+} from "./roomBoardNavigation";
 import { RoomArtifactLive } from "./RoomBoardArtifact";
 import { type ReadRoomCodePatch, RoomCodeWindow } from "./RoomBoardCode";
 import { PullRequestStateIcon, RoomPullRequestWindow } from "./RoomBoardPullRequest";
@@ -229,6 +237,7 @@ import {
   CardActionsMenu,
   type CardMenu,
 } from "./RoomBoardCardMenu";
+import { BoardMinimap, useBoardMinimap } from "./BoardMinimap";
 import { WhatItDoes, WhyNot } from "./RoomBoardWhy";
 import { BoardHistoryButtons } from "./RoomBoardHistory";
 import { AddReaction, ReactionChips } from "./RoomBoardReactions";
@@ -490,6 +499,12 @@ const boardAreaOf = (surface: HTMLElement | null): BoardArea | null => {
     height: surface.clientHeight,
   };
 };
+
+/** A note or task, which Ctrl+Enter and its + follow with a blank one beside it. */
+const followsOn = (note: RoomBoardNote) =>
+  note.section !== true &&
+  note.pinnedTo === undefined &&
+  (note.kind === undefined || note.kind === "task");
 
 /** Where an item is drawn on the board and how big, in board pixels. */
 const drawnRect = (element: HTMLElement): BoardRect => ({
@@ -874,14 +889,19 @@ export function RoomBoard({
     surface.addEventListener("wheel", onWheel, { passive: false });
     return () => surface.removeEventListener("wheel", onWheel);
   }, []);
-  // The board opens showing every card, once: after that the view is the viewer's to move.
-  const fittable = cards === undefined ? room !== null : cards.length + shown.notes.length > 0;
+  // The board opens showing every card, once: after that the view is the viewer's to move. A
+  // board just made from a template waits for its cards, which can reach it after it opens.
+  const [fitAwaits] = useState(() => (viewKey === undefined ? 0 : roomBoardFitAwaits(viewKey)));
+  const fittable =
+    (cards === undefined ? room !== null : cards.length + shown.notes.length > 0) &&
+    shown.notes.length >= fitAwaits;
   const fitFirst = useStableCallback(() => {
     const area = boardAreaOf(surfaceRef.current);
     if (fitted.current || !fittable || area === null || area.width === 0 || area.height === 0) {
       return;
     }
     fitted.current = true;
+    if (viewKey !== undefined) forgetRoomBoardFitOnOpen(viewKey);
     const rects = drawnRectsIn(surfaceRef.current);
     setView((current) =>
       current === INITIAL_BOARD_VIEW ||
@@ -1064,7 +1084,7 @@ export function RoomBoard({
     if (onChange === undefined) return;
     const key = boardEditKey(target);
     held.current.delete(key);
-    const before = gestureFrom.current.get(key) ?? boardValueOf(shown, target);
+    const before = boardStepBefore(gestureFrom.current, shown, target);
     gestureFrom.current.delete(key);
     // Deleting a card cannot be taken back: its content and lines are not kept here.
     const undoable =
@@ -1153,10 +1173,17 @@ export function RoomBoard({
     });
   // A section dragged on its own carries what sits over it when the drag starts.
   const carried = useRef(new Map<string, ReadonlyArray<BoardSelected>>());
+  // The copies an Alt-drag carries, and how far it has gone in board pixels, until it lands.
+  const altCopies = useRef<{
+    readonly notes: ReadonlyArray<RoomBoardNote>;
+    dx: number;
+    dy: number;
+  } | null>(null);
   // Escape mid-gesture: everything held goes back where it was, nothing is sent, and everyone
   // else's view of the drag ends now rather than landing.
   const cancelGesture = () => {
     const keys = new Set(held.current.keys());
+    altCopies.current = null;
     held.current.clear();
     gestureFrom.current.clear();
     carried.current.clear();
@@ -1289,6 +1316,34 @@ export function RoomBoard({
     event: PointerEvent<HTMLElement>,
   ) => {
     const target = { kind: "note", id: note.id } as const;
+    // Alt held as a drag starts leaves the originals, and their lines, where they are: copies
+    // follow the pointer instead.
+    if (
+      altCopies.current === null &&
+      event.altKey &&
+      canEdit &&
+      !held.current.has(boardEditKey(target))
+    ) {
+      const copies = boardDuplicates(
+        (inGroup(target) ? selectedNotes : [note]).map(noteNow),
+        viewer,
+        randomUUID,
+      ).slice(0, Math.max(0, ROOM_BOARD_MAX_NOTES - shown.notes.length));
+      if (copies.length > 0)
+        altCopies.current = { notes: copies.map(({ note }) => note), dx: 0, dy: 0 };
+    }
+    const copying = altCopies.current;
+    if (copying !== null) {
+      copying.dx += dx / view.zoom;
+      copying.dy += dy / view.zoom;
+      for (const copy of copying.notes) {
+        hold(
+          { kind: "note", id: copy.id },
+          { ...copy, x: copy.x + copying.dx, y: copy.y + copying.dy },
+        );
+      }
+      return sendDrag();
+    }
     dragBy(target, note, dx, dy);
     if (onUseNote === undefined && !canGive) return;
     // Only a card a drop does something on lights up, with what that is; over any other it moves.
@@ -1348,6 +1403,15 @@ export function RoomBoard({
   };
   // Dropped on the thread or on this person's own agent, a card becomes a draft and goes back.
   const dropNote = (note: RoomBoardNote) => {
+    const copying = altCopies.current;
+    if (copying !== null) {
+      altCopies.current = null;
+      release(() => {
+        for (const copy of copying.notes) letGo({ kind: "note", id: copy.id });
+      });
+      setSelection(new Set(copying.notes.map((copy) => noteRef(copy.id))));
+      return;
+    }
     const target = { kind: "note", id: note.id } as const;
     const hand =
       dropTarget === null || inGroup(target) ? undefined : handOf(note, dropTarget.on)?.run;
@@ -1392,6 +1456,7 @@ export function RoomBoard({
             onChange({ type: "note.react", noteId: note.id, emoji }),
           )
       : undefined;
+  const [minimapShown, toggleMinimap] = useBoardMinimap();
   const zoomBy = (factor: number) => {
     const area = boardAreaOf(surfaceRef.current);
     const center = { x: (area?.width ?? 0) / 2, y: (area?.height ?? 0) / 2 };
@@ -1627,6 +1692,28 @@ export function RoomBoard({
     const copies = copiesOf(selectedNotes);
     landCopies(copies);
     sayCopied(copies.length);
+  };
+  /** A blank note of the same kind, paint and size just right of `note`, selected; null if none fits. */
+  const addNextNote = (note: RoomBoardNote) => {
+    const element = drawnItem(noteRef(note.id));
+    if (!canEdit || full || !followsOn(note) || element === null) return null;
+    const from = drawnRect(element);
+    const size = note.size ?? boardNewNoteSize(note.kind);
+    const id = randomUUID();
+    const value = settleBoardValue({
+      id,
+      text: "",
+      ...boardNextNoteSpot(from, size, takenRects()),
+      ...(viewer === null ? {} : { guestId: viewer }),
+      ...(note.kind === undefined ? {} : { kind: note.kind }),
+      ...(note.size === undefined ? {} : { size: note.size }),
+      ...(note.color === undefined ? {} : { color: note.color }),
+    });
+    send({ kind: "note", id }, value);
+    lastCard.current = noteRef(id);
+    setSelection(new Set([noteRef(id)]));
+    reveal({ x: value.x, y: value.y, width: size.w, height: size.h }, true);
+    return id;
   };
   // Copied cards stay on this board only. What went on the system clipboard with them tells a
   // paste of them from a paste of something copied since, elsewhere.
@@ -2117,6 +2204,36 @@ export function RoomBoard({
   // The room thread's card, and a person's or an agent's: not notes, with menus of their own.
   const isFixedCard = (ref: string | null) =>
     ref !== null && menuNoteOf(ref) === undefined && ref.startsWith(cardRef(""));
+  const followAction = (guest: { readonly id: GuestId; readonly name: string }) =>
+    online.includes(guest.id) && guest.id !== viewer
+      ? [{ label: `Follow ${guest.name}`, run: () => follow.onFollow(guest.id) }]
+      : [];
+  const fixedCardActions = (ref: string): ReadonlyArray<CardAction> => {
+    const box = threadBoxes.find((candidate) => boardBoxRef(candidate.id) === ref);
+    const guest = guestCards.find((one) => cardRef(guestCardId(one)) === ref);
+    const agent = agents.find((one) => cardRef(agentCardId(one.guest)) === ref);
+    const workingOn = agent?.running?.artifactId ?? agent?.running?.taskId;
+    const workedOn = workingOn === undefined ? null : drawnItem(noteRef(workingOn));
+    return [
+      ...(box === undefined ? [] : boxMenuActions(box)),
+      ...(ref === cardRef(ROOM_BOARD_THREAD_CARD)
+        ? [{ label: "Open thread", run: onOpenThread }]
+        : []),
+      ...(guest === undefined ? [] : followAction(guest)),
+      ...(workingOn === undefined || workedOn === null
+        ? []
+        : [
+            {
+              label: "Show what it's working on",
+              run: () => {
+                setSelection(new Set([noteRef(workingOn)]));
+                reveal(drawnRect(workedOn));
+              },
+            },
+          ]),
+      ...(agent === undefined ? [] : followAction(agent.guest)),
+    ];
+  };
   /** Opens the right-click menu at a point on screen, for the card there, which it selects. */
   const openMenu = (x: number, y: number, ref: string | null) => {
     const note = menuNoteOf(ref)?.id;
@@ -2221,23 +2338,12 @@ export function RoomBoard({
         ? undefined
         : threadBoxes.find((candidate) => boardBoxRef(candidate.id) === ref);
     const boxEntries = box === undefined ? [] : boxMenuActions(box);
-    const guest = fixed ? guestCards.find((one) => cardRef(guestCardId(one)) === ref) : undefined;
     const own = note === undefined || several ? undefined : noteMenu(note);
     const card: CardMenu | undefined =
       own !== undefined
         ? { ...own, actions: [...boxEntries, ...own.actions] }
-        : fixed
-          ? {
-              actions: [
-                ...boxEntries,
-                ...(ref === cardRef(ROOM_BOARD_THREAD_CARD)
-                  ? [{ label: "Open thread", run: onOpenThread }]
-                  : []),
-                ...(guest !== undefined && online.includes(guest.id) && guest.id !== viewer
-                  ? [{ label: `Follow ${guest.name}`, run: () => follow.onFollow(guest.id) }]
-                  : []),
-              ],
-            }
+        : fixed && ref !== null
+          ? { actions: fixedCardActions(ref) }
           : undefined;
     return {
       card:
@@ -2758,44 +2864,76 @@ export function RoomBoard({
             />
           </BoardFloat>
         </div>
-        <BoardFloat className="absolute bottom-16 left-3 z-30 gap-0.5 p-1 @4xl/board:bottom-3">
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            aria-label="Zoom out"
-            onClick={() => thenBoard(() => zoomBy(1 / 1.2))}
-          >
-            <MinusIcon />
-          </Button>
-          <span className="w-10 text-center text-xs text-muted-foreground tabular-nums">
-            {Math.round(view.zoom * 100)}%
-          </span>
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            aria-label="Zoom in"
-            onClick={() => thenBoard(() => zoomBy(1.2))}
-          >
-            <PlusIcon />
-          </Button>
-          <BoardToolDivider />
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label="Fit"
-                  onClick={() => thenBoard(fitAll)}
-                />
-              }
+        <div className="absolute bottom-16 left-3 z-30 flex flex-col items-start gap-2 @4xl/board:bottom-3">
+          {minimapShown ? (
+            <BoardMinimap
+              board={shown}
+              cardIds={cardIds}
+              view={view}
+              surfaceRef={surfaceRef}
+              onView={(next) => {
+                setFollowing(null);
+                setView(next);
+              }}
+            />
+          ) : null}
+          <BoardFloat className="gap-0.5 p-1">
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Zoom out"
+              onClick={() => thenBoard(() => zoomBy(1 / 1.2))}
             >
-              <ScanIcon />
-            </TooltipTrigger>
-            <TooltipPopup side="top">Fit everything in view</TooltipPopup>
-          </Tooltip>
-          {cards === undefined && room !== null ? <LineLegend /> : null}
-        </BoardFloat>
+              <MinusIcon />
+            </Button>
+            <span className="w-10 text-center text-xs text-muted-foreground tabular-nums">
+              {Math.round(view.zoom * 100)}%
+            </span>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Zoom in"
+              onClick={() => thenBoard(() => zoomBy(1.2))}
+            >
+              <PlusIcon />
+            </Button>
+            <BoardToolDivider />
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    aria-label="Fit"
+                    onClick={() => thenBoard(fitAll)}
+                  />
+                }
+              >
+                <ScanIcon />
+              </TooltipTrigger>
+              <TooltipPopup side="top">Fit everything in view</TooltipPopup>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    size="icon-sm"
+                    variant={minimapShown ? "secondary" : "ghost"}
+                    aria-label="Minimap"
+                    aria-pressed={minimapShown}
+                    onClick={() => thenBoard(toggleMinimap)}
+                  />
+                }
+              >
+                <MapIcon />
+              </TooltipTrigger>
+              <TooltipPopup side="top">
+                {minimapShown ? "Hide minimap" : "Show minimap"}
+              </TooltipPopup>
+            </Tooltip>
+            {cards === undefined && room !== null ? <LineLegend /> : null}
+          </BoardFloat>
+        </div>
         <div
           ref={surfaceRef}
           role="application"
@@ -2904,6 +3042,32 @@ export function RoomBoard({
               else if (openComment !== null) closeComment();
               else if (selected.size > 0 && isBoardKey(event.target)) setSelection(NO_SELECTION);
               return;
+            }
+            // Ctrl+Enter on a note selected alone, or while typing in one, starts the next beside it.
+            if (
+              (event.ctrlKey || event.metaKey) &&
+              event.key === "Enter" &&
+              !event.altKey &&
+              !event.shiftKey
+            ) {
+              const typing =
+                event.target instanceof HTMLTextAreaElement &&
+                event.target.matches("[data-board-rest]")
+                  ? event.target
+                  : null;
+              const ref =
+                typing !== null
+                  ? typing.closest<HTMLElement>("[data-board-item]")?.dataset.boardItem
+                  : event.target === event.currentTarget && selected.size === 1
+                    ? [...selected][0]
+                    : undefined;
+              const note = shown.notes.find((candidate) => noteRef(candidate.id) === ref);
+              if (note !== undefined && followsOn(note) && canEdit && !full) {
+                event.preventDefault();
+                if (typing !== null) leaveText(typing);
+                addAndType(() => addNextNote(note));
+                return;
+              }
             }
             if ((event.ctrlKey || event.metaKey) && !event.altKey && isBoardKey(event.target)) {
               const key = event.key.toLowerCase();
@@ -3019,12 +3183,18 @@ export function RoomBoard({
             ) {
               return;
             }
+            const ref = target.closest<HTMLElement>("[data-board-item]")?.dataset.boardItem ?? null;
+            // A card with nothing to offer leaves the browser's menu, never an empty one.
+            if (
+              ref !== null &&
+              isFixedCard(ref) &&
+              !(selected.size > 1 && selected.has(ref)) &&
+              fixedCardActions(ref).length === 0
+            ) {
+              return;
+            }
             event.preventDefault();
-            openMenu(
-              event.clientX,
-              event.clientY,
-              target.closest<HTMLElement>("[data-board-item]")?.dataset.boardItem ?? null,
-            );
+            openMenu(event.clientX, event.clientY, ref);
           }}
           onCopy={copySelection}
           onPointerUp={(event) => {
@@ -3367,6 +3537,11 @@ export function RoomBoard({
                     link={link}
                     quote={boardNoteQuote(note, messages)}
                     onResize={canEdit ? resizeNote : undefined}
+                    onAddNext={
+                      canEdit && !full && followsOn(note)
+                        ? () => addAndType(() => addNextNote(note))
+                        : undefined
+                    }
                     onMove={dragNote}
                     onDrop={dropNote}
                     onBlur={(target) => release(() => letGo(target))}
@@ -3799,7 +3974,10 @@ function BoardNote({
   codeWindow,
   compact,
   menuOf,
+  onAddNext,
 }: {
+  /** Adds a blank note beside this one, ready to type. Absent where none can be added. */
+  readonly onAddNext?: (() => void) | undefined;
   /** Drawn too small for its header's buttons, which fold into one menu. */
   readonly compact: boolean;
   /** Its header's buttons as one menu, which its right-click menu starts with too. */
@@ -4255,6 +4433,29 @@ function BoardNote({
         }
         onEnd={() => onBlur(target)}
       />
+      {alone && onAddNext !== undefined ? (
+        <span
+          className="absolute top-1/2 -right-9 z-10 -translate-y-1/2"
+          onPointerDown={stopPointer}
+          data-board-add-next
+        >
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  size="icon-xs"
+                  variant="outline"
+                  aria-label="Add a note beside it"
+                  onClick={onAddNext}
+                />
+              }
+            >
+              <PlusIcon />
+            </TooltipTrigger>
+            <TooltipPopup side="right">Add a note beside it (Ctrl+Enter)</TooltipPopup>
+          </Tooltip>
+        </span>
+      ) : null}
     </div>
   );
 }

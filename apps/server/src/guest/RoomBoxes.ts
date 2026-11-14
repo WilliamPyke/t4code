@@ -24,7 +24,6 @@ import {
   type RoomBoxPromptResult,
   type RoomBoardContextCard,
   ROOM_BOX_PROMPT_MAX_LENGTH,
-  ROOM_BOX_REPLY_MAX_LENGTH,
   type RoomBoxTurn,
   type RunId,
   type ServerProvider,
@@ -44,6 +43,7 @@ import {
   roomBoardCardIdentity,
   roomBoardNoteOfRef,
   roomBoxExcerpt,
+  roomBoxReply,
   roomBoxRequestOf,
   roomCardLabelsOf,
   roomCommentRequestOf,
@@ -80,6 +80,8 @@ const SETTLED_RUN = new Set(["completed", "interrupted", "failed", "cancelled", 
 const WAITING_RUN = new Set(["preparing", "queued", "starting"]);
 // A board shows a box's progress about this often, however fast its agent streams.
 const PROGRESS_INTERVAL_MS = 1_000;
+// How long a finished reply's draft waits for its artifact to be filled, in case it never is.
+const FILL_WAIT_MS = 10_000;
 const BOX_TITLE_MAX_LENGTH = 80;
 // Runs that are no box's, remembered so their events are not looked up again.
 const IGNORED_RUNS_LIMIT = 1_000;
@@ -138,6 +140,8 @@ interface TrackedRun {
   draft: string | undefined;
   publishedAt: number;
   flushing: boolean;
+  /** Finished, and showing its draft until the artifact it fills shows the reply. */
+  filling: boolean;
 }
 
 const phaseOf = (run: TrackedRun): RoomBoxProgress["phase"] =>
@@ -549,7 +553,7 @@ const make = Effect.gen(function* () {
         prompt: roomBoxExcerpt(roomRunPromptText(turnItems), ROOM_BOX_PROMPT_MAX_LENGTH),
         ...(cards.length === 0 ? {} : { cards: [...cards] }),
         ...(model === "" ? {} : { model }),
-        reply: roomBoxExcerpt(reply, ROOM_BOX_REPLY_MAX_LENGTH),
+        reply: roomBoxReply(reply),
         at: DateTime.formatIso(run.completedAt ?? (yield* DateTime.now)),
       };
       return turn;
@@ -822,17 +826,53 @@ const make = Effect.gen(function* () {
     if (linked) ignored.clear();
   };
 
+  const settle = (run: TrackedRun) =>
+    Effect.suspend(() => {
+      if (tracked.get(run.runId) !== run) return Effect.void;
+      tracked.delete(run.runId);
+      return publish(run, true);
+    });
+
+  /** Ends the finished runs whose artifact this board now shows their reply in. */
+  const settleFilled = (room: ThreadRoom) =>
+    Effect.forEach(
+      [...tracked.values()].filter((run) => {
+        if (!run.filling || run.shareId !== room.id) return false;
+        const note = room.board?.notes.find((candidate) => candidate.id === run.artifactId);
+        return note?.artifact?.turnId === run.runId || note === undefined;
+      }),
+      settle,
+      { discard: true },
+    );
+
   // Untraced: it sees every domain event of every thread, and most do nothing here.
   const onEvent = Effect.fnUntraced(function* (event: OrchestrationV2DomainEvent) {
     if (event.type === "thread.guest-share-updated") {
-      return noteBoardThreads(event.threadId, threadRoomOf(event.payload).boardThreads);
+      const room = threadRoomOf(event.payload);
+      noteBoardThreads(event.threadId, room.boardThreads);
+      return yield* settleFilled(room);
     }
     if (event.type === "run.created" || event.type === "run.updated") {
       const run = event.payload;
       const known = tracked.get(run.id);
       if (SETTLED_RUN.has(run.status)) {
         ignored.delete(run.id);
-        if (known === undefined) return;
+        if (known === undefined || known.filling) return;
+        // A finished reply stays in its artifact until the board shows it there, so the old
+        // version never shows in between. Any other end takes the draft away at once.
+        if (
+          run.status === "completed" &&
+          known.artifactId !== undefined &&
+          known.draft !== undefined
+        ) {
+          known.filling = true;
+          known.publishedAt = yield* nowMillis;
+          yield* publish(known, false);
+          return yield* Effect.sleep(Duration.millis(FILL_WAIT_MS)).pipe(
+            Effect.andThen(settle(known)),
+            Effect.forkIn(scope),
+          );
+        }
         tracked.delete(run.id);
         return yield* publish(known, true);
       }
@@ -859,6 +899,7 @@ const make = Effect.gen(function* () {
           draft: undefined,
           publishedAt: yield* nowMillis,
           flushing: false,
+          filling: false,
         };
         tracked.set(run.id, entry);
         return yield* publish(entry, false);

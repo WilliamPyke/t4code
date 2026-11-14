@@ -311,6 +311,38 @@ it.effect("shows each box's agent at work about once a second, and nothing once 
         run("run:box", boxThreadId, "interrupted"),
         run("run:late", lateThreadId, "completed"),
       ]);
+      // A finished reply stays in its artifact until the board shows it there.
+      const filling = yield* until((views) => views.owner.length === 1);
+      assert.deepInclude(of(filling.guests, "thread"), { draft: "# Plan\nDark mode" });
+      const board = (turnId: string) => ({
+        ...threads[roomThreadId],
+        guestShare: {
+          ...roomShare,
+          board: {
+            ...roomShare.board,
+            notes: roomShare.board.notes.map((note) =>
+              note.id === "art:a" ? { ...note, artifact: { body: "# Plan", turnId } } : note,
+            ),
+          },
+        },
+      });
+      const shareUpdated = (turnId: string) =>
+        ({
+          type: "thread.guest-share-updated",
+          threadId: roomThreadId,
+          payload: board(turnId),
+        }) as unknown as OrchestrationV2DomainEvent;
+      // Another turn's version is not this one's.
+      yield* Queue.offerAll(events, [
+        shareUpdated("run:older"),
+        run("run:late", lateThreadId, "running", "run.created"),
+      ]);
+      const older = yield* until((views) => of(views.owner, "box:late") !== undefined);
+      assert.isDefined(of(older.owner, "thread"));
+      yield* Queue.offerAll(events, [
+        shareUpdated("run:room"),
+        run("run:late", lateThreadId, "failed"),
+      ]);
       yield* until((views) => views.owner.length === 0 && views.guests.length === 0);
     }).pipe(Effect.provide(layerWith(events)));
   }),

@@ -11,7 +11,6 @@ import {
   ROOM_BOARD_THREAD_CARD,
   ROOM_BOX_CONTEXT_KIND,
   ROOM_BOX_PROMPT_MAX_LENGTH,
-  ROOM_BOX_REPLY_MAX_LENGTH,
   ROOM_BOX_TURN_LIMIT,
   guestMessageAuthorName,
   roomBoardAgentCard,
@@ -56,6 +55,7 @@ import {
   roomBoardWithoutCards,
   roomBoxCodeWindows,
   roomBoxExcerpt,
+  roomBoxReply,
   type RoomBoardScope,
 } from "@t3tools/shared/roomBoard";
 import * as DateTime from "effect/DateTime";
@@ -1038,7 +1038,7 @@ export function decideGuestShareCommand(input: {
           id: turn.id,
           ...about,
           prompt: roomBoxExcerpt(turn.prompt, ROOM_BOX_PROMPT_MAX_LENGTH),
-          reply: roomBoxExcerpt(turn.reply, ROOM_BOX_REPLY_MAX_LENGTH),
+          reply: roomBoxReply(turn.reply),
           at: DateTime.formatIso(now),
           guestId: command.guestId,
         });

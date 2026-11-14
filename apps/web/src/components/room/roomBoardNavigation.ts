@@ -60,6 +60,17 @@ export const roomBoardViewKey = (ref: ScopedThreadRef) => threadKey(ref);
 export const rememberedRoomBoardView = (key: string): BoardViewState | undefined =>
   readBoardViews()[key];
 
+// New boards made from a template, by view key: how many notes to wait for before the first fit.
+const fitsOnOpen = new Map<string, number>();
+
+/** Opens this new board fitted to its cards once it shows `notes` of them, as a template makes. */
+export const fitRoomBoardOnOpen = (key: string, notes: number) => void fitsOnOpen.set(key, notes);
+
+/** How many notes this board waits for before its first fit: 0 fits it as it opens. */
+export const roomBoardFitAwaits = (key: string): number => fitsOnOpen.get(key) ?? 0;
+
+export const forgetRoomBoardFitOnOpen = (key: string) => void fitsOnOpen.delete(key);
+
 /** Keeps the view a board was left at, for the next time it opens here. */
 export function rememberRoomBoardView(key: string, view: BoardViewState): void {
   const { [key]: _previous, ...others } = readBoardViews();

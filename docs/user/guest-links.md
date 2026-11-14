@@ -49,6 +49,11 @@ palette, or **Board** in a shared thread's header. The board is where the room w
 thread, each guest, and every [thread box](#thread-boxes) appear as cards you can drag, with what
 each guest has waiting for you, and you can add notes.
 
+To start a new board from a layout, open the arrow beside **New board** on Boards, or **New board
+from template…** in the command palette: **Plan a feature**, **Bug bash**, **Design review** and
+**Retro** come with sections, placeholder notes to fill in and lines into the thread box. **Blank**
+is the default, and **New board** itself still makes a blank board in one click.
+
 You can plan on a board before inviting anyone. A thread you have not shared opens on an empty
 board, kept on the thread from your first change, and its header says **Not shared**. Everything
 that needs no guest works there: cards, lines, colours, comment threads, thread boxes running on
@@ -58,7 +63,10 @@ joined (click the names to manage guests) and has **Stop sharing**. The thread's
 working, and a guest's agent gets a card as soon as it starts a turn
 [on their machine](#your-turns-show-in-the-room). Scroll or drag the empty board to move, and
 hold Ctrl or Cmd while scrolling, or pinch, to zoom towards the pointer. Double-click the empty
-board to add a note there and start writing in it. A card added from the toolbar is ready to type
+board to add a note there and start writing in it. With a note or task selected, or while writing
+in one, Ctrl+Enter (Cmd+Enter on a Mac) or the **+** on its right edge adds the next one beside it
+in the same colour, ready to type. Hold Alt (Option on a Mac) as you start dragging notes, tasks or
+links to drag copies of them instead, leaving the originals and their lines where they are. A card added from the toolbar is ready to type
 in too. A note or task lands in the middle of the view (or the section you selected), just beside
 whatever is already there; other cards go where you are working: into the section you selected,
 last pointed at, or last added or picked a card in, or else as near the middle of the view as there
@@ -221,8 +229,10 @@ A line from a thread box to an artifact means that box's replies fill the artifa
 
 An **Artifact** is a card agents write into. Add one, give it a title, and draw a line to it from a
 thread box. Each prompt to that box tells its agent that its reply fills the artifact, with what
-the artifact shows now to revise. While the turn runs, everyone watches the artifact being
-written. Once it finishes, the artifact shows the final reply: markdown as text, or, when the
+the artifact shows now to revise. While the turn runs, everyone on the board watches the artifact
+being written, about once a second and scrolled to the newest text; a page shows as its source
+until it is done, so a half-written page never runs. Once it finishes, the artifact shows the
+final reply: markdown as text, or, when the
 reply holds a whole HTML page in an `html` code block, the live page. An interrupted or failed
 turn leaves the artifact as it was.
 

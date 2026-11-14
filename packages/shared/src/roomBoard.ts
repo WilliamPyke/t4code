@@ -12,6 +12,7 @@ import {
   ROOM_BOARD_THREAD_CARD,
   ROOM_BOX_CARD_LABELS_MAX,
   ROOM_BOX_CONTEXT_KIND,
+  ROOM_BOX_REPLY_MAX_LENGTH,
   ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH,
   isRoomBoardUrl,
   roomPullRequestOf,
@@ -854,3 +855,10 @@ export function roomArtifactBody(reply: string): {
     truncated: true,
   };
 }
+
+/**
+ * A finished reply as its thread box keeps it: the page it wrote, when it holds a whole one, so
+ * the box can show it as a page by name, or else its words.
+ */
+export const roomBoxReply = (reply: string): string =>
+  roomBoxExcerpt(htmlDocumentBlock(reply) ?? reply, ROOM_BOX_REPLY_MAX_LENGTH);

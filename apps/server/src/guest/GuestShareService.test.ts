@@ -409,8 +409,8 @@ it.effect("lets each browser join an invite as its own guest until the owner sto
     const { token: session } = yield* guestShares.redeem({ credential, name: "Sam" });
     const eve = yield* guestShares.redeem({ credential, name: "Eve" });
     assert.notEqual(eve.token, session);
-    const taken = yield* Effect.flip(guestShares.redeem({ credential, name: "sam" }));
-    assert.equal(taken.reason, "name_taken");
+    // A name already on the link never keeps anyone out, say Sam from another browser.
+    yield* guestShares.redeem({ credential, name: "sam" });
     // Each guest's page names them, lists everyone, and shows what the others asked.
     yield* guestShares.submit(session, { shareId: eve.shareId, text: "Sam's question" }, []);
     yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
@@ -424,7 +424,7 @@ it.effect("lets each browser join an invite as its own guest until the owner sto
     assert.equal(eveView.view.ownerName, "Will");
     assert.deepEqual(
       eveView.view.guests.map((guest) => guest.name),
-      ["Sam", "Eve"],
+      ["Sam", "Eve", "sam 2"],
     );
     const [asked] = eveView.view.messages;
     assert.equal(asked?.text, "Sam's question");
@@ -1787,6 +1787,7 @@ it.effect("starts a stream with the runs and items already in the thread", () =>
 it.effect("redeems only a short invite whose signature and share id are both current", () =>
   Effect.gen(function* () {
     const { guestShares, credential: replaced } = yield* shareThread;
+    yield* guestShares.redeem({ credential: replaced, name: "Sam" });
     const again = yield* guestShares.create({ threadId });
     assert.equal(again.url.slice(again.url.indexOf("#") + 1), replaced);
     const { url } = yield* guestShares.create({ threadId, replace: true });

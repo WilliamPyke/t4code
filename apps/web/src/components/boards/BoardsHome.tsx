@@ -11,7 +11,7 @@ import {
   type RoomBoardSummary,
 } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
-import { PlusIcon, SearchIcon } from "lucide-react";
+import { ChevronDownIcon, PlusIcon, SearchIcon } from "lucide-react";
 import { useState } from "react";
 
 import { isElectron } from "~/env";
@@ -33,12 +33,13 @@ import { BOARD_PERSON_COLORS } from "../room/roomBoard.logic";
 import { roomBoardLocation } from "../room/roomBoardNavigation";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
+import { Group, GroupSeparator } from "../ui/group";
 import { Input } from "../ui/input";
 import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { BoardThumbnail } from "./BoardThumbnail";
 import { type HomeBoard, listHomeBoards } from "./boardsHome.logic";
-import { useStartNewBoard } from "./newBoard";
+import { openBoardTemplates, useStartNewBoard } from "./newBoard";
 
 const NO_THREAD_IDS: ReadonlyArray<ThreadId> = [];
 
@@ -104,10 +105,22 @@ export function BoardsHome() {
               />
             </label>
           ) : null}
-          <Button onClick={() => void startNewBoard()} data-new-board>
-            <PlusIcon />
-            New board
-          </Button>
+          <Group aria-label="New board">
+            <Button onClick={() => void startNewBoard()} data-new-board>
+              <PlusIcon />
+              New board
+            </Button>
+            <GroupSeparator />
+            <Button
+              size="icon"
+              aria-label="New board from a template"
+              title="New board from a template"
+              onClick={openBoardTemplates}
+              data-new-board-template
+            >
+              <ChevronDownIcon />
+            </Button>
+          </Group>
         </header>
         {all.length === 0 ? (
           bootstrapped ? (
@@ -120,10 +133,13 @@ export function BoardsHome() {
                       A board is where you and your agents work together: notes, thread boxes and
                       what they make, side by side. Share it when you want others in.
                     </EmptyDescription>
-                    <div className="mt-5 flex justify-center">
+                    <div className="mt-5 flex justify-center gap-2">
                       <Button onClick={() => void startNewBoard()}>
                         <PlusIcon />
                         New board
+                      </Button>
+                      <Button variant="outline" onClick={openBoardTemplates}>
+                        From a template
                       </Button>
                     </div>
                   </EmptyHeader>

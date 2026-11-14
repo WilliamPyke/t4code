@@ -325,20 +325,30 @@ const decodeSessionClaims = Schema.decodeUnknownOption(Schema.fromJsonString(Ses
 
 const inactive = new GuestShareAccessError({ reason: "inactive" });
 
-// A member's account name lands in the agent's attribution line: one plain line, unique here.
+/**
+ * The name a newcomer joins under: theirs, numbered when someone on the link already has it. A
+ * guest who left keeps their name and cards, and nobody can prove they are them, so a second
+ * "Sam" joins as "Sam 2" instead of being turned away.
+ */
+const freeGuestName = (share: ThreadGuestShare, wanted: string) => {
+  const base = wanted.slice(0, GUEST_NAME_MAX_LENGTH - 3);
+  const taken = new Set(share.guests?.map((guest) => guest.name.toLowerCase()) ?? []);
+  let name = wanted;
+  for (let suffix = 2; taken.has(name.toLowerCase()); suffix++) name = `${base} ${suffix}`;
+  return name;
+};
+
+// A member's account name lands in the agent's attribution line: one plain line.
 const LINE_BREAKING = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
-const memberGuestName = (share: ThreadGuestShare, accountName: string) => {
-  const base =
+const memberGuestName = (share: ThreadGuestShare, accountName: string) =>
+  freeGuestName(
+    share,
     accountName
       .replace(LINE_BREAKING, " ")
       .replace(/\s+/g, " ")
       .trim()
-      .slice(0, GUEST_NAME_MAX_LENGTH - 3) || "Member";
-  const taken = new Set(share.guests?.map((guest) => guest.name.toLowerCase()) ?? []);
-  let name = base;
-  for (let suffix = 2; taken.has(name.toLowerCase()); suffix++) name = `${base} ${suffix}`;
-  return name;
-};
+      .slice(0, GUEST_NAME_MAX_LENGTH) || "Member",
+  );
 
 export class GuestShareService extends Context.Service<
   GuestShareService,
@@ -915,7 +925,7 @@ const make = Effect.gen(function* () {
       threadId: thread.id,
       shareId: share.id,
       guestId,
-      guestName: request.name,
+      guestName: freeGuestName(share, request.name),
     });
     // Guests have no client connection, so their events carry no surface.
     yield* analytics.record("feature.used", { feature: "guest_share.join" });

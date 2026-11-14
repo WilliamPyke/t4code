@@ -1060,15 +1060,15 @@ const sameViewport = (a: RoomBoardViewport | null, b: RoomBoardViewport | null) 
   a === null || b === null ? a === b : samePoint(a, b) && a.zoom === b.zoom;
 
 /**
- * Sends pointer, view and drag at most every `CURSOR_SEND_INTERVAL_MS`, ending on the latest and
- * repeating nothing, but a drag held still every `DRAG_BEAT_MS`. A pointer leaving is sent at once,
- * and closing takes pointer and view away. Where a drag landed is sent once, and the post after it
- * says the drag is over.
+ * Sends pointer, view and drag at most every `CURSOR_SEND_INTERVAL_MS`, a held drag every
+ * `DRAG_BEAT_MS`; a landing once, then no drag. The room keeps a drag only with a pointer, so one
+ * held off the board (typing) goes with the pointer's last board spot, or the view's middle.
  */
 export function cursorSender(send: (presence: BoardPresence) => void) {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let beat: ReturnType<typeof setTimeout> | null = null;
   let at: BoardPoint | null = null;
+  let parked: BoardPoint | null = null;
   let view: RoomBoardViewport | null = null;
   let drag: RoomBoardDrag | null = null;
   let sentAt: BoardPoint | null = null;
@@ -1078,12 +1078,13 @@ export function cursorSender(send: (presence: BoardPresence) => void) {
   const flush = (again = false) => {
     if (timer !== null) clearTimeout(timer);
     timer = null;
+    const point =
+      at ?? (drag === null ? null : (parked ?? (view === null ? null : { x: view.x, y: view.y })));
     const viewChanged = !sameViewport(view, sentView);
     const dragChanged = JSON.stringify(drag) !== JSON.stringify(sentDrag);
-    if (!again && samePoint(at, sentAt) && !viewChanged && !dragChanged) return;
-    // A pointer off the board takes its drag with it.
-    const sentWith = at === null ? null : drag;
-    sentAt = at;
+    if (!again && samePoint(point, sentAt) && !viewChanged && !dragChanged) return;
+    const sentWith = point === null ? null : drag;
+    sentAt = point;
     sentView = view;
     sentDrag = sentWith;
     lastSend = Date.now();
@@ -1093,7 +1094,7 @@ export function cursorSender(send: (presence: BoardPresence) => void) {
         ? setTimeout(() => flush(true), DRAG_BEAT_MS)
         : null;
     send({
-      at,
+      at: point,
       ...(viewChanged ? { view } : {}),
       ...(sentWith === null ? {} : { drag: sentWith }),
     });
@@ -1109,6 +1110,7 @@ export function cursorSender(send: (presence: BoardPresence) => void) {
   return {
     move: (point: BoardPoint) => {
       at = point;
+      parked = point;
       schedule();
     },
     look: (next: RoomBoardViewport) => {
@@ -1135,6 +1137,7 @@ export function cursorSender(send: (presence: BoardPresence) => void) {
       timer = null;
       beat = null;
       at = null;
+      parked = null;
       view = null;
       drag = null;
       if (sentAt === null && sentView === null) return;
@@ -2559,6 +2562,21 @@ export function boardHistoryChanges(
   return changes;
 }
 
+/**
+ * What a card was before this person's change, for undo to put back, at whole pixels: as their
+ * gesture found it (null for a card the gesture made, as an Alt-drag copy), else as `board` shows.
+ */
+export const boardStepBefore = (
+  gestureFrom: ReadonlyMap<string, BoardValue>,
+  board: RoomBoard,
+  target: BoardTarget,
+): BoardValue => {
+  const key = boardEditKey(target);
+  return settleBoardValue(
+    gestureFrom.has(key) ? (gestureFrom.get(key) ?? null) : boardValueOf(board, target),
+  );
+};
+
 /** The history with one more entry, the oldest dropped past the cap. */
 export const boardHistoryWith = (
   history: ReadonlyArray<BoardHistoryEntry>,
@@ -2725,3 +2743,30 @@ export const boardKeyEditsNote = (event: {
   !event.metaKey &&
   !event.altKey &&
   (event.key === "Enter" || (event.key.length === 1 && event.key !== " "));
+
+const NEXT_NOTE_GAP = 24;
+
+/**
+ * Where the note after `from` goes, as FigJam puts the next sticky: just to its right, top edges
+ * level, else just below it, left edges level, else the clear spot nearest its right, so it always
+ * lands beside the note it follows.
+ */
+export function boardNextNoteSpot(
+  from: BoardRect,
+  size: RoomBoardSize,
+  taken: ReadonlyArray<BoardRect>,
+): BoardPoint {
+  const clear = (at: BoardPoint) =>
+    !taken.some(
+      (rect) =>
+        at.x < rect.x + rect.width + PLACE_GAP &&
+        at.x + size.w + PLACE_GAP > rect.x &&
+        at.y < rect.y + rect.height + PLACE_GAP &&
+        at.y + size.h + PLACE_GAP > rect.y,
+    );
+  const right = { x: Math.round(from.x + from.width + NEXT_NOTE_GAP), y: Math.round(from.y) };
+  if (clear(right)) return right;
+  const below = { x: Math.round(from.x), y: Math.round(from.y + from.height + NEXT_NOTE_GAP) };
+  if (clear(below)) return below;
+  return placeBoardItem(size, { x: right.x + size.w / 2, y: right.y + size.h / 2 }, taken);
+}

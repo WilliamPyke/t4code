@@ -14,7 +14,7 @@ import {
   type RoomBoardReply,
   type ThreadGuestMessage,
 } from "@t3tools/contracts";
-import { roomBoardWithCardsSent } from "@t3tools/shared/roomBoard";
+import { roomBoardWithCardsSent, roomBoxReply } from "@t3tools/shared/roomBoard";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -69,6 +69,7 @@ import {
   boardEditKey,
   boardGroupMove,
   boardHistoryChanges,
+  boardStepBefore,
   boardHistoryWith,
   boardItemsInRect,
   boardItemsCentredIn,
@@ -119,6 +120,7 @@ import {
   pinnedCommentSpot,
   placeBoardCards,
   placeBoardItem,
+  boardNextNoteSpot,
   putBoardEdit,
   resizeBoardFromLeft,
   resolveBoard,
@@ -242,6 +244,33 @@ describe("placeBoardItem", () => {
     at.y >= view.y &&
     at.x + size.w <= view.x + view.width &&
     at.y + size.h <= view.y + view.height;
+
+  it("puts the next note just right of the last, else below it, else the nearest clear spot", () => {
+    const from = { x: 100, y: 50, width: 192, height: 144 };
+    const size = { w: 192, h: 144 };
+    expect(boardNextNoteSpot(from, size, [from])).toEqual({ x: 316, y: 50 });
+    // Something only above or below the row does not push it along.
+    const beside = { x: 316, y: 60, width: 192, height: 144 };
+    expect(boardNextNoteSpot(from, size, [from, { ...beside, y: 400 }])).toEqual({ x: 316, y: 50 });
+    // A note already there, and a wide window after it: below, not past them.
+    const window = { x: 520, y: 0, width: 400, height: 400 };
+    expect(boardNextNoteSpot(from, size, [from, beside, window])).toEqual({ x: 100, y: 218 });
+    // A note sitting over a thread box, which blocks right and below: beside the box, close by.
+    const box = { x: 40, y: 0, width: 320, height: 420 };
+    const far = { x: 1_000, y: 50, width: 192, height: 144 };
+    const taken = [box, from, far];
+    const spot = boardNextNoteSpot(from, size, taken);
+    expect(
+      taken.some(
+        (rect) =>
+          spot.x < rect.x + rect.width &&
+          spot.x + size.w > rect.x &&
+          spot.y < rect.y + rect.height &&
+          spot.y + size.h > rect.y,
+      ),
+    ).toBe(false);
+    expect(Math.hypot(spot.x - 316, spot.y - 50)).toBeLessThan(size.w);
+  });
 
   it("centres a new item on the spot asked for when nothing is there", () => {
     expect(placeBoardItem({ w: 200, h: 100 }, { x: 500, y: 300 }, [])).toEqual({ x: 400, y: 250 });
@@ -1023,6 +1052,34 @@ describe("cursorSender", () => {
     vi.advanceTimersByTime(5_000);
     expect(sent.slice(6)).toEqual([{ at: null, view: null }]);
   });
+
+  it("sends typing with the pointer off the board from where it last was, or the view's middle", () => {
+    using _timers = { [Symbol.dispose]: () => vi.useRealTimers() };
+    vi.useFakeTimers();
+    const sent: Array<BoardPresence> = [];
+    const cursor = cursorSender((presence) => sent.push(presence));
+    const typed = (text: string) => [{ ref: "note:a", text }];
+    // Never on the board, as a note added from the toolbar: the view's middle.
+    cursor.look({ x: 50, y: 60, zoom: 1 });
+    cursor.drag(typed("H"));
+    vi.advanceTimersByTime(0);
+    expect(sent).toEqual([
+      { at: { x: 50, y: 60 }, view: { x: 50, y: 60, zoom: 1 }, drag: { items: typed("H") } },
+    ]);
+    cursor.move({ x: 1, y: 1 });
+    cursor.leave();
+    cursor.drag(typed("Hi"));
+    vi.advanceTimersByTime(200);
+    cursor.land(typed("Hi"));
+    vi.advanceTimersByTime(200);
+    vi.advanceTimersByTime(200);
+    expect(sent.slice(1)).toEqual([
+      { at: { x: 1, y: 1 }, drag: { items: typed("H") } },
+      { at: { x: 1, y: 1 }, drag: { items: typed("Hi") } },
+      { at: { x: 1, y: 1 }, drag: { items: typed("Hi"), done: true } },
+      { at: null },
+    ]);
+  });
 });
 
 describe("boardDragItems", () => {
@@ -1607,6 +1664,21 @@ describe("boardPromptContext", () => {
     expect(isBoardHtmlArtifact('<html lang="en"><body>Hi</body></html>')).toBe(true);
     expect(isBoardHtmlArtifact("# Plan\n\n<html> is a tag")).toBe(false);
     expect(isBoardHtmlArtifact("<div>Hi</div>")).toBe(false);
+  });
+
+  it("names the page a box's reply wrote, bare, fenced or after a few words", () => {
+    const page =
+      '<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="utf-8">\n  <title>Launch plan</title>\n  <style>\n    body { color: #222; }\n  </style>\n</head>\n<body><h1>Plan</h1></body>\n</html>';
+    for (const reply of [
+      page,
+      `\`\`\`html\n${page}\n\`\`\``,
+      `Here is the page:\n\n\`\`\`html\n${page}\n\`\`\`\n\nOpen it in a browser.`,
+    ]) {
+      const kept = roomBoxReply(reply);
+      expect(isBoardHtmlArtifact(kept)).toBe(true);
+      expect(boardHtmlTitle(kept)).toBe("Launch plan");
+    }
+    expect(isBoardHtmlArtifact(roomBoxReply("Fixed **two** tests."))).toBe(false);
   });
 
   it.each([
@@ -2481,6 +2553,25 @@ describe("undo and redo", () => {
     }
     expect(history).toHaveLength(BOARD_HISTORY_MAX);
     expect(history[0]?.[0]?.after).toEqual({ x: 1, y: 0 });
+  });
+
+  it("records a card an Alt-drag made as not there before, so undo takes it off", () => {
+    const copy = { ...note, id: "copy", x: 40.6, y: 12.2 };
+    const copyTarget = { kind: "note", id: "copy" } as const;
+    // The board as drawn while the copy is held shows it already.
+    const drawn = { ...board, notes: [...board.notes, copy] };
+    const before = boardStepBefore(new Map([["note:copy", null]]), drawn, copyTarget);
+    expect(before).toBeNull();
+    const stored = { ...board, notes: [...board.notes, { ...copy, x: 41, y: 12 }] };
+    expect(
+      boardHistoryChanges(
+        stored,
+        [{ target: copyTarget, before, after: { ...copy, x: 41, y: 12 } }],
+        "undo",
+      ),
+    ).toEqual([{ target: copyTarget, value: null }]);
+    // A card the gesture did not hold is as the board shows it, at whole pixels.
+    expect(boardStepBefore(new Map(), drawn, copyTarget)).toEqual({ ...copy, x: 41, y: 12 });
   });
 });
 
