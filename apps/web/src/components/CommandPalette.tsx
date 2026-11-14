@@ -66,6 +66,7 @@ import {
   FolderPlusIcon,
   LayoutGridIcon,
   LayoutTemplateIcon,
+  MegaphoneIcon,
   MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
@@ -1771,6 +1772,17 @@ function OpenCommandPaletteDialog(props: {
     shortcutCommand: "usage.open",
     run: async () => {
       await navigate({ to: "/usage" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:whats-new",
+    searchTerms: ["what's new", "whats new", "changelog", "release notes", "updates", "new"],
+    title: "What's new",
+    icon: <MegaphoneIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/whats-new" });
     },
   });
 

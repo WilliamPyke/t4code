@@ -11,7 +11,7 @@ import {
   type RoomBoardSummary,
 } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
-import { ChevronDownIcon, PlusIcon, SearchIcon } from "lucide-react";
+import { ChevronDownIcon, MegaphoneIcon, PlusIcon, SearchIcon } from "lucide-react";
 import { useState } from "react";
 
 import { isElectron } from "~/env";
@@ -27,6 +27,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { useTeams } from "~/teams/teams";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
+import { useWhatsNewSeen } from "~/whatsNew";
 
 import { BoardBackdrop, BoardChip } from "../room/BoardChrome";
 import { BOARD_PERSON_COLORS } from "../room/roomBoard.logic";
@@ -76,6 +77,7 @@ export function BoardsHome() {
   const nowMinute = useNowMinute();
   const nowMs = Date.parse(`${nowMinute}:00.000Z`);
   const contentArea = workspaceAreaProps("home", 1, "Boards");
+  const whatsNew = useWhatsNewSeen();
 
   return (
     <SidebarInset
@@ -84,7 +86,12 @@ export function BoardsHome() {
       className="h-dvh min-h-0 overflow-y-auto overscroll-y-none scrollbar-gutter-both"
       data-boards-home
     >
-      {isElectron ? <WorkspacePageHeader electron /> : null}
+      {isElectron ? (
+        <WorkspacePageHeader electron />
+      ) : (
+        // Room for the floating sidebar button on phones.
+        <WorkspacePageHeader className="md:hidden" />
+      )}
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-6 sm:px-6">
         <header className="flex flex-wrap items-center gap-3" data-boards-home-header>
           <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -93,6 +100,16 @@ export function BoardsHome() {
               Where you, your team and everyone's agents work on the same thing.
             </p>
           </div>
+          <Button variant="ghost-muted" render={<Link to="/whats-new" />} data-whats-new-link>
+            <MegaphoneIcon />
+            What's new
+            {whatsNew.unseen ? (
+              <>
+                <span aria-hidden className="size-1.5 rounded-full bg-primary" />
+                <span className="sr-only">(new)</span>
+              </>
+            ) : null}
+          </Button>
           {all.length > 0 ? (
             <label className="flex w-full items-center gap-2 sm:w-64">
               <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />

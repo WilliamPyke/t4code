@@ -1,4 +1,10 @@
-import { ArrowLeftIcon, ArrowRightIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  ChartNoAxesColumnIcon,
+  MegaphoneIcon,
+  SettingsIcon,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
@@ -38,6 +44,7 @@ import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
+import { useWhatsNewSeen } from "~/whatsNew";
 import { observeResize } from "~/lib/observeResize";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
@@ -197,23 +204,36 @@ function SidebarUtilityItem({
   icon,
   label,
   onClick,
+  marked = false,
 }: {
   icon: ReactNode;
   label: string;
   onClick: () => void;
+  /** Shows a dot: there is something here this browser has not seen. */
+  marked?: boolean;
 }) {
   return (
     <SidebarMenuItem className="shrink-0">
       <Tooltip>
         <TooltipTrigger
           render={
-            <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
+            <SidebarMenuButton
+              aria-label={marked ? `${label} (new)` : label}
+              onClick={onClick}
+              size="icon"
+            >
               {icon}
             </SidebarMenuButton>
           }
         />
         <TooltipPopup side="top">{label}</TooltipPopup>
       </Tooltip>
+      {marked ? (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute top-1 right-1 size-1.5 rounded-full bg-primary"
+        />
+      ) : null}
     </SidebarMenuItem>
   );
 }
@@ -249,6 +269,11 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     }
     void navigate({ to: "/usage" });
   };
+  const whatsNew = useWhatsNewSeen();
+  const handleWhatsNewClick = () => {
+    closeMobileSidebar();
+    void navigate({ to: "/whats-new" });
+  };
 
   const handleBackClick = () => {
     closeMobileSidebar();
@@ -282,6 +307,12 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             icon={<ChartNoAxesColumnIcon />}
             label="Usage"
             onClick={handleUsageClick}
+          />
+          <SidebarUtilityItem
+            icon={<MegaphoneIcon />}
+            label="What's new"
+            onClick={handleWhatsNewClick}
+            marked={whatsNew.unseen}
           />
         </>
       )}
