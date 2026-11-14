@@ -22,6 +22,12 @@ export const BoardSelectionContext = createContext(NOTHING_SELECTED);
 
 export const useBoardSelected = (ref: string) => use(BoardSelectionContext).has(ref);
 
+/** Whether this item is the whole selection. */
+export const useBoardSelectedAlone = (ref: string) => {
+  const selected = use(BoardSelectionContext);
+  return selected.size === 1 && selected.has(ref);
+};
+
 /** A key the board takes as its own: not one typed into a field. */
 export const isBoardKey = (target: EventTarget | null) =>
   !(target instanceof Element) ||

@@ -1280,6 +1280,7 @@ function OpenCommandPaletteDialog(props: {
       searchTerms: ["boards", "home", "all boards", "canvas"],
       title: "Go to Boards",
       icon: <LayoutGridIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "boards.open",
       run: async () => {
         await navigate({ to: "/" });
       },
@@ -1290,6 +1291,7 @@ function OpenCommandPaletteDialog(props: {
       searchTerms: ["new board", "board", "canvas", "create", "start"],
       title: "New board",
       icon: <PlusIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "boards.new",
       run: async () => {
         await startNewBoard();
       },
@@ -2644,7 +2646,9 @@ function OpenCommandPaletteDialog(props: {
       event.keyCode !== 229 &&
       (command === "chat.new" ||
         command === "chat.newLocal" ||
-        command === "chat.newWithoutProject");
+        command === "chat.newWithoutProject" ||
+        command === "boards.open" ||
+        command === "boards.new");
     const matchingItem =
       isJump || isNewThread
         ? displayedGroups

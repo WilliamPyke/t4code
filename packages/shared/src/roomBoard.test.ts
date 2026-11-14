@@ -700,6 +700,11 @@ describe("roomBoardWithCardsSent", () => {
     expect(roomBoardWithCardsSent(board, "box", "doc", ["note:far"], at).edges?.[1]).toEqual(far);
     // Another box's line, an uncarried card's, and an artifact the box has no line to stay new.
     expect(sentIds(roomBoardWithCardsSent(board, "box", "loose", ["note:b"], at))).toEqual([]);
+    // A prompt naming no artifact, as one asked from a comment thread, still carried what is on
+    // the artifact the box rewrites, as the box's next prompt finds its cards.
+    expect(sentIds(roomBoardWithCardsSent(board, "box", undefined, ["note:b"], at))).toEqual([
+      "b>doc",
+    ]);
     expect(roomBoardWithCardsSent(board, "box", undefined, ["note:other"], at).edges?.[5]).toEqual({
       id: "other>box",
       from: "note:other",

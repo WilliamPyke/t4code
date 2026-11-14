@@ -227,6 +227,16 @@ export type ProjectionSettlementCandidate = Pick<
     readonly latestUserAuthoredMessageAt: DateTime.Utc | null;
   };
 
+/** The owner's threads in thread boxes on a thread's board, as a shell field. */
+const boardBoxThreadIdsOf = (
+  thread: Pick<OrchestrationV2AppThread, "guestShare" | "roomBoard">,
+) => {
+  const ids = Object.values(
+    thread.guestShare?.boardThreads ?? thread.roomBoard?.boardThreads ?? {},
+  );
+  return ids.length === 0 ? {} : { boardBoxThreadIds: ids };
+};
+
 const ProjectionCheckpointContext = Schema.Struct({
   runs: Schema.Array(
     OrchestrationV2RunJsonSchema.mapFields(({ id, ordinal, status }) => ({ id, ordinal, status })),
@@ -1675,6 +1685,7 @@ export function threadShellFromProjection(
     pendingGuestMessageCount: pendingGuestMessageCount(projection.thread.guestShare),
     ...((projection.thread.guestShare ?? null) === null ? {} : { guestShared: true }),
     ...((projection.thread.roomBoard ?? null) === null ? {} : { hasRoomBoard: true }),
+    ...boardBoxThreadIdsOf(projection.thread),
     // Thread detail owns message bodies. Keeping them out of shell rows makes
     // initial hydration and streaming updates independent of transcript size.
     latestVisibleMessage: null,
@@ -1953,6 +1964,7 @@ function shellFromState(input: {
     pendingGuestMessageCount: pendingGuestMessageCount(input.state.thread.guestShare),
     ...((input.state.thread.guestShare ?? null) === null ? {} : { guestShared: true }),
     ...((input.state.thread.roomBoard ?? null) === null ? {} : { hasRoomBoard: true }),
+    ...boardBoxThreadIdsOf(input.state.thread),
     latestVisibleMessage: null,
     latestUserMessageAt: input.state.latestUserMessageAt,
     latestUserAuthoredMessageAt: input.state.latestUserAuthoredMessageAt,
@@ -6699,6 +6711,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   pendingGuestMessageCount: pendingGuestMessageCount(thread.guestShare),
                   ...((thread.guestShare ?? null) === null ? {} : { guestShared: true }),
                   ...((thread.roomBoard ?? null) === null ? {} : { hasRoomBoard: true }),
+                  ...boardBoxThreadIdsOf(thread),
                   pendingBackgroundTasks: derivePendingBackgroundWork({
                     latestRun:
                       latestRunId === null || status === "idle"

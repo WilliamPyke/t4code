@@ -782,8 +782,8 @@ export type RoomAgentActivity = typeof RoomAgentActivity.Type;
 export const ROOM_BOARD_DRAG_MAX_ITEMS = 64;
 
 /**
- * A card or note someone is dragging or resizing, by its board ref (`note:<id>`, `card:<id>`),
- * where and how big it is this moment. Absent fields did not change.
+ * A card or note someone is dragging, resizing or writing in, by its board ref (`note:<id>`,
+ * `card:<id>`), where and how big it is this moment and what it says. Absent fields did not change.
  */
 export const RoomBoardDragItem = Schema.Struct({
   ref: Schema.String.check(Schema.isMaxLength(128)),
@@ -791,6 +791,8 @@ export const RoomBoardDragItem = Schema.Struct({
   y: Schema.optional(RoomBoardCoordinate),
   w: Schema.optional(RoomBoardLength),
   h: Schema.optional(RoomBoardLength),
+  /** A note's or section's text as they type it, which is stored once they finish. */
+  text: Schema.optional(RoomBoardNote.fields.text),
 });
 export type RoomBoardDragItem = typeof RoomBoardDragItem.Type;
 

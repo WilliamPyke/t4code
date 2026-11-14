@@ -7,6 +7,8 @@ import ChatMarkdown from "../ChatMarkdown";
 import { Button } from "../ui/button";
 import { BoardChip } from "./BoardChrome";
 import {
+  type BoardPeople,
+  boardCardsLine,
   boardDraftIsPage,
   boardProgressLine,
   boardRestoreLabel,
@@ -110,6 +112,7 @@ export function RoomArtifactLive({
   writingFallback,
   boxName,
   onRestore,
+  people,
 }: {
   readonly noteId: string;
   readonly artifact: RoomArtifactContent | undefined;
@@ -119,12 +122,13 @@ export function RoomArtifactLive({
   readonly writingFallback: string | null;
   readonly boxName: (boxId: string) => string;
   readonly onRestore: (() => Promise<boolean>) | undefined;
+  readonly people: BoardPeople;
 }) {
   const progress = useArtifactProgress(noteId);
   const draft = progress?.draft === undefined || progress.draft === "" ? undefined : progress.draft;
   return (
     <>
-      <RoomArtifactMeta author={author} artifact={artifact} onRestore={onRestore} />
+      <RoomArtifactMeta author={author} artifact={artifact} onRestore={onRestore} people={people} />
       {progress !== undefined ? (
         <p role="status" className="flex shrink-0 px-3 pb-1.5">
           <BoardChip tone="primary">
@@ -149,12 +153,14 @@ function RoomArtifactMeta({
   author,
   artifact,
   onRestore,
+  people,
 }: {
   /** Absent before anything was written. */
   readonly author: string | undefined;
   readonly artifact: RoomArtifactContent | undefined;
   /** Swaps in the version it replaced. Absent when there is none, or the viewer may not. */
   readonly onRestore: (() => Promise<boolean>) | undefined;
+  readonly people: BoardPeople;
 }) {
   const [restoring, setRestoring] = useState(false);
   const restore = async () => {
@@ -195,7 +201,9 @@ function RoomArtifactMeta({
         </p>
       )}
       {cards.length === 0 ? null : (
-        <p className="truncate text-2xs text-muted-foreground">With {cards.join(", ")}</p>
+        <p className="truncate text-2xs text-muted-foreground">
+          With {boardCardsLine(cards, people)}
+        </p>
       )}
     </div>
   );

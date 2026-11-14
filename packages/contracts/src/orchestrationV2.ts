@@ -2160,6 +2160,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   guestShared: Schema.optional(Schema.Boolean),
   /** The thread keeps a board while it is not shared. Absent from older servers. */
   hasRoomBoard: Schema.optional(Schema.Boolean),
+  /** The owner's threads in thread boxes on this thread's board. Absent when there are none. */
+  boardBoxThreadIds: Schema.optional(Schema.Array(ThreadId)),
   latestVisibleMessage: Schema.NullOr(OrchestrationV2LatestVisibleMessageSummary),
   latestUserMessageAt: Schema.NullOr(Schema.DateTimeUtc),
   /** Excludes wakes and agent messages that advance latestUserMessageAt through the user role. */

@@ -14,16 +14,18 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { useNavigate } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/reactivity";
-import { useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 
-import { openCommandPalette } from "~/commandPaletteBus";
+import { isCommandPaletteOpen, openCommandPalette } from "~/commandPaletteBus";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import { useScratchProject } from "~/hooks/useScratchProject";
+import { registerCommands } from "~/shortcuts/dispatcher";
 import { newThreadId } from "~/lib/utils";
 import { resolveProjectDefaultProviderModelSelection } from "~/providerInstances";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useProjects, useThreadShells } from "~/state/entities";
 import {
+  readGuestOnly,
   useEnvironmentProviders,
   useEnvironments,
   usePrimaryEnvironmentId,
@@ -202,7 +204,42 @@ export function useStartNewBoard() {
 
 /** Hosted once at the root, so every New board can ask which project when it has to. */
 export function NewBoardDialogHost() {
-  return useAtomValue(pickerOpenAtom) ? <NewBoardProjectPicker /> : null;
+  const pickerOpen = useAtomValue(pickerOpenAtom);
+  return (
+    <>
+      <BoardShortcuts />
+      {pickerOpen ? <NewBoardProjectPicker /> : null}
+    </>
+  );
+}
+
+/** Go to Boards and New board from the keyboard, wherever the app is. */
+function BoardShortcuts() {
+  const navigate = useNavigate();
+  const startNewBoard = useStartNewBoard();
+  const goToBoards = useEffectEvent(() => void navigate({ to: "/" }));
+  const newBoard = useEffectEvent(() => void startNewBoard());
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers the board shortcuts with the global keydown dispatcher
+  useEffect(
+    () =>
+      registerCommands(
+        {
+          "boards.open": (event) => {
+            event.preventDefault();
+            if (!event.repeat) goToBoards();
+          },
+          "boards.new": (event) => {
+            // A browser that only joined guest links has nowhere to make a board.
+            if (readGuestOnly()) return false;
+            event.preventDefault();
+            if (!event.repeat) newBoard();
+          },
+        },
+        { when: () => !isCommandPaletteOpen() },
+      ),
+    [],
+  );
+  return null;
 }
 
 function NewBoardProjectPicker() {

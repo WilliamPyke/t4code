@@ -596,7 +596,14 @@ export function roomBoardWithCardsSent(
 ): RoomBoard {
   const edges = board.edges ?? [];
   const box = roomBoxRef(boxId);
-  const artifact = artifactId === undefined ? undefined : roomBoardNoteRef(artifactId);
+  // A prompt naming none, as one asked from a comment thread, still found its cards on the
+  // artifact the box rewrites, the first one it has a line to, as the board finds them.
+  const artifact =
+    artifactId === undefined
+      ? edges.find(
+          (edge) => edge.from === box && roomBoardNoteOfRef(board, edge.to)?.kind === "artifact",
+        )?.to
+      : roomBoardNoteRef(artifactId);
   const rewrites =
     artifact !== undefined &&
     roomBoardNoteOfRef(board, artifact)?.kind === "artifact" &&

@@ -5,6 +5,7 @@ import {
   BOARD_DRAG_LANDING_MS,
   type BoardLiveDrag,
   boardLiveRect,
+  boardLiveText,
   createRoomLiveStore,
   mergeBoardDrags,
 } from "./roomBoardLive";
@@ -166,5 +167,33 @@ describe("boardLiveRect", () => {
     },
   ])("$name", ({ live, rect }) => {
     expect(boardLiveRect(stored, live)).toEqual(rect);
+  });
+});
+
+describe("boardLiveText", () => {
+  it.each([
+    { name: "shows the stored text when nobody writes in it", live: undefined, text: null },
+    {
+      name: "shows a note's text as someone else writes it",
+      live: { text: "Hello", color: "red", landed: false },
+      text: "Hello",
+    },
+    {
+      name: "keeps what they wrote until the stored board has it",
+      live: { text: "Hello", color: "red", landed: true, until: 1 },
+      text: "Hello",
+    },
+    {
+      name: "lets it go once the stored board has it",
+      live: { text: "Hi", color: "red", landed: true, until: 1 },
+      text: null,
+    },
+    {
+      name: "ignores a drag that does not write",
+      live: { x: 30, color: "red", landed: false },
+      text: null,
+    },
+  ])("$name", ({ live, text }) => {
+    expect(boardLiveText("Hi", live)).toEqual(text);
   });
 });

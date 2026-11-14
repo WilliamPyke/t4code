@@ -4,7 +4,7 @@ import {
   type RoomBoardNoteColor,
 } from "@t3tools/contracts";
 import { XIcon } from "lucide-react";
-import type { PointerEvent, ReactNode } from "react";
+import { type PointerEvent, type ReactNode, useState } from "react";
 
 import { cn } from "~/lib/utils";
 
@@ -14,8 +14,8 @@ import {
   BOARD_SELECTED_CHROME_CLASS,
 } from "./BoardChrome";
 import { BOARD_SECTION_SIZE, boardEditKey } from "./roomBoard.logic";
-import { boardLiveRect, boardLiveStyle, useBoardLiveDrag } from "./roomBoardLive";
-import { dragHandlers } from "./roomBoardPointer";
+import { boardLiveRect, boardLiveStyle, boardLiveText, useBoardLiveDrag } from "./roomBoardLive";
+import { dragHandlers, leaveText } from "./roomBoardPointer";
 import { useBoardSelected } from "./RoomBoardSelection";
 import { NoteColorPicker, sectionColorClassName, sectionLabelClassName } from "./RoomNoteColor";
 
@@ -56,7 +56,11 @@ export function BoardSection({
   const size = note.size ?? BOARD_SECTION_SIZE;
   const ref = boardEditKey({ kind: "note", id: note.id });
   const selected = useBoardSelected(ref);
-  const live = boardLiveRect({ x: note.x, y: note.y, w: size.w, h: size.h }, useBoardLiveDrag(ref));
+  const liveDrag = useBoardLiveDrag(ref);
+  const live = boardLiveRect({ x: note.x, y: note.y, w: size.w, h: size.h }, liveDrag);
+  // Once this person types here, their own draft shows until they leave it.
+  const [drafting, setDrafting] = useState(false);
+  const text = (drafting ? null : boardLiveText(note.text, liveDrag)) ?? note.text;
   return (
     <div
       className={cn(
@@ -85,7 +89,7 @@ export function BoardSection({
       >
         <input
           aria-label="Section title"
-          value={note.text}
+          value={text}
           readOnly={!canRename}
           maxLength={ROOM_BOARD_NOTE_MAX_LENGTH}
           placeholder={canRename ? "Name this section" : "Untitled section"}
@@ -96,15 +100,21 @@ export function BoardSection({
             !canRename && "cursor-default",
           )}
           onPointerDown={stopPointer}
-          onChange={(event) => onText(event.target.value)}
+          onChange={(event) => {
+            setDrafting(true);
+            onText(event.target.value);
+          }}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.stopPropagation();
               onRevert();
             }
-            if (event.key === "Enter" || event.key === "Escape") event.currentTarget.blur();
+            if (event.key === "Enter" || event.key === "Escape") leaveText(event.currentTarget);
           }}
-          onBlur={onBlur}
+          onBlur={() => {
+            setDrafting(false);
+            onBlur();
+          }}
         />
         <div className={cn("flex items-center gap-1", !selected && BOARD_HOVER_CHROME_CLASS)}>
           {onPickColor === undefined ? null : (

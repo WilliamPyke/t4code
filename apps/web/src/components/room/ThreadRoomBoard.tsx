@@ -60,13 +60,7 @@ import { BoardChatPanel } from "./BoardChatPanel";
 import { BOARD_TITLE_BAR_CLASS } from "./BoardChrome";
 import { BoardSharing } from "./BoardSharing";
 import { BoardThreadPicker } from "./BoardThreadPicker";
-import {
-  BoardModelName,
-  BoardModelPicker,
-  ThreadBoardModelName,
-  ThreadBoardModelPicker,
-  composerDraftPick,
-} from "./BoardModelPicker";
+import { BoardModelPicker, ThreadBoardModelPicker, composerDraftPick } from "./BoardModelPicker";
 import { BoardSplit } from "./BoardSplit";
 import { RoomBoard, RoomCursors } from "./RoomBoard";
 import { RoomReplyProvider, revealRoomReply } from "./RoomReplyComments";
@@ -344,15 +338,6 @@ export function ThreadRoomBoard({
       />
     );
   };
-  // What a guest's request would run on: the box's own thread's model, else what a new box starts from.
-  const renderRequestModel = (boxId: string) => {
-    const ref = boxThreadRef(boxId);
-    if (ref !== null) return <ThreadBoardModelName threadRef={ref} fallback={roomSelection} />;
-    const selection = boxPicks[boxId] ?? roomSelection;
-    return selection === null ? null : (
-      <BoardModelName environmentId={threadRef.environmentId} selection={selection} />
-    );
-  };
   const cwd = thread?.worktreePath ?? project?.workspaceRoot ?? null;
   const { data: gitStatus } = useEnvironmentQuery(
     share === null || cwd === null
@@ -487,7 +472,7 @@ export function ThreadRoomBoard({
               onAddThread={canAddThread ? setAddingAt : undefined}
               renderBoxModel={renderBoxModel}
               onOpenConversation={openPanel}
-              renderRequestModel={renderRequestModel}
+              renderRequestModel={renderBoxModel}
               onResolveRequest={requests.canOperate ? resolveRequest : undefined}
               resolvingRequests={requests.busyIds}
               ownerWritingArtifactId={writingArtifactId}

@@ -18,9 +18,12 @@ const CONTROL =
  * What a press on the board is for. Where people type or select text (fields, prompt boxes,
  * artifact content, comment threads, all marked `data-board-text`) it is the text's; on a button or
  * link it is the control's; anywhere else, grips included, it moves, pans, selects, resizes or draws.
+ * A note's text (`data-board-rest`) is the note's to grab until it is focused for typing.
  */
 export function boardPressKind(target: EventTarget | null): "text" | "control" | "gesture" {
   if (!(target instanceof Element)) return "gesture";
+  const resting = target.closest("[data-board-rest]");
+  if (resting !== null && resting !== document.activeElement) return "gesture";
   if (target.closest(TEXT_ZONE) !== null) return "text";
   if (target.closest("[data-board-grip]") !== null) return "gesture";
   return target.closest(CONTROL) === null ? "gesture" : "control";
@@ -46,22 +49,28 @@ export function dropHeldPointer(): boolean {
   return true;
 }
 
-const presses = new WeakMap<Element, { readonly x: number; readonly y: number; moved: boolean }>();
+const presses = new WeakMap<
+  Element,
+  { readonly x: number; readonly y: number; readonly on: EventTarget; moved: boolean }
+>();
 
 /**
  * Pointer handlers that report how far a held pointer moved, in screen pixels, once it moved further
- * than a click would, and when it is let go after that. A press on text or a control is left alone.
+ * than a click would, and when it is let go after that, or `onTap`, with where the press began, when
+ * it never moved that far. A press on text or a control is left alone.
  */
 export function dragHandlers(
   onMove: (dx: number, dy: number, event: PointerEvent<HTMLElement>) => void,
   onEnd?: (event: PointerEvent<HTMLElement>) => void,
+  onTap?: (event: PointerEvent<HTMLElement>, on: EventTarget) => void,
 ) {
   const release = (event: PointerEvent<HTMLElement>) => {
     if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
     event.currentTarget.releasePointerCapture(event.pointerId);
-    const moved = presses.get(event.currentTarget)?.moved === true;
+    const press = presses.get(event.currentTarget);
     presses.delete(event.currentTarget);
-    if (moved) onEnd?.(event);
+    if (press?.moved === true) onEnd?.(event);
+    else if (press !== undefined && event.type === "pointerup") onTap?.(event, press.on);
   };
   return {
     onPointerDown: (event: PointerEvent<HTMLElement>) => {
@@ -73,7 +82,12 @@ export function dragHandlers(
       // The board under a card must not start panning too.
       event.stopPropagation();
       holdPointer(event);
-      presses.set(event.currentTarget, { x: event.clientX, y: event.clientY, moved: false });
+      presses.set(event.currentTarget, {
+        x: event.clientX,
+        y: event.clientY,
+        on: event.target,
+        moved: false,
+      });
     },
     onPointerMove: (event: PointerEvent<HTMLElement>) => {
       if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
@@ -91,4 +105,20 @@ export function dragHandlers(
     onPointerUp: release,
     onPointerCancel: release,
   };
+}
+
+/** Takes the caret out of a card's field and gives the board its keys back, not the page. */
+export function leaveText(field: HTMLElement) {
+  const board = field.closest<HTMLElement>("[role=application]");
+  if (board === null) field.blur();
+  else board.focus({ preventScroll: true });
+}
+
+/** Puts the caret in a field where a point falls on its text, or at its end where the browser cannot say. */
+export function focusTextAt(field: HTMLTextAreaElement, x: number, y: number) {
+  const position =
+    "caretPositionFromPoint" in document ? document.caretPositionFromPoint(x, y) : null;
+  const at = position?.offsetNode === field ? position.offset : field.value.length;
+  field.focus({ preventScroll: true });
+  field.setSelectionRange(at, at);
 }

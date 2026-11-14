@@ -752,6 +752,13 @@ it.effect("shows a thread box's last turns, and keeps the owner's box threads ap
     yield* link("box", "thread:box");
     yield* link("box", "thread:box");
     assert.deepEqual((yield* share).boardThreads, { box: ThreadId.make("thread:box") });
+    // The board's shell names its box threads, so thread lists can leave them to the board.
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const boxThreadsInShell = Effect.map(
+      projections.getThreadShell(threadId),
+      (shell) => shell?.boardBoxThreadIds,
+    );
+    assert.deepEqual(yield* boxThreadsInShell, [ThreadId.make("thread:box")]);
 
     for (const id of ["run:1", "run:2", "run:2", "run:3", "run:4"]) yield* turn("box", id);
     // A box keeps its last few turns, each once; a note that is no box shows none.
@@ -765,6 +772,7 @@ it.effect("shows a thread box's last turns, and keeps the owner's box threads ap
     // Removing the box forgets its thread; unlinking one with none changes nothing.
     yield* change({ type: "note.remove", noteId: "box" });
     assert.isUndefined((yield* share).boardThreads);
+    assert.isUndefined(yield* boxThreadsInShell);
     yield* link("box", null);
 
     // An existing thread lands as a new box and its link at once, showing its last turn.

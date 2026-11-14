@@ -59,8 +59,11 @@ working, and a guest's agent gets a card as soon as it starts a turn
 [on their machine](#your-turns-show-in-the-room). Scroll or drag the empty board to move, and
 hold Ctrl or Cmd while scrolling, or pinch, to zoom towards the pointer. Double-click the empty
 board to add a note there and start writing in it. A card added from the toolbar is ready to type
-in too, and goes where you are working: into the section you selected, last pointed at, or last
-added or picked a card in, or else as near the middle of the view as there is room. When cards are
+in too. A note or task lands in the middle of the view (or the section you selected), just beside
+whatever is already there; other cards go where you are working: into the section you selected,
+last pointed at, or last added or picked a card in, or else as near the middle of the view as there
+is room. Right-click the board, a card or a selection for what you can do there (Shift+F10 or the
+Menu key does the same for the selected card). When cards are
 small on screen, the buttons on a note's header fold into one **…** menu, so the rest of the
 header is free to grab.
 
@@ -83,7 +86,8 @@ next notes take the colour you picked last. React to a note, task, link, artifac
 with the smiley on it; reactions show under the card with how many, and clicking one adds or takes
 back your own. When the owner removes a guest, that guest's reactions go too.
 
-Click a card to select it, and click the empty board to let go of it. Hold Shift and click cards to
+Click a card to select it, and click the empty board to let go of it. Drag a note or task by its
+text to move it; click it again, or just start typing, to write in it. Hold Shift and click cards to
 select several, hold Shift and drag across empty board to select everything the rectangle touches,
 or press Ctrl+A (Cmd+A on a Mac) to select every card. Dragging a selected card moves the whole
 selection; dragging any other card moves just that one and selects it. The arrow keys nudge the

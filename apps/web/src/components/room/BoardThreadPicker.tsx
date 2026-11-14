@@ -1,7 +1,11 @@
+import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { isListedThreadLineage, type EnvironmentId, type ThreadId } from "@t3tools/contracts";
 import { useState } from "react";
 
+import { useQuietThreadShells } from "~/state/entities";
+
+import { boardBoxThreadKeys } from "../Sidebar.logic";
 import { ThreadPicker } from "../ThreadPicker";
 import { Dialog, DialogDescription, DialogHeader, DialogPopup, DialogTitle } from "../ui/dialog";
 
@@ -22,6 +26,8 @@ export function BoardThreadPicker({
   readonly onClose: () => void;
 }) {
   const [pending, setPending] = useState(false);
+  // A thread is on one board at a time; a box's progress follows a single board.
+  const onBoards = boardBoxThreadKeys(useQuietThreadShells());
   return (
     <Dialog
       open
@@ -40,8 +46,14 @@ export function BoardThreadPicker({
           environmentId={environmentId}
           pending={pending}
           // A shared thread, or one keeping a board of its own, already shows its turns to a room.
+          // One with no conversation, such as what an emptied board leaves, adds nothing.
           include={(thread) =>
-            !excluded.has(thread.id) && thread.guestShared !== true && thread.hasRoomBoard !== true
+            !excluded.has(thread.id) &&
+            thread.guestShared !== true &&
+            thread.hasRoomBoard !== true &&
+            thread.latestUserMessageAt !== null &&
+            isListedThreadLineage(thread.lineage) &&
+            !onBoards.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)))
           }
           onSelect={async (thread) => {
             setPending(true);

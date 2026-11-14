@@ -73,6 +73,10 @@ import {
   boardItemsInRect,
   boardItemsCentredIn,
   boardDuplicates,
+  boardCentreSpot,
+  boardKeyEditsNote,
+  boardMenuEntries,
+  type BoardMenuRights,
   boardTidy,
   boardSectionAround,
   boardItemTarget,
@@ -107,6 +111,8 @@ import {
   followBoardView,
   formatBoardElapsed,
   isBoardHtmlArtifact,
+  boardCardsLine,
+  boardHtmlTitle,
   panToShow,
   panToShowAdded,
   parseBoardLink,
@@ -1028,9 +1034,14 @@ describe("boardDragItems", () => {
       items: [{ ref: "note:a", x: 10, y: 21 }],
     },
     {
-      name: "not a note only written in",
+      name: "a note written in, with its text alone",
       held: [["note:a", { ...note, text: "Hello" }]],
-      items: [],
+      items: [{ ref: "note:a", text: "Hello" }],
+    },
+    {
+      name: "a note moved while written in, with both",
+      held: [["note:a", { ...note, text: "Hello", x: 5 }]],
+      items: [{ ref: "note:a", x: 5, y: 0, text: "Hello" }],
     },
     {
       name: "a note resized, with its size",
@@ -1596,6 +1607,62 @@ describe("boardPromptContext", () => {
     expect(isBoardHtmlArtifact('<html lang="en"><body>Hi</body></html>')).toBe(true);
     expect(isBoardHtmlArtifact("# Plan\n\n<html> is a tag")).toBe(false);
     expect(isBoardHtmlArtifact("<div>Hi</div>")).toBe(false);
+  });
+
+  it.each([
+    {
+      html: "<!doctype html><html><head><title> Q3 &amp; Q4\n plan </title></head><h1>Other</h1>",
+      title: "Q3 & Q4 plan",
+    },
+    {
+      html: '<html><body><h2 class="x">A <em>bold</em> idea</h2></body></html>',
+      title: "A bold idea",
+    },
+    { html: "<html><head><title></title></head><body><h1>Fallback</h1>", title: "Fallback" },
+    // A reply cut short before its title closes names nothing.
+    { html: "<!doctype html><html><head><title>Cut sho", title: null },
+  ])("names an HTML page by its title or first heading: $title", ({ html, title }) => {
+    expect(boardHtmlTitle(html)).toBe(title);
+  });
+});
+
+describe("boardCardsLine", () => {
+  const sam = GuestId.make("sam");
+  const guests = [
+    { id: sam, name: "Sam" },
+    { id: "ana", name: "Ana" },
+  ];
+  const sent = [
+    "Note from the owner",
+    "Note from the owner",
+    "Task from Sam",
+    'Artifact "Plan"',
+    "Note from Ana",
+  ];
+  it.each([
+    {
+      name: "the owner reads their own cards as theirs, counted",
+      people: { guests, viewer: null },
+      line: '2 notes from You, Task from Sam, Artifact "Plan", Note from Ana',
+    },
+    {
+      name: "a guest reads the owner's by name and their own as theirs",
+      people: { guests, viewer: sam, ownerName: "Theo" },
+      line: '2 notes from Theo, Task from You, Artifact "Plan", Note from Ana',
+    },
+    {
+      name: "an owner with no name shown is the owner, as the chips say",
+      people: { guests, viewer: "ana" },
+      line: '2 notes from Owner, Task from Sam, Artifact "Plan", Note from You',
+    },
+  ])("$name", ({ people, line }) => {
+    expect(boardCardsLine(sent, people)).toBe(line);
+  });
+
+  it("counts the same card label of another kind without making up a plural", () => {
+    expect(boardCardsLine(['Artifact "Plan"', 'Artifact "Plan"'], { guests, viewer: null })).toBe(
+      'Artifact "Plan" (2)',
+    );
   });
 });
 
@@ -2433,5 +2500,136 @@ describe("boardReactionChips", () => {
     expect(boardReactionChips([{ emoji: "👀" }], { ...people, viewer: null })).toEqual([
       { emoji: "👀", count: 1, mine: true, names: "You" },
     ]);
+  });
+});
+
+describe("boardCentreSpot", () => {
+  const note = { w: 200, h: 150 };
+  const view = { x: 1_000, y: 2_000, width: 1_200, height: 800 };
+  const centred = { x: 1_500, y: 2_325 };
+
+  it("lands a toolbar note in the middle of the view, beside a card there, never far off", () => {
+    expect(boardCentreSpot(note, [], view)).toEqual(centred);
+    const blocker = { ...centred, width: 200, height: 150 };
+    const beside = boardCentreSpot(note, [blocker], view);
+    expect(beside).not.toEqual(centred);
+    expect(Math.abs(beside.x - centred.x)).toBeLessThanOrEqual(note.w * 1.5);
+    expect(Math.abs(beside.y - centred.y)).toBeLessThanOrEqual(note.h * 1.5);
+  });
+
+  it("steps over notes already stacked on the middle of a crowded view", () => {
+    const wall = { x: 1_000, y: 2_000, width: 1_200, height: 800 };
+    const stacked = [wall, { ...centred, width: 200, height: 150 }];
+    expect(boardCentreSpot(note, [wall], view)).toEqual(centred);
+    expect(boardCentreSpot(note, stacked, view)).toEqual({ x: 1_524, y: 2_349 });
+  });
+});
+
+describe("boardMenuEntries", () => {
+  const sam = GuestId.make("sam");
+  const eve = GuestId.make("eve");
+  const owner: BoardMenuRights = {
+    viewer: null,
+    canEdit: true,
+    roomBoard: true,
+    canAdd: true,
+    canAddThread: true,
+    canAddArtifact: true,
+    canPaste: false,
+  };
+  const guest: BoardMenuRights = { ...owner, viewer: sam };
+  const looker: BoardMenuRights = {
+    ...guest,
+    canEdit: false,
+    canAdd: false,
+    canAddThread: false,
+    canAddArtifact: false,
+  };
+  const samsNote: RoomBoardNote = { id: "n", text: "Idea", x: 0, y: 0, guestId: sam };
+  const evesLink: RoomBoardNote = {
+    id: "l",
+    text: "Docs",
+    x: 0,
+    y: 0,
+    kind: "link",
+    url: "https://x.dev",
+    guestId: eve,
+  };
+  const evesBox: RoomBoardNote = { id: "b", text: "", x: 0, y: 0, kind: "thread", guestId: eve };
+
+  it.each([
+    {
+      name: "everything to add for the owner, with paste when the clipboard is readable",
+      rights: { ...owner, canPaste: true },
+      entries: [
+        "add-note",
+        "add-task",
+        "add-section",
+        "add-thread",
+        "add-artifact",
+        "paste",
+        "select-all",
+        "fit",
+      ],
+    },
+    {
+      name: "no thread box or artifact past their limits, and no paste without the clipboard",
+      rights: { ...guest, canAddThread: false, canAddArtifact: false },
+      entries: ["add-note", "add-task", "add-section", "select-all", "fit"],
+    },
+    {
+      name: "notes and tasks only on a team's board",
+      rights: { ...owner, roomBoard: false },
+      entries: ["add-note", "add-task", "select-all", "fit"],
+    },
+    {
+      name: "only fitting the view for someone who may just look",
+      rights: looker,
+      entries: ["fit"],
+    },
+  ])("offers on the open board $name", ({ rights, entries }) => {
+    expect(boardMenuEntries({ kind: "canvas" }, rights)).toEqual(entries);
+  });
+
+  it("offers copies and links of a card, never of a window, and nothing to a looker", () => {
+    // The room thread's card, a person's or an agent's: only its own actions, never the board's.
+    expect(boardMenuEntries({ kind: "fixed-card" }, owner)).toEqual([]);
+    expect(boardMenuEntries({ kind: "card", note: samsNote }, guest)).toEqual([
+      "duplicate",
+      "copy",
+    ]);
+    expect(boardMenuEntries({ kind: "card", note: evesLink }, guest)).toEqual([
+      "duplicate",
+      "copy",
+      "copy-link",
+    ]);
+    expect(boardMenuEntries({ kind: "card", note: evesBox }, guest)).toEqual([]);
+    expect(boardMenuEntries({ kind: "card", note: evesLink }, looker)).toEqual(["copy-link"]);
+  });
+
+  it("deletes a selection only when some of it is the viewer's own", () => {
+    const both = { kind: "selection", notes: [samsNote, evesBox], count: 2 } as const;
+    expect(boardMenuEntries(both, guest)).toEqual(["duplicate", "copy", "tidy", "group", "delete"]);
+    const evesOnly = { kind: "selection", notes: [evesBox, evesLink], count: 3 } as const;
+    expect(boardMenuEntries(evesOnly, guest)).toEqual(["duplicate", "copy", "tidy", "group"]);
+    expect(boardMenuEntries(evesOnly, owner)).toContain("delete");
+    expect(boardMenuEntries(both, { ...guest, canAdd: false })).not.toContain("group");
+    expect(boardMenuEntries(both, looker)).toEqual([]);
+  });
+});
+
+describe("boardKeyEditsNote", () => {
+  const plain = { ctrlKey: false, metaKey: false, altKey: false };
+  it.each([
+    { key: "a", modifiers: plain, edits: true },
+    { key: "Enter", modifiers: plain, edits: true },
+    { key: "a", modifiers: { ...plain, ctrlKey: true }, edits: false },
+    { key: "a", modifiers: { ...plain, metaKey: true }, edits: false },
+    { key: " ", modifiers: plain, edits: false },
+    { key: "Delete", modifiers: plain, edits: false },
+    { key: "ArrowUp", modifiers: plain, edits: false },
+    { key: "Escape", modifiers: plain, edits: false },
+  ])("edits a selected note on $key: $edits", ({ key, modifiers, edits }) => {
+    expect(boardKeyEditsNote({ key, ...modifiers })).toBe(edits);
   });
 });

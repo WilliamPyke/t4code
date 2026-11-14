@@ -186,6 +186,7 @@ import {
   filterSidebarV2VisibleThreads,
   groupSidebarThreadsByProject,
   sidebarFolderExpansionKeys,
+  boardBoxThreadKeys,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
   deleteSelectedThreadEntries,
@@ -481,7 +482,7 @@ function useSidebarThreads(input: {
   const settledVisibleCount =
     settledTail.scopeKey === projectScopeKey ? settledTail.count : SETTLED_TAIL_INITIAL_COUNT;
 
-  const partition = partitionSidebarThreads({
+  const partitioned = partitionSidebarThreads({
     threads,
     scopedProjectKeys,
     delegatedUnderParent,
@@ -492,6 +493,21 @@ function useSidebarThreads(input: {
     sortActiveBySend: folderGroups !== null,
     clockKey: `${nowMinute}:${snoozeWakeClock}:${inboxReturnsVersion}`,
   });
+  // Thread boxes live on their board. Search still lists them; a pinned or open one keeps its row.
+  const boardBoxKeys = boardBoxThreadKeys(threads);
+  const onBoardOnly = (thread: EnvironmentThreadShell) => {
+    const key = threadShellKey(thread);
+    return boardBoxKeys.has(key) && key !== routeRowThreadKey;
+  };
+  const offBoards = (list: readonly EnvironmentThreadShell[]) =>
+    list.some(onBoardOnly) ? list.filter((thread) => !onBoardOnly(thread)) : list;
+  const partition = {
+    ...partitioned,
+    activeThreads: offBoards(partitioned.activeThreads),
+    workingThreads: offBoards(partitioned.workingThreads),
+    snoozedThreads: offBoards(partitioned.snoozedThreads),
+    settledThreads: offBoards(partitioned.settledThreads),
+  };
 
   const { pinnedThreads, activeThreads, workingThreads, snoozedThreads, settledThreads } =
     partition;
@@ -571,11 +587,11 @@ function useSidebarThreads(input: {
     threads,
     workingShelfEnabled,
     searchableThreads: [
-      ...pinnedThreads,
-      ...activeThreads,
-      ...workingThreads,
-      ...snoozedThreads,
-      ...settledThreads,
+      ...partitioned.pinnedThreads,
+      ...partitioned.activeThreads,
+      ...partitioned.workingThreads,
+      ...partitioned.snoozedThreads,
+      ...partitioned.settledThreads,
     ],
     settledVisibleCount,
     settledCount,
@@ -1451,6 +1467,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     setSelectionAnchor(scopedThreadKey(threadRef));
     if (isMobile) {
       setOpenMobile(false);
+    }
+    // A board's thread opens its board, with the conversation beside it.
+    const shell = readThreadShell(threadRef);
+    if (shell?.guestShared === true || shell?.hasRoomBoard === true) {
+      return router.navigate(roomBoardLocation(threadRef));
     }
     return router.navigate({
       to: "/$environmentId/$threadId",

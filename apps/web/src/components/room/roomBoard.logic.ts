@@ -1148,8 +1148,8 @@ export function cursorSender(send: (presence: BoardPresence) => void) {
 
 /**
  * What a person drags now, from the edits they hold: each card or note whose place or size moved
- * from where the gesture took it, at the whole pixels the room takes. A note only written in is
- * not dragged.
+ * from where the gesture took it, at the whole pixels the room takes, and each note's text while
+ * it is written in, so the room reads it as it is typed.
  */
 export function boardDragItems(
   held: ReadonlyMap<string, BoardValue>,
@@ -1170,12 +1170,15 @@ export function boardDragItems(
       const sized =
         value.size !== undefined &&
         (was?.size?.w !== value.size.w || was?.size?.h !== value.size.h);
-      if (was !== null && was.x === value.x && was.y === value.y && !sized) continue;
-      put(key, {
-        x: value.x,
-        y: value.y,
-        ...(sized && value.size !== undefined ? { w: value.size.w, h: value.size.h } : {}),
-      });
+      const written = was !== null && was.text !== value.text;
+      if (was === null || was.x !== value.x || was.y !== value.y || sized) {
+        put(key, {
+          x: value.x,
+          y: value.y,
+          ...(sized && value.size !== undefined ? { w: value.size.w, h: value.size.h } : {}),
+        });
+      }
+      if (written) put(key, { text: value.text });
     } else if (kind === "card" && "x" in value) {
       put(key, { x: value.x, y: value.y });
     } else if (kind === "size" && "w" in value) {
@@ -1612,6 +1615,31 @@ export function boardCodeEdgeIds(board: RoomBoard): ReadonlySet<string> {
 export const isBoardHtmlArtifact = (body: string): boolean =>
   /^(?:<!doctype html|<html)/i.test(body.trimStart());
 
+const HTML_ENTITIES: Readonly<Record<string, string>> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  "#39": "'",
+  nbsp: " ",
+};
+
+/** An HTML page's name: its `<title>`, else its first heading, as plain text; null if neither. */
+export function boardHtmlTitle(html: string): string | null {
+  for (const pattern of [
+    /<title[^>]*>([\s\S]*?)<\/title>/i,
+    /<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/i,
+  ]) {
+    const text = (pattern.exec(html)?.[1] ?? "")
+      .replace(/<[^>]*>/g, "")
+      .replace(/&(amp|lt|gt|quot|#39|nbsp);/g, (_, name: string) => HTML_ENTITIES[name] ?? "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (text !== "") return text;
+  }
+  return null;
+}
+
 /** How many connected cards one message from the board carries. */
 export const BOARD_PROMPT_MAX_CARDS = 8;
 /** How many cards a box's lines reach, sent ones too, before the board stops looking further. */
@@ -1641,6 +1669,51 @@ const sharedPersonName = (people: BoardPeople, guestId: string | undefined): str
   guestId === undefined
     ? (people.ownerName ?? "the owner")
     : (people.guests.find((guest) => guest.id === guestId)?.name ?? "a guest");
+
+const CARD_LABEL_PLURALS: ReadonlyArray<readonly [RegExp, (by: string) => string, string]> = [
+  [/^Note from (.+)$/, (by) => `Note from ${by}`, "notes from"],
+  [/^Task from (.+)$/, (by) => `Task from ${by}`, "tasks from"],
+  [/^Link from (.+)$/, (by) => `Link from ${by}`, "links from"],
+  [/^Comment thread from (.+)$/, (by) => `Comment thread from ${by}`, "comment threads from"],
+];
+
+/**
+ * The cards a turn went with, kept as everyone reads them ("Note from the owner"), as this viewer's
+ * chips name their authors ("Note from You"), the same card label once with how many it was.
+ */
+export function boardCardsLine(cards: ReadonlyArray<string>, people: BoardPeople): string {
+  const owner = new Set([
+    "the owner",
+    ...(people.ownerName === undefined ? [] : [people.ownerName]),
+  ]);
+  const viewerName =
+    people.viewer === null
+      ? undefined
+      : people.guests.find((guest) => guest.id === people.viewer)?.name;
+  const counted = new Map<string, { count: number; plural: string | null }>();
+  for (const sent of cards) {
+    let label = sent;
+    let plural: string | null = null;
+    for (const [pattern, write, many] of CARD_LABEL_PLURALS) {
+      const by = pattern.exec(sent)?.[1];
+      if (by === undefined) continue;
+      const name = owner.has(by)
+        ? boardPersonName(people, undefined)
+        : by === viewerName
+          ? "You"
+          : by;
+      label = write(name);
+      plural = `${many} ${name}`;
+      break;
+    }
+    counted.set(label, { count: (counted.get(label)?.count ?? 0) + 1, plural });
+  }
+  return [...counted]
+    .map(([label, { count, plural }]) =>
+      count === 1 ? label : plural === null ? `${label} (${count})` : `${count} ${plural}`,
+    )
+    .join(", ");
+}
 
 const EXCERPT_CHIP_LENGTH = 80;
 
@@ -1759,6 +1832,10 @@ export function boardCommentPromptCard(
 
 /** What an agent asked from a comment thread is sent when the person asking typed nothing. */
 export const BOARD_COMMENT_ASK_TEXT = "Respond to this comment thread.";
+
+/** What a box is asked when someone puts the HTML page its agent last wrote in a new artifact. */
+export const BOARD_PAGE_TO_ARTIFACT_TEXT =
+  "Write the HTML page from your last reply into the artifact, unchanged.";
 
 /**
  * The thread boxes someone can ask from a comment thread: their own, the room thread's card first
@@ -2511,3 +2588,140 @@ export function boardReactionChips(
     ];
   });
 }
+
+const NOTE_CASCADE = 24;
+const NOTE_CASCADE_MAX = 40;
+
+/**
+ * Where a note or task added from the toolbar goes: centred in the view when that is clear, else
+ * the nearest clear spot about a note's size from the centre, else on the centre, stepped down and
+ * right past any card already starting there, so it never lands far from where people look.
+ */
+export function boardCentreSpot(
+  size: RoomBoardSize,
+  taken: ReadonlyArray<BoardRect>,
+  view: BoardRect,
+): BoardPoint {
+  const middle = { x: view.x + view.width / 2, y: view.y + view.height / 2 };
+  const left = Math.max(view.x, middle.x - size.w * 1.5);
+  const top = Math.max(view.y, middle.y - size.h * 1.5);
+  const near = {
+    x: left,
+    y: top,
+    width: Math.min(view.x + view.width, middle.x + size.w * 1.5) - left,
+    height: Math.min(view.y + view.height, middle.y + size.h * 1.5) - top,
+  };
+  const clear =
+    near.width >= size.w + PLACE_GAP * 2 && near.height >= size.h + PLACE_GAP * 2
+      ? searchBoardSpot(size, middle, taken, near)
+      : null;
+  if (clear !== null && clear.cover === 0) return clear.at;
+  const start = { x: Math.round(middle.x - size.w / 2), y: Math.round(middle.y - size.h / 2) };
+  for (let step = 0; step < NOTE_CASCADE_MAX; step += 1) {
+    const at = { x: start.x + step * NOTE_CASCADE, y: start.y + step * NOTE_CASCADE };
+    const sitting = taken.some(
+      (rect) =>
+        Math.abs(rect.x - at.x) < NOTE_CASCADE / 2 && Math.abs(rect.y - at.y) < NOTE_CASCADE / 2,
+    );
+    if (!sitting) return at;
+  }
+  return start;
+}
+
+/** An entry of the board's right-click menu, beside a card's own actions. */
+export type BoardMenuEntry =
+  | "add-note"
+  | "add-task"
+  | "add-section"
+  | "add-thread"
+  | "add-artifact"
+  | "paste"
+  | "select-all"
+  | "fit"
+  | "duplicate"
+  | "copy"
+  | "copy-link"
+  | "tidy"
+  | "group"
+  | "delete";
+
+/**
+ * What the right-click menu is for: the board itself, one card, a card that is not a note (the
+ * room thread's card, a person's or an agent's), or a selection of several.
+ */
+export type BoardMenuOn =
+  | { readonly kind: "canvas" }
+  | { readonly kind: "card"; readonly note: RoomBoardNote }
+  | { readonly kind: "fixed-card" }
+  | {
+      readonly kind: "selection";
+      readonly notes: ReadonlyArray<RoomBoardNote>;
+      readonly count: number;
+    };
+
+/** What this viewer may do on this board, as the toolbar and selection bar already decide it. */
+export interface BoardMenuRights {
+  readonly viewer: GuestId | null;
+  readonly canEdit: boolean;
+  /** A room's own board, with sections, thread boxes and artifacts; a team's board has none. */
+  readonly roomBoard: boolean;
+  readonly canAdd: boolean;
+  readonly canAddThread: boolean;
+  readonly canAddArtifact: boolean;
+  /** The browser lets the page read the clipboard without asking. */
+  readonly canPaste: boolean;
+}
+
+/**
+ * The board's own entries of its right-click menu. A card's actions (react, colour, use, give,
+ * delete) come from its "…" menu and go first; these never repeat them.
+ */
+export function boardMenuEntries(
+  on: BoardMenuOn,
+  rights: BoardMenuRights,
+): ReadonlyArray<BoardMenuEntry> {
+  const entries: Array<BoardMenuEntry> = [];
+  const add = (entry: BoardMenuEntry, when: boolean) => {
+    if (when) entries.push(entry);
+  };
+  if (on.kind === "canvas") {
+    add("add-note", rights.canAdd);
+    add("add-task", rights.canAdd);
+    add("add-section", rights.canAdd && rights.roomBoard);
+    add("add-thread", rights.canAddThread && rights.roomBoard);
+    add("add-artifact", rights.canAddArtifact && rights.roomBoard);
+    add("paste", rights.canEdit && rights.canPaste);
+    add("select-all", rights.canEdit);
+    add("fit", true);
+    return entries;
+  }
+  // Never copied or deleted, and never the board's: only its own actions.
+  if (on.kind === "fixed-card") return entries;
+  const notes = on.kind === "card" ? [on.note] : on.notes;
+  const copies =
+    rights.canEdit &&
+    rights.roomBoard &&
+    boardDuplicates(notes, rights.viewer, () => "").length > 0;
+  add("duplicate", copies);
+  add("copy", copies);
+  if (on.kind === "card") {
+    add("copy-link", on.note.url !== undefined);
+    return entries;
+  }
+  add("tidy", rights.canEdit && on.count > 1);
+  add("group", rights.canAdd && rights.roomBoard);
+  add("delete", rights.canEdit && notes.some((note) => isRoomCardOwnedBy(note, rights.viewer)));
+  return entries;
+}
+
+/** Whether a key pressed on the board, with one note selected and not being edited, edits it. */
+export const boardKeyEditsNote = (event: {
+  readonly key: string;
+  readonly ctrlKey: boolean;
+  readonly metaKey: boolean;
+  readonly altKey: boolean;
+}): boolean =>
+  !event.ctrlKey &&
+  !event.metaKey &&
+  !event.altKey &&
+  (event.key === "Enter" || (event.key.length === 1 && event.key !== " "));

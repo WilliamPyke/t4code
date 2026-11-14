@@ -12,6 +12,7 @@ import {
   type ThreadGuestMessage,
 } from "@t3tools/contracts";
 import { roomBoxExcerpt } from "@t3tools/shared/roomBoard";
+import { AppWindowIcon } from "lucide-react";
 import { type PointerEvent, type ReactNode, useState } from "react";
 
 import { useEnvironmentScope } from "~/state/session";
@@ -23,10 +24,69 @@ import { ComposerPendingApprovalActions } from "../chat/ComposerPendingApprovalA
 import { guestMessageArtifactTitle } from "../chat/roomBoardPrompt";
 import { BoardProgressLine } from "./RoomBoardArtifact";
 import { BoardChip } from "./BoardChrome";
-import { type BoardPeople, boardPersonName } from "./roomBoard.logic";
+import {
+  type BoardPeople,
+  boardCardsLine,
+  boardHtmlTitle,
+  boardPersonName,
+  isBoardHtmlArtifact,
+} from "./roomBoard.logic";
 import { useBoxProgress } from "./roomBoardLive";
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
+
+/**
+ * A box's reply: as written, or, when it is a whole HTML page, what the page is called, with its
+ * source a press away and, for the last reply, a way to put the page in an artifact window.
+ */
+function BoxReply({
+  reply,
+  onToArtifact,
+}: {
+  readonly reply: string;
+  readonly onToArtifact: ((title: string | null) => void) | undefined;
+}) {
+  const [source, setSource] = useState(false);
+  if (!isBoardHtmlArtifact(reply)) {
+    return <p className="line-clamp-4 whitespace-pre-wrap [overflow-wrap:anywhere]">{reply}</p>;
+  }
+  const title = boardHtmlTitle(reply);
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="truncate">Wrote an HTML page{title === null ? "" : ` · ${title}`}</p>
+      <div className="flex flex-wrap gap-1">
+        {onToArtifact === undefined ? null : (
+          <Button
+            size="micro"
+            variant="outline"
+            onPointerDown={stopPointer}
+            onClick={() => onToArtifact(title)}
+          >
+            <AppWindowIcon />
+            Put in an artifact
+          </Button>
+        )}
+        <Button
+          size="micro"
+          variant="ghost-muted"
+          aria-expanded={source}
+          onPointerDown={stopPointer}
+          onClick={() => setSource((shown) => !shown)}
+        >
+          {source ? "Hide source" : "Show source"}
+        </Button>
+      </div>
+      {source ? (
+        <pre
+          data-board-scroll
+          className="max-h-40 overflow-auto rounded-md bg-foreground/4 px-2 py-1 font-mono text-2xs whitespace-pre-wrap [overflow-wrap:anywhere]"
+        >
+          {reply}
+        </pre>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * The last few turns of a thread box: who asked what, with which cards, and the reply. While a
@@ -36,10 +96,13 @@ export function BoxTurns({
   boxId,
   turns,
   people,
+  onPageToArtifact,
 }: {
   readonly boxId: string;
   readonly turns: ReadonlyArray<RoomBoxTurn>;
   readonly people: BoardPeople;
+  /** Puts the page the last reply wrote in a new artifact; absent when this person cannot. */
+  readonly onPageToArtifact?: ((title: string | null) => void) | undefined;
 }) {
   const running = useBoxProgress(boxId);
   if (turns.length === 0 && running === undefined) {
@@ -47,7 +110,7 @@ export function BoxTurns({
   }
   return (
     <ol className="flex flex-col gap-2.5">
-      {turns.map((turn) => (
+      {turns.map((turn, index) => (
         <li key={turn.id} className="flex flex-col gap-1 text-xs">
           <span className="text-2xs font-medium text-muted-foreground">
             {boardPersonName(people, turn.askedBy ?? turn.guestId)}
@@ -57,12 +120,15 @@ export function BoxTurns({
             {turn.prompt}
           </p>
           {turn.cards === undefined || turn.cards.length === 0 ? null : (
-            <p className="truncate text-2xs text-muted-foreground">With {turn.cards.join(", ")}</p>
+            <p className="truncate text-2xs text-muted-foreground">
+              With {boardCardsLine(turn.cards, people)}
+            </p>
           )}
           {turn.reply === "" ? null : (
-            <p className="line-clamp-4 whitespace-pre-wrap [overflow-wrap:anywhere]">
-              {turn.reply}
-            </p>
+            <BoxReply
+              reply={turn.reply}
+              onToArtifact={index === turns.length - 1 ? onPageToArtifact : undefined}
+            />
           )}
         </li>
       ))}
@@ -138,7 +204,7 @@ export function BoxRequests({
     | ((message: ThreadGuestMessage, decision: "send" | "dismiss") => void)
     | undefined;
   readonly resolving: ReadonlySet<string>;
-  /** Which model the owner's Send runs it on. */
+  /** Which model the owner's Send runs it on, and the way to change it. */
   readonly model?: ReactNode;
 }) {
   if (requests.length === 0) return null;
@@ -164,9 +230,9 @@ export function BoxRequests({
               <p className="text-2xs text-muted-foreground">Waiting for the owner</p>
             ) : (
               <div className="flex items-center justify-end gap-1">
-                <span className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">
+                <div className="flex min-w-0 flex-1 items-center" onPointerDown={stopPointer}>
                   {model}
-                </span>
+                </div>
                 <Button
                   size="micro"
                   variant="ghost-muted"

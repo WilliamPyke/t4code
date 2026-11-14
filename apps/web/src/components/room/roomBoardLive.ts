@@ -7,12 +7,13 @@ const NO_RUNNING: ReadonlyArray<RoomAgentActivity> = [];
 /** How long a card someone let go is held where it landed while the stored board catches up. */
 export const BOARD_DRAG_LANDING_MS = 3_000;
 
-/** A card or note someone else drags, where and how big it is now, in their colour. */
+/** A card or note someone else drags or writes in, where it is and what it says now. */
 export interface BoardLiveDrag {
   readonly x?: number | undefined;
   readonly y?: number | undefined;
   readonly w?: number | undefined;
   readonly h?: number | undefined;
+  readonly text?: string | undefined;
   readonly color: string;
   /** Let go: held where it landed until `until`, or until the stored board has it there. */
   readonly landed: boolean;
@@ -95,6 +96,15 @@ export function boardLiveRect(
   const arrived =
     rect.x === stored.x && rect.y === stored.y && rect.w === stored.w && rect.h === stored.h;
   return live.landed && arrived ? null : { ...rect, color: live.color };
+}
+
+/**
+ * What a note says while someone else writes in it, or null to show it as stored: once nobody
+ * does, or once what they finished is what the stored board says.
+ */
+export function boardLiveText(stored: string, live: BoardLiveDrag | undefined): string | null {
+  if (live?.text === undefined) return null;
+  return live.landed && live.text === stored ? null : live.text;
 }
 
 /**
