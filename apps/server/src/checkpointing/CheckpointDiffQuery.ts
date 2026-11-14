@@ -28,7 +28,7 @@ import { isGitImport, parseTurnDiffFilesFromNumstat, type TurnDiffFileSummary } 
 
 // Windows limits a command line to 32,767 characters. Leave room for the rest of git's arguments.
 const MAX_PATHSPEC_CHARS = 24_000;
-const DIFF_TRUNCATED_MARKER = "\n\n[truncated]";
+export const DIFF_TRUNCATED_MARKER = "\n\n[truncated]";
 
 function batchFilePaths(files: ReadonlyArray<TurnDiffFileSummary>) {
   const batches: string[][] = [];

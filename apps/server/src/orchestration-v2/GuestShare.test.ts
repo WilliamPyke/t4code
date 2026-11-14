@@ -859,6 +859,327 @@ it.effect("shows a thread box's last turns, and keeps the owner's box threads ap
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect(
+  "marks a box's cards sent only as a prompt that carried them is taken, never by a change",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* setup;
+      let commands = 0;
+      const next = (label: string) => CommandId.make(`${label}:${commands++}`);
+      yield* orchestrator.dispatch({
+        type: "thread.guest-share.redeem",
+        commandId: next("redeem"),
+        threadId,
+        shareId,
+        guestId: sam,
+        guestName: "Sam",
+      });
+      const change = (author: GuestId | null, change: RoomBoardChange) =>
+        orchestrator.dispatch({
+          type: "thread.guest-board.change",
+          commandId: next("board"),
+          threadId,
+          shareId,
+          author,
+          change,
+        });
+      const line = (author: GuestId | null, id: string, from: string, to: string) =>
+        change(author, { type: "edge.put", edgeId: id, from, to });
+      yield* change(null, {
+        type: "note.put",
+        noteId: "box",
+        text: "Box",
+        x: 0,
+        y: 0,
+        kind: "thread",
+      });
+      yield* change(null, { type: "note.put", noteId: "plan", text: "Plan", x: 0, y: 0 });
+      yield* change(sam, {
+        type: "note.put",
+        noteId: "his",
+        text: "His",
+        x: 0,
+        y: 0,
+        kind: "thread",
+      });
+      yield* change(sam, { type: "note.put", noteId: "idea", text: "Idea", x: 0, y: 0 });
+      yield* change(sam, { type: "note.put", noteId: "late", text: "Late", x: 0, y: 0 });
+      yield* line(null, "plan>box", "note:plan", "note:box");
+      yield* line(sam, "idea>his", "note:idea", "note:his");
+      yield* line(sam, "plan>his", "note:plan", "note:his");
+      yield* line(sam, "late>his", "note:late", "note:his");
+      // A change that claims a line was sent draws it plain: only a taken prompt marks one.
+      const forged = decodeChange({
+        type: "edge.put",
+        edgeId: "forged",
+        from: "note:idea",
+        to: "note:box",
+        sentAt: "2026-11-13T00:00:00.000Z",
+      });
+      assert.isTrue(Option.isSome(forged));
+      if (Option.isSome(forged)) yield* change(sam, forged.value);
+      const sent = Effect.map(orchestrator.getThreadRecords(threadId, []), ({ thread }) =>
+        (thread.guestShare?.board?.edges ?? [])
+          .filter((edge) => edge.sentAt !== undefined)
+          .map((edge) => edge.id),
+      );
+      assert.deepEqual(yield* sent, []);
+
+      // A turn Sam's machine posts for a box that is not his marks nothing.
+      const post = (id: string, boxId: string, cardRefs: ReadonlyArray<string>) =>
+        orchestrator.dispatch({
+          type: "thread.guest-turn.post",
+          commandId: next("turn"),
+          threadId,
+          shareId,
+          guestId: sam,
+          turn: { id, prompt: "Go", reply: "Done", boxId, cardRefs: [...cardRefs] },
+        });
+      yield* post("run:not-his", "box", ["note:plan"]);
+      assert.deepEqual(yield* sent, []);
+
+      // The owner's server marks what the owner's own prompt took into the owner's box, along lines
+      // into that box only.
+      yield* orchestrator.dispatch({
+        type: "thread.room-cards.sent",
+        commandId: next("sent"),
+        threadId,
+        shareId,
+        boxId: "box",
+        cardRefs: ["note:plan", "note:late"],
+      });
+      assert.deepEqual(yield* sent, ["plan>box"]);
+
+      // A guest's request marks its cards only once the owner sends it, not when it waits or is
+      // dismissed.
+      const submit = (id: string) =>
+        orchestrator.dispatch({
+          type: "thread.guest-message.submit",
+          commandId: next("submit"),
+          threadId,
+          shareId,
+          guestId: sam,
+          guestMessageId: GuestMessageId.make(id),
+          text: "Dark mode",
+          boxId: "his",
+          cards: ["Note from Sam"],
+          cardRefs: ["note:idea"],
+        });
+      yield* submit("m:dismissed");
+      yield* orchestrator.dispatch({
+        type: "thread.guest-message.dismiss",
+        commandId: next("dismiss"),
+        threadId,
+        guestMessageId: GuestMessageId.make("m:dismissed"),
+      });
+      yield* submit("m:sent");
+      const waiting = yield* orchestrator.getThreadRecords(threadId, []);
+      assert.deepInclude(waiting.thread.guestShare?.messages.at(-1), {
+        cards: ["Note from Sam"],
+        cardRefs: ["note:idea"],
+      });
+      assert.deepEqual(yield* sent, ["plan>box"]);
+      yield* orchestrator.dispatch({
+        type: "thread.guest-message.route",
+        commandId: next("route"),
+        threadId,
+        guestMessageId: GuestMessageId.make("m:sent"),
+        sentAs: MessageId.make("message:his"),
+      });
+      assert.deepEqual(yield* sent, ["plan>box", "idea>his"]);
+
+      // Sam's own turn in his box marks the cards it carried, once, as the box first shows it.
+      yield* post("run:his", "his", ["note:late"]);
+      assert.deepEqual(yield* sent, ["plan>box", "idea>his", "late>his"]);
+      const marked = yield* orchestrator.getThreadRecords(threadId, []);
+      const lateAt = marked.thread.guestShare?.board?.edges?.find((edge) => edge.id === "late>his");
+      yield* post("run:his", "his", ["note:late", "note:plan"]);
+      assert.deepEqual(yield* sent, ["plan>box", "idea>his", "late>his"]);
+
+      // Pinning is a change anyone in the room makes, and keeps the mark.
+      yield* change(sam, { type: "edge.pin", edgeId: "late>his", pinned: true });
+      const pinned = yield* orchestrator.getThreadRecords(threadId, []);
+      assert.deepEqual(
+        pinned.thread.guestShare?.board?.edges?.find((edge) => edge.id === "late>his"),
+        { ...lateAt!, pinned: true },
+      );
+    }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("shows what a box's thread changed in its code windows, once per run, each its own", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* setup;
+    let commands = 0;
+    const next = (label: string) => CommandId.make(`${label}:${commands++}`);
+    const change = (author: GuestId | null, change: RoomBoardChange) =>
+      orchestrator.dispatch({
+        type: "thread.guest-board.change",
+        commandId: next("board"),
+        threadId,
+        shareId,
+        author,
+        change,
+      });
+    yield* orchestrator.dispatch({
+      type: "thread.guest-share.redeem",
+      commandId: next("redeem"),
+      threadId,
+      shareId,
+      guestId: sam,
+      guestName: "Sam",
+    });
+    yield* change(null, {
+      type: "note.put",
+      noteId: "box",
+      text: "Box",
+      x: 0,
+      y: 0,
+      kind: "thread",
+    });
+    yield* change(sam, {
+      type: "note.put",
+      noteId: "sams",
+      text: "Sam",
+      x: 0,
+      y: 0,
+      kind: "thread",
+    });
+    for (const id of ["code", "other", "loose", "his"]) {
+      yield* change(null, { type: "note.put", noteId: id, text: id, x: 0, y: 0, kind: "code" });
+    }
+    yield* change(null, { type: "edge.put", edgeId: "e1", from: "note:box", to: "note:code" });
+    yield* change(null, { type: "edge.put", edgeId: "e2", from: "note:box", to: "note:other" });
+    yield* change(sam, { type: "edge.put", edgeId: "e3", from: "note:sams", to: "note:his" });
+    const summary = (count: number) => ({
+      files: [{ path: "src/a.ts", additions: count, deletions: 1 }],
+      additions: count,
+      deletions: 1,
+      turnCount: count,
+    });
+    const fill = (boxId: string, turnId: string, count: number) =>
+      orchestrator.dispatch({
+        type: "thread.room-box.changes",
+        commandId: next("changes"),
+        threadId,
+        shareId,
+        boxId,
+        turnId,
+        changes: summary(count),
+      });
+    const changesOf = (noteId: string) =>
+      Effect.map(
+        orchestrator.getThreadRecords(threadId, []),
+        ({ thread }) => thread.guestShare?.board?.notes.find((note) => note.id === noteId)?.changes,
+      );
+    yield* fill("box", "run:1", 1);
+    assert.deepInclude(yield* changesOf("code"), {
+      boxId: "box",
+      turnId: "run:1",
+      additions: 1,
+      turnCount: 1,
+    });
+    assert.deepInclude(yield* changesOf("other"), { turnId: "run:1" });
+    assert.isUndefined(yield* changesOf("loose"));
+    // The same run writes once; the next one replaces it.
+    const first = yield* changesOf("code");
+    yield* fill("box", "run:1", 5);
+    assert.deepEqual(yield* changesOf("code"), first);
+    yield* fill("box", "run:2", 2);
+    assert.deepInclude(yield* changesOf("code"), { turnId: "run:2", additions: 2 });
+    // This server never writes a guest's box: only what their machine posts with their turn.
+    yield* fill("sams", "run:3", 3);
+    assert.isUndefined(yield* changesOf("his"));
+    const post = (id: string, boxId: string, changes?: ReturnType<typeof summary>) =>
+      orchestrator.dispatch({
+        type: "thread.guest-turn.post",
+        commandId: next("post"),
+        threadId,
+        shareId,
+        guestId: sam,
+        turn: {
+          id,
+          prompt: "Go",
+          reply: "Done",
+          boxId,
+          ...(changes === undefined ? {} : { changes }),
+        },
+      });
+    // Not into the owner's box's windows.
+    yield* post("sam:run:0", "box", summary(9));
+    assert.deepInclude(yield* changesOf("code"), { turnId: "run:2" });
+    // The turn lands first, then again with what it changed once its checkpoint is taken.
+    yield* post("sam:run:1", "sams");
+    assert.isUndefined(yield* changesOf("his"));
+    yield* post("sam:run:1", "sams", summary(4));
+    assert.deepInclude(yield* changesOf("his"), {
+      boxId: "sams",
+      guestId: sam,
+      turnId: "sam:run:1",
+      additions: 4,
+    });
+    const box = Effect.map(
+      orchestrator.getThreadRecords(threadId, []),
+      ({ thread }) => thread.guestShare?.board?.notes.find((note) => note.id === "sams")?.thread,
+    );
+    assert.deepEqual(
+      (yield* box)?.turns.map((turn) => turn.id),
+      ["sam:run:1"],
+    );
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("shows a pull request read only on the window that still names it", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* setup;
+    let commands = 0;
+    const next = (label: string) => CommandId.make(`${label}:${commands++}`);
+    const url = "https://github.com/acme/app/pull/12";
+    const change = (change: RoomBoardChange) =>
+      orchestrator.dispatch({
+        type: "thread.guest-board.change",
+        commandId: next("board"),
+        threadId,
+        shareId,
+        author: null,
+        change,
+      });
+    yield* change({
+      type: "note.put",
+      noteId: "pr",
+      text: "",
+      x: 0,
+      y: 0,
+      kind: "pull-request",
+      url,
+    });
+    yield* change({ type: "note.put", noteId: "idea", text: url, x: 0, y: 0 });
+    const read = (noteId: string, at: string, readUrl = url) =>
+      orchestrator.dispatch({
+        type: "thread.room-pull-request.read",
+        commandId: next("read"),
+        threadId,
+        shareId,
+        noteId,
+        url: readUrl,
+        read: { readAt: at, problem: "not_found" },
+      });
+    const reads = Effect.map(orchestrator.getThreadRecords(threadId, []), ({ thread }) =>
+      Object.fromEntries(
+        (thread.guestShare?.board?.notes ?? []).map((note) => [note.id, note.pullRequest?.readAt]),
+      ),
+    );
+    yield* read("pr", "2026-11-13T00:00:00.000Z");
+    // Another URL, a card of another kind, or one since removed takes nothing.
+    yield* read("pr", "2026-11-13T00:01:00.000Z", "https://github.com/acme/app/pull/13");
+    yield* read("idea", "2026-11-13T00:01:00.000Z");
+    yield* read("gone", "2026-11-13T00:01:00.000Z");
+    assert.deepEqual(yield* reads, { pr: "2026-11-13T00:00:00.000Z", idea: undefined });
+    // Moving the window keeps its read.
+    yield* change({ type: "note.put", noteId: "pr", text: "", x: 50, y: 0, kind: "pull-request" });
+    assert.deepEqual(yield* reads, { pr: "2026-11-13T00:00:00.000Z", idea: undefined });
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("sends a guest's message for an artifact with the card as this board has it", () =>
   Effect.gen(function* () {
     const orchestrator = yield* setup;
@@ -1007,7 +1328,15 @@ it.effect("keeps one board for the room, changed a card or a note at a time", ()
       positions: { thread: { x: 300, y: -40 }, [`agent:${sam}`]: { x: 5, y: 5 } },
       sizes: { [`agent:${sam}`]: { w: 300, h: 200 } },
       notes: [
-        { id: "note:sam", text: "Ship it Friday", x: 9, y: 9, guestId: sam },
+        // The edit is timed by the board, so a box sends the note again once it changed.
+        {
+          id: "note:sam",
+          text: "Ship it Friday",
+          x: 9,
+          y: 9,
+          guestId: sam,
+          editedAt: DateTime.formatIso(yield* DateTime.now),
+        },
         { id: "note:owner", text: "Not yet", x: 3, y: 4 },
       ],
     });
@@ -1173,6 +1502,7 @@ it.effect("keeps tasks, links, comments and arrows on the board, checked by the 
         kind: "task",
         done: true,
         assignee: { guestId: alex },
+        editedAt: DateTime.formatIso(yield* DateTime.now),
       },
       { id: "comment", text: "Why 15 minutes?", x: 0, y: 0, guestId: alex, pinnedTo: "message:1" },
       { id: "owner-task", text: "", x: 0, y: 0, kind: "task", assignee: {} },

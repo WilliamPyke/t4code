@@ -64,11 +64,13 @@ import {
   FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
+  LayoutGridIcon,
   MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
   PaletteIcon,
   PanelsTopLeftIcon,
+  PlusIcon,
   RotateCcwIcon,
   SettingsIcon,
   MonitorIcon,
@@ -252,6 +254,7 @@ import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
 import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
 import { openGuestShareDialog } from "./chat/guestShareDialogState";
 import { roomBoardLocation } from "./room/roomBoardNavigation";
+import { useStartNewBoard } from "./boards/newBoard";
 import { openUseInAnotherApp } from "./mcp/UseInAnotherAppDialog";
 import { openNewTeamDialog } from "./teams/NewTeamDialog";
 import { useTeams } from "../teams/teams";
@@ -407,6 +410,7 @@ function OpenCommandPaletteDialog(props: {
   readonly initialContext: CommandPaletteReturnContext | undefined;
 }) {
   const navigate = useNavigate();
+  const startNewBoard = useStartNewBoard();
   const pathname = useLocation({ select: (location) => location.pathname });
   const { openChildSearch, setOpen } = props;
   // Keyed by palette session: the intent and restored search only seed this
@@ -1268,6 +1272,29 @@ function OpenCommandPaletteDialog(props: {
   };
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
+  // Boards first: home and a new board lead the actions.
+  actionItems.push(
+    {
+      kind: "action",
+      value: "action:go-to-boards",
+      searchTerms: ["boards", "home", "all boards", "canvas"],
+      title: "Go to Boards",
+      icon: <LayoutGridIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({ to: "/" });
+      },
+    },
+    {
+      kind: "action",
+      value: "action:new-board",
+      searchTerms: ["new board", "board", "canvas", "create", "start"],
+      title: "New board",
+      icon: <PlusIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await startNewBoard();
+      },
+    },
+  );
 
   if (projects.length > 0) {
     const activeProjectTitle =
@@ -1477,13 +1504,13 @@ function OpenCommandPaletteDialog(props: {
       kind: "submenu",
       value: "action:open-board-of",
       searchTerms: ["board", "room", "shared threads", "guests", "canvas"],
-      title: "Open board of...",
+      title: "Open board...",
       icon: <PanelsTopLeftIcon className={ITEM_ICON_CLASS} />,
       addonIcon: <PanelsTopLeftIcon className={ADDON_ICON_CLASS} />,
       groups: [
         {
           value: "shared-threads",
-          label: "Threads with a board",
+          label: "Boards",
           items: sharedThreads.map((thread) => ({
             kind: "action" as const,
             value: `action:open-board:${thread.environmentId}:${thread.id}`,

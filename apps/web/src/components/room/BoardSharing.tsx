@@ -27,7 +27,7 @@ export function BoardSharing({
         <span className="text-xs text-muted-foreground">Not shared</span>
       )}
       {canShare ? (
-        <Button size="xs" variant="outline" onClick={() => openGuestShareDialog(threadRef)}>
+        <Button size="xs" onClick={() => openGuestShareDialog(threadRef)}>
           <UserPlusIcon />
           Share
         </Button>

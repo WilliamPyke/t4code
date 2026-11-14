@@ -18,6 +18,7 @@ import {
   rememberGuestShare,
 } from "~/guest/guestShares";
 import { redeemInvite } from "~/guest/redeemInvite";
+import { BoardBackdrop } from "../room/BoardChrome";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { GuestNotice, noteGuestSignInFailure } from "./GuestThreadView";
@@ -99,7 +100,7 @@ export function GuestPage() {
   }, []);
 
   return (
-    <div className="flex h-dvh flex-col bg-background text-foreground">
+    <BoardBackdrop className="flex h-dvh flex-col px-4 text-foreground">
       {joined !== null ? (
         <Navigate
           to="/$environmentId/$threadId"
@@ -111,7 +112,7 @@ export function GuestPage() {
       ) : (
         <NameForm credential={credential} host={host} onJoined={setJoined} />
       )}
-    </div>
+    </BoardBackdrop>
   );
 }
 
@@ -142,10 +143,17 @@ function NameForm({
     onJoined(joined);
   };
   return (
-    <form className="m-auto flex w-full max-w-xs flex-col gap-3 p-6" onSubmit={submit}>
-      <h1 className="text-base font-medium">Join a shared thread</h1>
-      <p className="text-xs text-muted-foreground">Shared from {host}</p>
-      <label className="flex flex-col gap-1.5 text-sm" htmlFor="guest-name">
+    <form
+      className="m-auto flex w-full max-w-sm flex-col gap-4 rounded-board border border-board-hairline bg-card p-6 text-card-foreground shadow-board"
+      onSubmit={submit}
+    >
+      <div className="flex flex-col gap-1">
+        <h1 className="text-lg font-semibold tracking-tight">Join a shared board</h1>
+        <p className="text-sm text-muted-foreground">
+          Shared with you from <span className="font-medium text-foreground">{host}</span>
+        </p>
+      </div>
+      <label className="flex flex-col gap-1.5 text-sm font-medium" htmlFor="guest-name">
         Your name
         <Input
           id="guest-name"

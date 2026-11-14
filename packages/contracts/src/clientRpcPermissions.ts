@@ -94,6 +94,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   // Shows one of the owner's threads to the room from then on.
   [WS_METHODS.guestShareAddBoxThread]: AuthOrchestrationOperateScope,
   [WS_METHODS.guestShareResolveMessage]: AuthOrchestrationOperateScope,
+  // Spends the owner's GitHub requests to show a pull request to the room.
+  [WS_METHODS.guestShareRefreshPullRequest]: AuthOrchestrationOperateScope,
   [WS_METHODS.peerLinksLink]: AuthAccessWriteScope,
   [WS_METHODS.peerLinksUnlink]: AuthAccessWriteScope,
   // A link lets every agent here reach the other environment: Settings' bar.

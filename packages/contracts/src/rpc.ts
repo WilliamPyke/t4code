@@ -176,10 +176,15 @@ import {
   RoomAgentsEvent,
   RoomBoardChangeError,
   RoomBoardChangeInput,
+  RoomCodePatch,
+  RoomCodePatchError,
+  RoomCodePatchInput,
+  RoomPullRequestRefreshInput,
   RoomCursorInput,
   RoomCursorsEvent,
   RoomLiveInput,
 } from "./guestShare.ts";
+import { RoomBoardSummaries, RoomBoardSummariesInput } from "./roomBoardSummary.ts";
 import {
   SharedThreadJoinError,
   SharedThreadJoinInput,
@@ -191,6 +196,7 @@ import {
   SharedThreadSource,
   SharedThreadFindRoomInput,
   SharedThreadFindRoomResult,
+  SharedThreadBoxPatchInput,
   SharedThreadLinkBoxInput,
   SharedThreadPromptBoxInput,
   SharedThreadPromptBoxResult,
@@ -607,6 +613,10 @@ export const WS_METHODS = {
   sharedThreadPromptBox: "sharedThread.promptBox",
   sharedThreadLinkBox: "sharedThread.linkBox",
   sharedThreadFindRoom: "sharedThread.findRoom",
+  sharedThreadBoxPatch: "sharedThread.boxPatch",
+  guestShareCodePatch: "guestShare.codePatch",
+  guestShareRefreshPullRequest: "guestShare.refreshPullRequest",
+  guestShareBoardSummaries: "guestShare.boardSummaries",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
 
@@ -2139,6 +2149,29 @@ const WsSharedThreadLinkBoxRpc = Rpc.make(WS_METHODS.sharedThreadLinkBox, {
   error: Schema.Union([SharedThreadJoinError, EnvironmentAuthorizationError]),
 });
 
+const WsSharedThreadBoxPatchRpc = Rpc.make(WS_METHODS.sharedThreadBoxPatch, {
+  payload: SharedThreadBoxPatchInput,
+  success: RoomCodePatch,
+  error: Schema.Union([RoomCodePatchError, EnvironmentAuthorizationError]),
+});
+
+const WsGuestShareCodePatchRpc = Rpc.make(WS_METHODS.guestShareCodePatch, {
+  payload: RoomCodePatchInput,
+  success: RoomCodePatch,
+  error: Schema.Union([RoomCodePatchError, EnvironmentAuthorizationError]),
+});
+
+const WsGuestShareBoardSummariesRpc = Rpc.make(WS_METHODS.guestShareBoardSummaries, {
+  payload: RoomBoardSummariesInput,
+  success: RoomBoardSummaries,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsGuestShareRefreshPullRequestRpc = Rpc.make(WS_METHODS.guestShareRefreshPullRequest, {
+  payload: RoomPullRequestRefreshInput,
+  error: Schema.Union([RoomBoardChangeError, EnvironmentAuthorizationError]),
+});
+
 const WsSharedThreadFindRoomRpc = Rpc.make(WS_METHODS.sharedThreadFindRoom, {
   payload: SharedThreadFindRoomInput,
   success: SharedThreadFindRoomResult,
@@ -2233,6 +2266,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsSharedThreadPromptBoxRpc,
   WsSharedThreadLinkBoxRpc,
   WsSharedThreadFindRoomRpc,
+  WsSharedThreadBoxPatchRpc,
+  WsGuestShareCodePatchRpc,
+  WsGuestShareRefreshPullRequestRpc,
+  WsGuestShareBoardSummariesRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

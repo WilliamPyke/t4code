@@ -1,6 +1,8 @@
 import {
   GUEST_ATTACHMENT_ROUTE,
+  GUEST_BOARD_CODE_ROUTE,
   GUEST_BOARD_CURSOR_ROUTE,
+  GUEST_BOARD_PULL_REQUEST_ROUTE,
   GUEST_BOARD_ROUTE,
   GUEST_COMMAND_OUTPUT_ROUTE,
   GUEST_EXPORT_ROUTE,
@@ -38,6 +40,8 @@ import {
   OrchestrationV2ThreadHistoryPage,
   RoomArtifactRead,
   RoomBoardChange,
+  RoomBoardNote,
+  RoomCodePatchRequest,
   RoomUpdates,
   SharedThreadExport,
 } from "@t3tools/contracts";
@@ -485,6 +489,56 @@ const boardRoute = HttpRouter.add(
   }),
 );
 
+const decodeNoteId = Schema.decodeUnknownEffect(RoomBoardNote.fields.id);
+
+const boardPullRequestRoute = HttpRouter.add(
+  "POST",
+  GUEST_BOARD_PULL_REQUEST_ROUTE,
+  Effect.gen(function* () {
+    const session = yield* sessionToken;
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const params = new URLSearchParams(request.url.split("?", 2)[1] ?? "");
+    const noteId = yield* decodeNoteId(params.get("note")).pipe(Effect.option);
+    if (noteId._tag === "None") return yield* badRequest;
+    const guestShares = yield* GuestShareService;
+    return yield* guestShares
+      .refreshPullRequest({ session }, noteId.value)
+      .pipe(
+        Effect.as(HttpServerResponse.empty({ status: 202, headers: NO_STORE })),
+        Effect.catchTags({ GuestShareAccessError: errorResponse }),
+      );
+  }),
+);
+
+const decodeCodePatchRequest = Schema.decodeUnknownEffect(RoomCodePatchRequest);
+
+const boardCodeRoute = HttpRouter.add(
+  "GET",
+  GUEST_BOARD_CODE_ROUTE,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const params = new URLSearchParams(request.url.split("?", 2)[1] ?? "");
+    const asked = yield* decodeCodePatchRequest({
+      noteId: params.get("note"),
+      path: params.get("path"),
+      scope: params.get("scope"),
+    }).pipe(Effect.option);
+    if (asked._tag === "None") return yield* badRequest;
+    const guestShares = yield* GuestShareService;
+    return yield* guestShares.codePatch({ session: yield* sessionToken }, asked.value).pipe(
+      Effect.map((body) => HttpServerResponse.jsonUnsafe(body, { headers: NO_STORE })),
+      Effect.catchTags({
+        GuestShareAccessError: errorResponse,
+        RoomCodePatchError: (error) =>
+          HttpServerResponse.json(
+            { reason: error.reason, message: error.message },
+            { status: error.reason === "inactive" ? 403 : 404, headers: NO_STORE },
+          ),
+      }),
+    );
+  }),
+);
+
 // A pointer position and view are a few bytes; anything bigger is not one.
 const CURSOR_MAX_BODY_BYTES = 256;
 const decodeCursor = Schema.decodeUnknownEffect(GuestCursorRequest);
@@ -741,6 +795,8 @@ export const layer = Layer.mergeAll(
   roomUpdatesRoute,
   roomArtifactRoute,
   boardRoute,
+  boardCodeRoute,
+  boardPullRequestRoute,
   boardCursorRoute,
   signInRoute,
   signInBeginRoute,

@@ -8,38 +8,56 @@ import { cn } from "~/lib/utils";
 
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { BOARD_ICON_BUTTON_CLASS } from "./BoardChrome";
 
-/** A note's paper and edge in each colour, from the theme's tokens so both themes read well. */
+/** A note's paper in each colour: a full paint fill from the board's tokens (index.css). */
 const NOTE_COLOR_CLASSES: Readonly<Record<RoomBoardNoteColor, string>> = {
-  yellow: "border-warning/40 bg-warning-surface",
-  green: "border-success/40 bg-success/8 dark:bg-success/16",
-  blue: "border-info/40 bg-info/8 dark:bg-info/16",
-  pink: "border-guest/40 bg-guest/8 dark:bg-guest/16",
-  purple: "border-violet-500/40 bg-violet-500/8 dark:bg-violet-500/16",
-  grey: "border-muted-foreground/30 bg-muted-foreground/8 dark:bg-muted-foreground/16",
+  yellow: "bg-paint-yellow",
+  green: "bg-paint-green",
+  blue: "bg-paint-blue",
+  pink: "bg-paint-pink",
+  purple: "bg-paint-purple",
+  grey: "bg-paint-grey",
 };
 
 /** A section's frame and faint fill in each colour, quieter than a note so cards read over it. */
 const SECTION_COLOR_CLASSES: Readonly<Record<RoomBoardNoteColor, string>> = {
-  yellow: "border-warning/50 bg-warning/4",
-  green: "border-success/50 bg-success/4",
-  blue: "border-info/50 bg-info/4",
-  pink: "border-guest/50 bg-guest/4",
-  purple: "border-violet-500/50 bg-violet-500/4",
-  grey: "border-muted-foreground/40 bg-muted-foreground/4",
+  yellow: "border-paint-yellow-deep/35 bg-paint-yellow-deep/7",
+  green: "border-paint-green-deep/35 bg-paint-green-deep/7",
+  blue: "border-paint-blue-deep/35 bg-paint-blue-deep/7",
+  pink: "border-paint-pink-deep/35 bg-paint-pink-deep/7",
+  purple: "border-paint-purple-deep/35 bg-paint-purple-deep/7",
+  grey: "border-paint-grey-deep/30 bg-paint-grey-deep/4",
 };
 
 export const sectionColorClassName = (color: RoomBoardNoteColor | undefined) =>
   SECTION_COLOR_CLASSES[color ?? "grey"];
 
-const SWATCH_CLASSES: Readonly<Record<RoomBoardNoteColor, string>> = {
-  yellow: "bg-warning",
-  green: "bg-success",
-  blue: "bg-info",
-  pink: "bg-guest",
-  purple: "bg-violet-500",
-  grey: "bg-muted-foreground",
+/** A section's label above its corner, in the deeper hue of its paint. */
+const SECTION_LABEL_CLASSES: Readonly<Record<RoomBoardNoteColor, string>> = {
+  yellow: "text-paint-yellow-deep",
+  green: "text-paint-green-deep",
+  blue: "text-paint-blue-deep",
+  pink: "text-paint-pink-deep",
+  purple: "text-paint-purple-deep",
+  grey: "text-paint-grey-deep",
 };
+
+export const sectionLabelClassName = (color: RoomBoardNoteColor | undefined) =>
+  SECTION_LABEL_CLASSES[color ?? "grey"];
+
+const SWATCH_CLASSES: Readonly<Record<RoomBoardNoteColor, string>> = {
+  yellow: "bg-paint-yellow",
+  green: "bg-paint-green",
+  blue: "bg-paint-blue",
+  pink: "bg-paint-pink",
+  purple: "bg-paint-purple",
+  grey: "bg-paint-grey",
+};
+
+/** A small square in a paint, as the toolbar's sticky button and the colour menu show it. */
+export const paintSwatchClassName = (color: RoomBoardNoteColor | undefined) =>
+  SWATCH_CLASSES[color ?? "yellow"];
 
 const COLOR_NAMES: Readonly<Record<RoomBoardNoteColor, string>> = {
   yellow: "Yellow",
@@ -79,7 +97,7 @@ export function NoteColorPicker({
                 <button
                   type="button"
                   aria-label={`Colour: ${COLOR_NAMES[color ?? "yellow"]}`}
-                  className="grid size-6 place-items-center rounded-sm opacity-60 hover:opacity-100"
+                  className={BOARD_ICON_BUTTON_CLASS}
                   onPointerDown={stopPointer}
                 />
               }
@@ -91,23 +109,39 @@ export function NoteColorPicker({
         <TooltipPopup side="top">Colour</TooltipPopup>
       </Tooltip>
       <MenuPopup align="end">
-        <MenuRadioGroup
-          value={color ?? "yellow"}
-          onValueChange={(value) => {
-            const picked = ROOM_BOARD_NOTE_COLORS.find((choice) => choice === value);
-            if (picked !== undefined) onPick(picked);
-          }}
-        >
-          {ROOM_BOARD_NOTE_COLORS.map((choice) => (
-            <MenuRadioItem key={choice} value={choice} closeOnClick>
-              <span className="flex items-center gap-2">
-                <span aria-hidden className={cn("size-3 rounded-full", SWATCH_CLASSES[choice])} />
-                {COLOR_NAMES[choice]}
-              </span>
-            </MenuRadioItem>
-          ))}
-        </MenuRadioGroup>
+        <NoteColorChoices color={color} onPick={onPick} />
       </MenuPopup>
     </Menu>
+  );
+}
+
+/** The colours a plain note can take, as items of a menu. */
+export function NoteColorChoices({
+  color,
+  onPick,
+}: {
+  readonly color: RoomBoardNoteColor | undefined;
+  readonly onPick: (color: RoomBoardNoteColor) => void;
+}) {
+  return (
+    <MenuRadioGroup
+      value={color ?? "yellow"}
+      onValueChange={(value) => {
+        const picked = ROOM_BOARD_NOTE_COLORS.find((choice) => choice === value);
+        if (picked !== undefined) onPick(picked);
+      }}
+    >
+      {ROOM_BOARD_NOTE_COLORS.map((choice) => (
+        <MenuRadioItem key={choice} value={choice} closeOnClick>
+          <span className="flex items-center gap-2">
+            <span
+              aria-hidden
+              className={cn("size-3 rounded-sm ring-1 ring-foreground/10", SWATCH_CLASSES[choice])}
+            />
+            {COLOR_NAMES[choice]}
+          </span>
+        </MenuRadioItem>
+      ))}
+    </MenuRadioGroup>
   );
 }

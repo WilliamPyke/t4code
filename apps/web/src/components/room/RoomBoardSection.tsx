@@ -8,11 +8,16 @@ import type { PointerEvent, ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 
+import {
+  BOARD_HOVER_CHROME_CLASS,
+  BOARD_ICON_BUTTON_CLASS,
+  BOARD_SELECTED_CHROME_CLASS,
+} from "./BoardChrome";
 import { BOARD_SECTION_SIZE, boardEditKey } from "./roomBoard.logic";
 import { boardLiveRect, boardLiveStyle, useBoardLiveDrag } from "./roomBoardLive";
 import { dragHandlers } from "./roomBoardPointer";
 import { useBoardSelected } from "./RoomBoardSelection";
-import { NoteColorPicker, sectionColorClassName } from "./RoomNoteColor";
+import { NoteColorPicker, sectionColorClassName, sectionLabelClassName } from "./RoomNoteColor";
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
 
@@ -56,9 +61,13 @@ export function BoardSection({
     <div
       className={cn(
         // Only its title bar and grips take the pointer: pressing inside pans or selects the board.
-        "group/item pointer-events-none absolute flex flex-col rounded-md border-2 border-dashed",
+        "group/item pointer-events-none absolute flex flex-col rounded-lg border",
         sectionColorClassName(note.color),
-        selected && "ring-2 ring-primary ring-offset-2 ring-offset-background",
+        selected &&
+          cn(
+            "ring-2 ring-primary ring-offset-2 ring-offset-board-canvas",
+            BOARD_SELECTED_CHROME_CLASS,
+          ),
       )}
       style={{
         left: note.x,
@@ -71,7 +80,7 @@ export function BoardSection({
       data-board-section=""
     >
       <div
-        className="pointer-events-auto flex h-9 shrink-0 cursor-grab items-center gap-1 ps-2 pe-1 active:cursor-grabbing"
+        className="pointer-events-auto relative flex h-9 shrink-0 cursor-grab items-center justify-end gap-1 ps-2 pe-1 active:cursor-grabbing"
         {...dragHandlers(onMove, onDrop)}
       >
         <input
@@ -81,8 +90,9 @@ export function BoardSection({
           maxLength={ROOM_BOARD_NOTE_MAX_LENGTH}
           placeholder={canRename ? "Name this section" : "Untitled section"}
           className={cn(
-            // As wide as its title, so the rest of the bar is left to drag by.
-            "field-sizing-content min-w-0 max-w-[70%] truncate bg-transparent px-1 text-sm font-semibold outline-none placeholder:text-placeholder",
+            // Above the frame's corner, as wide as its title, so it never covers or clips a card.
+            "absolute bottom-full -left-1 mb-0.5 field-sizing-content h-6 min-w-0 max-w-full truncate rounded-sm bg-transparent px-1 text-sm font-semibold outline-none placeholder:text-placeholder focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+            sectionLabelClassName(note.color),
             !canRename && "cursor-default",
           )}
           onPointerDown={stopPointer}
@@ -96,21 +106,22 @@ export function BoardSection({
           }}
           onBlur={onBlur}
         />
-        <span aria-hidden className="flex-1" />
-        {onPickColor === undefined ? null : (
-          <NoteColorPicker color={note.color ?? "grey"} onPick={onPickColor} />
-        )}
-        {canDelete ? (
-          <button
-            type="button"
-            aria-label="Delete section"
-            className="grid size-6 place-items-center rounded-sm opacity-60 hover:opacity-100"
-            onPointerDown={stopPointer}
-            onClick={onDelete}
-          >
-            <XIcon className="size-3.5" />
-          </button>
-        ) : null}
+        <div className={cn("flex items-center gap-1", !selected && BOARD_HOVER_CHROME_CLASS)}>
+          {onPickColor === undefined ? null : (
+            <NoteColorPicker color={note.color ?? "grey"} onPick={onPickColor} />
+          )}
+          {canDelete ? (
+            <button
+              type="button"
+              aria-label="Delete section"
+              className={BOARD_ICON_BUTTON_CLASS}
+              onPointerDown={stopPointer}
+              onClick={onDelete}
+            >
+              <XIcon className="size-3.5" />
+            </button>
+          ) : null}
+        </div>
       </div>
       <div className="pointer-events-auto contents">{handles}</div>
     </div>

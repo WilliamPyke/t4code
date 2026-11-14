@@ -1,15 +1,20 @@
 import {
   ROOM_ARTIFACT_MAX_LENGTH,
   ROOM_BOARD_MAX_ARTIFACTS,
+  ROOM_BOARD_MAX_CODE_WINDOWS,
   ROOM_BOARD_MAX_EDGES,
   ROOM_BOARD_MAX_NOTES,
+  ROOM_BOARD_MAX_PULL_REQUESTS,
   ROOM_BOARD_MAX_REACTIONS,
   ROOM_BOARD_MAX_REPLIES,
   ROOM_BOARD_MAX_THREADS,
+  ROOM_BOARD_ROOM_BOX,
+  ROOM_BOARD_THREAD_CARD,
   ROOM_BOX_CARD_LABELS_MAX,
   ROOM_BOX_CONTEXT_KIND,
   ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH,
   isRoomBoardUrl,
+  roomPullRequestOf,
   roomBoardCardRef,
   roomBoardNoteRef,
   RoomArtifactContextRecord,
@@ -114,10 +119,16 @@ function putNote(
   at: string,
 ): Result.Result<RoomBoardNote, string> {
   const kind = existing === undefined ? change.kind : existing.kind;
-  // The server never fetches the address; clients open it only in a new tab.
-  const linkOk =
-    change.url === undefined ? kind !== "link" : kind === "link" && isRoomBoardUrl(change.url);
-  if (existing === undefined && !linkOk) {
+  // The server never fetches a link; clients open it only in a new tab. The owner's server reads
+  // a pull request window's, so it takes only a github.com pull request URL, as one spelling.
+  if (existing === undefined && kind === "pull-request") {
+    if (change.url === undefined || roomPullRequestOf(change.url)?.url !== change.url) {
+      return Result.fail("A pull request window needs the address of a pull request on GitHub.");
+    }
+  } else if (
+    existing === undefined &&
+    (change.url === undefined ? kind === "link" : kind !== "link" || !isRoomBoardUrl(change.url))
+  ) {
     return Result.fail("A link card needs an http or https address, and only a link card has one.");
   }
   const assigns = change.assignee !== undefined && change.assignee !== null;
@@ -162,8 +173,12 @@ function putNote(
   const assignee = change.assignee === undefined ? base.assignee : change.assignee;
   const size = change.size ?? base.size;
   const color = change.color ?? base.color;
+  // A card edited since a prompt carried it goes with the next one again.
+  const edited =
+    existing !== undefined && (change.text !== existing.text || done !== (existing.done === true));
   return Result.succeed({
     ...rest,
+    ...(edited ? { editedAt: at } : {}),
     text: change.text,
     x: change.x,
     y: change.y,
@@ -262,6 +277,23 @@ export function applyRoomBoardChange(
         return Result.fail("This board has as many thread boxes as it holds. Remove one first.");
       }
       if (
+        existing === undefined &&
+        change.kind === "code" &&
+        board.notes.filter((note) => note.kind === "code").length >= ROOM_BOARD_MAX_CODE_WINDOWS
+      ) {
+        return Result.fail("This board has as many code windows as it holds. Remove one first.");
+      }
+      if (
+        existing === undefined &&
+        change.kind === "pull-request" &&
+        board.notes.filter((note) => note.kind === "pull-request").length >=
+          ROOM_BOARD_MAX_PULL_REQUESTS
+      ) {
+        return Result.fail(
+          "This board has as many pull request windows as it holds. Remove one first.",
+        );
+      }
+      if (
         (existing?.kind === "thread" || existing?.section === true) &&
         change.text !== existing.text &&
         !isRoomCardOwnedBy(existing, author)
@@ -320,6 +352,16 @@ export function applyRoomBoardChange(
       if (!isOnBoard(scope, board, change.from) || !isOnBoard(scope, board, change.to)) {
         return Result.fail("An arrow joins cards that are on the board.");
       }
+      const window = roomBoardNoteOfRef(board, change.to);
+      if (
+        window?.kind === "code" &&
+        roomBoxIdOfRef(board, change.from) !== undefined &&
+        roomWindowBoxId(board, window.id) !== undefined
+      ) {
+        return Result.fail(
+          "A code window shows one thread box's changes. Remove its line from the other box first.",
+        );
+      }
       if (edges.length >= ROOM_BOARD_MAX_EDGES) {
         return Result.fail("This board has as many arrows as it holds. Remove one first.");
       }
@@ -332,6 +374,18 @@ export function applyRoomBoardChange(
       return board.edges?.some((edge) => edge.id === change.edgeId) === true
         ? Result.succeed(roomBoardWithEdges(board, (edge) => edge.id !== change.edgeId))
         : Result.succeed(board);
+    // Anyone who may draw or remove a line may pin it.
+    case "edge.pin": {
+      const edge = board.edges?.find((candidate) => candidate.id === change.edgeId);
+      if (edge === undefined) return Result.fail("This arrow is not on the board.");
+      if ((edge.pinned === true) === change.pinned) return Result.succeed(board);
+      const { pinned: _pinned, ...rest } = edge;
+      const next = change.pinned ? { ...rest, pinned: true as const } : rest;
+      return Result.succeed({
+        ...board,
+        edges: board.edges?.map((candidate) => (candidate === edge ? next : candidate)),
+      });
+    }
     case "artifact.restore": {
       const note = board.notes.find((candidate) => candidate.id === change.noteId);
       const current = note?.kind === "artifact" ? note.artifact : undefined;
@@ -510,6 +564,94 @@ export function roomCardLabelsOf(
     .slice(0, ROOM_BOX_CARD_LABELS_MAX);
 }
 
+/** The board cards that went with a run's messages, as arrows name them. */
+export function roomCardRefsOf(
+  items: ReadonlyArray<OrchestrationV2TurnItem>,
+): ReadonlyArray<string> {
+  return items
+    .flatMap((item) =>
+      item.type === "user_message"
+        ? (item.context?.records ?? []).flatMap((record) =>
+            isRoomCardsRecord(record)
+              ? record.cards.flatMap((card) => (card.ref === undefined ? [] : [card.ref]))
+              : [],
+          )
+        : [],
+    )
+    .slice(0, ROOM_BOX_CARD_LABELS_MAX);
+}
+
+/**
+ * The board with the lines that carried `refs` into a thread box marked sent at `at`: into the box
+ * or the artifact it rewrites in `sentAt`, into a card whose lines lead there in `sentFor` for this
+ * box alone, as other boxes reach that card too. Lines no prompt from this box could carry stay as
+ * they were, so a sender can mark only what their own prompt took.
+ */
+export function roomBoardWithCardsSent(
+  board: RoomBoard,
+  boxId: string,
+  artifactId: string | undefined,
+  refs: ReadonlyArray<string>,
+  at: string,
+): RoomBoard {
+  const edges = board.edges ?? [];
+  const box = roomBoxRef(boxId);
+  const artifact = artifactId === undefined ? undefined : roomBoardNoteRef(artifactId);
+  const rewrites =
+    artifact !== undefined &&
+    roomBoardNoteOfRef(board, artifact)?.kind === "artifact" &&
+    edges.some((edge) => edge.from === box && edge.to === artifact);
+  const roots = new Set([box, ...(rewrites ? [artifact] : [])]);
+  const sent = new Set(refs.filter((ref) => !roots.has(ref)));
+  // Every card a prompt from this box carries, as it finds them: along lines into the box or its
+  // artifact, and into those cards, never through another box.
+  const reached = new Set<string>();
+  let frontier = [...roots];
+  while (frontier.length > 0) {
+    const next: Array<string> = [];
+    for (const edge of edges) {
+      if (!frontier.includes(edge.to) || roots.has(edge.from) || reached.has(edge.from)) continue;
+      const note = roomBoardNoteOfRef(board, edge.from);
+      if (note === undefined || note.kind === "thread") continue;
+      reached.add(edge.from);
+      next.push(edge.from);
+    }
+    frontier = next;
+  }
+  let changed = false;
+  const next = edges.map((edge) => {
+    if (!sent.has(edge.from)) return edge;
+    if (roots.has(edge.to)) {
+      if (edge.sentAt === at) return edge;
+      changed = true;
+      return { ...edge, sentAt: at };
+    }
+    if (!reached.has(edge.to) || edge.sentFor?.[boxId] === at) return edge;
+    changed = true;
+    return { ...edge, sentFor: { ...edge.sentFor, [boxId]: at } };
+  });
+  return changed ? { ...board, edges: next } : board;
+}
+
+/**
+ * When a card last changed in a way a prompt from `boxId` should carry again: its text or status
+ * edited, a reply in its thread (except this box's own agent's answer), or new content an agent
+ * wrote into it. Undefined for a card unchanged since it was added.
+ */
+export function roomBoardCardChangedAt(note: RoomBoardNote, boxId: string): string | undefined {
+  const times = [
+    note.editedAt,
+    ...(note.replies ?? []).flatMap((reply) => (reply.agent?.boxId === boxId ? [] : [reply.at])),
+    note.artifact?.updatedAt,
+    note.changes?.updatedAt,
+  ].filter((time): time is string => time !== undefined);
+  return times.reduce<string | undefined>(
+    (latest, time) =>
+      latest === undefined || Date.parse(time) > Date.parse(latest) ? time : latest,
+    undefined,
+  );
+}
+
 /** What a run was asked, without the chips its cards and artifact left in the text. */
 export const roomRunPromptText = (items: ReadonlyArray<OrchestrationV2TurnItem>): string =>
   replaceComposerContextReferences(
@@ -532,6 +674,47 @@ export const roomRunReplyText = (items: ReadonlyArray<OrchestrationV2TurnItem>):
 export const roomBoardNoteOfRef = (board: RoomBoard | undefined, ref: string) =>
   board?.notes.find((note) => roomBoardNoteRef(note.id) === ref);
 
+/** A thread box as lines name it: the room thread's own card, or a thread note. */
+export const roomBoxRef = (boxId: string): string =>
+  boxId === ROOM_BOARD_ROOM_BOX
+    ? roomBoardCardRef(ROOM_BOARD_THREAD_CARD)
+    : roomBoardNoteRef(boxId);
+
+/** The thread box a line from `ref` starts at, or undefined when it starts at anything else. */
+export function roomBoxIdOfRef(board: RoomBoard, ref: string): string | undefined {
+  if (ref === roomBoardCardRef(ROOM_BOARD_THREAD_CARD)) return ROOM_BOARD_ROOM_BOX;
+  const note = roomBoardNoteOfRef(board, ref);
+  return note?.kind === "thread" ? note.id : undefined;
+}
+
+/**
+ * The thread box whose changes a code window shows: the first one with a line into it, which the
+ * board keeps the only one. Undefined once no box has a line to it.
+ */
+export function roomWindowBoxId(board: RoomBoard, noteId: string): string | undefined {
+  const ref = roomBoardNoteRef(noteId);
+  for (const edge of board.edges ?? []) {
+    if (edge.to !== ref) continue;
+    const boxId = roomBoxIdOfRef(board, edge.from);
+    if (boxId !== undefined) return boxId;
+  }
+  return undefined;
+}
+
+/** The code windows that show this thread box's changes. */
+export const roomBoxCodeWindows = (board: RoomBoard, boxId: string): ReadonlyArray<RoomBoardNote> =>
+  board.notes.filter((note) => note.kind === "code" && roomWindowBoxId(board, note.id) === boxId);
+
+/** A pull request window as a card's label names it: 'Pull request #12 "Fix login"'. */
+export function roomPullRequestLabel(note: Pick<RoomBoardNote, "url" | "pullRequest">): string {
+  const ref = note.url === undefined ? null : roomPullRequestOf(note.url);
+  const title = note.pullRequest?.pullRequest?.title.trim().replace(/\s+/g, " ") ?? "";
+  if (ref === null) return "Pull request";
+  return title === ""
+    ? `Pull request ${ref.repository}#${ref.number}`
+    : `Pull request #${ref.number} "${title}"`;
+}
+
 /**
  * A card's label and who wrote it, from the board, so it reads the same to everyone: "Note from
  * Sam", "Task from the owner", 'Artifact "Plan"'. `nameOf` names a guest, or with no id the
@@ -552,15 +735,21 @@ export function roomBoardCardIdentity(
         ? title === ""
           ? "Thread box"
           : `Thread box "${title}"`
-        : note.kind === "task"
-          ? `Task from ${by}`
-          : note.kind === "link"
-            ? `Link from ${by}`
-            : note.kind === "comment"
-              ? `Comment thread from ${by}`
-              : note.pinnedTo === undefined
-                ? `Note from ${by}`
-                : `Comment from ${by} on a reply`;
+        : note.kind === "code"
+          ? title === ""
+            ? "Code window"
+            : `Code window "${title}"`
+          : note.kind === "pull-request"
+            ? roomPullRequestLabel(note)
+            : note.kind === "task"
+              ? `Task from ${by}`
+              : note.kind === "link"
+                ? `Link from ${by}`
+                : note.kind === "comment"
+                  ? `Comment thread from ${by}`
+                  : note.pinnedTo === undefined
+                    ? `Note from ${by}`
+                    : `Comment from ${by} on a reply`;
   const writer = note.kind === "artifact" && note.artifact !== undefined ? note.artifact : note;
   const agent = writer !== note;
   const writerName = nameOf(writer.guestId);

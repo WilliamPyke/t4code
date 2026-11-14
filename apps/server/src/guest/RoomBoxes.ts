@@ -507,6 +507,25 @@ const make = Effect.gen(function* () {
       },
       "web",
     );
+    // Taken, so the cards it carried stay out of this box's next prompt unless pinned or changed.
+    const cardRefs = cards.flatMap((card) => (card.ref === undefined ? [] : [card.ref]));
+    if (cardRefs.length > 0) {
+      yield* orchestrator
+        .dispatch({
+          type: "thread.room-cards.sent",
+          commandId: yield* commandIdOf("cards-sent"),
+          threadId: room.id,
+          shareId: share.id,
+          boxId: input.boxId,
+          ...(artifact === undefined ? {} : { artifactId: artifact.id }),
+          cardRefs,
+        })
+        .pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Could not mark a box's cards sent", { cause }),
+          ),
+        );
+    }
     return { boxThreadId };
   });
 

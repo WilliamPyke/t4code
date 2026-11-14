@@ -215,6 +215,7 @@ describe("command permissions", () => {
     WS_METHODS.guestSharePromptBox,
     WS_METHODS.guestShareAddBoxThread,
     WS_METHODS.guestShareResolveMessage,
+    WS_METHODS.guestShareRefreshPullRequest,
     WS_METHODS.sharedThreadTakeArtifact,
     WS_METHODS.sharedThreadPromptBox,
     WS_METHODS.sharedThreadLinkBox,

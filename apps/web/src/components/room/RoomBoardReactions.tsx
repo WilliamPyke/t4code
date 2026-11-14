@@ -11,6 +11,7 @@ import { cn } from "~/lib/utils";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { type BoardPeople, boardReactionChips } from "./roomBoard.logic";
+import { BOARD_ICON_BUTTON_CLASS } from "./BoardChrome";
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
 
@@ -30,7 +31,7 @@ export function AddReaction({
                 <button
                   type="button"
                   aria-label="Add reaction"
-                  className="grid size-6 place-items-center rounded-sm opacity-60 hover:opacity-100"
+                  className={BOARD_ICON_BUTTON_CLASS}
                   onPointerDown={stopPointer}
                 />
               }
@@ -42,15 +43,26 @@ export function AddReaction({
         <TooltipPopup side="top">React</TooltipPopup>
       </Tooltip>
       <MenuPopup align="end">
-        <div className="grid grid-cols-6 gap-0.5">
-          {ROOM_BOARD_REACTIONS.map((emoji) => (
-            <MenuItem key={emoji} aria-label={`React ${emoji}`} onClick={() => onReact(emoji)}>
-              <span className="text-base">{emoji}</span>
-            </MenuItem>
-          ))}
-        </div>
+        <ReactionChoices onReact={onReact} />
       </MenuPopup>
     </Menu>
+  );
+}
+
+/** The fixed reactions, as items of a menu. */
+export function ReactionChoices({
+  onReact,
+}: {
+  readonly onReact: (emoji: RoomBoardReactionEmoji) => void;
+}) {
+  return (
+    <div className="grid grid-cols-6 gap-0.5">
+      {ROOM_BOARD_REACTIONS.map((emoji) => (
+        <MenuItem key={emoji} aria-label={`React ${emoji}`} onClick={() => onReact(emoji)}>
+          <span className="text-base">{emoji}</span>
+        </MenuItem>
+      ))}
+    </div>
   );
 }
 
@@ -80,7 +92,7 @@ export function ReactionChips({
                 disabled={onReact === undefined}
                 className={cn(
                   "flex h-5 items-center gap-1 rounded-full border px-1.5 text-2xs tabular-nums",
-                  mine ? "border-primary/50 bg-primary/10" : "border-border bg-background/60",
+                  mine ? "border-primary/50 bg-primary/12" : "border-current/15 bg-card/70",
                   onReact !== undefined && "hover:border-primary/70",
                 )}
                 onPointerDown={stopPointer}

@@ -190,6 +190,12 @@ export const ThreadGuestMessage = Schema.Struct({
   sentAs: Schema.optional(MessageId),
   /** The board cards the guest attached, as this server labelled them when it took the message. */
   cards: Schema.optional(RoomBoxCardLabels),
+  /** The same cards as arrows name them (`note:<id>`), whose lines are marked sent with it. */
+  cardRefs: Schema.optional(
+    Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(170))).check(
+      Schema.isMaxLength(ROOM_BOX_CARD_LABELS_MAX),
+    ),
+  ),
 });
 export type ThreadGuestMessage = typeof ThreadGuestMessage.Type;
 
@@ -357,6 +363,140 @@ export const RoomArtifactContent = Schema.Struct({
 });
 export type RoomArtifactContent = typeof RoomArtifactContent.Type;
 
+export const ROOM_BOARD_MAX_CODE_WINDOWS = 6;
+/** What a code window lists: at most this many files, each path cut to this length. */
+export const ROOM_CODE_MAX_FILES = 50;
+export const ROOM_CODE_PATH_MAX_LENGTH = 300;
+/** The longest patch of one file a code window opens. Longer ones say they are too large. */
+export const ROOM_CODE_PATCH_MAX_LENGTH = 200_000;
+
+const RoomLineCount = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+
+/** One file a thread box's thread changed, as its code window lists it. */
+export const RoomCodeFile = Schema.Struct({
+  path: Schema.String.check(Schema.isMaxLength(ROOM_CODE_PATH_MAX_LENGTH)),
+  additions: RoomLineCount,
+  deletions: RoomLineCount,
+  /** What the thread's last turn changed in it, when it changed it. */
+  lastTurn: Schema.optional(Schema.Struct({ additions: RoomLineCount, deletions: RoomLineCount })),
+});
+export type RoomCodeFile = typeof RoomCodeFile.Type;
+
+/**
+ * What a thread changed from its start to one of its turns, as the machine that ran it counted
+ * it: the files, never their patches, which are read when someone opens one.
+ */
+export const RoomCodeDiffSummary = Schema.Struct({
+  files: Schema.Array(RoomCodeFile).check(Schema.isMaxLength(ROOM_CODE_MAX_FILES)),
+  /** Changed files left out after the first `ROOM_CODE_MAX_FILES`. */
+  more: Schema.optional(RoomLineCount),
+  /** Lines added and removed in every changed file, those left out too. */
+  additions: RoomLineCount,
+  deletions: RoomLineCount,
+  /** The diff was longer than the machine reads, so the counts may be short. */
+  truncated: Schema.optional(Schema.Literal(true)),
+  /** Which of the thread's turns it is up to, as a patch read names it. */
+  turnCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+});
+export type RoomCodeDiffSummary = typeof RoomCodeDiffSummary.Type;
+
+/**
+ * What a code window shows of the thread box it has a line from. Only the owner's server writes
+ * it: from a turn of the owner's, or one a guest's machine posted for the guest's own box.
+ */
+export const RoomCodeChanges = Schema.Struct({
+  ...RoomCodeDiffSummary.fields,
+  /** The box whose thread made them: `ROOM_BOARD_ROOM_BOX` for the room thread. */
+  boxId: RoomBoardNoteId,
+  /** The guest whose agent made them, on their machine. Absent: the owner's. */
+  guestId: Schema.optional(GuestId),
+  /** The run that ended with them, as the machine that ran it named it. */
+  turnId: ThreadGuestTurn.fields.id,
+  updatedAt: IsoDateTime,
+});
+export type RoomCodeChanges = typeof RoomCodeChanges.Type;
+
+/** Which changes of a code window's thread a patch shows: since the thread began, or its last turn. */
+export const RoomCodePatchScope = Schema.Literals(["thread", "turn"]);
+export type RoomCodePatchScope = typeof RoomCodePatchScope.Type;
+
+/** One file's patch, as a code window opens it. Without `patch`, the file is too large to show. */
+export const RoomCodePatch = Schema.Struct({
+  path: RoomCodeFile.fields.path,
+  patch: Schema.optional(Schema.String.check(Schema.isMaxLength(ROOM_CODE_PATCH_MAX_LENGTH))),
+});
+export type RoomCodePatch = typeof RoomCodePatch.Type;
+
+export const ROOM_BOARD_MAX_PULL_REQUESTS = 10;
+/** The failing checks a pull request window names; the rest it counts. */
+export const ROOM_PULL_REQUEST_MAX_FAILING_NAMES = 8;
+
+const ROOM_PULL_REQUEST_URL =
+  /^https:\/\/github\.com\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/([A-Za-z0-9._-]{1,100})\/pull\/([1-9][0-9]{0,9})(?:[/?#].*)?$/;
+
+/**
+ * The GitHub pull request a URL names, as `owner/repo` and its number, or null for anything but a
+ * github.com pull request URL. The owner's server reads only what this accepts.
+ */
+export function roomPullRequestOf(
+  value: string,
+): { readonly repository: string; readonly number: number; readonly url: string } | null {
+  const match = ROOM_PULL_REQUEST_URL.exec(value.trim());
+  if (match === null) return null;
+  const [, owner, repo, number] = match;
+  if (owner === undefined || repo === undefined || number === undefined) return null;
+  if (repo === "." || repo === "..") return null;
+  const repository = `${owner}/${repo}`;
+  return {
+    repository,
+    number: Number(number),
+    url: `https://github.com/${repository}/pull/${number}`,
+  };
+}
+
+const RoomPullRequestText = (max: number) => Schema.String.check(Schema.isMaxLength(max));
+
+/** One pull request as its window shows it, read by the owner's server from GitHub. */
+export const RoomPullRequest = Schema.Struct({
+  title: RoomPullRequestText(300),
+  state: Schema.Literals(["open", "draft", "merged", "closed"]),
+  headBranch: RoomPullRequestText(255),
+  baseBranch: RoomPullRequestText(255),
+  /** Absent when the commits could not be counted; `moreCommits` when there are more than that. */
+  commits: Schema.optional(RoomLineCount),
+  moreCommits: Schema.optional(Schema.Literal(true)),
+  changedFiles: RoomLineCount,
+  additions: RoomLineCount,
+  deletions: RoomLineCount,
+  checks: Schema.Struct({
+    passing: RoomLineCount,
+    failing: RoomLineCount,
+    pending: RoomLineCount,
+    /** The first failing checks' names. */
+    failingNames: Schema.Array(RoomPullRequestText(200)).check(
+      Schema.isMaxLength(ROOM_PULL_REQUEST_MAX_FAILING_NAMES),
+    ),
+  }),
+  /** When GitHub last saw it change. */
+  updatedAt: IsoDateTime,
+});
+export type RoomPullRequest = typeof RoomPullRequest.Type;
+
+/** Why a pull request window has no pull request to show. */
+export const RoomPullRequestProblem = Schema.Literals(["not_found", "signed_out", "unavailable"]);
+export type RoomPullRequestProblem = typeof RoomPullRequestProblem.Type;
+
+/**
+ * The last read of a pull request window's pull request: what it showed, or why it could not be
+ * read. Only the owner's server writes it, from its own GitHub sign-in.
+ */
+export const RoomPullRequestRead = Schema.Struct({
+  readAt: IsoDateTime,
+  pullRequest: Schema.optional(RoomPullRequest),
+  problem: Schema.optional(RoomPullRequestProblem),
+});
+export type RoomPullRequestRead = typeof RoomPullRequestRead.Type;
+
 /** Replies one comment thread holds after its first comment. */
 export const ROOM_BOARD_MAX_REPLIES = 30;
 /** How much of an agent's answer a comment thread keeps, longer than a person's reply. */
@@ -416,10 +556,9 @@ export const RoomBoardReaction = Schema.Struct({
 export type RoomBoardReaction = typeof RoomBoardReaction.Type;
 
 /**
- * A card someone added to the board: a note, unless `kind` says it is a task, a link, an
- * artifact, a thread box or a comment thread. A note with `pinnedTo` is a comment on that message
- * of the thread. An artifact's and a thread box's `text` is its title; a comment thread's is its
- * first comment. A thread box is a conversation of its own, run by the agent of whoever added it.
+ * A card someone added to the board: a note unless `kind` names another card. A note with
+ * `pinnedTo` comments on that message. An artifact's, thread box's, code window's or pull request
+ * window's `text` is its title; a comment thread's is its first comment.
  */
 export const RoomBoardNote = Schema.Struct({
   /** The client that adds the note names it. */
@@ -428,11 +567,16 @@ export const RoomBoardNote = Schema.Struct({
   ...RoomBoardPoint.fields,
   /** The guest who added it. Absent on the owner's notes. */
   guestId: Schema.optional(GuestId),
-  kind: Schema.optional(Schema.Literals(["task", "link", "artifact", "thread", "comment"])),
+  kind: Schema.optional(
+    Schema.Literals(["task", "link", "artifact", "thread", "comment", "code", "pull-request"]),
+  ),
   /** A task that is done. */
   done: Schema.optional(Schema.Boolean),
   assignee: Schema.optional(RoomBoardAssignee),
-  /** A link card's address. Clients read it; the server never fetches it. */
+  /**
+   * A link card's address, which clients read and the server never fetches, or a pull request
+   * window's GitHub pull request URL as `roomPullRequestOf` writes it.
+   */
   url: Schema.optional(RoomBoardUrl),
   /** The id of the thread's message this comment is pinned to. */
   pinnedTo: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
@@ -454,8 +598,14 @@ export const RoomBoardNote = Schema.Struct({
   artifact: Schema.optional(RoomArtifactContent),
   /** A thread box's recent turns. No board change sets it; it stays when the box changes. */
   thread: Schema.optional(RoomBoxState),
+  /** What a code window's box changed, as of its last turn. No board change sets it. */
+  changes: Schema.optional(RoomCodeChanges),
+  /** A pull request window's last read of its pull request. No board change sets it. */
+  pullRequest: Schema.optional(RoomPullRequestRead),
   /** When a comment thread was started, as the server that holds the board took it. */
   createdAt: Schema.optional(IsoDateTime),
+  /** When its text or a task's status last changed, as the server took it. */
+  editedAt: Schema.optional(IsoDateTime),
   /** A comment thread's replies, oldest first. Only the comment changes set them. */
   replies: Schema.optional(
     Schema.Array(RoomBoardReply).check(Schema.isMaxLength(ROOM_BOARD_MAX_REPLIES)),
@@ -479,6 +629,18 @@ export const RoomBoardEdge = Schema.Struct({
   id: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
   from: RoomBoardItemRef,
   to: RoomBoardItemRef,
+  /**
+   * When a prompt last carried the card this line starts at, along this line, as the server that
+   * took the prompt stamped it. No board change sets it. Absent: never sent.
+   */
+  sentAt: Schema.optional(IsoDateTime),
+  /**
+   * On a line between two cards, which several boxes can reach: when a prompt from each box,
+   * by box id, last carried the card along it. `sentAt` is for lines into a box or its artifact.
+   */
+  sentFor: Schema.optional(Schema.Record(Schema.String, IsoDateTime)),
+  /** The card goes with every prompt along this line, not only while it is new. */
+  pinned: Schema.optional(Schema.Literal(true)),
 });
 export type RoomBoardEdge = typeof RoomBoardEdge.Type;
 
@@ -560,6 +722,12 @@ export const RoomBoardChange = Schema.Union([
     to: RoomBoardEdge.fields.to,
   }),
   Schema.Struct({ type: Schema.Literal("edge.remove"), edgeId: RoomBoardEdge.fields.id }),
+  /** Makes the card an arrow carries go with every prompt, or only while it is new again. */
+  Schema.Struct({
+    type: Schema.Literal("edge.pin"),
+    edgeId: RoomBoardEdge.fields.id,
+    pinned: Schema.Boolean,
+  }),
   /**
    * Swaps an artifact's content with the version it replaced, so a second restore undoes the
    * first. An artifact with no earlier version stays as it is.
@@ -973,6 +1141,44 @@ export class GuestShareCreateError extends Schema.TaggedError<GuestShareCreateEr
 export const RoomBoardChangeInput = Schema.Struct({ threadId: ThreadId, change: RoomBoardChange });
 export type RoomBoardChangeInput = typeof RoomBoardChangeInput.Type;
 
+/** One file of a code window, as a guest's page asks for it: `?share=&note=&path=&scope=`. */
+export const RoomCodePatchRequest = Schema.Struct({
+  noteId: RoomBoardNoteId,
+  path: RoomCodeFile.fields.path,
+  scope: RoomCodePatchScope,
+});
+export type RoomCodePatchRequest = typeof RoomCodePatchRequest.Type;
+
+/** One file of a code window on the board of the owner's thread. */
+export const RoomCodePatchInput = Schema.Struct({
+  threadId: ThreadId,
+  ...RoomCodePatchRequest.fields,
+});
+export type RoomCodePatchInput = typeof RoomCodePatchInput.Type;
+
+/** Asks the owner's server to read a pull request window's pull request again. */
+export const RoomPullRequestRefreshInput = Schema.Struct({
+  threadId: ThreadId,
+  noteId: RoomBoardNoteId,
+});
+export type RoomPullRequestRefreshInput = typeof RoomPullRequestRefreshInput.Type;
+
+const ROOM_CODE_PATCH_MESSAGES = {
+  inactive: "This thread is not shared.",
+  window_gone: "This code window is no longer on the board.",
+  elsewhere: "These changes are on the machine of the person whose thread box it is.",
+  unavailable: "This file's changes cannot be read now.",
+} as const;
+
+export class RoomCodePatchError extends Schema.TaggedError<RoomCodePatchError>()(
+  "RoomCodePatchError",
+  { reason: Schema.Literals(["inactive", "window_gone", "elsewhere", "unavailable"]) },
+) {
+  override get message(): string {
+    return ROOM_CODE_PATCH_MESSAGES[this.reason];
+  }
+}
+
 const ROOM_BOARD_CHANGE_MESSAGES = {
   inactive: "This thread is not shared.",
   full: "This board has as many notes as it holds. Remove one first.",
@@ -1160,6 +1366,8 @@ export const GuestTurnRequest = Schema.Struct({
   boxId: Schema.optional(RoomBoardNoteId),
   /** With `boxId`: the labels of the board cards that went with the prompt. */
   cards: Schema.optional(RoomBoxCardLabels),
+  /** With `boxId`: those cards as arrows name them, whose lines into the box are marked sent. */
+  cardRefs: ThreadGuestMessage.fields.cardRefs,
   /** With `boxId`: the model's display name. */
   model: Schema.optional(RoomBoxModelName),
   /**
@@ -1172,6 +1380,11 @@ export const GuestTurnRequest = Schema.Struct({
       text: Schema.String.check(Schema.isMaxLength(ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH)),
     }),
   ),
+  /**
+   * With `boxId`: what the box's thread changed, for the code windows the box has a line to. The
+   * machine posts the turn again with it once the turn's checkpoint is taken.
+   */
+  changes: Schema.optional(RoomCodeDiffSummary),
 });
 export type GuestTurnRequest = typeof GuestTurnRequest.Type;
 
@@ -1282,6 +1495,16 @@ export const GUEST_ROOM_ARTIFACT_ROUTE = `${GUEST_ROUTE_PREFIX}/room/artifact`;
 export const GUEST_BOARD_ROUTE = `${GUEST_ROUTE_PREFIX}/board`;
 /** Where a guest's pointer is on the room's board (POST), a `GuestCursorRequest`: `?share=<id>`. */
 export const GUEST_BOARD_CURSOR_ROUTE = `${GUEST_ROUTE_PREFIX}/board/cursor`;
+/**
+ * One file of a code window on the room's board, a `RoomCodePatch`:
+ * `?share=<id>&note=<id>&path=<path>&scope=thread|turn`.
+ */
+export const GUEST_BOARD_CODE_ROUTE = `${GUEST_ROUTE_PREFIX}/board/code`;
+/**
+ * Asks the owner's server to read a pull request window's pull request again (POST):
+ * `?share=<id>&note=<id>`. It answers at once; the board shows the read when it lands.
+ */
+export const GUEST_BOARD_PULL_REQUEST_ROUTE = `${GUEST_ROUTE_PREFIX}/board/pull-request`;
 /** The guest page and guest routes name the share they mean with this query parameter. */
 export const GUEST_SHARE_PARAM = "share";
 /** On the hosted app, the guest page names the owner's host with this query parameter. */

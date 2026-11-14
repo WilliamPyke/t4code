@@ -95,6 +95,7 @@ import {
   RpcClientId,
   EnvironmentAuthorizationError,
   RoomBoardChangeError,
+  RoomCodePatchError,
   type ProjectId,
   type ProviderDriverKind,
   type ProviderInstanceId,
@@ -2393,6 +2394,16 @@ export const layerWsRpc = (
                 }),
             ),
           ),
+        [WS_METHODS.guestShareRefreshPullRequest]: (input) =>
+          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+            Effect.andThen(
+              guestShares.refreshPullRequest({ threadId: input.threadId }, input.noteId),
+            ),
+            Effect.mapError(
+              ({ reason }) =>
+                new RoomBoardChangeError({ reason: reason === "inactive" ? reason : "rejected" }),
+            ),
+          ),
         [WS_METHODS.guestSharePromptBox]: (input) =>
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(roomBoxes.prompt(input)),
@@ -2432,6 +2443,17 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.sharedThreadFindRoom]: (input) =>
           sharedRooms.findRoom(input.host, input.shareId),
+        [WS_METHODS.sharedThreadBoxPatch]: (input) => sharedRooms.boxPatch(input),
+        [WS_METHODS.guestShareCodePatch]: ({ threadId, ...request }) =>
+          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": threadId }).pipe(
+            Effect.andThen(guestShares.codePatch({ threadId }, request)),
+            Effect.catchTags({
+              GuestShareAccessError: () =>
+                Effect.fail(new RoomCodePatchError({ reason: "inactive" })),
+            }),
+          ),
+        [WS_METHODS.guestShareBoardSummaries]: ({ threadIds }) =>
+          guestShares.boardSummaries(threadIds),
         [WS_METHODS.guestShareCreate]: (input) =>
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(guestShares.create(input)),

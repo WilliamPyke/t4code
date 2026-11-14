@@ -1,16 +1,18 @@
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { ExternalLinkIcon, XIcon } from "lucide-react";
+import { ExternalLinkIcon, MessagesSquareIcon, XIcon } from "lucide-react";
 
 import { useDiffPanelStore } from "~/diffPanelStore";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import type { SideChatParentPanel } from "~/lib/sideChatPane";
 import { useRightPanelStore } from "~/rightPanelStore";
+import { cn } from "~/lib/utils";
 
 import ChatView from "../ChatView";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { BOARD_TITLE_BAR_CLASS } from "./BoardChrome";
 
 /**
  * A conversation on the owner's machine beside the board: the thread's own chat, with its composer,
@@ -52,8 +54,9 @@ export function BoardChatPanel({
   return (
     // Marked as an embedded chat, so the chat's shortcuts answer only while focus is inside it.
     <div data-side-chat-pane className="flex h-full min-h-0 flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border pr-1 pl-3">
-        <span className="min-w-0 flex-1 truncate text-xs font-medium">{title}</span>
+      <div className={cn(BOARD_TITLE_BAR_CLASS, "gap-1 pe-1")}>
+        <MessagesSquareIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="ms-1 min-w-0 flex-1 truncate font-semibold">{title}</span>
         <Tooltip>
           <TooltipTrigger
             render={

@@ -93,8 +93,8 @@ notes at once, and has:
 - **Tidy**, which lines the selected cards up in an even grid from where the top-left one was, in
   the order you read them, moving it right or down only as far as it takes to clear other cards.
 - **Duplicate** (or Ctrl+D, Cmd+D on a Mac), which copies the selected notes, tasks and links next
-  to them as your own cards and selects the copies. Thread boxes, artifacts, comment threads and
-  sections are not copied, and the board says so. Ctrl+C then Ctrl+V (Cmd on a Mac) does the same, placing the copies at
+  to them as your own cards and selects the copies. Thread boxes, artifacts, code and pull request
+  windows, comment threads and sections are not copied, and the board says so. Ctrl+C then Ctrl+V (Cmd on a Mac) does the same, placing the copies at
   your pointer. Pasting text copied anywhere else makes a note of it, and pasting a link makes a
   link card.
 - **Group in a section**, which puts a section around them where they are.
@@ -200,8 +200,12 @@ delete an answer like any reply. A thread deleted before the answer arrives gets
 ### Lines between cards
 
 Lines carry meaning. A note, task, link, comment, comment thread or artifact with a line into a thread box goes
-with every prompt to that box, each with who wrote it, so anyone can steer a box by attaching a
-note to it. The box's message lists them; remove any you do not want to send. The owner sees them
+with the next prompt to that box, each with who wrote it, so anyone can steer a box by attaching a
+note to it. Once sent, a card stays out of that box's later prompts until it changes: an edited
+note or a comment thread with a new reply goes once more. Pin a card (**Always send**) to send it
+with every prompt. The box's message lists the cards that will go; remove any you do not want to
+send, or open **already sent** to send one again. On the board, a sent card's line is dashed and
+a pinned one is thicker. The owner sees them
 as a **Board** chip on the message, and opening it shows exactly what the agent got. The agent
 reads each card as the words of whoever wrote it, so a guest's note is background, not the
 owner's instruction. A guest's cards are written into their message's text, so the owner reads
@@ -228,6 +232,27 @@ A guest who [continued on their machine](#continue-on-your-own-machine) can also
 to their own agent. It opens as a draft in their thread from this room, with the artifact's
 current content attached. Nothing runs until they send it; when their turn finishes, its reply
 fills the artifact.
+
+### Code windows
+
+A **Code** window shows what a thread box's agent changed: each file with its lines added and
+removed, and a file's diff when you click it. Add one from the board's tools and draw a line to it
+from a thread box, or choose **New code window** on the box. It updates each time the box's turn
+ends; **Last turn only** narrows it to that turn. Everyone in the room sees the file list. A diff
+is read from the machine that ran the agent, so the diffs of a guest's box open only on that
+guest's own machine. A board holds up to 6 code windows, a window lists up to 50 files, and a very
+large file says it is too large to show.
+
+### Pull request windows
+
+A **Pull request** window shows one GitHub pull request, kept current: its title, whether it is
+open, a draft, merged or closed, its checks (and which are failing), commits, files and lines
+changed, and its branches. Choose **Pull request** in the board's tools and paste its address,
+paste a pull request address on the board, or choose **Show pull request** on a thread box whose
+thread has one. Only the owner's T Code reads GitHub, with the owner's own sign-in, so guests need
+no GitHub access, and a pull request the owner's account cannot see says so. It reads again when
+added, when anyone chooses **Refresh**, and every few minutes while someone has the board open.
+A board holds up to 10 pull request windows.
 
 ### Take a task to your agent
 
@@ -311,7 +336,7 @@ your key.
 
 A typed name proves nothing, so the switch above is per guest and per link. To approve someone
 for every link, list their GitHub username under **Settings → Labs → Guest links → Approved
-contributors**. When they join a link and choose **Sign in with GitHub** in the shared thread, their
+contributors**. When they join a link and choose **Sign in** (with the GitHub mark) in the shared thread, their
 browser goes to GitHub and comes back, and from then on their messages are sent without asking on
 that thread. You can also approve a signed-in guest from the guest names in the thread header.
 

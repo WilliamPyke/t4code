@@ -9,10 +9,12 @@ import {
   ROOM_BOARD_NOTE_MAX_LENGTH,
   ROOM_BOARD_QUOTE_MAX_LENGTH,
   type RoomBoard,
+  type RoomBoardEdge,
   type RoomBoardNote,
   type RoomBoardReply,
   type ThreadGuestMessage,
 } from "@t3tools/contracts";
+import { roomBoardWithCardsSent } from "@t3tools/shared/roomBoard";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -36,6 +38,8 @@ import {
   boardTakenRects,
   boardAddSection,
   boardAddSpot,
+  boardCodeEdgeIds,
+  boardCodeTotals,
   boardCopySkipped,
   boardAgentCode,
   boardAgents,
@@ -85,6 +89,7 @@ import {
   boardProgressLine,
   boardProgressPhase,
   boardReactionChips,
+  boardPromptCardGoes,
   boardPromptContext,
   boardReplyQuote,
   boardRestoreLabel,
@@ -1230,6 +1235,35 @@ describe("boardPromptContext", () => {
       turnId: "t",
       updatedAt: "2026-11-12T00:00:00.000Z",
     };
+    const changes = {
+      files: [
+        { path: "src/login.ts", additions: 4, deletions: 1 },
+        { path: "README.md", additions: 1, deletions: 0 },
+      ],
+      more: 1,
+      additions: 5,
+      deletions: 1,
+      turnCount: 2,
+      boxId: "box",
+      turnId: "t",
+      updatedAt: "2026-11-12T00:00:00.000Z",
+    };
+    const pullRequest = {
+      readAt: "2026-11-12T00:00:00.000Z",
+      pullRequest: {
+        title: "Fix login",
+        state: "open" as const,
+        headBranch: "fix-login",
+        baseBranch: "main",
+        commits: 100,
+        moreCommits: true as const,
+        changedFiles: 1,
+        additions: 4,
+        deletions: 1,
+        checks: { passing: 2, failing: 1, pending: 0, failingNames: ["lint"] },
+        updatedAt: "2026-11-12T00:00:00.000Z",
+      },
+    };
     const context = boardPromptContext(
       board(
         [
@@ -1238,11 +1272,20 @@ describe("boardPromptContext", () => {
           note("old", { text: "Why?", pinnedTo: "m1", guestId: sam }),
           note("new", { text: "Agreed", pinnedTo: "m2", quote: "Use a 15 minute TTL" }),
           note("page", { text: "Mockup", kind: "artifact", artifact }),
+          note("code", { text: "Login fix", kind: "code", changes }),
+          note("pr", {
+            text: "",
+            kind: "pull-request",
+            url: "https://github.com/acme/app/pull/12",
+            pullRequest,
+          }),
           note("empty", { text: "Untitled", kind: "artifact" }),
           note("other", { text: "", kind: "artifact" }),
         ],
         [
-          ...["task", "link", "old", "new", "page"].map((id) => arrow(`note:${id}`, "card:thread")),
+          ...["task", "link", "old", "new", "page", "code", "pr"].map((id) =>
+            arrow(`note:${id}`, "card:thread"),
+          ),
           arrow("card:thread", "note:task"),
           arrow("card:thread", "note:empty"),
           arrow("card:thread", "note:other"),
@@ -1257,6 +1300,22 @@ describe("boardPromptContext", () => {
       ["Comment from You on a reply", 'On the reply: "The token TTL is 900s."\nWhy?'],
       ["Comment from Owner on a reply", 'On the reply: "Use a 15 minute TTL"\nAgreed'],
       ['Artifact "Mockup"', "Mockup\n\n<!doctype html><p>Hi</p>"],
+      // A code window carries its files and counts, never a patch.
+      [
+        'Code window "Login fix"',
+        "Login fix\nChanged 3 files, +5 −1:\nsrc/login.ts +4 -1\nREADME.md +1 -0\nand 1 more file",
+      ],
+      // A pull request window carries what the owner's server last read of it.
+      [
+        'Pull request #12 "Fix login"',
+        [
+          "acme/app#12: Fix login",
+          "State: open, fix-login into main",
+          "Checks: 1 failing (lint), 2 passing",
+          "100+ commits, 1 file changed, +4 -1",
+          "https://github.com/acme/app/pull/12",
+        ].join("\n"),
+      ],
     ]);
     // What is sent is kept and shown to everyone, so it names people as everyone reads them;
     // the chip says what the card itself says.
@@ -1266,6 +1325,8 @@ describe("boardPromptContext", () => {
       ["Comment from Sam on a reply", "Why?"],
       ["Comment from the owner on a reply", "Agreed"],
       ['Artifact "Mockup"', ""],
+      ['Code window "Login fix"', ""],
+      ['Pull request #12 "Fix login"', ""],
     ]);
     const named = boardPromptContext(
       board([note("n", { text: "Ship it\non Friday" })], [arrow("note:n", "card:thread")]),
@@ -1276,6 +1337,34 @@ describe("boardPromptContext", () => {
     ).toEqual([["Note from You", "Note from Alex", "Ship it"]]);
     expect(context.artifact?.id).toBe("empty");
     expect(context.artifactEdgeId).toBe("card:thread>note:empty");
+  });
+
+  it("marks the line from the box a code window shows, and sums its changes", () => {
+    const code = board(
+      [
+        note("box", { kind: "thread" }),
+        note("diff", { kind: "code" }),
+        note("loose", { kind: "code" }),
+        note("idea"),
+      ],
+      [
+        arrow("note:idea", "note:diff"),
+        arrow("note:box", "note:diff"),
+        arrow("card:thread", "note:loose"),
+        arrow("note:diff", "note:box"),
+      ],
+    );
+    expect([...boardCodeEdgeIds(code)]).toEqual(["note:box>note:diff", "card:thread>note:loose"]);
+    expect(
+      boardCodeTotals({
+        files: [{ path: "a", additions: 1, deletions: 0 }],
+        additions: 1,
+        deletions: 0,
+      }),
+    ).toBe("1 file, +1 −0");
+    expect(boardCodeTotals({ files: [], more: 51, additions: 42, deletions: 7 })).toBe(
+      "51 files, +42 −7",
+    );
   });
 
   it("carries a comment thread whole, each comment as its author's, the newest that fit", () => {
@@ -1382,6 +1471,124 @@ describe("boardPromptContext", () => {
     expect(room.artifactEdgeId).toBe("card:thread>note:art");
     // A box with no line to an artifact rewrites nothing.
     expect(boardPromptContext(shared, people, [], "box2").artifact).toBeNull();
+  });
+
+  it("sends a card once, again once it changed, always when pinned, and new on an old board", () => {
+    const sentAt = "2026-11-13T10:00:00.000Z";
+    const before = "2026-11-13T09:00:00.000Z";
+    const after = "2026-11-13T11:00:00.000Z";
+    const line = (from: string, fields: Partial<RoomBoardEdge> = {}): RoomBoardEdge => ({
+      id: `${from}>box`,
+      from: `note:${from}`,
+      to: "note:box",
+      ...fields,
+    });
+    const marked: RoomBoard = {
+      positions: {},
+      notes: [
+        note("box", { kind: "thread", text: "Box" }),
+        note("old"),
+        note("sent", { editedAt: before }),
+        note("edited", { editedAt: after }),
+        note("talk", {
+          kind: "comment",
+          replies: [
+            { id: "r", text: "Yes", at: before },
+            // This box's own agent answering is no change to send back to it.
+            { id: "agent:t", text: "Done", at: after, agent: { turnId: "t", boxId: "box" } },
+          ],
+        }),
+        note("replied", { kind: "comment", replies: [{ id: "r", text: "No", at: after }] }),
+        note("pin"),
+      ],
+      edges: [
+        line("old"),
+        line("sent", { sentAt }),
+        line("edited", { sentAt }),
+        line("talk", { sentAt }),
+        line("replied", { sentAt }),
+        line("pin", { sentAt, pinned: true }),
+      ],
+    };
+    const context = boardPromptContext(marked, people, [], "box");
+    expect(context.cards.map((card) => [card.ref, card.status, boardPromptCardGoes(card)])).toEqual(
+      [
+        ["note:old", "new", true],
+        ["note:sent", "sent", false],
+        ["note:edited", "updated", true],
+        ["note:talk", "sent", false],
+        ["note:replied", "updated", true],
+        ["note:pin", "pinned", true],
+      ],
+    );
+    expect(context.cards.find((card) => card.ref === "note:pin")?.edgeIds).toEqual(["pin>box"]);
+    expect(context.edgeStatus.get("sent>box")).toBe("sent");
+    expect(context.edgeStatus.get("old>box")).toBe("new");
+    // A card newly connected by a second line goes again; one sent never uses up a prompt's room.
+    const relinked = boardPromptContext(
+      {
+        ...marked,
+        edges: [...(marked.edges ?? []), { id: "sent>talk", from: "note:sent", to: "note:talk" }],
+      },
+      people,
+      [],
+      "box",
+    );
+    expect(relinked.cards.find((card) => card.ref === "note:sent")?.status).toBe("new");
+    const many = Array.from({ length: BOARD_PROMPT_MAX_CARDS + 2 }, (_, index) =>
+      note(`s${index}`),
+    );
+    const crowded = boardPromptContext(
+      {
+        positions: {},
+        notes: [note("box", { kind: "thread" }), ...many, note("fresh")],
+        edges: [...many.map((each) => line(each.id, { sentAt })), line("fresh")],
+      },
+      people,
+      [],
+      "box",
+    );
+    expect(crowded.cards.at(-1)?.ref).toBe("note:fresh");
+    // A line between cards counts as sent only for the boxes a prompt carried it to; an older
+    // board's single mark on it is no box's.
+    const shared: RoomBoard = {
+      ...marked,
+      notes: [...marked.notes, note("box2", { kind: "thread" }), note("far")],
+      edges: [
+        ...(marked.edges ?? []),
+        { id: "far>sent", from: "note:far", to: "note:sent", sentAt, sentFor: { box: sentAt } },
+        { id: "sent>box2", from: "note:sent", to: "note:box2" },
+      ],
+    };
+    const statuses = (boxId: string) =>
+      boardPromptContext(shared, people, [], boxId).cards.map((card) => [card.ref, card.status]);
+    expect(statuses("box")).toContainEqual(["note:far", "sent"]);
+    expect(statuses("box2")).toEqual([
+      ["note:sent", "new"],
+      ["note:far", "new"],
+    ]);
+    // What a prompt carried, marked the way the server marks it, reads back as sent, however far.
+    const chain: RoomBoard = {
+      positions: {},
+      notes: [note("x", { kind: "thread" }), note("y", { kind: "thread" }), note("b"), note("a")],
+      edges: [
+        { id: "a>b", from: "note:a", to: "note:b" },
+        { id: "b>x", from: "note:b", to: "note:x" },
+        { id: "b>y", from: "note:b", to: "note:y" },
+      ],
+    };
+    const carried = boardPromptContext(chain, people, [], "x").cards.map((card) => card.ref);
+    const afterSend = roomBoardWithCardsSent(chain, "x", undefined, carried, sentAt);
+    const read = (boxId: string) =>
+      boardPromptContext(afterSend, people, [], boxId).cards.map((card) => [card.ref, card.status]);
+    expect(read("x")).toEqual([
+      ["note:b", "sent"],
+      ["note:a", "sent"],
+    ]);
+    expect(read("y")).toEqual([
+      ["note:b", "new"],
+      ["note:a", "new"],
+    ]);
   });
 
   it("shows an artifact as a page only when it is a whole HTML document", () => {
@@ -1821,6 +2028,7 @@ describe("comment pins", () => {
       notes: [
         { id: "box", text: "", x: 0, y: 0, kind: "thread" },
         { id: "page", text: "", x: 0, y: 0, kind: "artifact" },
+        { id: "code", text: "", x: 0, y: 0, kind: "code" },
         { id: "idea", text: "Ship it", x: 0, y: 0 },
         { id: "pin", text: "Why?", x: 0, y: 0, kind: "comment" },
       ],
@@ -1829,6 +2037,7 @@ describe("comment pins", () => {
       ["card:thread", "card:thread"],
       ["note:box", "note:box"],
       ["note:page", "note:page"],
+      ["note:code", "note:code"],
       ["note:idea", null],
       ["note:pin", null],
       ["card:guest:g1", null],
@@ -1972,6 +2181,7 @@ describe("selecting several cards", () => {
       },
       { id: "l", text: "Docs", x: 20, y: 0, kind: "link", url: "https://x.dev" },
       { id: "a", text: "Page", x: 0, y: 0, kind: "artifact" },
+      { id: "d", text: "Diff", x: 0, y: 0, kind: "code" },
       { id: "b", text: "Box", x: 0, y: 0, kind: "thread" },
       { id: "c", text: "Why?", x: 0, y: 0, kind: "comment" },
       { id: "s", text: "Plan", x: 0, y: 0, section: true },
@@ -1997,9 +2207,9 @@ describe("selecting several cards", () => {
     { name: "nothing when all of it is copied", kinds: [undefined, "task"], cards: 0, said: null },
     {
       name: "what it left out, in one sentence",
-      kinds: [undefined, "artifact", "comment", "thread"],
+      kinds: [undefined, "artifact", "comment", "thread", "code"],
       cards: 0,
-      said: "Artifacts, comment threads and thread boxes are not copied.",
+      said: "Artifacts, comment threads, thread boxes and code windows are not copied.",
     },
     {
       name: "the room's cards",
@@ -2144,6 +2354,29 @@ describe("undo and redo", () => {
             {
               ...note,
               artifact: { body: "#", turnId: "t", updatedAt: "2026-11-13T00:00:00.000Z" },
+            },
+          ],
+        },
+        null,
+      ],
+      // Or the changes a box's thread made, in a code window this person added.
+      [
+        "adding a code window a box's changes then filled",
+        [{ target: noteTarget, before: null, after: note }],
+        {
+          ...board,
+          notes: [
+            {
+              ...note,
+              changes: {
+                files: [],
+                additions: 0,
+                deletions: 0,
+                turnCount: 1,
+                boxId: "thread",
+                turnId: "t",
+                updatedAt: "2026-11-13T00:00:00.000Z",
+              },
             },
           ],
         },

@@ -21,6 +21,7 @@ import {
   roomTaskAnswerExcerpt,
   unsharedRoomId,
   type RoomArtifactContent,
+  type RoomCodeChanges,
   type RoomBoard,
   type RoomBoardNote,
   type RoomBoardReply,
@@ -50,8 +51,10 @@ import {
   roomArtifactAfterFill,
   roomBoardCardIdentity,
   roomBoardNoteOfRef,
+  roomBoardWithCardsSent,
   roomBoardWithEdges,
   roomBoardWithoutCards,
+  roomBoxCodeWindows,
   roomBoxExcerpt,
   type RoomBoardScope,
 } from "@t3tools/shared/roomBoard";
@@ -79,6 +82,9 @@ export type GuestShareCommand = Extract<
       | "thread.room-comment.answer"
       | "thread.room-box.link"
       | "thread.room-box.turn"
+      | "thread.room-box.changes"
+      | "thread.room-pull-request.read"
+      | "thread.room-cards.sent"
       | "thread.guest-message.route"
       | "thread.room-link.set";
   }
@@ -372,6 +378,30 @@ function boardWithCommentAnswer(
   return { ...board, notes: board.notes.map((other) => (other === note ? answered : other)) };
 }
 
+/**
+ * The board with what a thread box's thread changed shown in every code window the box has a line
+ * to. A window that already shows this turn of this person's, or a box with no window, leaves the
+ * board as it was.
+ */
+function boardWithBoxChanges(
+  board: RoomBoard,
+  boxId: string,
+  changes: Omit<RoomCodeChanges, "boxId">,
+): RoomBoard {
+  const windows = new Set(roomBoxCodeWindows(board, boxId));
+  const shows = (note: RoomBoardNote) =>
+    note.changes?.boxId === boxId &&
+    note.changes.turnId === changes.turnId &&
+    note.changes.guestId === changes.guestId;
+  if (![...windows].some((note) => !shows(note))) return board;
+  return {
+    ...board,
+    notes: board.notes.map((note) =>
+      windows.has(note) && !shows(note) ? { ...note, changes: { ...changes, boxId } } : note,
+    ),
+  };
+}
+
 const artifactOn = (share: Pick<ThreadRoom, "board">, noteId: string | undefined) =>
   noteId === undefined
     ? undefined
@@ -400,6 +430,7 @@ function boardGuestIds(board: RoomBoard): ReadonlySet<GuestId | undefined> {
       note.artifact?.askedBy,
       note.artifact?.previous?.guestId,
       note.artifact?.previous?.askedBy,
+      note.changes?.guestId,
       ...(note.thread?.turns.flatMap((turn) => [turn.guestId, turn.askedBy]) ?? []),
       ...(note.replies?.map((reply) => reply.guestId) ?? []),
       ...(note.reactions?.map((reaction) => reaction.guestId) ?? []),
@@ -494,6 +525,23 @@ function boardWithBoxTurn(
   };
   return { ...board, notes: board.notes.map((note) => (note === box ? updated : note)) };
 }
+
+/** The share with the lines a guest's message carried into its box marked sent, as it is sent. */
+const withMessageCardsSent = (
+  share: ThreadGuestShare,
+  message: ThreadGuestMessage | undefined,
+  now: DateTime.Utc,
+): ThreadGuestShare => {
+  if (message?.cardRefs === undefined || share.board === undefined) return share;
+  const board = roomBoardWithCardsSent(
+    share.board,
+    message.boxId ?? ROOM_BOARD_ROOM_BOX,
+    message.artifactId,
+    message.cardRefs,
+    DateTime.formatIso(now),
+  );
+  return board === share.board ? share : { ...share, board };
+};
 
 const resolveMessage = (
   share: ThreadGuestShare,
@@ -680,6 +728,9 @@ export function decideGuestShareCommand(input: {
             ...(command.cards === undefined || command.cards.length === 0
               ? {}
               : { cards: command.cards }),
+            ...(command.cardRefs === undefined || command.cardRefs.length === 0
+              ? {}
+              : { cardRefs: command.cardRefs }),
           },
         ]),
       };
@@ -808,6 +859,47 @@ export function decideGuestShareCommand(input: {
           boardWithBoxTurn(board, command.boxId, command.turn),
         ),
       );
+    // Only the owner's own boxes: a guest's box shows what their machine posts with their turn.
+    case "thread.room-box.changes":
+      return Result.succeed(
+        withRoomBoard(thread, command.shareId, (board) =>
+          roomBoxOn({ board }, command.boxId)?.guestId !== undefined
+            ? board
+            : boardWithBoxChanges(board, command.boxId, {
+                ...command.changes,
+                turnId: command.turnId,
+                updatedAt: DateTime.formatIso(now),
+              }),
+        ),
+      );
+    // A read lands only on the window that still names the pull request it read.
+    case "thread.room-pull-request.read":
+      return Result.succeed(
+        withRoomBoard(thread, command.shareId, (board) => {
+          const window = board.notes.find(
+            (note) =>
+              note.id === command.noteId &&
+              note.kind === "pull-request" &&
+              note.url === command.url,
+          );
+          if (window === undefined) return board;
+          const read = { ...window, pullRequest: command.read };
+          return { ...board, notes: board.notes.map((note) => (note === window ? read : note)) };
+        }),
+      );
+    // Dispatched by the owner's server once it took the owner's own prompt from a box.
+    case "thread.room-cards.sent":
+      return Result.succeed(
+        withRoomBoard(thread, command.shareId, (board) =>
+          roomBoardWithCardsSent(
+            board,
+            command.boxId,
+            command.artifactId,
+            command.cardRefs,
+            DateTime.formatIso(now),
+          ),
+        ),
+      );
     case "thread.guest-message.route": {
       if (share === null) return Result.fail("This thread has no guest link.");
       const message = share.messages.find((candidate) => candidate.id === command.guestMessageId);
@@ -828,7 +920,7 @@ export function decideGuestShareCommand(input: {
       return Result.map(resolveMessage(share, command.guestMessageId, "sent"), (next) => ({
         ...thread,
         guestShare: {
-          ...next,
+          ...withMessageCardsSent(next, message, now),
           messages: next.messages.map((candidate) =>
             candidate.id === command.guestMessageId ? { ...candidate, sentAs } : candidate,
           ),
@@ -876,10 +968,31 @@ export function decideGuestShareCommand(input: {
       if (turns.some((turn) => turn.guestId === command.guestId && turn.id === command.turn.id)) {
         return Result.succeed(thread);
       }
-      const { truncated, taskId, artifact, boxId, cards, model, comment, ...turn } = command.turn;
+      const {
+        truncated,
+        taskId,
+        artifact,
+        boxId,
+        cards,
+        cardRefs,
+        model,
+        comment,
+        changes,
+        ...turn
+      } = command.turn;
       // Only the guest's own thread box shows their turn; any other box is ignored.
       const namedBox = roomBoxOn(share, boxId);
       const box = namedBox?.guestId === command.guestId ? namedBox : undefined;
+      // Their machine posts the turn again once its checkpoint is taken, with what it changed.
+      const changed =
+        box === undefined || changes === undefined || share.board === undefined
+          ? share.board
+          : boardWithBoxChanges(share.board, box.id, {
+              ...changes,
+              guestId: command.guestId,
+              turnId: turn.id,
+              updatedAt: DateTime.formatIso(now),
+            });
       const about =
         box === undefined
           ? {}
@@ -889,9 +1002,9 @@ export function decideGuestShareCommand(input: {
               ...(model === undefined ? {} : { model }),
             };
       const answered =
-        taskId === undefined || share.board === undefined
-          ? share.board
-          : boardWithTaskAnswered(share.board, taskId, command.guestId, turn);
+        taskId === undefined || changed === undefined
+          ? changed
+          : boardWithTaskAnswered(changed, taskId, command.guestId, turn);
       // The guest's own agent wrote it, on their machine; the owner's agent never sees the post.
       const filled =
         artifact === undefined || answered === undefined
@@ -921,7 +1034,7 @@ export function decideGuestShareCommand(input: {
                   ...(model === undefined ? {} : { model }),
                 },
               });
-        const board = boardWithBoxTurn(commented, box.id, {
+        const shown = boardWithBoxTurn(commented, box.id, {
           id: turn.id,
           ...about,
           prompt: roomBoxExcerpt(turn.prompt, ROOM_BOX_PROMPT_MAX_LENGTH),
@@ -929,6 +1042,17 @@ export function decideGuestShareCommand(input: {
           at: DateTime.formatIso(now),
           guestId: command.guestId,
         });
+        // Only as the box first shows the turn: a post again with its changes marks nothing anew.
+        const board =
+          shown === commented || cardRefs === undefined
+            ? shown
+            : roomBoardWithCardsSent(
+                shown,
+                box.id,
+                artifact?.noteId,
+                cardRefs,
+                DateTime.formatIso(now),
+              );
         return board === share.board ? Result.succeed(thread) : withShare({ ...share, board });
       }
       const board = filled;
@@ -1027,7 +1151,11 @@ export function decideGuestMessageSend(input: {
   const message = share.messages.find((candidate) => candidate.id === input.guestMessageId);
   const built = guestMessageForAgent(share, input.thread.id, input.guestMessageId, message);
   return Result.map(resolveMessage(share, input.guestMessageId, "sent"), (next) => ({
-    thread: { ...input.thread, guestShare: next, updatedAt: input.now },
+    thread: {
+      ...input.thread,
+      guestShare: withMessageCardsSent(next, message, input.now),
+      updatedAt: input.now,
+    },
     text: built.text,
     guest: built.guest,
     records: built.records,

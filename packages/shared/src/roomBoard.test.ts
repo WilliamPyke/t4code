@@ -4,12 +4,16 @@ import {
   type OrchestrationV2TurnItem,
   ROOM_ARTIFACT_MAX_LENGTH,
   ROOM_BOARD_MAX_ARTIFACTS,
+  ROOM_BOARD_MAX_CODE_WINDOWS,
+  ROOM_BOARD_MAX_PULL_REQUESTS,
   ROOM_BOARD_MAX_REACTIONS,
   ROOM_BOARD_MAX_REPLIES,
   ROOM_BOARD_MAX_THREADS,
+  ROOM_BOARD_ROOM_BOX,
   ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH,
   RoomBoard,
   type RoomBoardChange,
+  roomPullRequestOf,
   type RoomBoardNote,
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
@@ -26,11 +30,15 @@ import {
   roomArtifactBody,
   roomArtifactRequestOf,
   roomBoardWithCards,
+  roomBoardWithCardsSent,
+  roomBoardCardChangedAt,
   roomBoardCardIdentity,
+  roomBoxCodeWindows,
   roomBoxExcerpt,
   roomBoxRequestOf,
   roomCommentAnswer,
   roomCommentRequestOf,
+  roomWindowBoxId,
 } from "./roomBoard.ts";
 
 describe("roomBoardWithCards", () => {
@@ -109,6 +117,7 @@ describe("applyRoomBoardChange", () => {
       { kind: "artifact" },
       { kind: "thread" },
       { kind: "comment" },
+      { kind: "code" },
       { pinnedTo: "message:1" },
     ];
     for (const fields of refused) {
@@ -244,6 +253,100 @@ describe("applyRoomBoardChange", () => {
     expect(Result.isFailure(apply(ran, put("t0", { done: true })))).toBe(true);
     const removed = applied(ran, { type: "note.remove", noteId: "t0" });
     expect(removed.edges).toEqual([]);
+  });
+
+  it("takes a pull request window only for a github.com pull request, and never its read", () => {
+    const url = "https://github.com/acme/app/pull/12";
+    expect(roomPullRequestOf("https://github.com/acme/app/pull/12/files?w=1#top")).toEqual({
+      repository: "acme/app",
+      number: 12,
+      url,
+    });
+    for (const other of [
+      "http://github.com/acme/app/pull/12",
+      "https://github.com.evil.dev/acme/app/pull/12",
+      "https://gitlab.com/acme/app/pull/12",
+      "https://github.com/acme/app/issues/12",
+      "https://github.com/acme/../pull/12",
+      "https://github.com/acme/app/pull/0",
+      "https://user@github.com/acme/app/pull/12",
+    ]) {
+      expect(roomPullRequestOf(other), other).toBeNull();
+    }
+    const window = (fields: Partial<Extract<RoomBoardChange, { type: "note.put" }>>) =>
+      apply(EMPTY_ROOM_BOARD, put("pr", { kind: "pull-request", ...fields }));
+    // One spelling only, so the owner's server reads exactly what the board shows.
+    for (const refused of [{}, { url: `${url}/files` }, { url: "https://gitlab.com/a/b/pull/1" }]) {
+      expect(Result.isFailure(window(refused))).toBe(true);
+    }
+    expect(Result.isFailure(apply(EMPTY_ROOM_BOARD, put("l", { kind: "link" })))).toBe(true);
+    // A change that carries a read of its own adds the window without it.
+    const forged = {
+      ...put("pr", { kind: "pull-request", url }),
+      pullRequest: { readAt: at, problem: "not_found" },
+    } as unknown as RoomBoardChange;
+    let board = applied(EMPTY_ROOM_BOARD, forged);
+    expect(board.notes[0]).toEqual({
+      id: "pr",
+      text: "",
+      x: 0,
+      y: 0,
+      guestId: sam,
+      kind: "pull-request",
+      url,
+    });
+    for (let index = 1; index < ROOM_BOARD_MAX_PULL_REQUESTS; index++) {
+      board = applied(board, put(`pr${index}`, { kind: "pull-request", url }));
+    }
+    expect(Result.isFailure(apply(board, put("over", { kind: "pull-request", url })))).toBe(true);
+  });
+
+  it("holds a few code windows, each showing one box's changes, kept once the box goes", () => {
+    let board = EMPTY_ROOM_BOARD;
+    for (let index = 0; index < ROOM_BOARD_MAX_CODE_WINDOWS; index++) {
+      board = applied(board, put(`c${index}`, { kind: "code", text: `Code ${index}` }));
+    }
+    expect(Result.isFailure(apply(board, put("over", { kind: "code" })))).toBe(true);
+    board = applied(
+      applied(board, put("box", { kind: "thread" })),
+      put("other", { kind: "thread" }),
+    );
+    const changes = {
+      files: [{ path: "src/a.ts", additions: 2, deletions: 1 }],
+      additions: 2,
+      deletions: 1,
+      turnCount: 1,
+      boxId: "box",
+      turnId: "run:1",
+      updatedAt: at,
+    };
+    const shown: RoomBoard = {
+      ...board,
+      notes: board.notes.map((note) => (note.id === "c0" ? { ...note, changes } : note)),
+    };
+    const line = (edgeId: string, from: string, to = "note:c0"): RoomBoardChange => ({
+      type: "edge.put",
+      edgeId,
+      from,
+      to,
+    });
+    const attached = applied(shown, line("e1", "note:box"));
+    expect(roomWindowBoxId(attached, "c0")).toBe("box");
+    expect(roomBoxCodeWindows(attached, "box").map((note) => note.id)).toEqual(["c0"]);
+    // A window shows one box: another box's line is refused, a note's is a plain line.
+    expect(Result.isFailure(apply(attached, line("e2", "note:other")))).toBe(true);
+    expect(Result.isFailure(apply(attached, line("e3", "card:thread")))).toBe(true);
+    expect(Result.isSuccess(apply(attached, line("e4", "note:c1")))).toBe(true);
+    const roomWindow = applied(shown, line("e5", "card:thread", "note:c1"));
+    expect(roomWindowBoxId(roomWindow, "c1")).toBe(ROOM_BOARD_ROOM_BOX);
+    expect(applied(attached, put("c0", { text: "Renamed" })).notes[0]).toMatchObject({
+      text: "Renamed",
+      kind: "code",
+      changes,
+    });
+    const removed = applied(attached, { type: "note.remove", noteId: "box" });
+    expect(roomWindowBoxId(removed, "c0")).toBeUndefined();
+    expect(removed.notes.find((note) => note.id === "c0")?.changes).toEqual(changes);
   });
 
   it("adds a section only as a frame of its own, which stays one", () => {
@@ -501,6 +604,132 @@ describe("applyRoomBoardChange", () => {
         allowed,
       );
     }
+  });
+
+  it("times an edit of a card's text or status, and lets anyone pin a line, which no line starts with", () => {
+    const board: RoomBoard = {
+      positions: {},
+      notes: [
+        { id: "n", text: "Hi", x: 0, y: 0 },
+        { id: "t", text: "Ship", x: 0, y: 0, kind: "task" },
+      ],
+      edges: [{ id: "e", from: "note:n", to: "card:thread", sentAt: at }],
+    };
+    expect(applied(board, put("n", { text: "Hi", x: 5, y: 5 })).notes[0]?.editedAt).toBeUndefined();
+    const edited = applied(board, put("n", { text: "Hello" }));
+    expect(edited.notes[0]?.editedAt).toBe(at);
+    // A move after it keeps when it was edited.
+    const later = "2026-11-13T11:00:00.000Z";
+    const moved = applyRoomBoardChange(
+      edited,
+      scope,
+      sam,
+      put("n", { text: "Hello", x: 9 }),
+      later,
+    );
+    expect(Result.getOrThrow(moved).notes[0]?.editedAt).toBe(at);
+    expect(applied(board, put("t", { text: "Ship", done: true })).notes[1]?.editedAt).toBe(at);
+
+    // A line drawn by a change is never marked sent, whatever it says.
+    const drawn = applied(board, {
+      type: "edge.put",
+      edgeId: "f",
+      from: "note:t",
+      to: "card:thread",
+    });
+    expect(drawn.edges?.at(-1)).toEqual({ id: "f", from: "note:t", to: "card:thread" });
+
+    const pinned = applied(board, { type: "edge.pin", edgeId: "e", pinned: true });
+    expect(pinned.edges?.[0]).toEqual({
+      id: "e",
+      from: "note:n",
+      to: "card:thread",
+      sentAt: at,
+      pinned: true,
+    });
+    expect(applied(pinned, { type: "edge.pin", edgeId: "e", pinned: true })).toBe(pinned);
+    expect(applied(pinned, { type: "edge.pin", edgeId: "e", pinned: false }).edges?.[0]).toEqual(
+      board.edges?.[0],
+    );
+    expect(Result.isFailure(apply(board, { type: "edge.pin", edgeId: "gone", pinned: true }))).toBe(
+      true,
+    );
+  });
+});
+
+describe("roomBoardWithCardsSent", () => {
+  const at = "2026-11-13T12:00:00.000Z";
+  const note = (id: string, fields: Partial<RoomBoardNote> = {}): RoomBoardNote => ({
+    id,
+    text: id,
+    x: 0,
+    y: 0,
+    ...fields,
+  });
+  const board: RoomBoard = {
+    positions: {},
+    notes: [
+      note("a"),
+      note("b"),
+      note("far"),
+      note("other"),
+      note("box", { kind: "thread" }),
+      note("doc", { kind: "artifact" }),
+      note("loose", { kind: "artifact" }),
+    ],
+    edges: [
+      { id: "a>box", from: "note:a", to: "note:box" },
+      { id: "far>a", from: "note:far", to: "note:a" },
+      { id: "box>doc", from: "note:box", to: "note:doc" },
+      { id: "b>doc", from: "note:b", to: "note:doc" },
+      { id: "a>thread", from: "note:a", to: "card:thread" },
+      { id: "other>box", from: "note:other", to: "note:box" },
+      { id: "b>loose", from: "note:b", to: "note:loose" },
+    ],
+  };
+  const sentIds = (next: RoomBoard) =>
+    (next.edges ?? []).filter((edge) => edge.sentAt === at).map((edge) => edge.id);
+
+  it("marks only the lines the prompt carried its cards along into this box and its artifact", () => {
+    const next = roomBoardWithCardsSent(board, "box", "doc", ["note:a", "note:far", "note:b"], at);
+    expect(sentIds(next)).toEqual(["a>box", "b>doc"]);
+    // A line between cards other boxes may reach too is marked for this box alone, also when the
+    // card it leads to was sent before and stayed out.
+    const far = { id: "far>a", from: "note:far", to: "note:a", sentFor: { box: at } };
+    expect(next.edges?.[1]).toEqual(far);
+    expect(roomBoardWithCardsSent(board, "box", "doc", ["note:far"], at).edges?.[1]).toEqual(far);
+    // Another box's line, an uncarried card's, and an artifact the box has no line to stay new.
+    expect(sentIds(roomBoardWithCardsSent(board, "box", "loose", ["note:b"], at))).toEqual([]);
+    expect(roomBoardWithCardsSent(board, "box", undefined, ["note:other"], at).edges?.[5]).toEqual({
+      id: "other>box",
+      from: "note:other",
+      to: "note:box",
+      sentAt: at,
+    });
+    // The room thread's own card is a box too.
+    expect(
+      sentIds(roomBoardWithCardsSent(board, ROOM_BOARD_ROOM_BOX, undefined, ["note:a"], at)),
+    ).toEqual(["a>thread"]);
+    expect(roomBoardWithCardsSent(board, "box", undefined, ["note:nope"], at)).toBe(board);
+  });
+
+  it("times a card's change by its edit, a reply other than this box's agent's, or new content", () => {
+    expect(roomBoardCardChangedAt(note("old"), "box")).toBeUndefined();
+    const thread = note("c", {
+      kind: "comment",
+      editedAt: "2026-11-13T09:00:00.000Z",
+      replies: [
+        { id: "r1", text: "Yes", at: "2026-11-13T10:00:00.000Z" },
+        {
+          id: "agent:t",
+          text: "Done",
+          at: "2026-11-13T11:00:00.000Z",
+          agent: { turnId: "t", boxId: "box" },
+        },
+      ],
+    });
+    expect(roomBoardCardChangedAt(thread, "box")).toBe("2026-11-13T10:00:00.000Z");
+    expect(roomBoardCardChangedAt(thread, "other")).toBe("2026-11-13T11:00:00.000Z");
   });
 });
 

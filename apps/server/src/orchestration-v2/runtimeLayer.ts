@@ -3,7 +3,10 @@ import * as GuestShareService from "../guest/GuestShareService.ts";
 import * as GuestLinkNames from "../guest/GuestLinkNames.ts";
 import * as GuestTeamShares from "../guest/GuestTeamShares.ts";
 import * as GuestSignIn from "../guest/GuestSignIn.ts";
+import * as CheckpointDiffQuery from "../checkpointing/CheckpointDiffQuery.ts";
 import * as RoomBoxes from "../guest/RoomBoxes.ts";
+import * as RoomCodeDiffs from "../guest/RoomCodeDiffs.ts";
+import * as RoomPullRequests from "../guest/RoomPullRequests.ts";
 import * as SharedRoomLink from "../guest/SharedRoomLink.ts";
 import * as SharedThreadJoin from "../guest/SharedThreadJoin.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
@@ -377,6 +380,18 @@ export const layer = Layer.mergeAll(
 const layerRoomBoxesProvided = RoomBoxes.layer.pipe(
   Layer.provide(Layer.merge(layerOrchestratorProvided, layerThreadLaunchProvided)),
 );
+const layerRoomCodeDiffsProvided = RoomCodeDiffs.layer.pipe(
+  Layer.provide(
+    Layer.merge(
+      layerOrchestratorProvided,
+      CheckpointDiffQuery.layer.pipe(Layer.provide(layerThreadManagementProvided)),
+    ),
+  ),
+);
+// Reads with the owner's GitHub sign-in, which the server provides as PullRequestService.
+const layerRoomPullRequestsProvided = RoomPullRequests.layer.pipe(
+  Layer.provide(layerOrchestratorProvided),
+);
 const layerSharedRoomLinkProvided = SharedRoomLink.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -384,6 +399,7 @@ const layerSharedRoomLinkProvided = SharedRoomLink.layer.pipe(
       layerProjectService,
       layerThreadLaunchProvided,
       layerRoomBoxesProvided,
+      layerRoomCodeDiffsProvided,
     ),
   ),
 );
@@ -411,6 +427,8 @@ export const layerProduction = Layer.mergeAll(
         layerCommandOutputHubProvided,
         layerProjectService,
         layerRoomBoxesProvided,
+        layerRoomCodeDiffsProvided,
+        layerRoomPullRequestsProvided,
         GuestSignIn.layer,
         GuestLinkNames.layer,
         GuestTeamShares.layer.pipe(Layer.provide(layerOrchestratorProvided)),

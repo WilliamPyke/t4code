@@ -1,7 +1,19 @@
+import type { RoomBoardNoteColor, RoomBoardReactionEmoji } from "@t3tools/contracts";
 import { EllipsisIcon } from "lucide-react";
 import type { PointerEvent } from "react";
 
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import {
+  Menu,
+  MenuItem,
+  MenuPopup,
+  MenuSub,
+  MenuSubPopup,
+  MenuSubTrigger,
+  MenuTrigger,
+} from "../ui/menu";
+import { BOARD_ICON_BUTTON_CLASS } from "./BoardChrome";
+import { ReactionChoices } from "./RoomBoardReactions";
+import { NoteColorChoices } from "./RoomNoteColor";
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
 
@@ -16,8 +28,21 @@ interface CardAction {
  * A card's header buttons folded into one, for a card drawn too small for them: the rest of its
  * header is left to grab, and none of them is pressed by a grab that lands a little off.
  */
-export function CardActionsMenu({ actions }: { readonly actions: ReadonlyArray<CardAction> }) {
-  if (actions.length === 0) return null;
+export function CardActionsMenu({
+  actions,
+  onReact,
+  color,
+}: {
+  readonly actions: ReadonlyArray<CardAction>;
+  readonly onReact?: ((emoji: RoomBoardReactionEmoji) => void) | undefined;
+  readonly color?:
+    | {
+        readonly value: RoomBoardNoteColor | undefined;
+        readonly onPick: (color: RoomBoardNoteColor) => void;
+      }
+    | undefined;
+}) {
+  if (actions.length === 0 && onReact === undefined && color === undefined) return null;
   return (
     <Menu>
       <MenuTrigger
@@ -25,7 +50,7 @@ export function CardActionsMenu({ actions }: { readonly actions: ReadonlyArray<C
           <button
             type="button"
             aria-label="Card actions"
-            className="grid size-6 shrink-0 place-items-center rounded-sm opacity-60 hover:opacity-100"
+            className={BOARD_ICON_BUTTON_CLASS}
             onPointerDown={stopPointer}
           />
         }
@@ -33,6 +58,22 @@ export function CardActionsMenu({ actions }: { readonly actions: ReadonlyArray<C
         <EllipsisIcon className="size-3.5" />
       </MenuTrigger>
       <MenuPopup align="end">
+        {onReact === undefined ? null : (
+          <MenuSub>
+            <MenuSubTrigger>React</MenuSubTrigger>
+            <MenuSubPopup>
+              <ReactionChoices onReact={onReact} />
+            </MenuSubPopup>
+          </MenuSub>
+        )}
+        {color === undefined ? null : (
+          <MenuSub>
+            <MenuSubTrigger>Colour</MenuSubTrigger>
+            <MenuSubPopup>
+              <NoteColorChoices color={color.value} onPick={color.onPick} />
+            </MenuSubPopup>
+          </MenuSub>
+        )}
         {actions.map((action) => (
           <MenuItem
             key={action.label}

@@ -5,6 +5,7 @@ import { formatDayAwareTimestamp } from "~/timestampFormat";
 
 import ChatMarkdown from "../ChatMarkdown";
 import { Button } from "../ui/button";
+import { BoardChip } from "./BoardChrome";
 import {
   boardDraftIsPage,
   boardProgressLine,
@@ -31,7 +32,7 @@ export function RoomArtifactBody({
 }) {
   if (draft !== undefined) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col border-t border-border">
+      <div className="flex min-h-0 flex-1 flex-col border-t border-board-hairline">
         <div
           data-board-scroll
           data-board-text
@@ -61,13 +62,13 @@ export function RoomArtifactBody({
     );
   }
   return (
-    <div className="flex min-h-0 flex-1 flex-col border-t border-border">
+    <div className="flex min-h-0 flex-1 flex-col border-t border-board-hairline">
       {isBoardHtmlArtifact(artifact.body) ? (
         <iframe
           aria-label="Artifact page"
           sandbox="allow-scripts"
           srcDoc={artifact.body}
-          className="min-h-0 w-full flex-1 rounded-b-sm border-0 group-data-board-busy/board:pointer-events-none"
+          className="min-h-0 w-full flex-1 rounded-b-board border-0 group-data-board-busy/board:pointer-events-none"
         />
       ) : (
         <div
@@ -125,12 +126,14 @@ export function RoomArtifactLive({
     <>
       <RoomArtifactMeta author={author} artifact={artifact} onRestore={onRestore} />
       {progress !== undefined ? (
-        <p role="status" className="shrink-0 truncate px-3 pb-1.5 text-2xs font-medium text-info">
-          {boxName(progress.boxId)} · <BoardProgressLine progress={progress} />
+        <p role="status" className="flex shrink-0 px-3 pb-1.5">
+          <BoardChip tone="primary">
+            {boxName(progress.boxId)} · <BoardProgressLine progress={progress} />
+          </BoardChip>
         </p>
       ) : writingFallback === null ? null : (
-        <p role="status" className="shrink-0 px-3 pb-1.5 text-2xs font-medium text-info">
-          {writingFallback}
+        <p role="status" className="flex shrink-0 px-3 pb-1.5">
+          <BoardChip tone="primary">{writingFallback}</BoardChip>
         </p>
       )}
       <RoomArtifactBody artifact={artifact} draft={draft} />
@@ -187,7 +190,7 @@ function RoomArtifactMeta({
         )}
       </div>
       {artifact.prompt === undefined || artifact.prompt.trim() === "" ? null : (
-        <p className="line-clamp-2 border-s-2 border-info/50 ps-2 text-2xs [overflow-wrap:anywhere]">
+        <p className="line-clamp-2 border-s-2 border-foreground/15 ps-2 text-2xs [overflow-wrap:anywhere]">
           {artifact.prompt}
         </p>
       )}

@@ -56,7 +56,7 @@ export function useBoardMarquee(onSelect: (rect: ClientRect) => void) {
       <div
         ref={box}
         aria-hidden
-        className="pointer-events-none absolute z-20 hidden rounded-sm border border-primary bg-primary/10"
+        className="pointer-events-none absolute z-20 hidden rounded-xs border border-primary bg-primary/8"
       />
     ),
     start: (event: PointerEvent<HTMLElement>) => {
@@ -157,7 +157,7 @@ export function SelectionBar({
       ref={barRef}
       data-board-overlay
       className={cn(
-        "absolute top-2 left-2 z-20 flex items-center gap-1 rounded-md border border-border bg-popover py-1 ps-2.5 pe-1 text-xs text-popover-foreground shadow-md",
+        "absolute top-2 left-2 z-20 flex items-center gap-1 rounded-board border border-board-hairline bg-card py-1 ps-2.5 pe-1 text-xs text-card-foreground shadow-board",
         hidden && "invisible",
       )}
       onPointerDown={(event) => event.stopPropagation()}

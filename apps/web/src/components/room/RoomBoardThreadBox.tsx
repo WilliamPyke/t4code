@@ -22,6 +22,7 @@ import { Button } from "../ui/button";
 import { ComposerPendingApprovalActions } from "../chat/ComposerPendingApprovalActions";
 import { guestMessageArtifactTitle } from "../chat/roomBoardPrompt";
 import { BoardProgressLine } from "./RoomBoardArtifact";
+import { BoardChip } from "./BoardChrome";
 import { type BoardPeople, boardPersonName } from "./roomBoard.logic";
 import { useBoxProgress } from "./roomBoardLive";
 
@@ -52,7 +53,7 @@ export function BoxTurns({
             {boardPersonName(people, turn.askedBy ?? turn.guestId)}
             {turn.model === undefined ? "" : ` · ${turn.model}`}
           </span>
-          <p className="line-clamp-2 border-s-2 border-info/50 ps-2 [overflow-wrap:anywhere]">
+          <p className="line-clamp-2 border-s-2 border-primary/40 ps-2 [overflow-wrap:anywhere]">
             {turn.prompt}
           </p>
           {turn.cards === undefined || turn.cards.length === 0 ? null : (
@@ -70,7 +71,7 @@ export function BoxTurns({
           <span className="text-2xs font-medium text-muted-foreground">
             {boardPersonName(people, running.askedBy ?? running.guestId)}
           </span>
-          <p className="line-clamp-2 border-s-2 border-info/50 ps-2 [overflow-wrap:anywhere]">
+          <p className="line-clamp-2 border-s-2 border-primary/40 ps-2 [overflow-wrap:anywhere]">
             {running.prompt}
           </p>
         </li>
@@ -102,18 +103,14 @@ export function BoxProgress({
       : "";
   return (
     <div role="status" className="flex flex-col gap-1">
-      <p
-        className={
-          progress.phase === "approval"
-            ? "text-2xs font-medium text-warning"
-            : "text-2xs font-medium text-info"
-        }
-      >
-        <BoardProgressLine progress={progress} />
+      <p className="flex">
+        <BoardChip tone={progress.phase === "approval" ? "warning" : "primary"}>
+          <BoardProgressLine progress={progress} />
+        </BoardChip>
       </p>
       {progress.phase === "approval" ? approval : null}
       {preview === "" ? null : (
-        <p className="line-clamp-4 rounded-md bg-muted/50 px-2 py-1 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
+        <p className="line-clamp-4 rounded-md bg-foreground/4 px-2 py-1 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
           {preview}
         </p>
       )}
@@ -154,7 +151,7 @@ export function BoxRequests({
         return (
           <li
             key={message.id}
-            className="flex flex-col gap-1 rounded-md border border-dashed border-border px-2 py-1.5 text-xs"
+            className="flex flex-col gap-1 rounded-md border border-dashed border-foreground/20 px-2 py-1.5 text-xs"
           >
             <span className="text-2xs font-medium text-muted-foreground">
               {who === "You" ? "You asked" : `${who} asked`}
@@ -227,14 +224,16 @@ export function BoxApproval({
     <div
       role="group"
       aria-label="Approval"
-      className="flex flex-col gap-1.5 rounded-md border border-warning/40 px-2 py-1.5 text-xs"
+      className="flex flex-col gap-1.5 rounded-md border border-warning/30 bg-warning/8 px-2 py-1.5 text-xs"
       onPointerDown={stopPointer}
     >
       <p className="line-clamp-2 font-mono text-2xs whitespace-pre-wrap [overflow-wrap:anywhere]">
         {approval.detail || approval.requestKind}
       </p>
       {approval.responseCapability === "live" ? null : (
-        <p className="text-2xs text-warning">The agent stopped. Open the conversation to go on.</p>
+        <p className="text-2xs text-warning-foreground">
+          The agent stopped. Open the conversation to go on.
+        </p>
       )}
       <div className="flex flex-wrap items-center gap-1">
         <ComposerPendingApprovalActions
@@ -264,7 +263,7 @@ export function BoxApproval({
         {open}
       </div>
       {error === null ? null : (
-        <p role="alert" className="text-2xs text-destructive">
+        <p role="alert" className="text-2xs text-error-foreground">
           {error}
         </p>
       )}

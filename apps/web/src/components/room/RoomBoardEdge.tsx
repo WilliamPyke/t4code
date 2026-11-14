@@ -24,6 +24,7 @@ export function BoardEdgeLine({
   color,
   width,
   marker,
+  dashed = false,
   selectable,
   onSelect,
 }: {
@@ -35,6 +36,7 @@ export function BoardEdgeLine({
   readonly color: string;
   readonly width: number;
   readonly marker: string;
+  readonly dashed?: boolean;
   /** Whether a press on it selects it, for whoever may edit the board. */
   readonly selectable: boolean;
   readonly onSelect: () => void;
@@ -58,7 +60,14 @@ export function BoardEdgeLine({
           onClick={onSelect}
         />
       ) : null}
-      <path d={path} fill="none" stroke={color} strokeWidth={width} markerEnd={marker} />
+      <path
+        d={path}
+        fill="none"
+        stroke={color}
+        strokeWidth={width}
+        strokeDasharray={dashed ? "5 4" : undefined}
+        markerEnd={marker}
+      />
     </g>
   );
 }

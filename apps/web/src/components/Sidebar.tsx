@@ -256,6 +256,7 @@ import {
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SharedWithMeSection } from "./sidebar/SharedWithMeSection";
 import { TeamsSection } from "./sidebar/TeamsSection";
+import { BoardsSection } from "./sidebar/BoardsSection";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { TooltipProvider } from "./ui/tooltip";
@@ -3007,6 +3008,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         className="min-h-full"
         fixedHeader={
           <SidebarGroup className="z-[1]">
+            <BoardsSection canStart={!guestOnly} />
+            <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">Threads</p>
             <SidebarThreadHeader
               hasProjects={projectGroups.length > 0}
               projectScope={

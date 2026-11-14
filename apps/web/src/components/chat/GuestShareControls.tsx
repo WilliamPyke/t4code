@@ -378,8 +378,21 @@ function GuestShareDialog({
             </Button>
           ) : (
             <>
+              {/* Ending the share is set apart on the left, away from the way forward. */}
+              {activeShare === null ? null : (
+                <div className="grid sm:me-auto">
+                  <Button
+                    variant="ghost-destructive"
+                    size="sm"
+                    onClick={() => void stopSharing.stop(activeShare)}
+                    disabled={stopSharing.closing || state.status === "creating"}
+                  >
+                    Stop sharing
+                  </Button>
+                </div>
+              )}
               <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
                 onClick={onClose}
                 disabled={state.status === "creating"}
@@ -410,16 +423,6 @@ function GuestShareDialog({
                   </MenuPopup>
                 </Menu>
               ) : null}
-              {activeShare === null ? null : (
-                <Button
-                  variant="destructive-outline"
-                  size="sm"
-                  onClick={() => void stopSharing.stop(activeShare)}
-                  disabled={stopSharing.closing || state.status === "creating"}
-                >
-                  Stop sharing
-                </Button>
-              )}
               {joinable ? (
                 <Menu>
                   <MenuTrigger

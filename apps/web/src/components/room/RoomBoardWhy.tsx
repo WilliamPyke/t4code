@@ -19,7 +19,10 @@ export function WhyNot({
     <Tooltip>
       <TooltipTrigger
         render={
-          <span tabIndex={0} className="inline-flex outline-none [&>*]:pointer-events-none" />
+          <span
+            tabIndex={0}
+            className="inline-flex rounded-md outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring [&>*]:pointer-events-none"
+          />
         }
       >
         {children}

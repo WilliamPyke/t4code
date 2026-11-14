@@ -79,8 +79,9 @@ function Avatar({
     <span
       aria-hidden
       className={cn(
-        "grid shrink-0 place-items-center rounded-full font-semibold text-background",
-        large ? "size-full text-sm" : "size-5 text-2xs",
+        "grid shrink-0 place-items-center font-semibold text-white",
+        // A pin's avatar fills the teardrop its button cuts.
+        large ? "size-full text-sm" : "size-5 rounded-full text-2xs",
       )}
       style={{ backgroundColor: boardCursorColor(people.guests, guestId) }}
     >
@@ -95,7 +96,7 @@ function AgentAnswering({ noteId }: { readonly noteId: string }) {
   return (
     <span
       aria-hidden
-      className="pointer-events-none absolute -right-1.5 -bottom-1.5 grid size-4 place-items-center rounded-full border border-border bg-card text-card-foreground"
+      className="pointer-events-none absolute -right-1.5 -bottom-1.5 grid size-4 place-items-center rounded-full border border-board-hairline bg-card text-card-foreground shadow-paint"
     >
       <BotIcon className="size-2.5" />
     </span>
@@ -166,7 +167,7 @@ export function CommentPin({
         aria-label={`Comment thread from ${author}${replies === 0 ? "" : `, ${replies} ${replies === 1 ? "reply" : "replies"}`}${unread ? ", new replies" : ""}${note.resolved === true ? ", resolved" : ""}`}
         aria-expanded={open}
         className={cn(
-          "size-8 cursor-pointer touch-none overflow-hidden rounded-full rounded-bl-none border-2 border-background shadow-md",
+          "size-8 cursor-pointer touch-none overflow-hidden rounded-full rounded-bl-none border-2 border-white shadow-paint focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset focus-visible:outline-none",
           note.resolved === true && "opacity-50",
           open && "ring-2 ring-primary",
         )}
@@ -201,13 +202,13 @@ export function CommentPin({
       {unread ? (
         <span
           aria-hidden
-          className="pointer-events-none absolute -top-0.5 -left-0.5 size-2.5 rounded-full border-2 border-background bg-primary"
+          className="pointer-events-none absolute -top-0.5 -left-0.5 size-2.5 rounded-full border-2 border-card bg-primary"
         />
       ) : null}
       {replies === 0 ? null : (
         <span
           aria-hidden
-          className="pointer-events-none absolute -top-1.5 -right-1.5 grid h-4 min-w-4 place-items-center rounded-full border border-border bg-card px-1 text-3xs leading-none font-medium text-card-foreground tabular-nums"
+          className="pointer-events-none absolute -top-1.5 -right-1.5 grid h-4 min-w-4 place-items-center rounded-full border border-board-hairline bg-card px-1 text-3xs leading-none font-medium text-muted-foreground shadow-paint tabular-nums"
         >
           {replies}
         </span>
@@ -409,7 +410,7 @@ export function CommentThreadPanel({
       data-board-overlay
       data-board-text
       className={cn(
-        "absolute z-30 flex w-72 cursor-default flex-col rounded-lg border border-border bg-popover text-popover-foreground shadow-lg",
+        "absolute z-30 flex w-72 cursor-default flex-col rounded-board border border-board-hairline bg-card text-card-foreground shadow-board",
         spot === null && "invisible",
       )}
       style={
@@ -426,8 +427,8 @@ export function CommentThreadPanel({
         onClose();
       }}
     >
-      <header className="flex shrink-0 items-center gap-1 border-b border-border py-1.5 ps-3 pe-1.5">
-        <h2 className="min-w-0 flex-1 truncate text-xs font-medium">
+      <header className="flex shrink-0 items-center gap-1 border-b border-board-hairline py-1.5 ps-3 pe-1.5">
+        <h2 className="min-w-0 flex-1 truncate text-xs font-semibold">
           {draft ? "New comment" : resolved ? "Resolved" : "Comment"}
         </h2>
         {draft || !canEdit ? null : (
@@ -488,12 +489,15 @@ export function CommentThreadPanel({
         </ol>
       )}
       {!canEdit ? null : full ? (
-        <p className="shrink-0 border-t border-border px-3 py-2 text-2xs text-muted-foreground">
+        <p className="shrink-0 border-t border-board-hairline px-3 py-2 text-2xs text-muted-foreground">
           This thread holds {ROOM_BOARD_MAX_REPLIES} replies. Start a new one to keep talking.
         </p>
       ) : (
         <form
-          className={cn("flex shrink-0 items-end gap-1.5 p-2", !draft && "border-t border-border")}
+          className={cn(
+            "flex shrink-0 items-end gap-1.5 p-2",
+            !draft && "border-t border-board-hairline",
+          )}
           onSubmit={(event) => {
             event.preventDefault();
             void send();

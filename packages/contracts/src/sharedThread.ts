@@ -14,6 +14,8 @@ import {
   GUEST_MESSAGE_MAX_LENGTH,
   RoomArtifactRead,
   RoomBoardNote,
+  RoomCodeDiffSummary,
+  RoomCodePatchRequest,
   RoomUpdate,
   SharedThreadCheckout,
 } from "./guestShare.ts";
@@ -131,6 +133,20 @@ export const SharedThreadFindRoomResult = Schema.Struct({
   boxes: Schema.Record(Schema.String, ThreadId),
 });
 export type SharedThreadFindRoomResult = typeof SharedThreadFindRoomResult.Type;
+
+/**
+ * One file's patch from the thread here behind one of the user's own thread boxes in a room, as
+ * a code window on that room's board lists it. Only this machine has it.
+ */
+export const SharedThreadBoxPatchInput = Schema.Struct({
+  host: TrimmedNonEmptyString,
+  shareId: GuestShareId,
+  boxId: RoomBoardNote.fields.id,
+  turnCount: RoomCodeDiffSummary.fields.turnCount,
+  path: RoomCodePatchRequest.fields.path,
+  scope: RoomCodePatchRequest.fields.scope,
+});
+export type SharedThreadBoxPatchInput = typeof SharedThreadBoxPatchInput.Type;
 
 export const SharedThreadCatchUpInput = Schema.Struct({ threadId: ThreadId });
 export type SharedThreadCatchUpInput = typeof SharedThreadCatchUpInput.Type;

@@ -21,18 +21,19 @@ import {
   unsharedRoomId,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { XIcon } from "lucide-react";
+import { MessagesSquareIcon, XIcon } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { useStableCallback } from "~/hooks/useStableCallback";
-import { randomUUID } from "~/lib/utils";
+import { cn, randomUUID } from "~/lib/utils";
 import { deriveThreadAgentWorking } from "~/session-logic";
 import { useGitStackedAction, useSourceControlActionRunning } from "~/state/sourceControlActions";
 import {
   useProject,
   useQuietThreadProjection,
+  useQuietThreadShells,
   useThreadShell,
   useThreadVisibleTurnItems,
 } from "~/state/entities";
@@ -54,7 +55,9 @@ import { resolveQuickAction } from "../GitActionsControl.logic";
 import { Button } from "../ui/button";
 import { SidebarInset } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
+import { BoardTitle } from "../boards/BoardTitle";
 import { BoardChatPanel } from "./BoardChatPanel";
+import { BOARD_TITLE_BAR_CLASS } from "./BoardChrome";
 import { BoardSharing } from "./BoardSharing";
 import { BoardThreadPicker } from "./BoardThreadPicker";
 import {
@@ -68,6 +71,11 @@ import { BoardSplit } from "./BoardSplit";
 import { RoomBoard, RoomCursors } from "./RoomBoard";
 import { RoomReplyProvider, revealRoomReply } from "./RoomReplyComments";
 import { BoxApproval } from "./RoomBoardThreadBox";
+import {
+  ROOM_CODE_PATCH_UNREADABLE,
+  type ReadRoomCodePatch,
+  roomCodePatchRead,
+} from "./RoomBoardCode";
 import {
   BOARD_THREAD_MESSAGES,
   EMPTY_ROOM_BOARD,
@@ -171,13 +179,8 @@ export function ThreadRoomBoard({
     label: "show your pointer",
     reportFailure: false,
   });
-  const openFullThread = useStableCallback(
-    () =>
-      void navigate({
-        to: "/$environmentId/$threadId",
-        params: { environmentId: threadRef.environmentId, threadId: threadRef.threadId },
-      }),
-  );
+  // Boards come first: the header's way back is the boards home; the thread opens from its box.
+  const openBoards = useStableCallback(() => void navigate({ to: "/" }));
   const openPanel = (boxId: string = ROOM_BOARD_ROOM_BOX) => onChat(boxId);
   const putInDraft = (text: string) => {
     // Only a draft: the owner reads it and sends it themselves.
@@ -222,7 +225,41 @@ export function ThreadRoomBoard({
     serverEnvironment.promptRoomBox.permissionAtom(threadRef.environmentId),
   );
   const promptRoomBox = useAtomCommand(serverEnvironment.promptRoomBox, "send the prompt");
+  // A file that cannot be read says so in its window instead of in a toast.
+  const readPatch = useAtomCommand(serverEnvironment.readRoomCodePatch, { reportFailure: false });
+  const readCodePatch: ReadRoomCodePatch = ({ note, path, scope }) =>
+    readPatch({
+      environmentId: threadRef.environmentId,
+      input: { threadId: threadRef.threadId, noteId: note.id, path, scope },
+    }).then((result) =>
+      result._tag === "Success" ? roomCodePatchRead(result.value) : ROOM_CODE_PATCH_UNREADABLE,
+    );
   const boardThreads = share?.boardThreads ?? kept?.boardThreads ?? NO_BOARD_THREADS;
+  const canRefreshPullRequest = useAtomValue(
+    serverEnvironment.refreshRoomPullRequest.permissionAtom(threadRef.environmentId),
+  );
+  // A read that cannot be asked for shows as the window's own state, not a toast.
+  const refreshPullRequest = useAtomCommand(serverEnvironment.refreshRoomPullRequest, {
+    reportFailure: false,
+  });
+  const onRefreshPullRequest = (noteId: string) =>
+    void refreshPullRequest({
+      environmentId: threadRef.environmentId,
+      input: { threadId: threadRef.threadId, noteId },
+    });
+  // The pull request each of the owner's box threads is linked to, as this app tracks it.
+  const shells = useQuietThreadShells();
+  const boxPullRequestUrl = (boxId: string) => {
+    const boxThreadId = boxId === ROOM_BOARD_ROOM_BOX ? threadRef.threadId : boardThreads[boxId];
+    const shell = shells.find(
+      (candidate) =>
+        candidate.environmentId === threadRef.environmentId && candidate.id === boxThreadId,
+    );
+    return (
+      shell?.pullRequests.findLast((link) => link.source !== "stack-dismissed")?.url ??
+      shell?.linkedPullRequest?.url
+    );
+  };
   const canAddThread = useAtomValue(
     serverEnvironment.addRoomBoxThread.permissionAtom(threadRef.environmentId),
   );
@@ -402,6 +439,7 @@ export function ThreadRoomBoard({
               shareId={roomId}
               viewKey={roomBoardViewKey(threadRef)}
               sharing={<BoardSharing threadRef={threadRef} shared={share !== null} />}
+              titleEditor={<BoardTitle threadRef={threadRef} title={title} />}
               online={presence?.online ?? []}
               messages={boardMessages(
                 items.map((projected) => projected.item),
@@ -420,7 +458,8 @@ export function ThreadRoomBoard({
                 )
               }
               onOpenThread={() => openPanel()}
-              onBack={openFullThread}
+              onBack={openBoards}
+              backLabel="Boards"
               onOpenReply={(messageId) => {
                 revealRoomReply(messageId);
                 openPanel();
@@ -442,6 +481,9 @@ export function ThreadRoomBoard({
               openingPullRequest={openingPullRequest}
               onPromptBox={canPrompt ? promptBox : undefined}
               askInComments
+              readCodePatch={readCodePatch}
+              onRefreshPullRequest={canRefreshPullRequest ? onRefreshPullRequest : undefined}
+              boxPullRequestUrl={boxPullRequestUrl}
               onAddThread={canAddThread ? setAddingAt : undefined}
               renderBoxModel={renderBoxModel}
               onOpenConversation={openPanel}
@@ -508,8 +550,9 @@ function BoardPanelEmpty({
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border pr-1 pl-3">
-        <span className="min-w-0 flex-1 truncate text-xs font-medium">{title}</span>
+      <div className={cn(BOARD_TITLE_BAR_CLASS, "gap-1 pe-1")}>
+        <MessagesSquareIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="ms-1 min-w-0 flex-1 truncate font-semibold">{title}</span>
         <Button variant="ghost" size="icon-xs" aria-label="Close conversation" onClick={onClose}>
           <XIcon />
         </Button>

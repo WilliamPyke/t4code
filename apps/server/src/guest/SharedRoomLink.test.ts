@@ -21,6 +21,7 @@ import { ROOM_UPDATES_NOTICE } from "@t3tools/shared/composerContextReferences";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -39,7 +40,9 @@ import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as CheckpointDiffQuery from "../checkpointing/CheckpointDiffQuery.ts";
 import * as RoomBoxes from "./RoomBoxes.ts";
+import * as RoomCodeDiffs from "./RoomCodeDiffs.ts";
 import * as SharedRoomLink from "./SharedRoomLink.ts";
 
 const threadId = ThreadId.make("thread:joined");
@@ -96,8 +99,26 @@ const world = Effect.fn(function* (
   const sent = yield* Ref.make<
     ReadonlyArray<Extract<OrchestrationV2ServerCommand, { type: "message.dispatch" }>>
   >([]);
+  // The run whose checkpoint every thread here has last, as its first turn.
+  const checkpointed = yield* Ref.make("run:1");
+  // Events of a thread joined from a room, sent once the test has set it up. Every service that
+  // reads the events gets each one, however late it starts reading.
+  const joinedEvents = yield* PubSub.unbounded<OrchestrationV2DomainEvent>({ replay: 16 });
+  // Each request to the room as it is sent, for a test to wait on.
+  const postsSent = yield* Queue.unbounded<unknown>();
   const layer = SharedRoomLink.layer.pipe(
     Layer.provide(RoomBoxes.layer),
+    Layer.provide(
+      RoomCodeDiffs.layer.pipe(
+        Layer.provide(
+          Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({
+            getFullThreadDiff: (input) =>
+              Effect.succeed({ ...input, fromTurnCount: 0, diff: changedPatch }),
+            getTurnDiff: (input) => Effect.succeed({ ...input, diff: changedPatch }),
+          }),
+        ),
+      ),
+    ),
     Layer.provide(ServerSettings.layerTest({})),
     Layer.provide(
       Layer.mock(ThreadLaunch.ThreadLaunchService)({
@@ -111,7 +132,18 @@ const world = Effect.fn(function* (
     ),
     Layer.provide(
       Layer.mock(Orchestrator.OrchestratorV2)({
-        streamDomainEvents: owner === undefined ? Stream.never : Stream.fromIterable(owner.events),
+        streamDomainEvents:
+          owner === undefined ? Stream.fromPubSub(joinedEvents) : Stream.fromIterable(owner.events),
+        getCheckpointContext: () =>
+          Effect.map(
+            Ref.get(checkpointed),
+            (runId) =>
+              ({
+                runs: [{ id: runId, ordinal: 1, status: "completed" }],
+                checkpointScopes: [],
+                checkpoints: [{ runId, appRunOrdinal: 1, status: "ready" }],
+              }) as never,
+          ),
         dispatch: (command: OrchestrationV2ServerCommand) =>
           command.type === "thread.room-link.set"
             ? (command.threadId === threadId
@@ -125,7 +157,8 @@ const world = Effect.fn(function* (
               : (command.type === "thread.room-task.answer" ||
                     command.type === "thread.room-artifact.fill" ||
                     command.type === "thread.room-comment.answer" ||
-                    command.type === "thread.room-box.turn") &&
+                    command.type === "thread.room-box.turn" ||
+                    command.type === "thread.room-box.changes") &&
                   owner !== undefined
                 ? Queue.offer(answers, command).pipe(Effect.as({} as never))
                 : Effect.die("Only the room link changes here"),
@@ -208,16 +241,15 @@ const world = Effect.fn(function* (
         HttpClient.make((request) =>
           Effect.gen(function* () {
             const body = request.body._tag === "Uint8Array" ? request.body.body : new Uint8Array();
-            yield* Ref.update(posts, (seen) => [
-              ...seen,
-              {
-                url: request.url,
-                authorization: request.headers["authorization"],
-                ...(request.method === "GET"
-                  ? { params: Object.fromEntries(request.urlParams.params) }
-                  : { turn: JSON.parse(new TextDecoder().decode(body)) }),
-              },
-            ]);
+            const sentPost = {
+              url: request.url,
+              authorization: request.headers["authorization"],
+              ...(request.method === "GET"
+                ? { params: Object.fromEntries(request.urlParams.params) }
+                : { turn: JSON.parse(new TextDecoder().decode(body)) }),
+            };
+            yield* Ref.update(posts, (seen) => [...seen, sentPost]);
+            yield* Queue.offer(postsSent, sentPost);
             const [next = 204, ...rest] = yield* Ref.get(replies);
             yield* Ref.set(replies, rest);
             return HttpClientResponse.fromWeb(
@@ -239,8 +271,46 @@ const world = Effect.fn(function* (
     Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-shared-room-" })),
     Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
-  return { link, here, posts, layer, requestedAt, status, answers, boxLinks, launched, sent };
+  return {
+    link,
+    here,
+    posts,
+    layer,
+    requestedAt,
+    status,
+    answers,
+    boxLinks,
+    launched,
+    sent,
+    checkpointed,
+    joinedEvents,
+    postsSent,
+  };
 });
+
+/** What git says every thread here changed: one line of one file, in its one turn. */
+const changedPatch = [
+  "diff --git a/src/login.ts b/src/login.ts",
+  "--- a/src/login.ts",
+  "+++ b/src/login.ts",
+  "@@ -1 +1 @@",
+  "-old",
+  "+new",
+].join("\n");
+const changedSummary = {
+  files: [
+    { path: "src/login.ts", additions: 1, deletions: 1, lastTurn: { additions: 1, deletions: 1 } },
+  ],
+  additions: 1,
+  deletions: 1,
+  turnCount: 1,
+};
+const checkpointCaptured = (runId: string, from: string) =>
+  ({
+    type: "checkpoint.captured",
+    threadId: from,
+    payload: { runId, status: "ready", appRunOrdinal: 1 },
+  }) as never;
 
 it("shows the room a run's prompt and its last reply, cut to what the room keeps", () => {
   assert.deepEqual(SharedRoomLink.guestTurnOf(RunId.make("run:1"), items), {
@@ -955,6 +1025,86 @@ it.effect(
         assert.equal(yield* Queue.size(answers), 0);
       }).pipe(Effect.provide(layer));
     }),
+);
+
+it.effect(
+  "shows what an owner's box's thread changed in its code windows once a turn is kept",
+  () =>
+    Effect.gen(function* () {
+      const shareId = GuestShareId.make("share:mine");
+      const roomThreadId = "thread:room";
+      const note = (id: string, kind: string) => ({ id, text: id, x: 0, y: 0, kind });
+      const { answers, layer } = yield* world([], {
+        share: null,
+        rooms: new Map([
+          [
+            roomThreadId,
+            {
+              id: shareId,
+              board: {
+                positions: {},
+                notes: [
+                  note("box:plan", "thread"),
+                  note("box:other", "thread"),
+                  note("code:plan", "code"),
+                  note("code:room", "code"),
+                ],
+                edges: [
+                  { id: "e1", from: "note:box:plan", to: "note:code:plan" },
+                  { id: "e2", from: "card:thread", to: "note:code:room" },
+                ],
+              },
+              messages: [],
+              boardThreads: { "box:plan": threadId, "box:other": "thread:other" },
+            } as never,
+          ],
+        ]),
+        // Taken once a run's checkpoint is: a thread behind no box, a box with no window, a box
+        // with one, and the room thread's own card.
+        events: [
+          checkpointCaptured("run:1", "thread:stray"),
+          checkpointCaptured("run:1", "thread:other"),
+          checkpointCaptured("run:1", threadId),
+          checkpointCaptured("run:1", roomThreadId),
+        ],
+        itemsOf: () => [],
+      });
+      yield* Effect.gen(function* () {
+        const rooms = yield* SharedRoomLink.SharedRoomLink;
+        yield* rooms.drain;
+        const shown = (boxId: string) => ({
+          type: "thread.room-box.changes",
+          threadId: roomThreadId,
+          shareId,
+          boxId,
+          turnId: "run:1",
+          changes: changedSummary,
+        });
+        assert.deepInclude(yield* Queue.take(answers), shown("box:plan") as never);
+        assert.deepInclude(yield* Queue.take(answers), shown("thread") as never);
+        assert.equal(yield* Queue.size(answers), 0);
+      }).pipe(Effect.provide(layer));
+    }),
+);
+
+it.effect("posts the user's own box's turn again with what it changed, once it is kept", () =>
+  Effect.gen(function* () {
+    const shareId = GuestShareId.make("share:room");
+    const { link, here, posts, layer, joinedEvents, postsSent } = yield* world([204, 204]);
+    yield* Effect.gen(function* () {
+      const rooms = yield* SharedRoomLink.SharedRoomLink;
+      yield* rooms.connect(threadId, "sam.t3.test", { ...room, shareId });
+      yield* Ref.update(link, (current) => (current === null ? null : { ...current, boxId: "b" }));
+      // A thread in no room, then the thread behind the user's box in this one.
+      yield* Ref.set(here, new Map([["thread:other", {}]]));
+      yield* PubSub.publish(joinedEvents, checkpointCaptured("run:1", "thread:other"));
+      yield* PubSub.publish(joinedEvents, checkpointCaptured("run:1", threadId));
+      const post = (yield* Queue.take(postsSent)) as { readonly turn: object };
+      assert.deepInclude(post.turn, { id: "run:1", boxId: "b", changes: changedSummary });
+      yield* rooms.drain;
+      assert.lengthOf(yield* Ref.get(posts), 1);
+    }).pipe(Effect.provide(layer));
+  }),
 );
 
 it.effect("fills the room's artifact card with the user's own turn, from its whole reply", () =>

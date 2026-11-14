@@ -1,4 +1,4 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { guestEnvironmentId, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -35,9 +35,9 @@ import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { takeRoomArtifactToDraft } from "../chat/roomTaskDraft";
+import { BoardBackdrop } from "../room/BoardChrome";
 import { sortScopedProjectsForSidebar } from "../Sidebar.logic";
 import { Button } from "../ui/button";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { placeLinkedPrompt } from "./linkedPrompt";
@@ -259,6 +259,15 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
       }
       return;
     }
+    // Boards first: a plain join lands on the room's board; the joined thread is in the sidebar.
+    if (task === undefined && shared !== undefined) {
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: { environmentId: guestEnvironmentId(shared.shareId), threadId: shared.threadId },
+        replace: true,
+      });
+      return;
+    }
     // A room on an older server names no share, so its task cannot be taken: it stays a draft.
     await takeTaskOn(project.environmentId);
     openThread(project.environmentId, result.value.threadId);
@@ -388,13 +397,17 @@ function JoinPage({
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       {isElectron ? <WorkspacePageHeader electron /> : null}
-      <Empty className="flex-1">
-        <EmptyHeader className="max-w-md">
-          <EmptyTitle>{title}</EmptyTitle>
-          {description ? <EmptyDescription>{description}</EmptyDescription> : null}
-          {children ? <div className="mt-5 flex justify-center gap-2">{children}</div> : null}
-        </EmptyHeader>
-      </Empty>
+      <BoardBackdrop className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-10 scrollbar-gutter-both">
+        <div className="m-auto flex w-full max-w-md flex-col gap-4 rounded-board border border-board-hairline bg-card p-6 text-card-foreground shadow-board">
+          <div className="flex flex-col gap-1.5">
+            <h1 className="text-lg font-semibold tracking-tight text-balance">{title}</h1>
+            {description ? (
+              <p className="text-sm text-pretty text-muted-foreground">{description}</p>
+            ) : null}
+          </div>
+          {children ? <div className="flex flex-wrap justify-end gap-2">{children}</div> : null}
+        </div>
+      </BoardBackdrop>
     </SidebarInset>
   );
 }

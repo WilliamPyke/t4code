@@ -286,12 +286,40 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --color-sidebar-row-active: var(--sidebar-row-active);
   --color-sidebar-row-selected: var(--sidebar-row-selected);
   --color-sidebar-border: var(--contrast-sidebar-border);
+  --color-board-canvas: var(--board-canvas);
+  --color-board-dot: var(--board-dot);
+  --color-board-hairline: var(--board-hairline);
+  --shadow-board: var(--board-shadow);
+  --shadow-paint: var(--paint-shadow);
+  --color-paint-yellow: var(--paint-yellow);
+  --color-paint-green: var(--paint-green);
+  --color-paint-blue: var(--paint-blue);
+  --color-paint-pink: var(--paint-pink);
+  --color-paint-purple: var(--paint-purple);
+  --color-paint-grey: var(--paint-grey);
+  --color-paint-yellow-deep: var(--paint-yellow-deep);
+  --color-paint-green-deep: var(--paint-green-deep);
+  --color-paint-blue-deep: var(--paint-blue-deep);
+  --color-paint-pink-deep: var(--paint-pink-deep);
+  --color-paint-purple-deep: var(--paint-purple-deep);
+  --color-paint-grey-deep: var(--paint-grey-deep);
+  --color-paint-ink: var(--paint-ink);
+  --color-paint-ink-muted: var(--paint-ink-muted);
+  --color-person-1: var(--person-1);
+  --color-person-2: var(--person-2);
+  --color-person-3: var(--person-3);
+  --color-person-4: var(--person-4);
+  --color-person-5: var(--person-5);
+  --color-person-6: var(--person-6);
+  --color-person-7: var(--person-7);
+  --color-person-8: var(--person-8);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
   --radius-2xl: calc(var(--radius) + 8px);
   --radius-3xl: calc(var(--radius) + 12px);
+  --radius-board: 0.625rem;
   @keyframes skeleton {
     /* The single loading-bar breath used by every skeleton: one opacity pulse
        per container, stepped so however many bars sit under it, the compositor
@@ -1297,6 +1325,62 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
   @variant dark {
     --diff-modified-icon: color-mix(in srgb, var(--muted-foreground) 65%, transparent);
+  }
+}
+
+/* The board. Chrome stays quiet and follows the theme; colour comes from paints (sticky notes and
+   sections, ~10% toward the theme's card so every theme tints them) and person colours (cursors,
+   avatars, pins, their agents). Person colours keep 4.5:1 under white text in both modes. */
+:root {
+  --board-canvas: color-mix(in srgb, var(--background) 96%, var(--foreground));
+  --board-dot: color-mix(in srgb, var(--foreground) 14%, transparent);
+  --board-hairline: color-mix(in srgb, var(--foreground) 8%, transparent);
+  --board-shadow: 0 1px 2px rgb(0 0 0 / 5%), 0 8px 24px -10px rgb(0 0 0 / 16%);
+  --paint-shadow: 0 1px 2px rgb(0 0 0 / 6%), 0 4px 10px -4px rgb(0 0 0 / 14%);
+  --paint-yellow: color-mix(in srgb, #ffe58a 90%, var(--card));
+  --paint-green: color-mix(in srgb, #bfebc9 90%, var(--card));
+  --paint-blue: color-mix(in srgb, #bfdfff 90%, var(--card));
+  --paint-pink: color-mix(in srgb, #ffc9e0 90%, var(--card));
+  --paint-purple: color-mix(in srgb, #dcceff 90%, var(--card));
+  --paint-grey: color-mix(in srgb, #e6e5e1 90%, var(--card));
+  /* Section frames and labels: a paint's hue deep enough to read on the canvas. */
+  --paint-yellow-deep: #925808;
+  --paint-green-deep: #14733a;
+  --paint-blue-deep: #1d4ed8;
+  --paint-pink-deep: #be185d;
+  --paint-purple-deep: #6d28d9;
+  --paint-grey-deep: #57534e;
+  --paint-ink: #1f1d1a;
+  --paint-ink-muted: color-mix(in srgb, var(--paint-ink) 72%, transparent);
+  --person-1: #d93036;
+  --person-2: #1f6fe5;
+  --person-3: #18794e;
+  --person-4: #7c3aed;
+  --person-5: #b8520b;
+  --person-6: #0b7a84;
+  --person-7: #c02d88;
+  --person-8: #5f6b12;
+
+  @variant dark {
+    --board-canvas: color-mix(in srgb, var(--background) 95%, var(--foreground));
+    --board-dot: color-mix(in srgb, var(--foreground) 16%, transparent);
+    --board-hairline: color-mix(in srgb, var(--foreground) 10%, transparent);
+    --board-shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 10px 28px -10px rgb(0 0 0 / 70%);
+    --paint-shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 6px 14px -6px rgb(0 0 0 / 60%);
+    --paint-yellow: color-mix(in srgb, #795808 90%, var(--card));
+    --paint-green: color-mix(in srgb, #176b40 90%, var(--card));
+    --paint-blue: color-mix(in srgb, #1f58a3 90%, var(--card));
+    --paint-pink: color-mix(in srgb, #8c2c5c 90%, var(--card));
+    --paint-purple: color-mix(in srgb, #5a40a8 90%, var(--card));
+    --paint-grey: color-mix(in srgb, #46464c 90%, var(--card));
+    --paint-yellow-deep: #e5c453;
+    --paint-green-deep: #6fcf8e;
+    --paint-blue-deep: #7cb4f5;
+    --paint-pink-deep: #f08bb8;
+    --paint-purple-deep: #b9a2f7;
+    --paint-grey-deep: #a8a29e;
+    --paint-ink: #f7f6f3;
+    --paint-ink-muted: color-mix(in srgb, var(--paint-ink) 78%, transparent);
   }
 }
 

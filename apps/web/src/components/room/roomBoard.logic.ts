@@ -28,10 +28,19 @@ import {
   type RoomBoardSize,
   type RoomBoardViewport,
   type RoomBoxProgress,
+  type RoomCodeChanges,
   type RoomCodeState,
+  type RoomPullRequest,
+  type RoomPullRequestRead,
+  roomPullRequestOf,
   type ThreadGuestMessage,
 } from "@t3tools/contracts";
-import { isRoomCardOwnedBy } from "@t3tools/shared/roomBoard";
+import {
+  isRoomCardOwnedBy,
+  roomBoardCardChangedAt,
+  roomPullRequestLabel,
+  roomWindowBoxId,
+} from "@t3tools/shared/roomBoard";
 import * as Schema from "effect/Schema";
 
 /** Where the board is scrolled to and how far it is zoomed. `x`/`y` are screen pixels. */
@@ -587,7 +596,12 @@ export function boardCommentLineTo(board: RoomBoard, under: string | null): stri
   if (under === null || (board.edges?.length ?? 0) >= ROOM_BOARD_MAX_EDGES) return null;
   if (under === roomBoardCardRef(ROOM_BOARD_THREAD_CARD)) return under;
   const note = board.notes.find((candidate) => roomBoardNoteRef(candidate.id) === under);
-  return note?.kind === "thread" || note?.kind === "artifact" ? under : null;
+  return note?.kind === "thread" ||
+    note?.kind === "artifact" ||
+    note?.kind === "code" ||
+    note?.kind === "pull-request"
+    ? under
+    : null;
 }
 
 /** Where a card or note is, how wide it is, and how far down the middle of its header is. */
@@ -600,6 +614,10 @@ export interface BoardBox extends BoardPoint {
 const BOARD_ARTIFACT_SIZE: RoomBoardSize = { w: 380, h: 400 };
 /** How big a thread box is until someone resizes it, with room for its prompt box. */
 const BOARD_THREAD_BOX_SIZE: RoomBoardSize = { w: 340, h: 460 };
+/** How big a code window is until someone resizes it: a file list beside a diff. */
+const BOARD_CODE_WINDOW_SIZE: RoomBoardSize = { w: 560, h: 420 };
+/** How big a pull request window is until someone resizes it. */
+const BOARD_PULL_REQUEST_SIZE: RoomBoardSize = { w: 360, h: 300 };
 
 const boardLength = (value: number) =>
   Math.round(Math.min(ROOM_BOARD_MAX_CARD_SIZE, Math.max(ROOM_BOARD_MIN_CARD_SIZE, value)));
@@ -632,7 +650,11 @@ export const boardNoteSize = (
     ? BOARD_ARTIFACT_SIZE
     : note.kind === "thread"
       ? BOARD_THREAD_BOX_SIZE
-      : undefined);
+      : note.kind === "code"
+        ? BOARD_CODE_WINDOW_SIZE
+        : note.kind === "pull-request"
+          ? BOARD_PULL_REQUEST_SIZE
+          : undefined);
 
 export const boardCardBox = (at: BoardPoint, size?: RoomBoardSize): BoardBox => ({
   x: at.x,
@@ -907,6 +929,8 @@ const withServerFields = (note: RoomBoardNote, room: RoomBoardNote | undefined):
     answer: _answer,
     artifact: _artifact,
     thread: _thread,
+    changes: _changes,
+    pullRequest: _pullRequest,
     createdAt: _createdAt,
     replies: _replies,
     resolved: _resolved,
@@ -918,6 +942,8 @@ const withServerFields = (note: RoomBoardNote, room: RoomBoardNote | undefined):
     ...(room?.answer === undefined ? {} : { answer: room.answer }),
     ...(room?.artifact === undefined ? {} : { artifact: room.artifact }),
     ...(room?.thread === undefined ? {} : { thread: room.thread }),
+    ...(room?.changes === undefined ? {} : { changes: room.changes }),
+    ...(room?.pullRequest === undefined ? {} : { pullRequest: room.pullRequest }),
     ...(room?.createdAt === undefined ? {} : { createdAt: room.createdAt }),
     ...(room?.replies === undefined ? {} : { replies: room.replies }),
     ...(room?.resolved === undefined ? {} : { resolved: room.resolved }),
@@ -1181,26 +1207,27 @@ export function followBoardView(viewport: RoomBoardViewport, size: BoardSize): B
 }
 
 // Semantic colours that read on the board in both themes; guests take them in join order.
-const GUEST_CURSOR_COLORS = [
-  "var(--color-guest)",
-  "var(--color-info)",
-  "var(--color-success)",
-  "var(--color-warning)",
-  "var(--color-update)",
-  "var(--color-destructive)",
-];
+// The board's person colours (index.css), most distinct first: the owner, then guests by join order.
+// Join order rather than a hash of the id, so up to eight people never share a colour.
+// The raw tokens: Tailwind only emits a `--color-person-n` it finds spelled out in source.
+export const BOARD_PERSON_COLORS = [2, 1, 3, 4, 5, 6, 7, 8].map((n) => `var(--person-${n})`);
 
-/** One colour per person for as long as the link lasts: the owner's, or the guest's by join order. */
+/**
+ * One colour per person for as long as the link lasts, for their cursor, avatar, pins, live drags
+ * and agent: the owner's, or the guest's by join order.
+ */
 export function boardCursorColor(
   guests: ReadonlyArray<{ readonly id: string }>,
   guestId: string | undefined,
 ): string {
-  if (guestId === undefined) return "var(--color-primary)";
-  const index = Math.max(
-    0,
-    guests.findIndex((guest) => guest.id === guestId),
-  );
-  return GUEST_CURSOR_COLORS[index % GUEST_CURSOR_COLORS.length]!;
+  const index =
+    guestId === undefined
+      ? 0
+      : Math.max(
+          0,
+          guests.findIndex((guest) => guest.id === guestId),
+        ) + 1;
+  return BOARD_PERSON_COLORS[index % BOARD_PERSON_COLORS.length]!;
 }
 
 /** Who someone is on the board, as follow mode names them: a guest's id, or the owner. */
@@ -1303,7 +1330,22 @@ export interface BoardPromptCard {
   readonly text: string;
   /** The start of what the card itself says, for its chip. */
   readonly excerpt: string;
+  /** Whether it goes with the next prompt on its own; see `BoardPromptCardStatus`. */
+  readonly status?: BoardPromptCardStatus | undefined;
+  /** The lines that carry it, which pinning it pins. */
+  readonly edgeIds?: ReadonlyArray<string> | undefined;
 }
+
+/**
+ * A connected card as a box's next prompt takes it: `new` (never sent along its line, or newly
+ * connected) and `updated` (changed since it was last sent) go, `sent` stays out unless put back
+ * for one prompt, and `pinned` goes with every prompt.
+ */
+export type BoardPromptCardStatus = "new" | "updated" | "sent" | "pinned";
+
+/** Whether a card goes with the next prompt unless someone leaves it out by hand. */
+export const boardPromptCardGoes = (card: Pick<BoardPromptCard, "status">): boolean =>
+  card.status !== "sent";
 
 /** A message sent from a thread box on the board. */
 export interface BoardPrompt {
@@ -1475,12 +1517,105 @@ export function boardMessages(
   return messages.toReversed();
 }
 
+const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+
+/** A code window's changes in a few words: "3 files, +42 −7". */
+export const boardCodeTotals = (
+  changes: Pick<RoomCodeChanges, "files" | "more" | "additions" | "deletions">,
+): string =>
+  `${plural(changes.files.length + (changes.more ?? 0), "file", "files")}, +${changes.additions} −${changes.deletions}`;
+
+/**
+ * What a code window carries to an agent: its totals and each file with its counts, never a
+ * patch, which only its machine has.
+ */
+function boardCodeFileList(changes: RoomCodeChanges): string {
+  return [
+    `Changed ${boardCodeTotals(changes)}${changes.truncated === true ? " (counts cut short)" : ""}:`,
+    ...changes.files.map((file) => `${file.path} +${file.additions} -${file.deletions}`),
+    ...(changes.more === undefined
+      ? []
+      : [`and ${plural(changes.more, "more file", "more files")}`]),
+  ].join("\n");
+}
+
+/** A pull request's checks in a few words: "1 failing (lint), 2 passing, 1 pending". */
+function boardPullRequestChecks(checks: RoomPullRequest["checks"]): string {
+  const failing =
+    checks.failing === 0
+      ? []
+      : [
+          `${checks.failing} failing${
+            checks.failingNames.length === 0 ? "" : ` (${checks.failingNames.join(", ")})`
+          }`,
+        ];
+  const said = [
+    ...failing,
+    ...(checks.passing === 0 ? [] : [`${checks.passing} passing`]),
+    ...(checks.pending === 0 ? [] : [`${checks.pending} pending`]),
+  ];
+  return said.length === 0 ? "No checks" : said.join(", ");
+}
+
+/** A pull request's commits in a few words, or null when they were not counted. */
+export const boardPullRequestCommits = (pullRequest: RoomPullRequest): string | null =>
+  pullRequest.commits === undefined
+    ? null
+    : `${pullRequest.commits}${pullRequest.moreCommits === true ? "+" : ""} ${
+        pullRequest.commits === 1 && pullRequest.moreCommits !== true ? "commit" : "commits"
+      }`;
+
+/** What a pull request window carries to an agent: what it last showed, and its address. */
+function boardPullRequestText(note: RoomBoardNote): string {
+  const shown = note.pullRequest?.pullRequest;
+  const ref = note.url === undefined ? null : roomPullRequestOf(note.url);
+  if (shown === undefined || ref === null) return note.url ?? "";
+  const commits = boardPullRequestCommits(shown);
+  return [
+    `${ref.repository}#${ref.number}: ${shown.title}`,
+    `State: ${shown.state}, ${shown.headBranch} into ${shown.baseBranch}`,
+    `Checks: ${boardPullRequestChecks(shown.checks)}`,
+    [
+      ...(commits === null ? [] : [commits]),
+      `${plural(shown.changedFiles, "file", "files")} changed, +${shown.additions} -${shown.deletions}`,
+    ].join(", "),
+    ref.url,
+  ].join("\n");
+}
+
+/** How long a pull request window's read lasts while someone looks at it, before it asks again. */
+export const BOARD_PULL_REQUEST_STALE_MS = 5 * 60_000;
+
+/** Whether a pull request window that is on screen should ask for a fresh read. */
+export const boardPullRequestStale = (read: RoomPullRequestRead | undefined, nowMs: number) =>
+  read === undefined || nowMs - Date.parse(read.readAt) >= BOARD_PULL_REQUEST_STALE_MS;
+
+/**
+ * The lines that make a code window show a thread box's changes: for each window, the first line
+ * into it from a box, the only one the room takes.
+ */
+export function boardCodeEdgeIds(board: RoomBoard): ReadonlySet<string> {
+  return new Set(
+    board.notes.flatMap((note) => {
+      if (note.kind !== "code") return [];
+      const boxId = roomWindowBoxId(board, note.id);
+      const from = boxId === undefined ? undefined : boardBoxRef(boxId);
+      const edge = (board.edges ?? []).find(
+        (candidate) => candidate.from === from && candidate.to === roomBoardNoteRef(note.id),
+      );
+      return edge === undefined ? [] : [edge.id];
+    }),
+  );
+}
+
 /** Whether an artifact is a whole HTML page, which the board shows as a page of its own. */
 export const isBoardHtmlArtifact = (body: string): boolean =>
   /^(?:<!doctype html|<html)/i.test(body.trimStart());
 
 /** How many connected cards one message from the board carries. */
 export const BOARD_PROMPT_MAX_CARDS = 8;
+/** How many cards a box's lines reach, sent ones too, before the board stops looking further. */
+const BOARD_PROMPT_MAX_REACH = 32;
 const PROMPT_ARTIFACT_LENGTH = 4_000;
 
 /** What a thread box does with the lines at it: what goes with a prompt, and where the reply goes. */
@@ -1492,6 +1627,8 @@ export interface BoardPromptContext {
   readonly cards: ReadonlyArray<BoardPromptCard>;
   /** The lines that carry them. */
   readonly edgeIds: ReadonlySet<string>;
+  /** What the card each of those lines carries does with the next prompt. */
+  readonly edgeStatus: ReadonlyMap<string, BoardPromptCardStatus>;
   /** The first artifact the box has a line to, which its replies rewrite, and that line. */
   readonly artifact: RoomBoardNote | null;
   readonly artifactEdgeId: string | null;
@@ -1550,6 +1687,10 @@ function boardPromptCard(
     switch (note.kind) {
       case "artifact":
         return text === "" ? "Artifact" : `Artifact "${text}"`;
+      case "code":
+        return text === "" ? "Code window" : `Code window "${text}"`;
+      case "pull-request":
+        return roomPullRequestLabel(note);
       case "task":
         return `Task from ${by}`;
       case "link":
@@ -1565,17 +1706,23 @@ function boardPromptCard(
       ? [text, cutText(note.artifact?.body.trim() ?? "", PROMPT_ARTIFACT_LENGTH)]
           .filter(Boolean)
           .join("\n\n")
-      : note.kind === "task"
-        ? text === ""
+      : note.kind === "code"
+        ? note.changes === undefined
           ? ""
-          : `${text}\nStatus: ${note.done === true ? "done" : "not done"}`
-        : note.kind === "link"
-          ? [note.url ?? "", text].filter(Boolean).join("\n")
-          : note.kind === "comment"
-            ? commentThreadText(note, people)
-            : comment && text !== "" && quote !== undefined
-              ? `On the reply: "${quote}"\n${text}`
-              : text;
+          : [text, boardCodeFileList(note.changes)].filter(Boolean).join("\n")
+        : note.kind === "pull-request"
+          ? [text, boardPullRequestText(note)].filter(Boolean).join("\n")
+          : note.kind === "task"
+            ? text === ""
+              ? ""
+              : `${text}\nStatus: ${note.done === true ? "done" : "not done"}`
+            : note.kind === "link"
+              ? [note.url ?? "", text].filter(Boolean).join("\n")
+              : note.kind === "comment"
+                ? commentThreadText(note, people)
+                : comment && text !== "" && quote !== undefined
+                  ? `On the reply: "${quote}"\n${text}`
+                  : text;
   if (body.trim() === "") return null;
   const said = (text === "" ? (note.url ?? "") : text).split("\n")[0] ?? "";
   return {
@@ -1583,8 +1730,11 @@ function boardPromptCard(
     label: labelBy(boardPersonName(people, note.guestId)),
     sharedLabel: labelBy(sharedPersonName(people, note.guestId)),
     text: body,
-    // An artifact's label already names it.
-    excerpt: note.kind === "artifact" ? "" : cutText(said.trim(), EXCERPT_CHIP_LENGTH),
+    // An artifact's and a code window's label already names it.
+    excerpt:
+      note.kind === "artifact" || note.kind === "code" || note.kind === "pull-request"
+        ? ""
+        : cutText(said.trim(), EXCERPT_CHIP_LENGTH),
   };
 }
 
@@ -1667,10 +1817,23 @@ export function boardPromptContext(
     (edge) => edge.from === target && notes.get(edge.to)?.kind === "artifact",
   );
   const roots = artifactEdge === undefined ? [target] : [target, artifactEdge.to];
+  // A line into another card can carry it to several boxes, so its marks are each box's own.
+  const marked = (edge: RoomBoardEdge): Pick<RoomBoardEdge, "sentAt" | "pinned"> => {
+    if (roots.includes(edge.to)) return edge;
+    const { sentAt: _shared, ...rest } = edge;
+    const own = edge.sentFor?.[boxId];
+    return own === undefined ? rest : { ...rest, sentAt: own };
+  };
   const reached = new Set<string>();
-  const cards: Array<BoardPromptCard> = [];
+  const found: Array<RoomBoardNote> = [];
+  // Cards already sent stay out of the next prompt, so only the ones that go use up its room.
+  let going = 0;
   let frontier = roots;
-  while (frontier.length > 0 && reached.size < BOARD_PROMPT_MAX_CARDS) {
+  while (
+    frontier.length > 0 &&
+    going < BOARD_PROMPT_MAX_CARDS &&
+    reached.size < BOARD_PROMPT_MAX_REACH
+  ) {
     const next: Array<string> = [];
     for (const edge of edges) {
       const note = notes.get(edge.from);
@@ -1683,23 +1846,51 @@ export function boardPromptContext(
       ) {
         continue;
       }
-      if (reached.size === BOARD_PROMPT_MAX_CARDS) break;
+      if (going === BOARD_PROMPT_MAX_CARDS || reached.size === BOARD_PROMPT_MAX_REACH) break;
       reached.add(edge.from);
       next.push(edge.from);
-      const card = boardPromptCard(note, people, boardNoteQuote(note, messages));
-      if (card !== null) cards.push(card);
+      found.push(note);
+      if (boardPromptCardStatus(note, [marked(edge)], boxId) !== "sent") going += 1;
     }
     frontier = next;
   }
   const carried = (ref: string) => roots.includes(ref) || reached.has(ref);
+  const lines = edges.filter((edge) => reached.has(edge.from) && carried(edge.to));
+  const edgeStatus = new Map<string, BoardPromptCardStatus>();
+  const cards: Array<BoardPromptCard> = [];
+  for (const note of found) {
+    const ref = roomBoardNoteRef(note.id);
+    const own = lines.filter((edge) => edge.from === ref);
+    const status = boardPromptCardStatus(note, own.map(marked), boxId);
+    for (const edge of own) edgeStatus.set(edge.id, status);
+    const card = boardPromptCard(note, people, boardNoteQuote(note, messages));
+    if (card !== null) cards.push({ ...card, status, edgeIds: own.map((edge) => edge.id) });
+  }
   return {
     cards,
-    edgeIds: new Set(
-      edges.filter((edge) => reached.has(edge.from) && carried(edge.to)).map((edge) => edge.id),
-    ),
+    edgeIds: new Set(lines.map((edge) => edge.id)),
+    edgeStatus,
     artifact: artifactEdge === undefined ? null : (notes.get(artifactEdge.to) ?? null),
     artifactEdgeId: artifactEdge?.id ?? null,
   };
+}
+
+/**
+ * What a card does with a box's next prompt, from the lines that carry it there: pinned on any of
+ * them, new on any no prompt went along yet, updated when it changed after the oldest send, else
+ * sent. A board from before sends were marked has no marks, so every card on it is new.
+ */
+function boardPromptCardStatus(
+  note: RoomBoardNote,
+  lines: ReadonlyArray<Pick<RoomBoardEdge, "sentAt" | "pinned">>,
+  boxId: string,
+): BoardPromptCardStatus {
+  if (lines.some((edge) => edge.pinned === true)) return "pinned";
+  const sent = lines.map((edge) => edge.sentAt);
+  if (sent.length === 0 || sent.some((at) => at === undefined)) return "new";
+  const oldest = Math.min(...sent.map((at) => Date.parse(at ?? "")));
+  const changed = roomBoardCardChangedAt(note, boxId);
+  return changed !== undefined && Date.parse(changed) > oldest ? "updated" : "sent";
 }
 
 /** A thread box: the room thread's own card, or a thread note someone added. */
@@ -2041,8 +2232,8 @@ export function boardSectionAround(
 /**
  * Copies of the notes, tasks and links among `notes`, each named by `newId`, as `viewer`'s own
  * (null for the owner), where the originals are: a task as not done and given to no one. Thread
- * boxes, artifacts, comment threads, comments on replies and sections are not copied: what makes
- * them is their conversation, content or what sits on them.
+ * boxes, artifacts, code windows, comment threads, comments on replies and sections are not
+ * copied: what makes them is their conversation, content or what sits on them.
  */
 export function boardDuplicates(
   notes: ReadonlyArray<RoomBoardNote>,
@@ -2085,6 +2276,8 @@ export function boardCopySkipped(
     else if (note.pinnedTo !== undefined) kinds.add("Comments on replies");
     else if (note.kind === "thread") kinds.add("Thread boxes");
     else if (note.kind === "artifact") kinds.add("Artifacts");
+    else if (note.kind === "code") kinds.add("Code windows");
+    else if (note.kind === "pull-request") kinds.add("Pull request windows");
     else if (note.kind === "comment") kinds.add("Comment threads");
   }
   if (cards > 0) kinds.add("The room's cards");
@@ -2258,7 +2451,14 @@ const withColorOf = (value: BoardValue, other: BoardValue): BoardValue =>
 const hasServerContent = (value: BoardValue) =>
   value !== null &&
   "text" in value &&
-  [value.artifact, value.thread, value.answer, value.replies].some((field) => field !== undefined);
+  [
+    value.artifact,
+    value.thread,
+    value.changes,
+    value.pullRequest,
+    value.answer,
+    value.replies,
+  ].some((field) => field !== undefined);
 
 /**
  * The changes that take an entry back (`undo`) or make it again (`redo`), or null when the board

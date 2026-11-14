@@ -19,6 +19,8 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
   RoomArtifactRead,
+  type RoomCodePatch,
+  RoomCodePatchError,
   ROOM_BOARD_ROOM_BOX,
   ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH,
   type RoomBoxProgress,
@@ -31,6 +33,7 @@ import {
   RoomUpdates,
   roomCodeStateOf,
   type RunId,
+  type SharedThreadBoxPatchInput,
   type SharedThreadCatchUpResult,
   type SharedThreadFindRoomResult,
   type SharedThreadLinkBoxInput,
@@ -55,7 +58,9 @@ import {
   roomArtifactRequestOf,
   roomBoxExcerpt,
   roomCardLabelsOf,
+  roomCardRefsOf,
   roomCommentAnswer,
+  roomBoxRef,
   roomCommentRequestOf,
   roomRunPromptText,
   roomRunReplyText,
@@ -83,6 +88,7 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { forkParked } from "../serverActivation.ts";
 import { threadRoomOf } from "../orchestration-v2/GuestShareDecider.ts";
 import * as RoomBoxes from "./RoomBoxes.ts";
+import * as RoomCodeDiffs from "./RoomCodeDiffs.ts";
 import { clip } from "./roomUpdates.ts";
 
 const REQUEST_TIMEOUT = Duration.seconds(20);
@@ -290,6 +296,13 @@ export class SharedRoomLink extends Context.Service<
     readonly linkBox: (
       input: SharedThreadLinkBoxInput,
     ) => Effect.Effect<void, SharedThreadJoinError>;
+    /**
+     * One file's patch from the thread here behind one of the user's own boxes in a room, for a
+     * code window there. Only this machine has it, so the room's other people cannot open it.
+     */
+    readonly boxPatch: (
+      input: SharedThreadBoxPatchInput,
+    ) => Effect.Effect<RoomCodePatch, RoomCodePatchError>;
     /** The thread joined from a room here, and the threads behind the user's boxes there. */
     readonly findRoom: (
       host: string,
@@ -320,6 +333,7 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const launches = yield* ThreadLaunch.ThreadLaunchService;
   const roomBoxes = yield* RoomBoxes.RoomBoxes;
+  const codeDiffs = yield* RoomCodeDiffs.RoomCodeDiffs;
   // One box gets one thread, however many prompts reach it at once.
   const boxThreads = yield* Semaphore.make(1);
   // The last run posted per thread: a finished run is updated again when its checkpoint lands.
@@ -587,6 +601,26 @@ const make = Effect.gen(function* () {
       : { threadId: joined.threadId, boxes: joined.link.boxes ?? {} };
   });
 
+  const boxPatch = Effect.fn("SharedRoomLink.boxPatch")(function* (
+    input: SharedThreadBoxPatchInput,
+  ) {
+    const unavailable = new RoomCodePatchError({ reason: "unavailable" });
+    const joined = yield* findJoined(input.host, input.shareId);
+    const boxThreadId = joined?.link.boxes?.[input.boxId];
+    if (boxThreadId === undefined) return yield* unavailable;
+    const isBoxThread = yield* orchestrator.getThreadRecords(boxThreadId, []).pipe(
+      Effect.map(({ thread }) => thread.roomLink?.boxId === input.boxId),
+      Effect.orElseSucceed(() => false),
+    );
+    if (!isBoxThread) return yield* unavailable;
+    return yield* codeDiffs.filePatch({
+      threadId: boxThreadId,
+      turnCount: input.turnCount,
+      scope: input.scope,
+      path: input.path,
+    });
+  });
+
   const boxMessage = (threadId: ThreadId, commandId: CommandId, message: BoxMessage) =>
     orchestrator.dispatch({
       type: "message.dispatch",
@@ -774,6 +808,7 @@ const make = Effect.gen(function* () {
       link.shareId === undefined ? undefined : roomCommentRequestOf(turnItems, link.shareId);
     const run = runs.find((candidate) => candidate.id === runId);
     const cards = roomCardLabelsOf(turnItems);
+    const cardRefs = roomCardRefsOf(turnItems);
     const model =
       link.boxId === undefined || run === undefined
         ? ""
@@ -793,6 +828,7 @@ const make = Effect.gen(function* () {
               boxId: link.boxId,
               prompt: roomRunPromptText(turnItems).trim(),
               ...(cards.length === 0 ? {} : { cards: [...cards] }),
+              ...(cardRefs.length === 0 ? {} : { cardRefs: [...cardRefs] }),
               ...(model === "" ? {} : { model }),
               commentId,
             },
@@ -818,22 +854,26 @@ const make = Effect.gen(function* () {
   };
 
   const publishRun = Effect.fn("SharedRoomLink.publishRun")(
-    function* (threadId: ThreadId, runId: RunId) {
-      if (posted.get(threadId) === runId) return;
+    function* (threadId: ThreadId, runId: RunId, withChanges = false) {
+      if (!withChanges && posted.get(threadId) === runId) return;
       const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
       const link = thread.roomLink ?? null;
-      if (link === null) return;
+      if (link === null || (withChanges && link.boxId === undefined)) return;
+      // What a box's thread changed is counted from the turn's checkpoint, taken after it ends.
+      const changed = withChanges ? yield* codeDiffs.summarize(threadId) : null;
+      if (withChanges && changed?.turnId !== runId) return;
       const url = sharedThreadRouteUrl(link.host, GUEST_ROOM_TURN_ROUTE);
       const token = yield* secrets.get(tokenSecretName(threadId));
       const now = DateTime.toEpochMillis(yield* DateTime.now);
       // Past its end the room is asked once anyway, since the owner may have extended the link.
       const pastEnd = now >= Date.parse(link.expiresAt);
       if (url === null || Option.isNone(token)) return yield* disconnect(threadId);
-      const { turnItems, about, artifactId, box } = yield* runFacts(threadId, thread, link, runId);
+      const facts = yield* runFacts(threadId, thread, link, runId);
+      const { turnItems, about, artifactId } = facts;
       const turn = guestTurnOf(runId, turnItems);
       if (turn === null) return;
       const artifact = artifactOfRun(artifactId, turnItems);
-      const { prompt: asked, commentId, ...shown } = box ?? { prompt: turn.prompt };
+      const { prompt: asked, commentId, ...shown } = facts.box ?? { prompt: turn.prompt };
       const comment = commentOfRun(commentId, turnItems);
       const request: GuestTurnRequest = {
         ...turn,
@@ -842,6 +882,7 @@ const make = Effect.gen(function* () {
         ...(artifact === undefined ? {} : { artifact }),
         ...shown,
         ...(comment === undefined ? {} : { comment }),
+        ...(changed === null || facts.box === undefined ? {} : { changes: changed.changes }),
       };
       const response = yield* http
         .execute(
@@ -1125,8 +1166,26 @@ const make = Effect.gen(function* () {
     });
   });
 
+  /**
+   * Shows what a thread changed up to a run, once that run's checkpoint is taken, in the code
+   * windows of the box it is behind: a box of the owner's here, or the user's own box in a room
+   * elsewhere, which gets the turn again with it.
+   */
+  const showChanges = Effect.fn("SharedRoomLink.showChanges")(
+    function* (threadId: ThreadId, runId: RunId) {
+      const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+      if (thread.roomLink?.boxId !== undefined) return yield* publishRun(threadId, runId, true);
+      if (thread.guestShare != null || thread.roomBoard != null) {
+        return yield* codeDiffs.showBoxChanges(threadId, roomBoxRef(ROOM_BOARD_ROOM_BOX));
+      }
+      const box = yield* roomBoxes.boxOfThread(threadId, []);
+      if (box !== null) yield* codeDiffs.showBoxChanges(box.roomThreadId, roomBoxRef(box.boxId));
+    },
+    Effect.catch((cause) => Effect.logWarning("Could not show a run's changes", { cause })),
+  );
+
   type Job = {
-    readonly kind: "turn" | "answer" | GuestAgentActivityRequest["state"];
+    readonly kind: "turn" | "answer" | "changes" | GuestAgentActivityRequest["state"];
     readonly threadId: ThreadId;
     readonly runId: RunId;
   };
@@ -1135,7 +1194,9 @@ const make = Effect.gen(function* () {
       ? publishRun(threadId, runId)
       : kind === "answer"
         ? answerOnOwnBoard(threadId, runId)
-        : publishActivity(threadId, runId, kind),
+        : kind === "changes"
+          ? showChanges(threadId, runId)
+          : publishActivity(threadId, runId, kind),
   );
   const linkBox = Effect.fn("SharedRoomLink.linkBox")(function* (input: SharedThreadLinkBoxInput) {
     const joined = yield* findJoined(input.host, input.shareId);
@@ -1237,6 +1298,13 @@ const make = Effect.gen(function* () {
   const onEvent = Effect.fnUntraced(function* (event: OrchestrationV2DomainEvent) {
     const { threadId } = event;
     if (event.type === "thread.deleted") return yield* forget(threadId);
+    if (
+      event.type === "checkpoint.captured" &&
+      event.payload.runId !== null &&
+      event.payload.status === "ready"
+    ) {
+      yield* worker.enqueue({ kind: "changes", threadId, runId: event.payload.runId });
+    }
     if (event.type === "run.updated") {
       const { id: runId, status } = event.payload;
       if (SETTLED_RUN.has(status)) {
@@ -1278,11 +1346,12 @@ const make = Effect.gen(function* () {
     takeTask,
     takeArtifact,
     findRoom,
+    boxPatch,
     promptBox,
     linkBox,
     publishRun,
     publishActivity,
-    drain: worker.drain,
+    drain: worker.drain.pipe(Effect.andThen(codeDiffs.drain)),
   });
 });
 

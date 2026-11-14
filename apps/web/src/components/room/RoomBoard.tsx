@@ -1,6 +1,9 @@
 import {
   type GuestId,
   ROOM_BOARD_MAX_ARTIFACTS,
+  ROOM_BOARD_MAX_CODE_WINDOWS,
+  ROOM_BOARD_MAX_PULL_REQUESTS,
+  roomPullRequestOf,
   ROOM_BOARD_MAX_EDGES,
   ROOM_BOARD_MAX_NOTES,
   ROOM_BOARD_MAX_THREADS,
@@ -28,10 +31,13 @@ import {
 } from "@t3tools/contracts";
 import {
   AppWindowIcon,
+  FileCode2Icon,
   ArrowLeftIcon,
   BotIcon,
   ChevronDownIcon,
   CircleCheckIcon,
+  CircleHelpIcon,
+  CodeXmlIcon,
   CopyIcon,
   ExternalLinkIcon,
   FrameIcon,
@@ -47,12 +53,13 @@ import {
   MousePointer2Icon,
   PlusIcon,
   ScanIcon,
-  StickyNoteIcon,
+  SquareDashedIcon,
   Trash2Icon,
   XIcon,
 } from "lucide-react";
 import {
   type ClipboardEvent,
+  type ComponentProps,
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
@@ -69,7 +76,9 @@ import { flushSync } from "react-dom";
 import {
   canRestoreRoomArtifact,
   isRoomCardOwnedBy,
+  roomBoxCodeWindows,
   roomBoxExcerpt,
+  roomWindowBoxId,
 } from "@t3tools/shared/roomBoard";
 
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
@@ -85,6 +94,7 @@ import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { toastManager } from "../ui/toast";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   BOARD_CARD_WIDTH,
@@ -97,6 +107,7 @@ import {
   type BoardPoint,
   type BoardPresence,
   type BoardPrompt,
+  type BoardPromptCard,
   type BoardRect,
   type BoardStep,
   type BoardTarget,
@@ -117,6 +128,7 @@ import {
   boardAddSection,
   boardAddSpot,
   boardCopySkipped,
+  boardCodeEdgeIds,
   boardAgents,
   boardArtifactAuthor,
   boardArtifactWriting,
@@ -134,6 +146,7 @@ import {
   boardCursorAt,
   clientRectToBoard,
   clientToBoard,
+  BOARD_PERSON_COLORS,
   boardCursorColor,
   boardEditKey,
   boardGroupMove,
@@ -191,9 +204,16 @@ import {
 } from "./roomBoard.logic";
 import { rememberRoomBoardView, rememberedRoomBoardView } from "./roomBoardNavigation";
 import { RoomArtifactLive } from "./RoomBoardArtifact";
+import { type ReadRoomCodePatch, RoomCodeWindow } from "./RoomBoardCode";
+import { PullRequestStateIcon, RoomPullRequestWindow } from "./RoomBoardPullRequest";
 import { CommentPin, CommentThreadPanel } from "./RoomBoardComments";
 import { useCommentUnread } from "./roomCommentSeen";
-import { NoteColorPicker, noteColorClassName, useLastNoteColor } from "./RoomNoteColor";
+import {
+  NoteColorPicker,
+  noteColorClassName,
+  paintSwatchClassName,
+  useLastNoteColor,
+} from "./RoomNoteColor";
 import { CardActionsMenu } from "./RoomBoardCardMenu";
 import { WhatItDoes, WhyNot } from "./RoomBoardWhy";
 import { BoardHistoryButtons } from "./RoomBoardHistory";
@@ -216,6 +236,17 @@ import {
   isInside,
 } from "./roomBoardPointer";
 import { BoardSection } from "./RoomBoardSection";
+import {
+  BOARD_HOVER_CHROME_CLASS,
+  BOARD_ICON_BUTTON_CLASS,
+  BOARD_SELECTED_CHROME_CLASS,
+  BOARD_TITLE_BAR_CLASS,
+  BOARD_WINDOW_CLASS,
+  BoardChip,
+  type BoardChipTone,
+  BoardFloat,
+  PersonDot,
+} from "./BoardChrome";
 import { BoxProgress, BoxRequests, BoxTurns } from "./RoomBoardThreadBox";
 import {
   RoomLiveContext,
@@ -242,6 +273,10 @@ const VIEW_SAVE_DELAY_MS = 500;
 const DUPLICATE_OFFSET = 40;
 // Below this zoom a card's header buttons are too small to miss, and fold into one menu.
 const COMPACT_CARD_ZOOM = 0.8;
+// Fitting keeps cards clear of the header pills and the toolbar floating over the board's edges.
+const FIT_MARGIN = 72;
+// The bottom toolbar's height with its gap below, which the board's own view keeps cards out of.
+const BOARD_TOOLBAR_BAND = 60;
 /** How far an arrow key moves the selection, in board pixels, and with Shift. */
 const NUDGE_STEP = 4;
 const NUDGE_STEP_LARGE = 40;
@@ -255,19 +290,57 @@ const NUDGES: Readonly<Record<string, readonly [number, number]>> = {
 };
 // About what three clamped lines of a quote hold on a note of the default width.
 const QUOTE_CLAMP_LENGTH = 90;
+const BOARD_CODE_WINDOW_HINT =
+  "Adds a code window beside this thread box. Everyone in the room will see the files its thread changed and their diffs, updated as each turn ends.";
 
-/** What a line does: carries a card into a thread box's prompts, or takes the box's replies. */
-type EdgeRole = "plain" | "context" | "artifact";
+/**
+ * What a line does: carries a card into a box's next prompt (`context`), every prompt (`pinned`),
+ * or carried it already and waits for it to change (`sent`); or takes the box's replies.
+ */
+type EdgeRole = "plain" | "context" | "sent" | "pinned" | "artifact";
 type EdgeStroke = EdgeRole | "selected";
+// The accent carries context; dashed and muted, it was sent already. A line that rewrites an
+// artifact takes its agent's person colour, drawn per line (see `lineColor`).
 const EDGE_STROKE_COLORS: Readonly<Record<EdgeStroke, string>> = {
-  plain: "var(--color-muted-foreground)",
-  context: "var(--color-info)",
-  artifact: "var(--color-success)",
+  plain: "color-mix(in srgb, var(--color-muted-foreground) 70%, transparent)",
+  context: "var(--color-primary)",
+  sent: "var(--color-muted-foreground)",
+  pinned: "var(--color-primary)",
+  artifact: "var(--color-muted-foreground)",
   selected: "var(--color-primary)",
+};
+const EDGE_STROKE_WIDTHS: Readonly<Record<EdgeStroke, number>> = {
+  plain: 1.5,
+  context: 1.5,
+  sent: 1.5,
+  pinned: 2.5,
+  artifact: 1.5,
+  selected: 2,
 };
 const EDGE_STROKES = Object.entries(EDGE_STROKE_COLORS);
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
+
+/** A tool on the board's toolbar: an icon, named on hover and to screen readers. */
+function BoardTool({
+  label,
+  hint,
+  children,
+  ...props
+}: ComponentProps<typeof Button> & { readonly label: string; readonly hint?: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<Button size="icon" variant="ghost" aria-label={label} {...props} />}>
+        {children}
+      </TooltipTrigger>
+      <TooltipPopup side="top">{hint ?? label}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+const BoardToolDivider = () => (
+  <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-board-hairline" />
+);
 
 /** A toolbar button's words, read out but not shown while the board is too narrow for them. */
 const ToolLabel = ({ children }: { readonly children: ReactNode }) => (
@@ -330,7 +403,8 @@ function ResizeHandle({
       aria-hidden
       data-board-grip
       className={cn(
-        "absolute -bottom-1 z-10 grid size-4 touch-none place-items-center opacity-40 transition-opacity group-hover/item:opacity-100",
+        "absolute -bottom-1 z-10 grid size-4 touch-none place-items-center",
+        BOARD_HOVER_CHROME_CLASS,
         corner === "right" ? "-right-1 cursor-nwse-resize" : "-left-1 cursor-nesw-resize",
       )}
       onPointerDown={(event) => {
@@ -498,6 +572,7 @@ export function RoomBoard({
   cards,
   summary,
   sharing,
+  titleEditor,
   backLabel = "Thread",
   ownerAssignable = true,
   formerPeople = NO_FORMER_PEOPLE,
@@ -514,6 +589,9 @@ export function RoomBoard({
   needsApproval = false,
   renderBoxApproval,
   askInComments = false,
+  readCodePatch,
+  onRefreshPullRequest,
+  boxPullRequestUrl,
 }: {
   readonly title: string;
   /** Null when the thread is not shared, so there is no room to arrange a board for. */
@@ -565,6 +643,8 @@ export function RoomBoard({
   readonly summary?: string;
   /** Who is in the room and the way to share it, shown after the title in place of the summary. */
   readonly sharing?: ReactNode;
+  /** Shown in place of the title in the header, to rename the board there. */
+  readonly titleEditor?: ReactNode;
   readonly backLabel?: string;
   /** Whether a task can be for the owner, who has no card of their own. */
   readonly ownerAssignable?: boolean;
@@ -609,6 +689,15 @@ export function RoomBoard({
    * through `onPromptBox`. Off for a guest whose box prompts wait for the owner.
    */
   readonly askInComments?: boolean | undefined;
+  /** Reads one file of a code window from the machine that has its box's thread. */
+  readonly readCodePatch?: ReadRoomCodePatch | undefined;
+  /** Asks the owner's server to read a pull request window's pull request again. */
+  readonly onRefreshPullRequest?: ((noteId: string) => void) | undefined;
+  /**
+   * The pull request a thread box's thread is linked to, where this client knows it. The room's
+   * own box falls back to the one its branch has.
+   */
+  readonly boxPullRequestUrl?: ((boxId: string) => string | undefined) | undefined;
 }) {
   const board = room?.board ?? EMPTY_ROOM_BOARD;
   const running = useRoomRunning();
@@ -644,6 +733,10 @@ export function RoomBoard({
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
   const [linking, setLinking] = useState<Linking | null>(null);
   const [linkDraft, setLinkDraft] = useState<string | null>(null);
+  // What the address typed in the toolbar adds: a link card or a pull request window.
+  const [draftKind, setDraftKind] = useState<"link" | "pull-request">("link");
+  const draftUrl = (text: string) =>
+    draftKind === "pull-request" ? (roomPullRequestOf(text)?.url ?? null) : boardUrlIn(text);
   const [following, setFollowing] = useState<{ person: string; seen: boolean } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // Choosing Comment, then pressing the board, starts a thread there.
@@ -756,7 +849,7 @@ export function RoomBoard({
     setView((current) =>
       current === INITIAL_BOARD_VIEW ||
       (current === remembered && openingBoardView(current, area, rects) === null)
-        ? fitBoardView(rects, area)
+        ? fitBoardView(rects, area, FIT_MARGIN)
         : current,
     );
   });
@@ -876,13 +969,44 @@ export function RoomBoard({
     threadBoxes.map((box) => [box.id, boardPromptContext(shown, people, messages, box.id)]),
   );
   const contextEdges = new Set([...contexts.values()].flatMap((context) => [...context.edgeIds]));
-  const artifactEdges = new Set(
-    [...contexts.values()].flatMap((context) =>
+  // A line into several boxes reads as the most a card does along it: pinned, then going, then sent.
+  const pinnedEdges = new Set<string>();
+  const goingEdges = new Set<string>();
+  for (const context of contexts.values()) {
+    for (const [id, status] of context.edgeStatus) {
+      if (status === "pinned") pinnedEdges.add(id);
+      else if (status !== "sent") goingEdges.add(id);
+    }
+  }
+  // A box's line to the code window that shows its changes fills it, as one to its artifact does.
+  const artifactEdges = new Set([
+    ...[...contexts.values()].flatMap((context) =>
       context.artifactEdgeId === null ? [] : [context.artifactEdgeId],
     ),
-  );
+    ...(cards === undefined ? boardCodeEdgeIds(shown) : []),
+  ]);
   const edgeRole = (id: string): EdgeRole =>
-    contextEdges.has(id) ? "context" : artifactEdges.has(id) ? "artifact" : "plain";
+    pinnedEdges.has(id)
+      ? "pinned"
+      : goingEdges.has(id)
+        ? "context"
+        : contextEdges.has(id)
+          ? "sent"
+          : artifactEdges.has(id)
+            ? "artifact"
+            : "plain";
+  // Pinning takes one of the card's lines; unpinning clears every pinned one.
+  const pinPromptCard = (card: BoardPromptCard, pinned: boolean) => {
+    if (onChange === undefined) return;
+    const lines = (shown.edges ?? []).filter(
+      (edge) => card.edgeIds?.includes(edge.id) === true && (edge.pinned === true) !== pinned,
+    );
+    for (const edge of pinned ? lines.slice(0, 1) : lines) {
+      void queueChange(boardChangeQueueKey(shown, { kind: "edge", id: edge.id }, null), () =>
+        onChange({ type: "edge.pin", edgeId: edge.id, pinned }),
+      );
+    }
+  };
   const boxName = (boxId: string) =>
     boardBoxName(
       threadBoxes.find((box) => box.id === boxId) ?? { id: boxId, guestId: undefined, title: "" },
@@ -1153,6 +1277,8 @@ export function RoomBoard({
   const messageOf = (note: RoomBoardNote) =>
     onUseNote === undefined ||
     note.kind === "artifact" ||
+    note.kind === "code" ||
+    note.kind === "pull-request" ||
     note.kind === "thread" ||
     note.kind === "comment" ||
     boardNoteMessage(note).trim() === ""
@@ -1163,6 +1289,8 @@ export function RoomBoard({
     !canGive ||
     note.kind === "task" ||
     note.kind === "artifact" ||
+    note.kind === "code" ||
+    note.kind === "pull-request" ||
     note.kind === "thread" ||
     note.kind === "comment" ||
     boardNoteMessage(note).trim() === ""
@@ -1249,6 +1377,19 @@ export function RoomBoard({
   const cannotAddArtifact =
     cannotAdd ??
     (artifactsFull ? `The board holds ${ROOM_BOARD_MAX_ARTIFACTS} artifacts at most` : null);
+  const codeFull =
+    shown.notes.filter((note) => note.kind === "code").length >= ROOM_BOARD_MAX_CODE_WINDOWS;
+  const cannotAddCode =
+    cannotAdd ??
+    (codeFull ? `The board holds ${ROOM_BOARD_MAX_CODE_WINDOWS} code windows at most` : null);
+  const pullRequestsFull =
+    shown.notes.filter((note) => note.kind === "pull-request").length >=
+    ROOM_BOARD_MAX_PULL_REQUESTS;
+  const cannotAddPullRequest =
+    cannotAdd ??
+    (pullRequestsFull
+      ? `The board holds ${ROOM_BOARD_MAX_PULL_REQUESTS} pull request windows at most`
+      : null);
   const drawnRects = () => drawnRectsIn(surfaceRef.current);
   const takenRects = () =>
     boardTakenRects(
@@ -1268,8 +1409,13 @@ export function RoomBoard({
   // Pans once, as little as it takes, and only when the rect is not already in view whole. A
   // card just added moves the view only when most of it is out of sight.
   const reveal = (rect: BoardRect, added = false) => {
-    const area = boardAreaOf(surfaceRef.current);
-    if (area === null) return;
+    const surface = boardAreaOf(surfaceRef.current);
+    if (surface === null) return;
+    // What the bottom toolbar covers is out of view: a card shown is shown above it.
+    const area = {
+      width: surface.width,
+      height: Math.max(surface.height / 2, surface.height - BOARD_TOOLBAR_BAND),
+    };
     const next = added ? panToShowAdded(view, rect, area) : panToShow(view, rect, area);
     if (next === view) return;
     setFollowing(null);
@@ -1277,6 +1423,7 @@ export function RoomBoard({
   };
   // The card this person last added or selected alone, which a new card joins in its section.
   const lastCard = useRef<string | null>(null);
+  const lastPointer = useRef<BoardPoint | null>(null);
   // A new card lands where this person is working: in the section they are on, else nearest the
   // middle of the view, clear of everything there at drawn sizes.
   const freeSpot = (
@@ -1342,9 +1489,12 @@ export function RoomBoard({
   const addAndType = (add: () => string | null) => {
     const id = flushSync(add);
     if (id === null) return;
-    drawnItem(noteRef(id))
-      ?.querySelector<HTMLElement>("textarea:not([data-box-prompt]), input")
-      ?.focus({ preventScroll: true });
+    const item = drawnItem(noteRef(id));
+    // The text first: a task's checkbox comes before its text.
+    (
+      item?.querySelector<HTMLElement>("textarea:not([data-box-prompt])") ??
+      item?.querySelector<HTMLElement>("input:not([type=checkbox])")
+    )?.focus({ preventScroll: true });
   };
   /** Adds a section in view, or round the rects given, as one change of this viewer's. */
   const addSection = (around?: ReadonlyArray<BoardRect>) => {
@@ -1426,7 +1576,6 @@ export function RoomBoard({
     readonly text: string;
     readonly copies: ReadonlyArray<{ readonly note: RoomBoardNote; readonly rect: BoardRect }>;
   } | null>(null);
-  const lastPointer = useRef<BoardPoint | null>(null);
   const viewCentre = () => {
     const within = visibleBoardRect(
       view,
@@ -1450,16 +1599,24 @@ export function RoomBoard({
     if (!isBoardKey(event.target) || !canEdit) return;
     const text = event.clipboardData.getData("text/plain");
     const at = lastPointer.current ?? viewCentre();
-    const cards = copied.current;
-    if (cards !== null && cards.text === text) {
+    const own = copied.current;
+    if (own !== null && own.text === text) {
       event.preventDefault();
       landCopies(
-        cards.copies.map(({ note, rect }) => ({ note: { ...note, id: randomUUID() }, rect })),
+        own.copies.map(({ note, rect }) => ({ note: { ...note, id: randomUUID() }, rect })),
         at,
       );
       return;
     }
     const url = boardUrlIn(text);
+    // A pull request pasted on a room's board shows itself, live, instead of as a plain link.
+    const pullRequest =
+      url === null || cards !== undefined || pullRequestsFull ? null : roomPullRequestOf(url);
+    if (pullRequest !== null) {
+      event.preventDefault();
+      addCard({ kind: "pull-request", url: pullRequest.url });
+      return;
+    }
     if (url !== null) {
       event.preventDefault();
       addLink(url);
@@ -1469,11 +1626,19 @@ export function RoomBoard({
     event.preventDefault();
     noteAt(at, text.slice(0, ROOM_BOARD_NOTE_MAX_LENGTH));
   };
-  /** A plain note centred on `at`, or as near as it fits, in this viewer's last colour. */
-  const noteAt = (at: BoardPoint, text = "") => {
+  /**
+   * A plain note centred on `at`, in this viewer's last colour: exactly there when `exact`, as for
+   * a double-click, else as near as it fits beside what is there.
+   */
+  const noteAt = (at: BoardPoint, text = "", exact = false) => {
     if (!canEdit || full) return null;
     const size = boardNewNoteSize(undefined);
-    return newNote({ text }, placeBoardItem(size, at, takenRects()));
+    return newNote(
+      { text },
+      exact
+        ? { x: Math.round(at.x - size.w / 2), y: Math.round(at.y - size.h / 2) }
+        : placeBoardItem(size, at, takenRects()),
+    );
   };
   // Plain notes in the selection, which its colour control recolours together.
   const colorable = selectedNotes.filter(
@@ -1518,12 +1683,17 @@ export function RoomBoard({
     if (rects.length > 0) addSection(rects);
   };
   /** Adds a card of `kind` beside an item, with a line between them in the direction given. */
-  const addBeside = (ref: string, kind: "artifact" | "thread", direction: "from" | "to") => {
+  const addBeside = (
+    ref: string,
+    kind: "artifact" | "thread" | "code" | "pull-request",
+    direction: "from" | "to",
+    url?: string,
+  ) => {
     const element = drawnItem(ref);
     if (!canEdit || full || element === null) return;
     const area = boardAreaOf(surfaceRef.current);
     const id = newNote(
-      { kind },
+      url === undefined ? { kind } : { kind, url },
       besideBoardItem(
         drawnRect(element),
         boardNewNoteSize(kind),
@@ -1552,7 +1722,7 @@ export function RoomBoard({
     const area = boardAreaOf(surfaceRef.current);
     if (area === null) return;
     setFollowing(null);
-    setView(fitBoardView(drawnRects(), area));
+    setView(fitBoardView(drawnRects(), area, FIT_MARGIN));
   };
   const attachAgentOf = (note: RoomBoardNote) => {
     if (note.kind !== "artifact" || cards !== undefined || room === null) return undefined;
@@ -1570,6 +1740,29 @@ export function RoomBoard({
       run: () => addBeside(noteRef(note.id), "thread", "to"),
     };
   };
+  const codeWindowOf = (note: RoomBoardNote) => {
+    const boxId = roomWindowBoxId(shown, note.id);
+    const changes = note.changes;
+    // The owner opens the thread of a box of their own, where the whole diff is.
+    const openThread =
+      viewer !== null || changes === undefined || changes.guestId !== undefined
+        ? undefined
+        : changes.boxId === ROOM_BOARD_ROOM_BOX
+          ? onOpenThread
+          : onOpenConversation === undefined
+            ? undefined
+            : () => onOpenConversation(changes.boxId);
+    return (
+      <RoomCodeWindow
+        note={note}
+        boxId={boxId}
+        boxName={boxName}
+        people={people}
+        readPatch={readCodePatch}
+        onOpenThread={openThread}
+      />
+    );
+  };
   const addLink = (url: string, wanted?: BoardPoint) => addCard({ kind: "link", url }, wanted);
   // A URL pasted in an empty note makes that note a link card.
   const pasteLinkInto = (note: RoomBoardNote, url: string) => {
@@ -1577,13 +1770,21 @@ export function RoomBoard({
     addLink(url, { x: note.x, y: note.y });
   };
   const submitLinkDraft = () => {
-    const url = linkDraft === null ? null : boardUrlIn(linkDraft);
+    const url = linkDraft === null ? null : draftUrl(linkDraft);
     if (url === null) return;
     addAndType(() => {
       setLinkDraft(null);
-      return addLink(url);
+      return draftKind === "pull-request" ? addCard({ kind: "pull-request", url }) : addLink(url);
     });
   };
+  const pullRequestWindowOf = (note: RoomBoardNote) => (
+    <RoomPullRequestWindow
+      note={note}
+      onRefresh={
+        onRefreshPullRequest === undefined ? undefined : () => onRefreshPullRequest(note.id)
+      }
+    />
+  );
   // After a toolbar action that types nothing, the board's own keys work again at once.
   const thenBoard = (action: () => void) => {
     action();
@@ -1843,6 +2044,25 @@ export function RoomBoard({
     const own = canPromptBoardBox(box, viewer);
     // A box rewrites one artifact; a second would draw a line that does nothing.
     const canAddArtifact = canEdit && !full && !artifactsFull && context?.artifact === null;
+    // Offered once per box; a box's changes show in each window it has a line to.
+    const canAddCode =
+      canEdit && !full && !codeFull && roomBoxCodeWindows(shown, box.id).length === 0;
+    // The pull request the box's thread is linked to, once, beside the box.
+    const linkedPullRequest =
+      cards !== undefined || !canEdit || full || pullRequestsFull
+        ? null
+        : roomPullRequestOf(
+            boxPullRequestUrl?.(box.id) ??
+              (box.id === ROOM_BOARD_ROOM_BOX ? ownerCode?.pullRequest?.url : undefined) ??
+              "",
+          );
+    const boxPullRequest =
+      linkedPullRequest !== null &&
+      !shown.notes.some(
+        (note) => note.kind === "pull-request" && note.url === linkedPullRequest.url,
+      )
+        ? linkedPullRequest
+        : null;
     // Always offered to the owner: a box with no conversation yet says so in the panel.
     // A box whose last turn ran on a guest's machine has its conversation there, not here.
     const ranElsewhere =
@@ -1867,6 +2087,7 @@ export function RoomBoard({
           placeholder={box.guestId === undefined ? "Ask your agent" : guestBoxPlaceholder}
           model={renderBoxModel?.(box.id)}
           onPrompt={(prompt) => onPromptBox(box.id, prompt)}
+          onPin={canEdit && onChange !== undefined ? pinPromptCard : undefined}
         />
       );
     const body = (
@@ -1881,7 +2102,10 @@ export function RoomBoard({
           resolving={resolvingRequests}
           model={renderRequestModel?.(box.id)}
         />
-        {canAddArtifact || (conversation !== undefined && box.id !== ROOM_BOARD_ROOM_BOX) ? (
+        {canAddArtifact ||
+        canAddCode ||
+        boxPullRequest !== null ||
+        (conversation !== undefined && box.id !== ROOM_BOARD_ROOM_BOX) ? (
           <div className="flex flex-wrap gap-1">
             {canAddArtifact ? (
               <Button
@@ -1894,6 +2118,32 @@ export function RoomBoard({
                 New artifact
               </Button>
             ) : null}
+            {canAddCode ? (
+              <WhatItDoes hint={BOARD_CODE_WINDOW_HINT}>
+                <Button
+                  size="micro"
+                  variant="outline"
+                  onPointerDown={stopPointer}
+                  onClick={() => addBeside(boardBoxRef(box.id), "code", "from")}
+                >
+                  <FileCode2Icon />
+                  New code window
+                </Button>
+              </WhatItDoes>
+            ) : null}
+            {boxPullRequest === null ? null : (
+              <Button
+                size="micro"
+                variant="outline"
+                onPointerDown={stopPointer}
+                onClick={() =>
+                  addBeside(boardBoxRef(box.id), "pull-request", "from", boxPullRequest.url)
+                }
+              >
+                <PullRequestGlyph.pullRequest />
+                Show pull request
+              </Button>
+            )}
             {conversation !== undefined && box.id !== ROOM_BOARD_ROOM_BOX ? (
               <Button
                 size="micro"
@@ -1938,850 +2188,978 @@ export function RoomBoard({
   const moving = boardDragItems(held.current, gestureFrom.current).length > 0;
   const edgeArea = drawingArea([...boxes.values()]);
   // Marker ids land in `url(#…)`, which takes no colons.
+  // The person colour of whoever owns the card a line starts from: the agent that rewrites.
+  const lineColor = (ref: string) =>
+    boardCursorColor(guests, shown.notes.find((note) => noteRef(note.id) === ref)?.guestId);
   const markerId = `board-arrow${useId().replace(/[^\w-]/g, "")}`;
 
   return (
     <div className="@container/board flex min-h-0 min-w-0 flex-1 flex-col overflow-clip overscroll-none">
-      <header
-        className={cn(
-          "flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-3 py-2 @5xl/board:gap-2",
-          COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
-        )}
-      >
-        <Button size="sm" variant="ghost" onClick={onBack ?? onOpenThread}>
-          <ArrowLeftIcon />
-          <ToolLabel>{backLabel}</ToolLabel>
-        </Button>
-        <h1 className="min-w-0 flex-1 truncate text-sm font-medium">
-          {title}
-          {sharing === undefined ? (
-            <span className="ms-2 font-normal text-muted-foreground">
-              {room === null ? "Not shared" : (summary ?? roomSummary(room, online.length))}
-            </span>
-          ) : null}
-        </h1>
-        {sharing}
-        {notice === null ? null : (
-          <span role="status" className="shrink-0 text-xs text-muted-foreground">
-            {notice}
-          </span>
-        )}
-        {following === null ? null : (
-          <span className="flex shrink-0 items-center gap-1.5 text-xs">
-            Following {personName(following.person)}
-            <Button size="xs" variant="outline" onClick={() => thenBoard(() => setFollowing(null))}>
-              Stop following
+      {/* The board fills this; its chrome floats over the canvas. */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <header
+          className={cn(
+            "pointer-events-none absolute inset-x-3 top-3 z-30 flex flex-wrap items-start gap-2",
+            COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
+          )}
+        >
+          <BoardFloat className="pointer-events-auto max-w-full min-w-0 gap-0.5 p-1 pe-3">
+            <Button size="sm" variant="ghost" onClick={onBack ?? onOpenThread}>
+              <ArrowLeftIcon />
+              <ToolLabel>{backLabel}</ToolLabel>
             </Button>
-          </span>
-        )}
-        {linkDraft === null ? (
-          <>
-            {cards !== undefined ? null : onAddThread === undefined ? (
-              <WhyNot reason={cannotAddThread}>
+            <span aria-hidden className="me-1.5 h-4 w-px shrink-0 bg-board-hairline" />
+            <h1 className="min-w-0 truncate text-sm font-semibold">
+              {titleEditor ?? title}
+              {sharing === undefined ? (
+                <span className="ms-2 font-normal text-muted-foreground">
+                  {room === null ? "Not shared" : (summary ?? roomSummary(room, online.length))}
+                </span>
+              ) : null}
+            </h1>
+          </BoardFloat>
+          <div className="pointer-events-auto ms-auto flex flex-wrap items-center justify-end gap-2">
+            {notice === null ? null : (
+              <BoardFloat className="px-3 py-1.5">
+                <span role="status" className="text-xs text-muted-foreground">
+                  {notice}
+                </span>
+              </BoardFloat>
+            )}
+            {following === null ? null : (
+              <BoardFloat className="gap-2 py-1 ps-3 pe-1 text-xs">
+                Following {personName(following.person)}
                 <Button
-                  size="sm"
+                  size="xs"
                   variant="outline"
-                  disabled={cannotAddThread !== null}
-                  onClick={() => addAndType(() => addCard({ kind: "thread" }))}
+                  onClick={() => thenBoard(() => setFollowing(null))}
                 >
-                  <MessagesSquareIcon />
-                  <ToolLabel>Thread</ToolLabel>
+                  Stop following
                 </Button>
-              </WhyNot>
-            ) : (
-              <Menu>
-                <WhyNot reason={cannotAddThread}>
-                  <MenuTrigger
-                    disabled={cannotAddThread !== null}
-                    render={<Button size="sm" variant="outline" />}
+              </BoardFloat>
+            )}
+            {sharing === undefined ? null : (
+              <BoardFloat className="min-w-0 gap-1.5 p-1 ps-2">{sharing}</BoardFloat>
+            )}
+          </div>
+        </header>
+        <div className="pointer-events-none absolute inset-x-3 bottom-3 z-30 flex justify-center">
+          <BoardFloat className="pointer-events-auto max-w-full gap-0.5 overflow-x-auto rounded-xl p-1">
+            {linkDraft === null ? (
+              <>
+                <WhyNot reason={cannotAdd}>
+                  <BoardTool
+                    label="Note"
+                    hint="Sticky note"
+                    disabled={cannotAdd !== null}
+                    onClick={() => addAndType(() => addCard({}))}
                   >
-                    <MessagesSquareIcon />
-                    <ToolLabel>Thread</ToolLabel>
-                    <ChevronDownIcon />
-                  </MenuTrigger>
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "size-4 rounded-sm ring-1 ring-foreground/15",
+                        paintSwatchClassName(noteColor ?? undefined),
+                      )}
+                    />
+                  </BoardTool>
                 </WhyNot>
-                {/* The new box's name field keeps the caret it took. */}
-                <MenuPopup align="start" finalFocus={() => isBoardKey(document.activeElement)}>
-                  <MenuItem onClick={() => addAndType(() => addCard({ kind: "thread" }))}>
-                    New thread box
-                  </MenuItem>
-                  <MenuItem
+                <WhyNot reason={cannotAdd}>
+                  <BoardTool
+                    label="Task"
+                    disabled={cannotAdd !== null}
+                    onClick={() => addAndType(() => addCard({ kind: "task" }))}
+                  >
+                    <ListTodoIcon />
+                  </BoardTool>
+                </WhyNot>
+                {cards === undefined ? (
+                  <WhyNot reason={cannotAdd}>
+                    <BoardTool
+                      label="Section"
+                      disabled={cannotAdd !== null}
+                      onClick={() => addAndType(() => addSection())}
+                    >
+                      <SquareDashedIcon />
+                    </BoardTool>
+                  </WhyNot>
+                ) : null}
+                <WhyNot reason={cannotAdd}>
+                  <BoardTool
+                    label="Link"
+                    disabled={cannotAdd !== null}
                     onClick={() => {
-                      const at = freeSpot("thread");
-                      const size = boardNewNoteSize("thread");
-                      reveal({ ...at, width: size.w, height: size.h }, true);
-                      onAddThread(at);
+                      setDraftKind("link");
+                      setLinkDraft("");
                     }}
                   >
-                    Add one of your threads…
-                  </MenuItem>
-                </MenuPopup>
-              </Menu>
-            )}
-            <WhyNot reason={cannotAdd}>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={cannotAdd !== null}
-                onClick={() => addAndType(() => addCard({}))}
-              >
-                <StickyNoteIcon />
-                <ToolLabel>Note</ToolLabel>
-              </Button>
-            </WhyNot>
-            <WhyNot reason={cannotAdd}>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={cannotAdd !== null}
-                onClick={() => addAndType(() => addCard({ kind: "task" }))}
-              >
-                <ListTodoIcon />
-                <ToolLabel>Task</ToolLabel>
-              </Button>
-            </WhyNot>
-            <WhyNot reason={cannotAdd}>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={cannotAdd !== null}
-                onClick={() => setLinkDraft("")}
-              >
-                <LinkIcon />
-                <ToolLabel>Link</ToolLabel>
-              </Button>
-            </WhyNot>
-            {cards === undefined ? (
-              <WhyNot reason={cannotAddArtifact}>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={cannotAddArtifact !== null}
-                  onClick={() => addAndType(() => addCard({ kind: "artifact" }))}
-                >
-                  <AppWindowIcon />
-                  <ToolLabel>Artifact</ToolLabel>
-                </Button>
-              </WhyNot>
-            ) : null}
-            {cards === undefined ? (
-              <WhyNot reason={cannotAdd}>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={cannotAdd !== null}
-                  onClick={() => addAndType(() => addSection())}
-                >
-                  <FrameIcon />
-                  <ToolLabel>Section</ToolLabel>
-                </Button>
-              </WhyNot>
-            ) : null}
-            {cards === undefined ? (
-              <WhyNot reason={cannotAdd}>
-                <Button
-                  size="sm"
-                  variant={placingComment ? "secondary" : "outline"}
-                  aria-pressed={placingComment}
-                  disabled={cannotAdd !== null}
-                  onClick={() => thenBoard(startComment)}
-                >
-                  <MessageCirclePlusIcon />
-                  <ToolLabel>Comment</ToolLabel>
-                </Button>
-              </WhyNot>
-            ) : null}
-            {cards === undefined ? (
-              // As wide as its widest count, and kept while nothing is resolved, so the tools
-              // never move.
-              <span className="grid">
-                <span aria-hidden className="invisible col-start-1 row-start-1 flex">
-                  <Button size="sm" variant="ghost" tabIndex={-1}>
-                    <CircleCheckIcon />
-                    <ResolvedCount count={RESOLVED_WIDEST_COUNT} />
-                  </Button>
-                </span>
-                <span
-                  className={cn(
-                    "col-start-1 row-start-1 flex",
-                    resolvedComments === 0 && "invisible",
-                  )}
-                >
-                  <Button
-                    size="sm"
-                    variant={showResolved ? "secondary" : "ghost"}
-                    aria-pressed={showResolved}
-                    aria-label={`Resolved (${resolvedComments})`}
-                    aria-hidden={resolvedComments === 0 || undefined}
-                    tabIndex={resolvedComments === 0 ? -1 : undefined}
-                    onClick={() => thenBoard(() => setShowResolved((shown) => !shown))}
-                  >
-                    <CircleCheckIcon />
-                    <ResolvedCount count={resolvedComments} />
-                  </Button>
-                </span>
-              </span>
-            ) : null}
-          </>
-        ) : (
-          <form
-            className="flex items-center gap-1.5"
-            onSubmit={(event) => {
-              event.preventDefault();
-              submitLinkDraft();
-            }}
-          >
-            <Input
-              size="sm"
-              aria-label="Link"
-              placeholder="Paste or type a link"
-              autoFocus
-              value={linkDraft}
-              aria-invalid={linkDraft.trim() !== "" && boardUrlIn(linkDraft) === null}
-              onChange={(event) => setLinkDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") thenBoard(() => setLinkDraft(null));
-              }}
-            />
-            <Button size="sm" type="submit" disabled={boardUrlIn(linkDraft) === null}>
-              Add
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => thenBoard(() => setLinkDraft(null))}>
-              Cancel
-            </Button>
-          </form>
-        )}
-        <BoardHistoryButtons
-          canUndo={canEdit && history.undo.length > 0}
-          canRedo={canEdit && history.redo.length > 0}
-          onUndo={() => thenBoard(() => travel("undo"))}
-          onRedo={() => thenBoard(() => travel("redo"))}
-        />
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          aria-label="Zoom out"
-          onClick={() => thenBoard(() => zoomBy(1 / 1.2))}
-        >
-          <MinusIcon />
-        </Button>
-        <span className="w-10 text-center text-xs text-muted-foreground tabular-nums">
-          {Math.round(view.zoom * 100)}%
-        </span>
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          aria-label="Zoom in"
-          onClick={() => thenBoard(() => zoomBy(1.2))}
-        >
-          <PlusIcon />
-        </Button>
-        <Button size="sm" variant="ghost" onClick={() => thenBoard(fitAll)}>
-          <ScanIcon />
-          <ToolLabel>Fit</ToolLabel>
-        </Button>
-      </header>
-      <div
-        ref={surfaceRef}
-        role="application"
-        aria-label="Room board"
-        // Focusable so a link pasted on the board lands as a card. Clipped, not hidden, so
-        // focusing a card at the edge cannot scroll the board out from under the pointer.
-        tabIndex={0}
-        className={cn(
-          "group/board relative min-h-0 flex-1 cursor-grab touch-none overflow-clip bg-background outline-none active:cursor-grabbing",
-          following !== null && "transition-[background-position,background-size] duration-200",
-        )}
-        style={boardGridStyle(view)}
-        {...pan}
-        // While a pointer is held on the board, artifact pages let it through; see RoomArtifactBody.
-        onPointerDownCapture={(event) => {
-          event.currentTarget.dataset.boardBusy = "";
-          // Cards stop their presses from reaching the board, and a press on one closes the thread too.
-          const target = event.target;
-          if (
-            openComment !== null &&
-            target instanceof Element &&
-            event.currentTarget.contains(target) &&
-            target.closest("[data-board-overlay], [data-board-pin]") === null
-          ) {
-            closeComment();
-          }
-          press.current = null;
-          if (event.button !== 0 || !isInside(event) || boardPressKind(target) !== "gesture") {
-            return;
-          }
-          // Keys act on the board during and after a gesture: Escape, Delete, the arrows.
-          event.currentTarget.focus({ preventScroll: true });
-          if (
-            !canEdit ||
-            !(target instanceof Element) ||
-            target.closest("[data-board-overlay], [data-board-grip], [data-board-pin]") !== null
-          ) {
-            return;
-          }
-          const ref = target.closest<HTMLElement>("[data-board-item]")?.dataset.boardItem ?? null;
-          // Shift and a press on a card selects it, or takes it out of the selection.
-          if (event.shiftKey) {
-            if (ref === null) return;
-            event.stopPropagation();
-            return toggleSelected(ref);
-          }
-          press.current = { on: ref, x: event.clientX, y: event.clientY, moved: false };
-        }}
-        onMouseDownCapture={(event) => {
-          // A press that moves, pans, selects or draws would also select the page's text, or start
-          // a native drag of it, and take focus off the board.
-          if (event.button === 0 && isInside(event) && boardPressKind(event.target) === "gesture") {
-            event.preventDefault();
-          }
-        }}
-        onPointerMoveCapture={(event) => {
-          const held = press.current;
-          if (held === null || held.moved) return;
-          if (Math.hypot(event.clientX - held.x, event.clientY - held.y) < CLICK_SLOP) return;
-          held.moved = true;
-          // A card dragged from outside the selection goes alone, and becomes the selection.
-          if (held.on !== null && !selected.has(held.on)) setSelection(new Set([held.on]));
-          if (held.on !== null) lastCard.current = held.on;
-        }}
-        onPointerUpCapture={(event) => {
-          delete event.currentTarget.dataset.boardBusy;
-          const held = press.current;
-          press.current = null;
-          if (held === null || held.moved) return;
-          if (Math.hypot(event.clientX - held.x, event.clientY - held.y) >= CLICK_SLOP) return;
-          setSelection(held.on === null ? NO_SELECTION : new Set([held.on]));
-          if (held.on !== null) lastCard.current = held.on;
-        }}
-        onPointerCancelCapture={(event) => {
-          delete event.currentTarget.dataset.boardBusy;
-          press.current = null;
-        }}
-        onPointerDown={(event) => {
-          if (!isInside(event)) return;
-          setSelectedEdge(null);
-          if (boardPressKind(event.target) !== "gesture") return;
-          if (event.shiftKey && canEdit && event.button === 0) return marquee.start(event);
-          pan.onPointerDown(event);
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Escape") {
-            if (dropHeldPointer()) cancelGesture();
-            else if (placingComment) setPlacingComment(false);
-            else if (openComment !== null) closeComment();
-            else if (selected.size > 0 && isBoardKey(event.target)) setSelection(NO_SELECTION);
-            return;
-          }
-          if ((event.ctrlKey || event.metaKey) && !event.altKey && isBoardKey(event.target)) {
-            const key = event.key.toLowerCase();
-            const redo = (key === "z" && event.shiftKey) || (key === "y" && !event.metaKey);
-            if (key === "z" || redo) {
-              event.preventDefault();
-              travel(redo ? "redo" : "undo");
-              return;
-            }
-            if (key === "d" && !event.shiftKey && selected.size > 0) {
-              event.preventDefault();
-              duplicateSelection();
-              return;
-            }
-            if (key === "a" && !event.shiftKey && canEdit) {
-              event.preventDefault();
-              setSelection(new Set(selectableRefs()));
-              return;
-            }
-          }
-          const direction = NUDGES[event.key];
-          if (
-            direction !== undefined &&
-            event.target === event.currentTarget &&
-            selected.size > 0
-          ) {
-            event.preventDefault();
-            const step = event.shiftKey ? NUDGE_STEP_LARGE : NUDGE_STEP;
-            nudge(direction[0] * step, direction[1] * step);
-            return;
-          }
-          // Delete acts only on the board itself, so a focused card's own controls keep theirs.
-          if (
-            (event.key === "Delete" || event.key === "Backspace") &&
-            event.target === event.currentTarget &&
-            removal.noteIds.length > 0
-          ) {
-            event.preventDefault();
-            event.currentTarget
-              .querySelector<HTMLButtonElement>("[data-selection-delete]")
-              ?.click();
-          }
-        }}
-        onPointerMove={(event) => {
-          if (!marquee.move(event)) pan.onPointerMove(event);
-          lastPointer.current = pointerOnBoard(event);
-          trackCursor(event);
-        }}
-        onDoubleClick={(event) => {
-          const target = event.target;
-          if (
-            !isInside(event) ||
-            boardPressKind(target) !== "gesture" ||
-            (target instanceof Element &&
-              target.closest("[data-board-item], [data-board-overlay], [data-board-grip]") !== null)
-          ) {
-            return;
-          }
-          const at = pointerOnBoard(event);
-          if (at !== null) addAndType(() => noteAt(at));
-        }}
-        onCopy={copySelection}
-        onPointerUp={(event) => {
-          if (!marquee.end(event)) pan.onPointerUp(event);
-        }}
-        onPointerCancel={(event) => {
-          if (!marquee.end(event)) pan.onPointerCancel(event);
-        }}
-        onPointerLeave={cursor.leave}
-        onPaste={pasteOnBoard}
-        // A prompt box taking focus brings its Send button into the board's visible area.
-        onFocusCapture={(event) => {
-          const prompt =
-            event.target instanceof Element
-              ? event.target.closest<HTMLElement>("[data-board-prompt]")
-              : null;
-          const area = boardAreaOf(surfaceRef.current);
-          if (prompt === null || area === null) return;
-          const drawn = prompt.getBoundingClientRect();
-          reveal(
-            clientRectToBoard(view, area, {
-              x: drawn.left,
-              y: drawn.top,
-              width: drawn.width,
-              height: drawn.height,
-            }),
-          );
-        }}
-      >
-        <BoardSelectionContext value={selected}>
-          <div
-            className={cn(
-              "absolute top-0 left-0 origin-top-left",
-              following !== null && "transition-transform duration-200 ease-out",
-            )}
-            style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}
-          >
-            {shown.notes.map((note) => {
-              if (note.section !== true) return null;
-              const target = { kind: "note", id: note.id } as const;
-              const own = canEdit && isRoomCardOwnedBy(note, viewer);
-              return (
-                <BoardSection
-                  key={note.id}
-                  note={note}
-                  canRename={own}
-                  canDelete={own}
-                  onMove={(dx, dy) => dragBy(target, note, dx, dy)}
-                  onDrop={() => dropItem(target)}
-                  handles={
-                    <ItemHandles
-                      from={noteRef(note.id)}
-                      on="note"
-                      link={undefined}
-                      onResize={
-                        canEdit
-                          ? (corner, from, dx, dy) => resizeNote(note, corner, from, dx, dy)
-                          : undefined
-                      }
-                      onEnd={() => release(() => letGo(target))}
-                    />
-                  }
-                  onText={(text) => writeNote(note, text)}
-                  onBlur={() => release(() => letGo(target))}
-                  onRevert={() => revertText(target)}
-                  onDelete={() => send(target, null)}
-                  onPickColor={
-                    canEdit && cards === undefined
-                      ? (color) => changeNote(note, (current) => ({ ...current, color }))
-                      : undefined
-                  }
-                />
-              );
-            })}
-            <svg
-              aria-hidden
-              className="pointer-events-none absolute overflow-visible"
-              style={{ left: edgeArea.x, top: edgeArea.y }}
-              width={edgeArea.width}
-              height={edgeArea.height}
-            >
-              <defs>
-                {EDGE_STROKES.map(([state, color]) => (
-                  <marker
-                    key={state}
-                    id={`${markerId}-${state}`}
-                    viewBox="0 0 10 10"
-                    refX="9"
-                    refY="5"
-                    markerWidth="7"
-                    markerHeight="7"
-                    orient="auto"
-                  >
-                    <path d="M0 0 L10 5 L0 10 z" fill={color} />
-                  </marker>
-                ))}
-              </defs>
-              <g transform={`translate(${-edgeArea.x} ${-edgeArea.y})`}>
-                {agents.map(({ guest }) => {
-                  const from = boxes.get(cardRef(guestCardId(guest)));
-                  const to = boxes.get(cardRef(agentCardId(guest)));
-                  if (from === undefined || to === undefined) return null;
-                  return (
-                    <path
-                      key={guest.id}
-                      d={boardConnector(from, to).path}
-                      fill="none"
-                      stroke="var(--color-border)"
-                      strokeWidth="1.5"
-                      strokeDasharray="4 5"
-                    />
-                  );
-                })}
-                {edges.map((edge) => {
-                  const from = boxes.get(edge.from);
-                  const to = boxes.get(edge.to);
-                  if (from === undefined || to === undefined) return null;
-                  const selected = selectedEdge === edge.id;
-                  const state: EdgeStroke = selected ? "selected" : edgeRole(edge.id);
-                  return (
-                    <BoardEdgeLine
-                      key={edge.id}
-                      id={edge.id}
-                      fromRef={edge.from}
-                      toRef={edge.to}
-                      from={from}
-                      to={to}
-                      color={EDGE_STROKE_COLORS[state]}
-                      width={state === "plain" ? 1.5 : 2}
-                      marker={`url(#${markerId}-${state})`}
-                      selectable={canEdit}
-                      onSelect={() => setSelectedEdge(selected ? null : edge.id)}
-                    />
-                  );
-                })}
-                {linking === null ? null : (
-                  <path
-                    d={boardConnector(linking.box, { ...linking.to, width: 0, headerY: 0 }).path}
-                    fill="none"
-                    stroke="var(--color-primary)"
-                    strokeWidth="1.5"
-                    strokeDasharray="4 4"
-                    markerEnd={`url(#${markerId}-selected)`}
-                  />
+                    <LinkIcon />
+                  </BoardTool>
+                </WhyNot>
+                {cards !== undefined ? null : <BoardToolDivider />}
+                {cards !== undefined ? null : onAddThread === undefined ? (
+                  <WhyNot reason={cannotAddThread}>
+                    <BoardTool
+                      label="Thread"
+                      hint="Thread box: an agent the room can prompt"
+                      disabled={cannotAddThread !== null}
+                      onClick={() => addAndType(() => addCard({ kind: "thread" }))}
+                    >
+                      <BotIcon />
+                    </BoardTool>
+                  </WhyNot>
+                ) : (
+                  <Menu>
+                    <WhyNot reason={cannotAddThread}>
+                      <MenuTrigger
+                        disabled={cannotAddThread !== null}
+                        render={<Button size="sm" variant="ghost" aria-label="Thread" />}
+                      >
+                        <BotIcon />
+                        <ChevronDownIcon className="-ms-1.5 size-3 opacity-60" />
+                      </MenuTrigger>
+                    </WhyNot>
+                    {/* The new box's name field keeps the caret it took. */}
+                    <MenuPopup align="start" finalFocus={() => isBoardKey(document.activeElement)}>
+                      <MenuItem onClick={() => addAndType(() => addCard({ kind: "thread" }))}>
+                        New thread box
+                      </MenuItem>
+                      <MenuItem
+                        onClick={() => {
+                          const at = freeSpot("thread");
+                          const size = boardNewNoteSize("thread");
+                          reveal({ ...at, width: size.w, height: size.h }, true);
+                          onAddThread(at);
+                        }}
+                      >
+                        Add one of your threads…
+                      </MenuItem>
+                    </MenuPopup>
+                  </Menu>
                 )}
-              </g>
-            </svg>
-            {cards?.map((card) => (
-              <BoardCard
-                key={card.id}
-                at={positions[card.id]!}
-                title={card.title}
-                kind={card.kind}
-                dashed={card.dashed === true}
-                id={card.id}
-                size={sizes[card.id]}
-                link={link}
-                resize={resize}
-                onMove={dragBy}
-                onDrop={dropItem}
+                {cards === undefined ? (
+                  <WhyNot reason={cannotAddArtifact}>
+                    <BoardTool
+                      label="Artifact"
+                      disabled={cannotAddArtifact !== null}
+                      onClick={() => addAndType(() => addCard({ kind: "artifact" }))}
+                    >
+                      <AppWindowIcon />
+                    </BoardTool>
+                  </WhyNot>
+                ) : null}
+                {cards === undefined ? (
+                  <WhyNot reason={cannotAddCode}>
+                    <BoardTool
+                      label="Code"
+                      hint="A code window shows the changes of the thread box you draw a line from it. Everyone in the room sees its files and diffs."
+                      disabled={cannotAddCode !== null}
+                      onClick={() => addAndType(() => addCard({ kind: "code" }))}
+                    >
+                      <CodeXmlIcon />
+                    </BoardTool>
+                  </WhyNot>
+                ) : null}
+                {cards === undefined ? (
+                  <WhyNot reason={cannotAddPullRequest}>
+                    <BoardTool
+                      label="Pull request"
+                      hint="Shows a GitHub pull request to the room, kept up to date by the board owner's GitHub sign-in."
+                      disabled={cannotAddPullRequest !== null}
+                      onClick={() => {
+                        setDraftKind("pull-request");
+                        setLinkDraft("");
+                      }}
+                    >
+                      <PullRequestGlyph.pullRequest />
+                    </BoardTool>
+                  </WhyNot>
+                ) : null}
+                {cards !== undefined ? null : <BoardToolDivider />}
+                {cards === undefined ? (
+                  <WhyNot reason={cannotAdd}>
+                    <BoardTool
+                      label="Comment"
+                      variant={placingComment ? "default" : "ghost"}
+                      aria-pressed={placingComment}
+                      disabled={cannotAdd !== null}
+                      onClick={() => thenBoard(startComment)}
+                    >
+                      <MessageCirclePlusIcon />
+                    </BoardTool>
+                  </WhyNot>
+                ) : null}
+                {cards === undefined ? (
+                  // As wide as its widest count, and kept while nothing is resolved, so the tools
+                  // never move.
+                  <span className="grid">
+                    <span aria-hidden className="invisible col-start-1 row-start-1 flex">
+                      <Button size="sm" variant="ghost" tabIndex={-1}>
+                        <CircleCheckIcon />
+                        <ResolvedCount count={RESOLVED_WIDEST_COUNT} />
+                      </Button>
+                    </span>
+                    <span
+                      className={cn(
+                        "col-start-1 row-start-1 flex",
+                        resolvedComments === 0 && "invisible",
+                      )}
+                    >
+                      <Button
+                        size="sm"
+                        variant={showResolved ? "secondary" : "ghost"}
+                        aria-pressed={showResolved}
+                        aria-label={`Resolved (${resolvedComments})`}
+                        aria-hidden={resolvedComments === 0 || undefined}
+                        tabIndex={resolvedComments === 0 ? -1 : undefined}
+                        onClick={() => thenBoard(() => setShowResolved((shown) => !shown))}
+                      >
+                        <CircleCheckIcon />
+                        <ResolvedCount count={resolvedComments} />
+                      </Button>
+                    </span>
+                  </span>
+                ) : null}
+              </>
+            ) : (
+              <form
+                className="flex items-center gap-1.5 ps-1"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  submitLinkDraft();
+                }}
               >
-                {card.children}
-              </BoardCard>
-            ))}
-            {roomParts !== null ? (
-              <BoardCard
-                at={positions[ROOM_BOARD_THREAD_CARD]!}
-                title={title}
-                kind={
-                  hasProgress
-                    ? "thread"
-                    : needsApproval
-                      ? "needs approval"
-                      : agentWorking
-                        ? "agent working"
-                        : "thread"
-                }
-                id={ROOM_BOARD_THREAD_CARD}
-                size={sizes[ROOM_BOARD_THREAD_CARD]}
-                dropTarget={onUseNote === undefined ? undefined : THREAD_DROP}
-                dropLabel={dropTarget?.on === THREAD_DROP ? dropTarget.label : undefined}
-                link={link}
-                resize={resize}
-                onMove={dragBy}
-                onDrop={dropItem}
-                footer={roomParts.prompt}
-              >
-                {roomParts.body}
-                <RoomCode
-                  code={ownerCode}
-                  onOpenPullRequest={onOpenPullRequest}
-                  openingPullRequest={openingPullRequest}
+                <Input
+                  size="sm"
+                  aria-label={draftKind === "pull-request" ? "Pull request address" : "Link"}
+                  placeholder={
+                    draftKind === "pull-request"
+                      ? "Paste a GitHub pull request link"
+                      : "Paste or type a link"
+                  }
+                  autoFocus
+                  value={linkDraft}
+                  aria-invalid={linkDraft.trim() !== "" && draftUrl(linkDraft) === null}
+                  onChange={(event) => setLinkDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") thenBoard(() => setLinkDraft(null));
+                  }}
                 />
-                {!hasProgress && needsApproval ? null : (
-                  <div>
-                    <Button size="xs" variant="outline" onClick={onOpenThread}>
-                      <MessagesSquareIcon />
-                      Open thread
+                <Button size="sm" type="submit" disabled={draftUrl(linkDraft) === null}>
+                  Add
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => thenBoard(() => setLinkDraft(null))}
+                >
+                  Cancel
+                </Button>
+              </form>
+            )}
+            <BoardToolDivider />
+            <BoardHistoryButtons
+              canUndo={canEdit && history.undo.length > 0}
+              canRedo={canEdit && history.redo.length > 0}
+              onUndo={() => thenBoard(() => travel("undo"))}
+              onRedo={() => thenBoard(() => travel("redo"))}
+            />
+          </BoardFloat>
+        </div>
+        <BoardFloat className="absolute bottom-16 left-3 z-30 gap-0.5 p-1 @4xl/board:bottom-3">
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Zoom out"
+            onClick={() => thenBoard(() => zoomBy(1 / 1.2))}
+          >
+            <MinusIcon />
+          </Button>
+          <span className="w-10 text-center text-xs text-muted-foreground tabular-nums">
+            {Math.round(view.zoom * 100)}%
+          </span>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Zoom in"
+            onClick={() => thenBoard(() => zoomBy(1.2))}
+          >
+            <PlusIcon />
+          </Button>
+          <BoardToolDivider />
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="Fit"
+                  onClick={() => thenBoard(fitAll)}
+                />
+              }
+            >
+              <ScanIcon />
+            </TooltipTrigger>
+            <TooltipPopup side="top">Fit everything in view</TooltipPopup>
+          </Tooltip>
+          {cards === undefined && room !== null ? <LineLegend /> : null}
+        </BoardFloat>
+        <div
+          ref={surfaceRef}
+          role="application"
+          aria-label="Room board"
+          // Focusable so a link pasted on the board lands as a card. Clipped, not hidden, so
+          // focusing a card at the edge cannot scroll the board out from under the pointer.
+          tabIndex={0}
+          className={cn(
+            "group/board relative min-h-0 flex-1 cursor-grab touch-none overflow-clip bg-board-canvas outline-none active:cursor-grabbing",
+            following !== null && "transition-[background-position,background-size] duration-200",
+          )}
+          style={boardGridStyle(view)}
+          {...pan}
+          // While a pointer is held on the board, artifact pages let it through; see RoomArtifactBody.
+          onPointerDownCapture={(event) => {
+            event.currentTarget.dataset.boardBusy = "";
+            // Cards stop their presses from reaching the board, and a press on one closes the thread too.
+            const target = event.target;
+            if (
+              openComment !== null &&
+              target instanceof Element &&
+              event.currentTarget.contains(target) &&
+              target.closest("[data-board-overlay], [data-board-pin]") === null
+            ) {
+              closeComment();
+            }
+            press.current = null;
+            if (event.button !== 0 || !isInside(event) || boardPressKind(target) !== "gesture") {
+              return;
+            }
+            // Keys act on the board during and after a gesture: Escape, Delete, the arrows.
+            event.currentTarget.focus({ preventScroll: true });
+            if (
+              !canEdit ||
+              !(target instanceof Element) ||
+              target.closest("[data-board-overlay], [data-board-grip], [data-board-pin]") !== null
+            ) {
+              return;
+            }
+            const ref = target.closest<HTMLElement>("[data-board-item]")?.dataset.boardItem ?? null;
+            // Shift and a press on a card selects it, or takes it out of the selection.
+            if (event.shiftKey) {
+              if (ref === null) return;
+              event.stopPropagation();
+              return toggleSelected(ref);
+            }
+            press.current = { on: ref, x: event.clientX, y: event.clientY, moved: false };
+          }}
+          onMouseDownCapture={(event) => {
+            // A press that moves, pans, selects or draws would also select the page's text, or start
+            // a native drag of it, and take focus off the board.
+            if (
+              event.button === 0 &&
+              isInside(event) &&
+              boardPressKind(event.target) === "gesture"
+            ) {
+              event.preventDefault();
+            }
+          }}
+          onPointerMoveCapture={(event) => {
+            const held = press.current;
+            if (held === null || held.moved) return;
+            if (Math.hypot(event.clientX - held.x, event.clientY - held.y) < CLICK_SLOP) return;
+            held.moved = true;
+            // A card dragged from outside the selection goes alone, and becomes the selection.
+            if (held.on !== null && !selected.has(held.on)) setSelection(new Set([held.on]));
+            if (held.on !== null) lastCard.current = held.on;
+          }}
+          onPointerUpCapture={(event) => {
+            delete event.currentTarget.dataset.boardBusy;
+            const held = press.current;
+            press.current = null;
+            if (held === null || held.moved) return;
+            if (Math.hypot(event.clientX - held.x, event.clientY - held.y) >= CLICK_SLOP) return;
+            setSelection(held.on === null ? NO_SELECTION : new Set([held.on]));
+            if (held.on !== null) lastCard.current = held.on;
+          }}
+          onPointerCancelCapture={(event) => {
+            delete event.currentTarget.dataset.boardBusy;
+            press.current = null;
+          }}
+          onPointerDown={(event) => {
+            if (!isInside(event)) return;
+            setSelectedEdge(null);
+            if (boardPressKind(event.target) !== "gesture") return;
+            if (event.shiftKey && canEdit && event.button === 0) return marquee.start(event);
+            pan.onPointerDown(event);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              if (dropHeldPointer()) cancelGesture();
+              else if (placingComment) setPlacingComment(false);
+              else if (openComment !== null) closeComment();
+              else if (selected.size > 0 && isBoardKey(event.target)) setSelection(NO_SELECTION);
+              return;
+            }
+            if ((event.ctrlKey || event.metaKey) && !event.altKey && isBoardKey(event.target)) {
+              const key = event.key.toLowerCase();
+              const redo = (key === "z" && event.shiftKey) || (key === "y" && !event.metaKey);
+              if (key === "z" || redo) {
+                event.preventDefault();
+                travel(redo ? "redo" : "undo");
+                return;
+              }
+              if (key === "d" && !event.shiftKey && selected.size > 0) {
+                event.preventDefault();
+                duplicateSelection();
+                return;
+              }
+              if (key === "a" && !event.shiftKey && canEdit) {
+                event.preventDefault();
+                setSelection(new Set(selectableRefs()));
+                return;
+              }
+            }
+            const direction = NUDGES[event.key];
+            if (
+              direction !== undefined &&
+              event.target === event.currentTarget &&
+              selected.size > 0
+            ) {
+              event.preventDefault();
+              const step = event.shiftKey ? NUDGE_STEP_LARGE : NUDGE_STEP;
+              nudge(direction[0] * step, direction[1] * step);
+              return;
+            }
+            // Delete acts only on the board itself, so a focused card's own controls keep theirs.
+            // The selection's own Delete, focused by a click that asked to confirm, takes it too.
+            if (
+              (event.key === "Delete" || event.key === "Backspace") &&
+              (event.target === event.currentTarget ||
+                (event.target instanceof Element &&
+                  event.target.closest("[data-selection-delete]") !== null)) &&
+              removal.noteIds.length > 0
+            ) {
+              event.preventDefault();
+              event.currentTarget
+                .querySelector<HTMLButtonElement>("[data-selection-delete]")
+                ?.click();
+            }
+          }}
+          onPointerMove={(event) => {
+            if (!marquee.move(event)) pan.onPointerMove(event);
+            lastPointer.current = pointerOnBoard(event);
+            trackCursor(event);
+          }}
+          onDoubleClick={(event) => {
+            const target = event.target;
+            if (
+              !isInside(event) ||
+              boardPressKind(target) !== "gesture" ||
+              (target instanceof Element &&
+                target.closest("[data-board-item], [data-board-overlay], [data-board-grip]") !==
+                  null)
+            ) {
+              return;
+            }
+            const at = pointerOnBoard(event);
+            if (at !== null) addAndType(() => noteAt(at, "", true));
+          }}
+          onCopy={copySelection}
+          onPointerUp={(event) => {
+            if (!marquee.end(event)) pan.onPointerUp(event);
+          }}
+          onPointerCancel={(event) => {
+            if (!marquee.end(event)) pan.onPointerCancel(event);
+          }}
+          onPointerLeave={cursor.leave}
+          onPaste={pasteOnBoard}
+          // A prompt box taking focus brings its Send button into the board's visible area.
+          onFocusCapture={(event) => {
+            const prompt =
+              event.target instanceof Element
+                ? event.target.closest<HTMLElement>("[data-board-prompt]")
+                : null;
+            const area = boardAreaOf(surfaceRef.current);
+            if (prompt === null || area === null) return;
+            const drawn = prompt.getBoundingClientRect();
+            reveal(
+              clientRectToBoard(view, area, {
+                x: drawn.left,
+                y: drawn.top,
+                width: drawn.width,
+                height: drawn.height,
+              }),
+            );
+          }}
+        >
+          <BoardSelectionContext value={selected}>
+            <div
+              className={cn(
+                "absolute top-0 left-0 origin-top-left",
+                following !== null && "transition-transform duration-200 ease-out",
+              )}
+              style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}
+            >
+              {shown.notes.map((note) => {
+                if (note.section !== true) return null;
+                const target = { kind: "note", id: note.id } as const;
+                const own = canEdit && isRoomCardOwnedBy(note, viewer);
+                return (
+                  <BoardSection
+                    key={note.id}
+                    note={note}
+                    canRename={own}
+                    canDelete={own}
+                    onMove={(dx, dy) => dragBy(target, note, dx, dy)}
+                    onDrop={() => dropItem(target)}
+                    handles={
+                      <ItemHandles
+                        from={noteRef(note.id)}
+                        on="note"
+                        link={undefined}
+                        onResize={
+                          canEdit
+                            ? (corner, from, dx, dy) => resizeNote(note, corner, from, dx, dy)
+                            : undefined
+                        }
+                        onEnd={() => release(() => letGo(target))}
+                      />
+                    }
+                    onText={(text) => writeNote(note, text)}
+                    onBlur={() => release(() => letGo(target))}
+                    onRevert={() => revertText(target)}
+                    onDelete={() => send(target, null)}
+                    onPickColor={
+                      canEdit && cards === undefined
+                        ? (color) => changeNote(note, (current) => ({ ...current, color }))
+                        : undefined
+                    }
+                  />
+                );
+              })}
+              <svg
+                aria-hidden
+                className="pointer-events-none absolute overflow-visible"
+                style={{ left: edgeArea.x, top: edgeArea.y }}
+                width={edgeArea.width}
+                height={edgeArea.height}
+              >
+                <defs>
+                  {EDGE_STROKES.map(([state, color]) => (
+                    <marker
+                      key={state}
+                      id={`${markerId}-${state}`}
+                      viewBox="0 0 10 10"
+                      refX="9"
+                      refY="5"
+                      markerWidth="7"
+                      markerHeight="7"
+                      orient="auto"
+                    >
+                      <path d="M0 0 L10 5 L0 10 z" fill={color} />
+                    </marker>
+                  ))}
+                  {BOARD_PERSON_COLORS.map((color, index) => (
+                    <marker
+                      key={color}
+                      id={`${markerId}-person-${index}`}
+                      viewBox="0 0 10 10"
+                      refX="9"
+                      refY="5"
+                      markerWidth="7"
+                      markerHeight="7"
+                      orient="auto"
+                    >
+                      <path d="M0 0 L10 5 L0 10 z" fill={color} />
+                    </marker>
+                  ))}
+                </defs>
+                <g transform={`translate(${-edgeArea.x} ${-edgeArea.y})`}>
+                  {agents.map(({ guest }) => {
+                    const from = boxes.get(cardRef(guestCardId(guest)));
+                    const to = boxes.get(cardRef(agentCardId(guest)));
+                    if (from === undefined || to === undefined) return null;
+                    return (
+                      <path
+                        key={guest.id}
+                        d={boardConnector(from, to).path}
+                        fill="none"
+                        stroke="var(--color-muted-foreground)"
+                        strokeOpacity={0.45}
+                        strokeWidth="1.5"
+                        strokeDasharray="4 5"
+                      />
+                    );
+                  })}
+                  {edges.map((edge) => {
+                    const from = boxes.get(edge.from);
+                    const to = boxes.get(edge.to);
+                    if (from === undefined || to === undefined) return null;
+                    const selected = selectedEdge === edge.id;
+                    const state: EdgeStroke = selected ? "selected" : edgeRole(edge.id);
+                    return (
+                      <BoardEdgeLine
+                        key={edge.id}
+                        id={edge.id}
+                        fromRef={edge.from}
+                        toRef={edge.to}
+                        from={from}
+                        to={to}
+                        color={
+                          state === "artifact" ? lineColor(edge.from) : EDGE_STROKE_COLORS[state]
+                        }
+                        width={EDGE_STROKE_WIDTHS[state]}
+                        dashed={state === "sent"}
+                        marker={
+                          state === "artifact"
+                            ? `url(#${markerId}-person-${BOARD_PERSON_COLORS.indexOf(lineColor(edge.from))})`
+                            : `url(#${markerId}-${state})`
+                        }
+                        selectable={canEdit}
+                        onSelect={() => setSelectedEdge(selected ? null : edge.id)}
+                      />
+                    );
+                  })}
+                  {linking === null ? null : (
+                    <path
+                      d={boardConnector(linking.box, { ...linking.to, width: 0, headerY: 0 }).path}
+                      fill="none"
+                      stroke="var(--color-primary)"
+                      strokeWidth="1.5"
+                      strokeDasharray="4 4"
+                      markerEnd={`url(#${markerId}-selected)`}
+                    />
+                  )}
+                </g>
+              </svg>
+              {cards?.map((card) => (
+                <BoardCard
+                  key={card.id}
+                  at={positions[card.id]!}
+                  title={card.title}
+                  kind={card.kind}
+                  dashed={card.dashed === true}
+                  id={card.id}
+                  size={sizes[card.id]}
+                  link={link}
+                  resize={resize}
+                  onMove={dragBy}
+                  onDrop={dropItem}
+                >
+                  {card.children}
+                </BoardCard>
+              ))}
+              {roomParts !== null ? (
+                <BoardCard
+                  at={positions[ROOM_BOARD_THREAD_CARD]!}
+                  title={title}
+                  kind={
+                    hasProgress
+                      ? "thread"
+                      : needsApproval
+                        ? "needs approval"
+                        : agentWorking
+                          ? "agent working"
+                          : "thread"
+                  }
+                  id={ROOM_BOARD_THREAD_CARD}
+                  size={sizes[ROOM_BOARD_THREAD_CARD]}
+                  dropTarget={onUseNote === undefined ? undefined : THREAD_DROP}
+                  dropLabel={dropTarget?.on === THREAD_DROP ? dropTarget.label : undefined}
+                  link={link}
+                  resize={resize}
+                  onMove={dragBy}
+                  onDrop={dropItem}
+                  footer={roomParts.prompt}
+                >
+                  {roomParts.body}
+                  <RoomCode
+                    code={ownerCode}
+                    onOpenPullRequest={onOpenPullRequest}
+                    openingPullRequest={openingPullRequest}
+                  />
+                  {!hasProgress && needsApproval ? null : (
+                    <div>
+                      <Button size="xs" variant="outline" onClick={onOpenThread}>
+                        <MessagesSquareIcon />
+                        Open thread
+                      </Button>
+                    </div>
+                  )}
+                </BoardCard>
+              ) : null}
+              {guestCards.map((guest) => {
+                const id = guestCardId(guest);
+                const here = online.includes(guest.id);
+                return (
+                  <BoardCard
+                    key={id}
+                    at={positions[id]!}
+                    title={guest.name}
+                    kind={here ? "viewing now" : "away"}
+                    color={boardCursorColor(guests, guest.id)}
+                    dashed
+                    id={id}
+                    size={sizes[id]}
+                    action={
+                      here && guest.id !== viewer ? followButton(guest.id, guest.name) : undefined
+                    }
+                    link={link}
+                    resize={resize}
+                    onMove={dragBy}
+                    onDrop={dropItem}
+                  >
+                    <GuestDetails
+                      guest={guest}
+                      messages={room?.messages ?? NO_GUEST_MESSAGES}
+                      boxes={threadBoxes}
+                      viewer={viewer}
+                    />
+                  </BoardCard>
+                );
+              })}
+              {agents.map((agent) => {
+                const { guest, turns, running: now } = agent;
+                const id = agentCardId(guest);
+                const latest = turns.at(-1);
+                const own = canGive && guest.id === viewer;
+                return (
+                  <BoardCard
+                    key={id}
+                    at={positions[id]!}
+                    title={guest.id === viewer ? "Your agent" : `${guest.name}'s agent`}
+                    color={boardCursorColor(guests, guest.id)}
+                    kind={
+                      now !== undefined
+                        ? "working"
+                        : `${turns.length} turn${turns.length === 1 ? "" : "s"}`
+                    }
+                    id={id}
+                    size={sizes[id]}
+                    dropTarget={own ? OWN_AGENT_DROP : undefined}
+                    dropLabel={
+                      own && dropTarget?.on === OWN_AGENT_DROP ? dropTarget.label : undefined
+                    }
+                    link={link}
+                    resize={resize}
+                    onMove={dragBy}
+                    onDrop={dropItem}
+                  >
+                    <p className="text-2xs text-muted-foreground">Runs on their machine</p>
+                    {now !== undefined ? (
+                      <p
+                        role="status"
+                        className="text-xs font-medium text-primary first-letter:uppercase"
+                      >
+                        {boardAgentName(people, guest.id)} is working
+                      </p>
+                    ) : latest !== undefined ? (
+                      <>
+                        {latest.prompt ? (
+                          <p className="line-clamp-2 border-s-2 border-foreground/15 ps-2 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                            {latest.prompt}
+                          </p>
+                        ) : null}
+                        <p className="line-clamp-6 text-xs [overflow-wrap:anywhere]">
+                          {roomBoxExcerpt(latest.reply, ROOM_BOX_REPLY_MAX_LENGTH)}
+                        </p>
+                      </>
+                    ) : null}
+                    <RoomCode code={boardAgentCode(agent)} />
+                  </BoardCard>
+                );
+              })}
+              {shown.notes.map((note) => {
+                if (note.kind === "comment" || note.section === true) return null;
+                const box =
+                  note.kind === "thread" && cards === undefined
+                    ? boxParts(
+                        { id: note.id, guestId: note.guestId, title: note.text.trim() },
+                        <BoxTurns
+                          boxId={note.id}
+                          turns={note.thread?.turns ?? []}
+                          people={people}
+                        />,
+                      )
+                    : undefined;
+                return (
+                  <BoardNote
+                    key={note.id}
+                    note={note}
+                    people={people}
+                    guests={guests}
+                    ownerAssignable={ownerAssignable}
+                    canEdit={canEdit}
+                    link={link}
+                    quote={boardNoteQuote(note, messages)}
+                    onResize={canEdit ? resizeNote : undefined}
+                    onMove={dragNote}
+                    onDrop={dropNote}
+                    onBlur={(target) => release(() => letGo(target))}
+                    onRevert={revertText}
+                    onText={writeNote}
+                    onChange={changeNote}
+                    onPasteLink={full ? undefined : pasteLinkInto}
+                    onDelete={send}
+                    onOpenReply={onOpenReply}
+                    worker={running.find((agent) => agent.taskId === note.id)}
+                    onTake={takeOf(note)}
+                    onUse={messageOf(note)}
+                    onGive={giveOf(note)}
+                    artifactAuthor={
+                      note.artifact === undefined
+                        ? undefined
+                        : boardArtifactAuthor(note.artifact, people)
+                    }
+                    artifactWriting={
+                      note.kind === "artifact"
+                        ? boardArtifactWriting(
+                            note.id,
+                            running,
+                            hasProgress ? null : ownerWritingArtifactId,
+                            people,
+                          )
+                        : null
+                    }
+                    boxName={boxName}
+                    onRestore={restoreOf(note)}
+                    onAttachAgent={attachAgentOf(note)}
+                    onPickColor={pickColor}
+                    onReact={reactTo}
+                    compact={view.zoom < COMPACT_CARD_ZOOM}
+                    box={
+                      box === undefined
+                        ? undefined
+                        : {
+                            label: boardBoxAgentLabel(note, people, note.thread?.turns.at(-1)),
+                            body: box.body,
+                            footer: box.prompt,
+                          }
+                    }
+                    codeWindow={
+                      note.kind === "code"
+                        ? codeWindowOf(note)
+                        : note.kind === "pull-request"
+                          ? pullRequestWindowOf(note)
+                          : null
+                    }
+                  />
+                );
+              })}
+              {[...commentNotes, ...(draftNote === null ? [] : [draftNote])].map((note) =>
+                hiddenComment(note) ? null : (
+                  <CommentPin
+                    key={note.id}
+                    note={note}
+                    people={people}
+                    open={openComment === note.id}
+                    scale={pinScale}
+                    itemRef={noteRef(note.id)}
+                    handle={
+                      note === draftNote ? null : (
+                        <PinLinkHandle from={noteRef(note.id)} link={link} />
+                      )
+                    }
+                    movable={canEdit && note !== draftNote}
+                    onDrag={dragPin}
+                    onDrop={dropPin}
+                    onToggle={togglePin}
+                    unread={unread(note)}
+                  />
+                ),
+              )}
+              {edges.map((edge) => {
+                const from = boxes.get(edge.from);
+                const to = boxes.get(edge.to);
+                if (selectedEdge !== edge.id || from === undefined || to === undefined) return null;
+                const { middle } = boardConnector(from, to);
+                return (
+                  <div
+                    key={edge.id}
+                    className="absolute -translate-x-1/2 -translate-y-1/2"
+                    style={{ left: middle.x, top: middle.y }}
+                  >
+                    <Button
+                      size="icon-xs"
+                      variant="outline"
+                      aria-label="Delete line"
+                      autoFocus
+                      onPointerDown={stopPointer}
+                      onClick={() => removeEdge(edge.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Delete" || event.key === "Backspace")
+                          removeEdge(edge.id);
+                        if (event.key === "Escape") setSelectedEdge(null);
+                      }}
+                    >
+                      <Trash2Icon />
                     </Button>
                   </div>
-                )}
-              </BoardCard>
-            ) : null}
-            {guestCards.map((guest) => {
-              const id = guestCardId(guest);
-              const here = online.includes(guest.id);
-              return (
-                <BoardCard
-                  key={id}
-                  at={positions[id]!}
-                  title={guest.name}
-                  kind={here ? "viewing now" : "away"}
-                  dashed
-                  id={id}
-                  size={sizes[id]}
-                  action={
-                    here && guest.id !== viewer ? followButton(guest.id, guest.name) : undefined
-                  }
-                  link={link}
-                  resize={resize}
-                  onMove={dragBy}
-                  onDrop={dropItem}
-                >
-                  <GuestDetails
-                    guest={guest}
-                    messages={room?.messages ?? NO_GUEST_MESSAGES}
-                    boxes={threadBoxes}
-                    viewer={viewer}
-                  />
-                </BoardCard>
-              );
-            })}
-            {agents.map((agent) => {
-              const { guest, turns, running: now } = agent;
-              const id = agentCardId(guest);
-              const latest = turns.at(-1);
-              const own = canGive && guest.id === viewer;
-              return (
-                <BoardCard
-                  key={id}
-                  at={positions[id]!}
-                  title={guest.id === viewer ? "Your agent" : `${guest.name}'s agent`}
-                  kind={
-                    now !== undefined
-                      ? "working"
-                      : `${turns.length} turn${turns.length === 1 ? "" : "s"}`
-                  }
-                  id={id}
-                  size={sizes[id]}
-                  dropTarget={own ? OWN_AGENT_DROP : undefined}
-                  dropLabel={
-                    own && dropTarget?.on === OWN_AGENT_DROP ? dropTarget.label : undefined
-                  }
-                  link={link}
-                  resize={resize}
-                  onMove={dragBy}
-                  onDrop={dropItem}
-                >
-                  <p className="text-2xs text-muted-foreground">Runs on their machine</p>
-                  {now !== undefined ? (
-                    <p
-                      role="status"
-                      className="text-xs font-medium text-info first-letter:uppercase"
-                    >
-                      {boardAgentName(people, guest.id)} is working
-                    </p>
-                  ) : latest !== undefined ? (
-                    <>
-                      {latest.prompt ? (
-                        <p className="line-clamp-2 border-s-2 border-guest/50 ps-2 text-xs text-muted-foreground [overflow-wrap:anywhere]">
-                          {latest.prompt}
-                        </p>
-                      ) : null}
-                      <p className="line-clamp-6 text-xs [overflow-wrap:anywhere]">
-                        {roomBoxExcerpt(latest.reply, ROOM_BOX_REPLY_MAX_LENGTH)}
-                      </p>
-                    </>
-                  ) : null}
-                  <RoomCode code={boardAgentCode(agent)} />
-                </BoardCard>
-              );
-            })}
-            {shown.notes.map((note) => {
-              if (note.kind === "comment" || note.section === true) return null;
-              const box =
-                note.kind === "thread" && cards === undefined
-                  ? boxParts(
-                      { id: note.id, guestId: note.guestId, title: note.text.trim() },
-                      <BoxTurns boxId={note.id} turns={note.thread?.turns ?? []} people={people} />,
-                    )
-                  : undefined;
-              return (
-                <BoardNote
-                  key={note.id}
-                  note={note}
-                  people={people}
-                  guests={guests}
-                  ownerAssignable={ownerAssignable}
-                  canEdit={canEdit}
-                  link={link}
-                  quote={boardNoteQuote(note, messages)}
-                  onResize={canEdit ? resizeNote : undefined}
-                  onMove={dragNote}
-                  onDrop={dropNote}
-                  onBlur={(target) => release(() => letGo(target))}
-                  onRevert={revertText}
-                  onText={writeNote}
-                  onChange={changeNote}
-                  onPasteLink={full ? undefined : pasteLinkInto}
-                  onDelete={send}
-                  onOpenReply={onOpenReply}
-                  worker={running.find((agent) => agent.taskId === note.id)}
-                  onTake={takeOf(note)}
-                  onUse={messageOf(note)}
-                  onGive={giveOf(note)}
-                  artifactAuthor={
-                    note.artifact === undefined
-                      ? undefined
-                      : boardArtifactAuthor(note.artifact, people)
-                  }
-                  artifactWriting={
-                    note.kind === "artifact"
-                      ? boardArtifactWriting(
-                          note.id,
-                          running,
-                          hasProgress ? null : ownerWritingArtifactId,
-                          people,
-                        )
-                      : null
-                  }
-                  boxName={boxName}
-                  onRestore={restoreOf(note)}
-                  onAttachAgent={attachAgentOf(note)}
-                  onPickColor={pickColor}
-                  onReact={reactTo}
-                  compact={view.zoom < COMPACT_CARD_ZOOM}
-                  box={
-                    box === undefined
-                      ? undefined
-                      : {
-                          label: boardBoxAgentLabel(note, people, note.thread?.turns.at(-1)),
-                          body: box.body,
-                          footer: box.prompt,
-                        }
-                  }
-                />
-              );
-            })}
-            {[...commentNotes, ...(draftNote === null ? [] : [draftNote])].map((note) =>
-              hiddenComment(note) ? null : (
-                <CommentPin
-                  key={note.id}
-                  note={note}
-                  people={people}
-                  open={openComment === note.id}
-                  scale={pinScale}
-                  itemRef={noteRef(note.id)}
-                  handle={
-                    note === draftNote ? null : (
-                      <PinLinkHandle from={noteRef(note.id)} link={link} />
-                    )
-                  }
-                  movable={canEdit && note !== draftNote}
-                  onDrag={dragPin}
-                  onDrop={dropPin}
-                  onToggle={togglePin}
-                  unread={unread(note)}
-                />
-              ),
-            )}
-            {edges.map((edge) => {
-              const from = boxes.get(edge.from);
-              const to = boxes.get(edge.to);
-              if (selectedEdge !== edge.id || from === undefined || to === undefined) return null;
-              const { middle } = boardConnector(from, to);
-              return (
-                <div
-                  key={edge.id}
-                  className="absolute -translate-x-1/2 -translate-y-1/2"
-                  style={{ left: middle.x, top: middle.y }}
-                >
-                  <Button
-                    size="icon-xs"
-                    variant="outline"
-                    aria-label="Delete line"
-                    autoFocus
-                    onPointerDown={stopPointer}
-                    onClick={() => removeEdge(edge.id)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Delete" || event.key === "Backspace") removeEdge(edge.id);
-                      if (event.key === "Escape") setSelectedEdge(null);
-                    }}
-                  >
-                    <Trash2Icon />
-                  </Button>
-                </div>
-              );
-            })}
-            <BoardFollowContext value={follow}>{cursorLayer}</BoardFollowContext>
-          </div>
-        </BoardSelectionContext>
-        {marquee.layer}
-        {selected.size === 0 ? null : (
-          <SelectionBar
-            refs={selected}
-            hidden={moving}
-            count={selected.size}
-            removable={canEdit ? removal.noteIds.length : 0}
-            onDelete={deleteSelection}
-            onClear={() => setSelection(NO_SELECTION)}
-          >
-            {canEdit && cards === undefined && colorable.length > 0 ? (
-              <NoteColorPicker color={sharedColor} onPick={colorSelection} />
-            ) : null}
-            {canEdit && selected.size > 1 ? (
-              <Button size="micro" variant="ghost-muted" onClick={tidySelection}>
-                <LayoutGridIcon />
-                Tidy
-              </Button>
-            ) : null}
-            {canDuplicate ? (
-              <Button size="micro" variant="ghost-muted" onClick={duplicateSelection}>
-                <CopyIcon />
-                Duplicate
-              </Button>
-            ) : null}
-            {canEdit && cards === undefined && !full ? (
-              <Button size="micro" variant="ghost-muted" onClick={groupInSection}>
-                <FrameIcon />
-                Group in a section
-              </Button>
-            ) : null}
-          </SelectionBar>
-        )}
-        {placingComment ? (
-          <div
-            aria-hidden
-            data-board-overlay
-            className="absolute inset-0 z-20 cursor-crosshair"
-            onPointerDown={stopPointer}
-            onClick={placeComment}
-          />
-        ) : null}
-        {commentPanel()}
-        {cards === undefined && room !== null ? <LineLegend /> : null}
-        {room === null ? (
-          <p className="pointer-events-none absolute inset-x-0 bottom-6 text-center text-sm text-muted-foreground">
-            Share this thread with guests and each person who joins gets a card here.
-          </p>
-        ) : null}
+                );
+              })}
+              <BoardFollowContext value={follow}>{cursorLayer}</BoardFollowContext>
+            </div>
+          </BoardSelectionContext>
+          {marquee.layer}
+          {selected.size === 0 ? null : (
+            <SelectionBar
+              refs={selected}
+              hidden={moving}
+              count={selected.size}
+              removable={canEdit ? removal.noteIds.length : 0}
+              onDelete={deleteSelection}
+              onClear={() => setSelection(NO_SELECTION)}
+            >
+              {canEdit && cards === undefined && colorable.length > 0 ? (
+                <NoteColorPicker color={sharedColor} onPick={colorSelection} />
+              ) : null}
+              {canEdit && selected.size > 1 ? (
+                <Button size="micro" variant="ghost-muted" onClick={tidySelection}>
+                  <LayoutGridIcon />
+                  Tidy
+                </Button>
+              ) : null}
+              {canDuplicate ? (
+                <Button size="micro" variant="ghost-muted" onClick={duplicateSelection}>
+                  <CopyIcon />
+                  Duplicate
+                </Button>
+              ) : null}
+              {canEdit && cards === undefined && !full ? (
+                <Button size="micro" variant="ghost-muted" onClick={groupInSection}>
+                  <FrameIcon />
+                  Group in a section
+                </Button>
+              ) : null}
+            </SelectionBar>
+          )}
+          {placingComment ? (
+            <div
+              aria-hidden
+              data-board-overlay
+              className="absolute inset-0 z-20 cursor-crosshair"
+              onPointerDown={stopPointer}
+              onClick={placeComment}
+            />
+          ) : null}
+          {commentPanel()}
+          {room === null ? (
+            <p className="pointer-events-none absolute inset-x-0 bottom-20 flex justify-center px-4">
+              <span className="rounded-board border border-board-hairline bg-card px-3 py-1.5 text-center text-xs text-muted-foreground shadow-board">
+                Share this thread with guests and each person who joins gets a card here.
+              </span>
+            </p>
+          ) : canEdit && shown.notes.length === 0 && (cards?.length ?? 0) === 0 ? (
+            // Above the toolbar, never on the room thread's own card, which a new board shows.
+            <div className="pointer-events-none absolute inset-x-0 bottom-20 flex justify-center px-4">
+              <div className="flex max-w-xs flex-col items-center gap-1 text-center">
+                <p className="text-sm font-semibold text-foreground">An empty board</p>
+                <p className="text-xs text-muted-foreground">
+                  Double-click anywhere for a sticky note, or pick a tool below.
+                </p>
+              </div>
+            </div>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -2808,7 +3186,7 @@ function drawingArea(boxes: ReadonlyArray<BoardBox>) {
 }
 
 const boardGridStyle = (view: BoardView) => ({
-  backgroundImage: "radial-gradient(var(--color-border) 1px, transparent 1px)",
+  backgroundImage: "radial-gradient(var(--color-board-dot) 1px, transparent 1px)",
   backgroundSize: `${GRID * view.zoom}px ${GRID * view.zoom}px`,
   backgroundPosition: `${view.x}px ${view.y}px`,
 });
@@ -2841,42 +3219,54 @@ interface CardResize {
  * covers a card.
  */
 function LineLegend() {
-  const [open, setOpen] = useState(false);
-  const id = useId();
+  const swatch = "h-0 w-5 shrink-0 border-t-2";
   return (
-    <div
-      className="absolute bottom-3 left-3 flex flex-col items-start gap-1"
-      onPointerDown={stopPointer}
-    >
-      {open ? (
-        <div
-          id={id}
-          className="flex flex-col gap-1 rounded-md border border-border bg-card/90 px-2 py-1.5 text-2xs text-muted-foreground"
+    <Popover>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <PopoverTrigger
+              render={
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="What the lines mean"
+                  onPointerDown={stopPointer}
+                />
+              }
+            />
+          }
         >
-          <span className="flex items-center gap-1.5">
-            <span aria-hidden className="h-0.5 w-4 rounded-full bg-info" />
-            Into a thread, or into the artifact it rewrites: goes with its prompts
+          <CircleHelpIcon />
+        </TooltipTrigger>
+        <TooltipPopup side="top">What the lines mean</TooltipPopup>
+      </Tooltip>
+      <PopoverPopup side="top" align="start" width="md" padding="compact">
+        <div className="flex flex-col gap-1.5 text-2xs text-muted-foreground">
+          <span className="flex items-center gap-2">
+            <span aria-hidden className={cn(swatch, "border-primary")} />
+            Into a thread, or into the artifact it rewrites: goes with the next prompt
           </span>
-          <span className="flex items-center gap-1.5">
-            <span aria-hidden className="h-0.5 w-4 rounded-full bg-success" />
-            From a thread to an artifact: its replies rewrite it
+          <span className="flex items-center gap-2">
+            <span aria-hidden className={cn(swatch, "border-t-3 border-primary")} />
+            Pinned: goes with every prompt
           </span>
-          <span className="flex items-center gap-1.5">
-            <span aria-hidden className="h-0.5 w-4 rounded-full bg-muted-foreground" />
+          <span className="flex items-center gap-2">
+            <span aria-hidden className={cn(swatch, "border-dashed border-muted-foreground")} />
+            Already sent: goes again once the card changes
+          </span>
+          <span className="flex items-center gap-2">
+            <span aria-hidden className={cn(swatch, "border-person-2")} />
+            From a thread to an artifact, in its owner's colour: its replies rewrite it. To a code
+            window: it shows the thread's changes
+          </span>
+          <span className="flex items-center gap-2">
+            <span aria-hidden className={cn(swatch, "border-muted-foreground/70")} />
             Any other line: only shows a link
           </span>
         </div>
-      ) : null}
-      <Button
-        size="micro"
-        variant="outline"
-        aria-expanded={open}
-        aria-controls={open ? id : undefined}
-        onClick={() => setOpen((shown) => !shown)}
-      >
-        {open ? "Hide lines" : "Lines"}
-      </Button>
-    </div>
+      </PopoverPopup>
+    </Popover>
   );
 }
 
@@ -3009,6 +3399,7 @@ function BoardNote({
   onPickColor,
   onReact,
   box,
+  codeWindow,
   compact,
 }: {
   /** Drawn too small for its header's buttons, which fold into one menu. */
@@ -3063,14 +3454,19 @@ function BoardNote({
   readonly box:
     | { readonly label: string; readonly body: ReactNode; readonly footer: ReactNode }
     | undefined;
+  /** A code window's files and diffs, or a pull request window's pull request. */
+  readonly codeWindow: ReactNode;
 }) {
   const target = { kind: "note", id: note.id } as const;
   const author = boardPersonName(people, note.guestId);
-  const parsed = note.url === undefined ? null : parseBoardLink(note.url);
   const plain = note.kind === undefined && note.pinnedTo === undefined;
   const artifact = note.kind === "artifact";
   const thread = note.kind === "thread";
-  const titled = artifact || thread;
+  const code = note.kind === "code";
+  const pullRequest = note.kind === "pull-request";
+  // A pull request window names its pull request, links to it and shows its own title.
+  const parsed = note.url === undefined || pullRequest ? null : parseBoardLink(note.url);
+  const titled = artifact || thread || code || pullRequest;
   const mine = isRoomCardOwnedBy(note, people.viewer);
   const canChange = canEdit && (!thread || mine);
   const canDelete = canEdit && mine;
@@ -3081,15 +3477,26 @@ function BoardNote({
     { x: note.x, y: note.y, w: size?.w, h: size?.h },
     useBoardLiveDrag(noteRef(note.id)),
   );
+  // Notes and tasks are paper in a paint; titled cards are windows; a link is a plain card.
+  const paper = note.kind === undefined || note.kind === "task";
   return (
     <div
       className={cn(
-        "group/item absolute flex flex-col rounded-sm border text-foreground shadow-lg",
+        "group/item absolute flex flex-col",
         size === undefined && live?.w === undefined && "w-48",
-        selected && "ring-2 ring-primary ring-offset-2 ring-offset-background",
-        note.kind === undefined
-          ? noteColorClassName(note.color)
-          : "border-border bg-card text-card-foreground",
+        selected &&
+          cn(
+            "ring-2 ring-primary ring-offset-2 ring-offset-board-canvas",
+            BOARD_SELECTED_CHROME_CLASS,
+          ),
+        paper
+          ? cn(
+              "rounded-xs text-paint-ink shadow-paint",
+              noteColorClassName(note.kind === "task" ? (note.color ?? "green") : note.color),
+            )
+          : titled
+            ? BOARD_WINDOW_CLASS
+            : "rounded-board border border-board-hairline bg-card text-card-foreground shadow-paint",
       )}
       style={{
         left: note.x,
@@ -3104,7 +3511,12 @@ function BoardNote({
         () => onDrop(note),
       )}
     >
-      <div className="flex h-6 cursor-grab items-center gap-1 ps-3 pe-3 active:cursor-grabbing">
+      <div
+        className={cn(
+          "flex cursor-grab items-center gap-1 active:cursor-grabbing",
+          titled ? BOARD_TITLE_BAR_CLASS : "h-6 ps-3 pe-3",
+        )}
+      >
         {note.kind === "task" ? (
           <span className="flex" onPointerDown={stopPointer}>
             <Checkbox
@@ -3117,93 +3529,116 @@ function BoardNote({
         ) : note.kind === "link" ? (
           <LinkIcon aria-hidden className="size-3 shrink-0 opacity-60" />
         ) : artifact ? (
-          <AppWindowIcon aria-hidden className="size-3 shrink-0 opacity-60" />
+          <AppWindowIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
         ) : thread ? (
-          <MessagesSquareIcon aria-hidden className="size-3 shrink-0 opacity-60" />
+          <PersonDot color={boardCursorColor(people.guests, note.guestId)} className="size-2" />
+        ) : code ? (
+          <CodeXmlIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+        ) : pullRequest ? (
+          <PullRequestStateIcon note={note} />
         ) : note.pinnedTo !== undefined ? (
           <MessageSquareTextIcon aria-hidden className="size-3 shrink-0 opacity-60" />
         ) : null}
-        <span className="min-w-0 flex-1 truncate text-2xs opacity-60">
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate",
+            box !== undefined || titled ? "font-semibold" : "text-2xs opacity-60",
+          )}
+        >
           {box !== undefined
             ? box.label
             : thread
               ? `Thread from ${author}`
               : artifact
                 ? `Artifact from ${author}`
-                : note.pinnedTo === undefined
-                  ? author
-                  : `${author} on a reply`}
+                : code
+                  ? `Code window from ${author}`
+                  : pullRequest
+                    ? `Pull request from ${author}`
+                    : note.pinnedTo === undefined
+                      ? paper
+                        ? null
+                        : author
+                      : `${author} on a reply`}
         </span>
-        {compact ? (
-          <CardActionsMenu
-            actions={[
-              ...(onUse === undefined ? [] : [{ label: "Use as message", run: onUse }]),
-              ...(onGive === undefined ? [] : [{ label: "Give to my agent", run: onGive }]),
-              ...(canDelete
-                ? [
-                    {
-                      label: plain ? "Delete note" : "Delete card",
-                      run: () => onDelete(target, null),
-                      destructive: true,
-                    },
-                  ]
-                : []),
-            ]}
-          />
-        ) : null}
-        {compact || onUse === undefined ? null : (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <button
-                  type="button"
-                  aria-label="Use as message"
-                  className="grid size-6 place-items-center rounded-sm opacity-60 hover:opacity-100"
-                  onPointerDown={stopPointer}
-                  onClick={onUse}
-                />
+        <div className={cn("flex items-center gap-1", !selected && BOARD_HOVER_CHROME_CLASS)}>
+          {compact ? (
+            <CardActionsMenu
+              onReact={onReact === undefined ? undefined : (emoji) => onReact(note, emoji)}
+              color={
+                plain && onPickColor !== undefined
+                  ? { value: note.color, onPick: (color) => onPickColor(note, color) }
+                  : undefined
               }
+              actions={[
+                ...(onUse === undefined ? [] : [{ label: "Use as message", run: onUse }]),
+                ...(onGive === undefined ? [] : [{ label: "Give to my agent", run: onGive }]),
+                ...(canDelete
+                  ? [
+                      {
+                        label: plain ? "Delete note" : "Delete card",
+                        run: () => onDelete(target, null),
+                        destructive: true,
+                      },
+                    ]
+                  : []),
+              ]}
+            />
+          ) : null}
+          {compact || onUse === undefined ? null : (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label="Use as message"
+                    className={BOARD_ICON_BUTTON_CLASS}
+                    onPointerDown={stopPointer}
+                    onClick={onUse}
+                  />
+                }
+              >
+                <MessageSquareShareIcon className="size-3.5" />
+              </TooltipTrigger>
+              <TooltipPopup side="top">Use as message</TooltipPopup>
+            </Tooltip>
+          )}
+          {compact || onGive === undefined ? null : (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label="Give to my agent"
+                    className={BOARD_ICON_BUTTON_CLASS}
+                    onPointerDown={stopPointer}
+                    onClick={onGive}
+                  />
+                }
+              >
+                <BotIcon className="size-3.5" />
+              </TooltipTrigger>
+              <TooltipPopup side="top">Give to my agent, as a draft</TooltipPopup>
+            </Tooltip>
+          )}
+          {compact || onReact === undefined ? null : (
+            <AddReaction onReact={(emoji) => onReact(note, emoji)} />
+          )}
+          {!compact && plain && onPickColor !== undefined ? (
+            <NoteColorPicker color={note.color} onPick={(color) => onPickColor(note, color)} />
+          ) : null}
+          {!compact && canDelete ? (
+            <button
+              type="button"
+              aria-label={plain ? "Delete note" : "Delete card"}
+              className={BOARD_ICON_BUTTON_CLASS}
+              onPointerDown={stopPointer}
+              onClick={() => onDelete(target, null)}
             >
-              <MessageSquareShareIcon className="size-3.5" />
-            </TooltipTrigger>
-            <TooltipPopup side="top">Use as message</TooltipPopup>
-          </Tooltip>
-        )}
-        {compact || onGive === undefined ? null : (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <button
-                  type="button"
-                  aria-label="Give to my agent"
-                  className="grid size-6 place-items-center rounded-sm opacity-60 hover:opacity-100"
-                  onPointerDown={stopPointer}
-                  onClick={onGive}
-                />
-              }
-            >
-              <BotIcon className="size-3.5" />
-            </TooltipTrigger>
-            <TooltipPopup side="top">Give to my agent, as a draft</TooltipPopup>
-          </Tooltip>
-        )}
-        {compact || onReact === undefined ? null : (
-          <AddReaction onReact={(emoji) => onReact(note, emoji)} />
-        )}
-        {!compact && plain && onPickColor !== undefined ? (
-          <NoteColorPicker color={note.color} onPick={(color) => onPickColor(note, color)} />
-        ) : null}
-        {!compact && canDelete ? (
-          <button
-            type="button"
-            aria-label={plain ? "Delete note" : "Delete card"}
-            className="grid size-6 place-items-center rounded-sm opacity-60 hover:opacity-100"
-            onPointerDown={stopPointer}
-            onClick={() => onDelete(target, null)}
-          >
-            <XIcon className="size-3.5" />
-          </button>
-        ) : null}
+              <XIcon className="size-3.5" />
+            </button>
+          ) : null}
+        </div>
       </div>
       <div className={cn("flex flex-col", size !== undefined && "min-h-0 flex-1 overflow-hidden")}>
         {parsed === null ? null : (
@@ -3229,7 +3664,7 @@ function BoardNote({
           <div className="mx-3 mb-1.5 flex shrink-0 flex-col items-start gap-0.5">
             <blockquote
               className={cn(
-                "border-s-2 border-warning/60 ps-2 text-2xs italic opacity-70 [overflow-wrap:anywhere]",
+                "border-s-2 border-current/30 ps-2 text-2xs italic opacity-70 [overflow-wrap:anywhere]",
                 !quoteOpen && "line-clamp-3",
                 quoteOpen && size !== undefined && "max-h-40 overflow-y-auto",
               )}
@@ -3250,64 +3685,77 @@ function BoardNote({
             ) : null}
           </div>
         )}
-        <textarea
-          aria-label={
-            note.kind === "task"
-              ? "Task"
-              : note.kind === "link"
-                ? "Caption"
-                : artifact
-                  ? "Artifact title"
-                  : thread
-                    ? "Thread name"
-                    : "Note"
-          }
-          value={note.text}
-          readOnly={!canChange}
-          maxLength={ROOM_BOARD_NOTE_MAX_LENGTH}
-          rows={titled ? 1 : note.kind === "link" ? 2 : note.kind === "task" ? 3 : 4}
-          placeholder={
-            note.kind === "task"
-              ? "Write a task"
-              : note.kind === "link"
-                ? "Add a caption"
-                : artifact
-                  ? "Name this artifact"
-                  : thread
-                    ? canChange
-                      ? "Name this thread"
-                      : "Untitled thread"
-                    : "Write a note, or paste a link"
-          }
-          className={cn(
-            "resize-none bg-transparent px-3 pb-3 text-sm leading-snug outline-none placeholder:text-placeholder",
-            note.kind === "task" && note.done === true && "text-muted-foreground line-through",
-            titled ? "shrink-0 pb-2 font-medium" : size !== undefined && "min-h-0 flex-1",
-            !canChange && "cursor-default",
-          )}
-          onPointerDown={stopPointer}
-          onChange={(event) => onText(note, event.target.value)}
-          onKeyDown={(event) => {
-            // A title goes back to what is stored on Escape; a note's text is kept, and saved.
-            if (event.key === "Escape") {
-              event.stopPropagation();
-              if (titled) onRevert(target);
-              event.currentTarget.blur();
+        {pullRequest && note.text === "" ? null : (
+          <textarea
+            aria-label={
+              note.kind === "task"
+                ? "Task"
+                : note.kind === "link"
+                  ? "Caption"
+                  : artifact
+                    ? "Artifact title"
+                    : code
+                      ? "Code window title"
+                      : pullRequest
+                        ? "Pull request window title"
+                        : thread
+                          ? "Thread name"
+                          : "Note"
             }
-            if (titled && event.key === "Enter") {
+            value={note.text}
+            readOnly={!canChange}
+            maxLength={ROOM_BOARD_NOTE_MAX_LENGTH}
+            rows={titled ? 1 : note.kind === "link" ? 2 : note.kind === "task" ? 3 : 4}
+            placeholder={
+              note.kind === "task"
+                ? "Write a task"
+                : note.kind === "link"
+                  ? "Add a caption"
+                  : artifact
+                    ? "Name this artifact"
+                    : code
+                      ? "Name this code window"
+                      : pullRequest
+                        ? "Add a title"
+                        : thread
+                          ? canChange
+                            ? "Name this thread"
+                            : "Untitled thread"
+                          : "Write a note, or paste a link"
+            }
+            className={cn(
+              "resize-none bg-transparent px-3 pb-3 text-sm leading-snug outline-none placeholder:text-placeholder",
+              paper && "pt-1 pb-1 placeholder:text-paint-ink-muted",
+              note.kind === "task" && note.done === true && "text-paint-ink-muted line-through",
+              titled
+                ? "shrink-0 pt-2.5 pb-2 font-semibold"
+                : size !== undefined && "min-h-0 flex-1",
+              !canChange && "cursor-default",
+            )}
+            onPointerDown={stopPointer}
+            onChange={(event) => onText(note, event.target.value)}
+            onKeyDown={(event) => {
+              // A title goes back to what is stored on Escape; a note's text is kept, and saved.
+              if (event.key === "Escape") {
+                event.stopPropagation();
+                if (titled) onRevert(target);
+                event.currentTarget.blur();
+              }
+              if (titled && event.key === "Enter") {
+                event.preventDefault();
+                event.currentTarget.blur();
+              }
+            }}
+            onBlur={() => onBlur(target)}
+            onPaste={(event) => {
+              if (!plain || note.text !== "" || onPasteLink === undefined) return;
+              const url = boardUrlIn(event.clipboardData.getData("text/plain"));
+              if (url === null) return;
               event.preventDefault();
-              event.currentTarget.blur();
-            }
-          }}
-          onBlur={() => onBlur(target)}
-          onPaste={(event) => {
-            if (!plain || note.text !== "" || onPasteLink === undefined) return;
-            const url = boardUrlIn(event.clipboardData.getData("text/plain"));
-            if (url === null) return;
-            event.preventDefault();
-            onPasteLink(note, url);
-          }}
-        />
+              onPasteLink(note, url);
+            }}
+          />
+        )}
         {note.kind === "task" ? <TaskProgress note={note} people={people} worker={worker} /> : null}
         {note.kind === "task" ? (
           <div className="flex flex-wrap items-center gap-1 px-2 pb-2">
@@ -3338,6 +3786,11 @@ function BoardNote({
             </Button>
           </div>
         )}
+        {paper && note.pinnedTo === undefined ? (
+          <p className="shrink-0 truncate px-3 pt-1 pb-2.5 text-2xs text-paint-ink-muted">
+            {author}
+          </p>
+        ) : null}
         {artifact && onAttachAgent !== undefined ? (
           <div className="flex shrink-0 px-3 pb-1.5">
             <WhatItDoes hint={onAttachAgent.hint}>
@@ -3363,6 +3816,7 @@ function BoardNote({
             onRestore={onRestore}
           />
         ) : null}
+        {code || pullRequest ? codeWindow : null}
         {box === undefined ? null : (
           <>
             <div
@@ -3372,7 +3826,9 @@ function BoardNote({
               {box.body}
             </div>
             {box.footer === undefined ? null : (
-              <div className="shrink-0 border-t border-border px-3 pt-2 pb-3">{box.footer}</div>
+              <div className="shrink-0 border-t border-board-hairline px-3 pt-2 pb-3">
+                {box.footer}
+              </div>
             )}
           </>
         )}
@@ -3409,7 +3865,7 @@ function TaskProgress({
 }) {
   if (worker !== undefined) {
     return (
-      <p role="status" className="px-3 pb-2 text-2xs text-muted-foreground first-letter:uppercase">
+      <p role="status" className="px-3 pb-2 text-2xs text-paint-ink-muted first-letter:uppercase">
         {boardAgentName(people, worker.guestId)} is working on this
       </p>
     );
@@ -3417,10 +3873,10 @@ function TaskProgress({
   if (note.answer === undefined) return null;
   return (
     <div className="flex flex-col gap-0.5 px-3 pb-2">
-      <p className="text-2xs font-medium text-muted-foreground">
+      <p className="text-2xs font-medium text-paint-ink-muted">
         Answered by {boardAgentName(people, note.answer.guestId)}
       </p>
-      <p className="line-clamp-4 border-s-2 border-guest/50 ps-2 text-xs [overflow-wrap:anywhere]">
+      <p className="line-clamp-4 border-s-2 border-current/25 ps-2 text-xs [overflow-wrap:anywhere]">
         {note.answer.excerpt}
       </p>
     </div>
@@ -3474,6 +3930,14 @@ function AssigneeMenu({
   );
 }
 
+/** A card's state chip: working in the accent, waiting on someone in the warning tone. */
+const boardCardKindTone = (kind: string): BoardChipTone =>
+  kind === "working" || kind === "agent working"
+    ? "primary"
+    : kind === "needs approval"
+      ? "warning"
+      : "neutral";
+
 function BoardCard({
   at,
   title,
@@ -3489,11 +3953,14 @@ function BoardCard({
   onMove,
   onDrop,
   footer,
+  color,
   children,
 }: {
   readonly at: BoardPoint;
   readonly title: string;
   readonly kind: string;
+  /** Whose card it is, as a dot in their person colour on its title bar. */
+  readonly color?: string | undefined;
   readonly dashed?: boolean;
   readonly id: string;
   /** Absent until someone resizes it: it is as tall as what it shows. */
@@ -3520,8 +3987,9 @@ function BoardCard({
   return (
     <section
       className={cn(
-        "group/item absolute flex flex-col rounded-xl border border-border bg-card text-card-foreground shadow-lg",
-        dashed && "border-dashed",
+        "group/item absolute flex flex-col",
+        BOARD_WINDOW_CLASS,
+        dashed && "border-dashed border-foreground/20",
         (dropLabel !== undefined || selected) && "ring-2 ring-primary",
       )}
       style={{
@@ -3539,16 +4007,15 @@ function BoardCard({
       )}
     >
       {dropLabel === undefined ? null : (
-        <span className="pointer-events-none absolute -top-8 left-0 rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground shadow-md">
+        <span className="pointer-events-none absolute -top-8 left-0 rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground shadow-board">
           {dropLabel}
         </span>
       )}
-      <header className="flex cursor-grab items-center gap-2 border-b border-border px-3 py-2 active:cursor-grabbing">
-        <h2 className="min-w-0 flex-1 truncate text-xs font-semibold">{title}</h2>
+      <header className={cn("cursor-grab active:cursor-grabbing", BOARD_TITLE_BAR_CLASS)}>
+        {color === undefined ? null : <PersonDot color={color} className="size-2" />}
+        <h2 className="min-w-0 flex-1 truncate font-semibold">{title}</h2>
         {action}
-        <span className="shrink-0 rounded-full border border-border px-1.5 text-2xs text-muted-foreground">
-          {kind}
-        </span>
+        <BoardChip tone={boardCardKindTone(kind)}>{kind}</BoardChip>
       </header>
       <div
         data-board-scroll={size === undefined ? undefined : ""}
@@ -3560,7 +4027,7 @@ function BoardCard({
         {children}
       </div>
       {footer === undefined ? null : (
-        <div className="shrink-0 border-t border-border px-3 pt-2 pb-3">{footer}</div>
+        <div className="shrink-0 border-t border-board-hairline px-3 pt-2 pb-3">{footer}</div>
       )}
       <ItemHandles
         from={cardRef(id)}
@@ -3692,7 +4159,7 @@ function GuestDetails({
           {waiting.map((message) => (
             <li
               key={message.id}
-              className="line-clamp-3 rounded-md border border-dashed border-border px-2 py-1 text-xs [overflow-wrap:anywhere]"
+              className="line-clamp-3 rounded-md border border-dashed border-foreground/15 px-2 py-1 text-xs [overflow-wrap:anywhere]"
             >
               {message.text || "Sent files"}
             </li>
@@ -3758,7 +4225,11 @@ export function RoomCursors({
         className="pointer-events-none absolute top-0 left-0 flex items-start transition-transform duration-100 ease-linear"
         style={{ transform: `translate(${cursor.x}px, ${cursor.y}px)`, color }}
       >
-        <MousePointer2Icon aria-hidden className="size-4 fill-current" />
+        <MousePointer2Icon
+          aria-hidden
+          strokeWidth={1.5}
+          className="size-4.5 shrink-0 fill-current stroke-white drop-shadow-sm"
+        />
         <Tooltip>
           <TooltipTrigger
             render={
@@ -3766,7 +4237,7 @@ export function RoomCursors({
                 type="button"
                 aria-pressed={following === person}
                 aria-label={following === person ? `Stop following ${name}` : `Follow ${name}`}
-                className="pointer-events-auto mt-3 max-w-32 cursor-pointer truncate rounded-sm px-1.5 py-0.5 text-2xs font-medium text-background"
+                className="pointer-events-auto -ms-0.5 mt-3.5 max-w-36 cursor-pointer truncate rounded-md px-1.5 py-0.5 text-xs leading-4 font-medium text-white shadow-paint focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset focus-visible:outline-none"
                 style={{ backgroundColor: color }}
                 onPointerDown={stopPointer}
                 onClick={() => onFollow(person)}

@@ -1,3 +1,4 @@
+import * as NodeOS from "node:os";
 import * as NodeURL from "node:url";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -17,6 +18,10 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  type PullRequestDetail,
+  PullRequestUnavailableError,
+  ROOM_BOARD_ROOM_BOX,
+  ROOM_CODE_PATCH_MAX_LENGTH,
   RunId,
   type ServerProvider,
   ThreadId,
@@ -69,8 +74,12 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
+import * as CheckpointDiffQuery from "../checkpointing/CheckpointDiffQuery.ts";
 import * as GuestShareService from "./GuestShareService.ts";
 import * as RoomBoxes from "./RoomBoxes.ts";
+import * as RoomCodeDiffs from "./RoomCodeDiffs.ts";
+import * as RoomPullRequests from "./RoomPullRequests.ts";
+import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 
 const instanceId = ProviderInstanceId.make("codex");
 const adapter = {
@@ -297,8 +306,52 @@ const layerLaunches = Layer.effect(
     });
   }),
 );
+// What git says the shared thread changed. Reading checkpoints is CheckpointDiffQuery's own test.
+const threadDiff = Ref.makeUnsafe("");
+const layerDiffs = Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({
+  getFullThreadDiff: (input) =>
+    Effect.map(Ref.get(threadDiff), (diff) => ({ ...input, fromTurnCount: 0, diff })),
+  getTurnDiff: (input) => Effect.map(Ref.get(threadDiff), (diff) => ({ ...input, diff })),
+});
+// What the owner's GitHub sign-in reads, and every read and refresh asked of it.
+const pullRequestCalls = Ref.makeUnsafe<ReadonlyArray<string>>([]);
+const pullRequestFailure = Ref.makeUnsafe<PullRequestService.PullRequestError | null>(null);
+const layerPullRequests = Layer.mock(PullRequestService.PullRequestService)({
+  invalidate: () => Ref.update(pullRequestCalls, (calls) => [...calls, "invalidate"]),
+  detail: (ref) =>
+    Ref.update(pullRequestCalls, (calls) => [
+      ...calls,
+      `${ref.host}/${ref.repository}#${ref.number}`,
+    ]).pipe(
+      Effect.andThen(Ref.get(pullRequestFailure)),
+      Effect.flatMap((failure) =>
+        failure === null
+          ? Effect.succeed({
+              title: "Fix login",
+              state: "open",
+              isDraft: true,
+              headBranch: "fix-login",
+              baseBranch: "main",
+              changedFiles: 3,
+              additions: 40,
+              deletions: 2,
+              updatedAt: "2026-11-12T10:00:00.000Z",
+              checks: [
+                { name: "lint", status: "failure", description: null, url: null },
+                { name: "test", status: "success", description: null, url: null },
+                { name: "e2e", status: "pending", description: null, url: null },
+              ],
+            } as unknown as PullRequestDetail)
+          : Effect.fail(failure),
+      ),
+    ),
+  // Commits it cannot count are left out, not a failed read.
+  activity: () => Effect.fail(new PullRequestUnavailableError({ reason: "provider-unsupported" })),
+});
 const layerTest = GuestShareService.layer.pipe(
   Layer.provideMerge(RoomBoxes.layer.pipe(Layer.provide(layerLaunches))),
+  Layer.provideMerge(RoomCodeDiffs.layer.pipe(Layer.provide(layerDiffs))),
+  Layer.provideMerge(RoomPullRequests.layer.pipe(Layer.provide(layerPullRequests))),
   Layer.provideMerge(
     CommandOutputHub.layer.pipe(
       Layer.provideMerge(layerOrchestration.pipe(Layer.provide(layerCleanup))),
@@ -722,29 +775,30 @@ it.effect("makes a link last as long as the owner chose, and extends it for ever
     const week = yield* guestShares.create({ threadId: linkThread, replace: true, days: 7 });
     assert.equal(endsIn(week.share), 7);
     assert.isDefined(week.shortUrl);
-    const weekCredential = week.url.slice(week.url.indexOf("#") + 1);
-    assert.notEqual(weekCredential, credential);
+    assert.notEqual(week.url.slice(week.url.indexOf("#") + 1), credential);
+    // A shorter end leaves the link as it is.
+    const unchanged = yield* guestShares.create({ threadId: linkThread, extend: true, days: 1 });
+    assert.equal(unchanged.share.expiresAt, week.share.expiresAt);
 
-    const sam = yield* guestShares.redeem({ credential: weekCredential, name: "Sam" });
+    // An open page checks the room every few seconds, so the clock crosses a one-day link's end.
+    const day = yield* guestShares.create({ threadId: linkThread, replace: true, days: 1 });
+    const dayCredential = day.url.slice(day.url.indexOf("#") + 1);
+    const sam = yield* guestShares.redeem({ credential: dayCredential, name: "Sam" });
     const room = (yield* guestShares.exportThread((yield* guestShares.handoff(sam.token)).token))
       .room!;
     const pageEnded = yield* Ref.make(false);
     const page = yield* Stream.runForEach(yield* guestShares.stream(sam.token), (event) =>
       event.type === "ended" ? Ref.set(pageEnded, true) : Effect.void,
     ).pipe(Effect.forkChild);
-    // A shorter end leaves the link as it is.
-    const unchanged = yield* guestShares.create({ threadId: linkThread, extend: true, days: 1 });
-    assert.equal(unchanged.share.expiresAt, week.share.expiresAt);
-
-    const month = yield* guestShares.create({ threadId: linkThread, extend: true, days: 30 });
-    assert.equal(month.share.id, week.share.id);
-    assert.equal(endsIn(month.share), 30);
+    const longer = yield* guestShares.create({ threadId: linkThread, extend: true, days: 7 });
+    assert.equal(longer.share.id, day.share.id);
+    assert.equal(endsIn(longer.share), 7);
     // The relay keeps the readable name only until the link first ended, so it goes out in full.
-    assert.isUndefined(month.shortUrl);
-    assert.equal(month.url, week.url);
+    assert.isUndefined(longer.shortUrl);
+    assert.equal(longer.url, day.url);
 
     // Sam joined before it was extended, and stays on it past the old end, page open and all.
-    yield* TestClock.adjust("8 days");
+    yield* TestClock.adjust("25 hours");
     yield* guestShares.check(sam.token);
     assert.isFalse(yield* Ref.get(pageEnded));
     const end = yield* guestShares.postTurn(room.token, {
@@ -752,8 +806,8 @@ it.effect("makes a link last as long as the owner chose, and extends it for ever
       prompt: "Still here?",
       reply: "Yes.",
     });
-    assert.equal(end, month.share.expiresAt);
-    yield* TestClock.adjust("23 days");
+    assert.equal(end, longer.share.expiresAt);
+    yield* TestClock.adjust("6 days");
     assert.equal((yield* Effect.flip(guestShares.check(sam.token))).reason, "inactive");
     yield* Fiber.join(page);
     assert.isTrue(yield* Ref.get(pageEnded));
@@ -1100,6 +1154,177 @@ it.effect("lets a guest's own machine read an artifact card and fill it with its
     // Nothing reached the owner's agent.
     assert.lengthOf(after.runs, 0);
     assert.lengthOf(after.messages, 0);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("opens a code window's file for the room only as the board shows it, redacted", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const owner = { threadId };
+    const change =
+      (by: { readonly threadId: ThreadId } | { readonly session: string }) =>
+      (change: Parameters<typeof guestShares.changeBoard>[1]) =>
+        guestShares.changeBoard(by, change);
+    const code = (noteId: string) =>
+      ({ type: "note.put", noteId, text: noteId, x: 0, y: 0, kind: "code" }) as const;
+    for (const noteId of ["code", "loose", "his"]) yield* change(owner)(code(noteId));
+    yield* change(owner)({ type: "note.put", noteId: "note", text: "Hi", x: 0, y: 0 });
+    yield* change({ session: sam.token })({
+      type: "note.put",
+      noteId: "sams",
+      text: "Sam",
+      x: 0,
+      y: 0,
+      kind: "thread",
+    });
+    yield* change(owner)({ type: "edge.put", edgeId: "e1", from: "card:thread", to: "note:code" });
+    yield* change(owner)({ type: "edge.put", edgeId: "e2", from: "note:sams", to: "note:his" });
+    const share = Effect.map(
+      orchestrator.getThreadRecords(threadId, []),
+      ({ thread }) => thread.guestShare!,
+    );
+    const samId = (yield* share).guests![0]!.id;
+    const summary = {
+      files: [
+        { path: "src/a.ts", additions: 1, deletions: 0 },
+        { path: "big.txt", additions: 1, deletions: 0, lastTurn: { additions: 1, deletions: 0 } },
+      ],
+      additions: 2,
+      deletions: 0,
+      turnCount: 1,
+    };
+    yield* orchestrator.dispatch({
+      type: "thread.room-box.changes",
+      commandId: CommandId.make("changes:room"),
+      threadId,
+      shareId: sam.shareId,
+      boxId: ROOM_BOARD_ROOM_BOX,
+      turnId: "run:1",
+      changes: summary,
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.guest-turn.post",
+      commandId: CommandId.make("changes:sam"),
+      threadId,
+      shareId: sam.shareId,
+      guestId: samId,
+      turn: { id: "sam:run:1", prompt: "Go", reply: "Done", boxId: "sams", changes: summary },
+    });
+    const home = NodeOS.homedir();
+    const patch = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -0,0 +1 @@",
+      `+const config = "${home}/secrets.json"; // and /repo/src/a.ts`,
+    ].join("\n");
+    const big = `diff --git a/big.txt b/big.txt\n@@ -0,0 +1 @@\n+${"x".repeat(ROOM_CODE_PATCH_MAX_LENGTH)}`;
+    yield* Ref.set(threadDiff, `${patch}\n${big}`);
+    const read = (
+      noteId: string,
+      path = "src/a.ts",
+      scope: "thread" | "turn" = "thread",
+      by: { readonly threadId: ThreadId } | { readonly session: string } = {
+        session: sam.token,
+      },
+    ) => guestShares.codePatch(by, { noteId, path, scope });
+
+    // The guest gets the owner's paths as the rest of the shared thread shows them.
+    const opened = yield* read("code");
+    assert.equal(opened.path, "src/a.ts");
+    assert.include(opened.patch, `"~/secrets.json"; // and repo/src/a.ts`);
+    assert.notInclude(opened.patch, home);
+    // The owner reads their own machine as it is.
+    assert.include((yield* read("code", "src/a.ts", "thread", owner)).patch, home);
+    // Too large to show says so instead of sending it.
+    assert.deepEqual(yield* read("code", "big.txt", "turn"), { path: "big.txt" });
+    const refused = (noteId: string, path?: string, scope?: "thread" | "turn") =>
+      Effect.map(Effect.flip(read(noteId, path, scope)), (error) => error.reason);
+    // Only a file the window lists, of the box it has a line from, kept on this machine.
+    assert.deepEqual(
+      [
+        yield* refused("gone"),
+        yield* refused("note"),
+        yield* refused("loose"),
+        yield* refused("code", "src/other.ts"),
+        yield* refused("code", "src/a.ts", "turn"),
+        yield* refused("his"),
+      ],
+      ["window_gone", "window_gone", "unavailable", "unavailable", "unavailable", "elsewhere"],
+    );
+    // A guest reads 30 files a minute at most, the 8 above among them.
+    let reads = 8;
+    while (Exit.isSuccess(yield* Effect.exit(read("code")))) reads += 1;
+    assert.equal(reads, 30);
+    assert.equal(yield* refused("code"), "too_fast");
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("reads a pull request window with the owner's sign-in, at most every so often", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const pullRequests = yield* RoomPullRequests.RoomPullRequests;
+    yield* Ref.set(pullRequestCalls, []);
+    yield* Ref.set(pullRequestFailure, null);
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    const url = "https://github.com/acme/app/pull/12";
+    yield* guestShares.changeBoard(
+      { session: sam.token },
+      { type: "note.put", noteId: "pr", text: "", x: 0, y: 0, kind: "pull-request", url },
+    );
+    yield* pullRequests.drain;
+    const shown = Effect.map(
+      orchestrator.getThreadRecords(threadId, []),
+      ({ thread }) => thread.guestShare!.board!.notes.find((note) => note.id === "pr")!.pullRequest,
+    );
+    // Added by a guest, read once by the owner's server, for the whole room.
+    assert.deepEqual((yield* shown)?.pullRequest, {
+      title: "Fix login",
+      state: "draft",
+      headBranch: "fix-login",
+      baseBranch: "main",
+      changedFiles: 3,
+      additions: 40,
+      deletions: 2,
+      checks: { passing: 1, failing: 1, pending: 1, failingNames: ["lint"] },
+      updatedAt: "2026-11-12T10:00:00.000Z",
+    });
+    assert.deepEqual(yield* Ref.get(pullRequestCalls), ["github.com/acme/app#12"]);
+
+    // Moving it reads nothing; a refresh this soon after one reads nothing either.
+    yield* guestShares.changeBoard(
+      { session: sam.token },
+      { type: "note.put", noteId: "pr", text: "", x: 40, y: 0, kind: "pull-request", url },
+    );
+    yield* guestShares.refreshPullRequest({ session: sam.token }, "pr");
+    yield* pullRequests.drain;
+    assert.lengthOf(yield* Ref.get(pullRequestCalls), 1);
+
+    // Later, it asks GitHub afresh; without the owner's sign-in the window says so.
+    yield* Ref.set(
+      pullRequestFailure,
+      new PullRequestUnavailableError({ reason: "cli-unauthenticated" }),
+    );
+    yield* TestClock.adjust(RoomPullRequests.ROOM_PULL_REQUEST_REFRESH_MS);
+    yield* guestShares.refreshPullRequest({ threadId }, "pr");
+    yield* pullRequests.drain;
+    assert.deepEqual((yield* Ref.get(pullRequestCalls)).slice(1), [
+      "invalidate",
+      "github.com/acme/app#12",
+    ]);
+    const failed = yield* shown;
+    assert.equal(failed?.problem, "signed_out");
+    assert.isUndefined(failed?.pullRequest);
+    // A note that is not a pull request window is never read.
+    yield* guestShares.changeBoard(
+      { session: sam.token },
+      { type: "note.put", noteId: "idea", text: url, x: 0, y: 0 },
+    );
+    yield* TestClock.adjust(RoomPullRequests.ROOM_PULL_REQUEST_REFRESH_MS);
+    yield* guestShares.refreshPullRequest({ session: sam.token }, "idea");
+    yield* pullRequests.drain;
+    assert.lengthOf(yield* Ref.get(pullRequestCalls), 3);
   }).pipe(Effect.provide(layerTest)),
 );
 

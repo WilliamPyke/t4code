@@ -16,7 +16,9 @@ import { createQuestionHistoryProjector } from "@t3tools/client-runtime/state/th
 import { shouldShowLoadEarlierControl } from "@t3tools/client-runtime/state/threads";
 import {
   GUEST_ATTACHMENT_ROUTE,
+  GUEST_BOARD_CODE_ROUTE,
   GUEST_BOARD_CURSOR_ROUTE,
+  GUEST_BOARD_PULL_REQUEST_ROUTE,
   GUEST_BOARD_ROUTE,
   GUEST_HANDOFF_ROUTE,
   GUEST_MEDIA_ROUTE,
@@ -37,6 +39,8 @@ import {
   type OrchestrationV2ThreadProjection,
   type RoomAgentActivity,
   type RoomBoardChange,
+  RoomCodePatch,
+  type RoomCodePatchScope,
   type RoomBoardNote,
   type ModelSelection,
   type ScopedThreadRef,
@@ -49,7 +53,7 @@ import { useNavigate } from "@tanstack/react-router";
 import type { LegendListRef } from "@legendapp/list/react";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { ArrowUpIcon, PaperclipIcon, XIcon } from "lucide-react";
+import { ArrowUpIcon, GithubIcon, PaperclipIcon, XIcon } from "lucide-react";
 import {
   useEffect,
   useRef,
@@ -104,11 +108,18 @@ import { getDisplayModelName, getTriggerDisplayModelName } from "../chat/provide
 import { ScrollToEndButton } from "../chat/TimelineOverlays";
 import type { TimelineRow } from "../chat/timelineRowContext";
 import { useTimelineFollow } from "../chat/useTimelineFollow";
+import { PersonDot } from "../room/BoardChrome";
 import { composerDraftPick } from "../room/BoardModelPicker";
 import { BoardSplit } from "../room/BoardSplit";
 import { BoardThreadPicker } from "../room/BoardThreadPicker";
 import { RoomBoard, RoomCursors } from "../room/RoomBoard";
 import { BoxApproval } from "../room/RoomBoardThreadBox";
+import {
+  ROOM_CODE_PATCH_UNREADABLE,
+  type ReadRoomCodePatch,
+  type RoomCodePatchRead,
+  roomCodePatchRead,
+} from "../room/RoomBoardCode";
 import { RoomReplyProvider, revealRoomReply } from "../room/RoomReplyComments";
 import {
   BOARD_THREAD_MESSAGES,
@@ -119,12 +130,14 @@ import {
   type BoardPrompt,
   boardMessages,
   boardNoteMessage,
+  boardCursorColor,
   boardThreadBoxTitle,
 } from "../room/roomBoard.logic";
 import { RoomLiveContext, type RoomLiveStore, createRoomLiveStore } from "../room/roomBoardLive";
 import { Button } from "../ui/button";
 import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { GuestHtmlRender } from "./GuestHtmlRender";
 import { openGuestFile, useGuestFiles } from "./guestFiles";
 import { linkEndsLabel } from "../chat/guestLinkTiming";
@@ -246,6 +259,39 @@ async function postGuestMessage(
   );
 }
 
+const decodeCodePatch = Schema.decodeUnknownOption(RoomCodePatch);
+
+/** One file of a code window, read by the owner's server, which has the box's thread. */
+async function readRoomCodePatch(
+  endpoint: GuestShareEndpoint,
+  noteId: string,
+  path: string,
+  scope: RoomCodePatchScope,
+): Promise<RoomCodePatchRead> {
+  try {
+    const response = await guestShareRequest(endpoint, GUEST_BOARD_CODE_ROUTE, {
+      params: { note: noteId, path, scope },
+    });
+    if (response.status === 429) {
+      return { error: "Too many files opened in a minute. Wait a moment." };
+    }
+    const read = response.ok
+      ? decodeCodePatch(await response.json().catch(() => null))
+      : Option.none();
+    return Option.isSome(read) ? roomCodePatchRead(read.value) : ROOM_CODE_PATCH_UNREADABLE;
+  } catch {
+    return ROOM_CODE_PATCH_UNREADABLE;
+  }
+}
+
+/** Asks the owner's server to read a pull request window again; the board shows the read. */
+function refreshRoomPullRequest(endpoint: GuestShareEndpoint, noteId: string) {
+  void guestShareRequest(endpoint, GUEST_BOARD_PULL_REQUEST_ROUTE, {
+    params: { note: noteId },
+    init: { method: "POST" },
+  }).catch(() => {});
+}
+
 /** Shows the room where this guest's pointer is and what their board shows. A lost one is replaced soon. */
 function postBoardCursor(endpoint: GuestShareEndpoint, presence: BoardPresence) {
   void guestShareRequest(endpoint, GUEST_BOARD_CURSOR_ROUTE, {
@@ -276,8 +322,8 @@ export function GuestNotice({
   readonly detail?: string;
 }) {
   return (
-    <div className="m-auto flex max-w-sm flex-col gap-1 p-6 text-center">
-      <p className="text-sm font-medium">{title}</p>
+    <div className="m-auto flex max-w-sm flex-col gap-1 rounded-board border border-board-hairline bg-card p-6 text-center text-card-foreground shadow-board">
+      <p className="text-sm font-semibold">{title}</p>
       {detail ? <p className="text-xs text-muted-foreground">{detail}</p> : null}
     </div>
   );
@@ -340,6 +386,9 @@ function GuestThreadSession({
   const linkOwnBox = useAtomCommand(serverEnvironment.linkSharedRoomBox, {
     reportFailure: false,
   });
+  const readOwnBoxPatch = useAtomCommand(serverEnvironment.readSharedRoomBoxPatch, {
+    reportFailure: false,
+  });
   // Where the box goes once the guest picks which of their threads it is.
   const [addingAt, setAddingAt] = useState<BoardPoint | null>(null);
   // A box with no thread yet has no composer to keep its model pick, so the board keeps it.
@@ -377,6 +426,25 @@ function GuestThreadSession({
     if (error !== null) {
       toastManager.add({ type: "error", title: "Could not open your T Code", description: error });
     }
+  };
+  // This guest's own box's changes are on their machine; anyone else's the owner's server reads.
+  const readCodePatch: ReadRoomCodePatch = async ({ note, changes, path, scope }) => {
+    if (changes.guestId === undefined) return readRoomCodePatch(endpoint, note.id, path, scope);
+    if (machine == null) {
+      return { error: "Open this on your machine, where your thread box's changes are." };
+    }
+    const result = await readOwnBoxPatch({
+      environmentId: machine.environmentId,
+      input: {
+        host: share.host,
+        shareId: GuestShareId.make(share.shareId),
+        boxId: changes.boxId,
+        turnCount: changes.turnCount,
+        path,
+        scope,
+      },
+    });
+    return result._tag === "Success" ? roomCodePatchRead(result.value) : ROOM_CODE_PATCH_UNREADABLE;
   };
   // The task becomes this guest's, and a draft in their own T Code; neither sends anything.
   const takeTask = (task: RoomBoardNote) => {
@@ -595,6 +663,8 @@ function GuestThreadSession({
             onCursor={(presence) => postBoardCursor(endpoint, presence)}
             onPromptBox={promptBox}
             askInComments={machine != null}
+            readCodePatch={readCodePatch}
+            onRefreshPullRequest={(noteId) => refreshRoomPullRequest(endpoint, noteId)}
             onAddThread={machine == null ? undefined : setAddingAt}
             renderBoxModel={(boxId) =>
               machine == null ? (
@@ -828,19 +898,21 @@ function GuestThread({
     ),
   );
   const unplaced = unplacedGuestMessages(messages, items, awaitingRowIds);
-  const otherGuests = guests
-    .filter((guest) => guest.id !== guestId)
-    .map((guest) => (online.includes(guest.id) ? guest.name : `${guest.name} (away)`));
   return (
     <>
-      <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-border px-4 py-2.5">
+      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-board-hairline px-3">
         <SidebarTrigger className="md:hidden" />
-        <h1 className="min-w-0 flex-1 truncate text-sm font-medium">{title}</h1>
-        {otherGuests.length === 0 ? null : (
-          <span className="max-w-[40%] min-w-0 truncate text-xs text-muted-foreground">
-            With {otherGuests.join(", ")}
-          </span>
-        )}
+        {/* Beside the board its header already names the thread, so the panel shows it once. */}
+        <h1
+          className={cn(
+            "min-w-0 flex-1 truncate text-sm font-semibold",
+            onClose !== undefined && "sr-only",
+          )}
+        >
+          {title}
+        </h1>
+        <GuestPeople guests={guests} viewer={guestId} online={online} />
+        {onClose === undefined ? null : <span aria-hidden className="flex-1" />}
         <GuestGitHubSignIn
           endpoint={endpoint}
           account={guests.find((guest) => guest.id === guestId)?.account}
@@ -1056,9 +1128,17 @@ function GuestGitHubSignIn({
           {error}
         </span>
       )}
-      <Button size="xs" variant="outline" disabled={busy} onClick={() => void start()}>
-        Sign in with GitHub
-      </Button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button size="xs" variant="outline" disabled={busy} onClick={() => void start()} />
+          }
+        >
+          <GithubIcon />
+          Sign in
+        </TooltipTrigger>
+        <TooltipPopup side="bottom">Sign in with GitHub</TooltipPopup>
+      </Tooltip>
     </>
   );
 }
@@ -1129,6 +1209,52 @@ function ContinueOnMyMachine({
         Continue on my machine
       </Button>
     </>
+  );
+}
+
+/** The other people in the room as a row of initials in their colours, named in a tooltip. */
+function GuestPeople({
+  guests,
+  viewer,
+  online,
+}: {
+  readonly guests: ReadonlyArray<ThreadGuest>;
+  readonly viewer: string | undefined;
+  readonly online: ReadonlyArray<string>;
+}) {
+  const others = guests.filter((guest) => guest.id !== viewer);
+  if (others.length === 0) return null;
+  const names = others
+    .map((guest) => (online.includes(guest.id) ? guest.name : `${guest.name} (away)`))
+    .join(", ");
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span role="img" className="flex shrink-0 items-center -space-x-1.5" tabIndex={0} />
+        }
+        aria-label={`With ${names}`}
+      >
+        {others.slice(0, 4).map((guest) => (
+          <PersonDot
+            key={guest.id}
+            color={boardCursorColor(guests, guest.id)}
+            className={cn(
+              "size-6 text-2xs font-semibold ring-2 ring-card",
+              !online.includes(guest.id) && "opacity-50",
+            )}
+          >
+            {Array.from(guest.name.trim())[0]?.toUpperCase() ?? "?"}
+          </PersonDot>
+        ))}
+        {others.length > 4 ? (
+          <span className="ps-2.5 text-xs text-muted-foreground tabular-nums">
+            +{others.length - 4}
+          </span>
+        ) : null}
+      </TooltipTrigger>
+      <TooltipPopup side="bottom">With {names}</TooltipPopup>
+    </Tooltip>
   );
 }
 

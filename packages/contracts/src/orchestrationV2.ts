@@ -54,6 +54,9 @@ import {
   RoomBoardNote,
   RoomBoardReply,
   RoomBoxTurn,
+  RoomCodeChanges,
+  RoomCodeDiffSummary,
+  RoomPullRequestRead,
   RoomTaskContextPayload,
   SharedThreadMessage,
   ThreadGuestMessage,
@@ -3523,6 +3526,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     boxId: ThreadGuestMessage.fields.boxId,
     /** The cards written into the text, as the server labelled them from its board. */
     cards: ThreadGuestMessage.fields.cards,
+    cardRefs: ThreadGuestMessage.fields.cardRefs,
   }),
   /** Shows a turn a guest ran on their own machine. It changes the share and nothing else. */
   Schema.Struct({
@@ -3613,6 +3617,45 @@ const OrchestrationV2InternalCommand = Schema.Union([
     shareId: GuestShareId,
     boxId: RoomBoardNote.fields.id,
     turn: RoomBoxTurn,
+  }),
+  /**
+   * Shows what one of the owner's thread boxes' threads changed in every code window the box has a
+   * line to. It changes the share only.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.room-box.changes"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    boxId: RoomBoardNote.fields.id,
+    turnId: RoomCodeChanges.fields.turnId,
+    changes: RoomCodeDiffSummary,
+  }),
+  /**
+   * Shows what the owner's server last read of a pull request window's pull request, while the
+   * window still names that `url`. It changes the share only.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.room-pull-request.read"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    noteId: RoomBoardNote.fields.id,
+    url: TrimmedNonEmptyString,
+    read: RoomPullRequestRead,
+  }),
+  /**
+   * Marks the lines that carried these cards into a thread box, or the artifact it rewrites, sent:
+   * the owner's server dispatches it once it took the owner's prompt. It changes the share only.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.room-cards.sent"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    shareId: GuestShareId,
+    boxId: RoomBoardNote.fields.id,
+    artifactId: Schema.optional(RoomBoardNote.fields.id),
+    cardRefs: Schema.Array(Schema.String.check(Schema.isMaxLength(170))),
   }),
   /**
    * Marks a guest's waiting message sent as `sentAs` in its thread box's own thread, or with null

@@ -67,7 +67,7 @@ export function BoardSplit({
             aria-valuenow={width ?? undefined}
             tabIndex={0}
             className={cn(
-              "shrink-0 cursor-col-resize touch-none border-s border-border bg-background outline-none hover:bg-primary/20 focus-visible:bg-primary/30",
+              "shrink-0 cursor-col-resize touch-none border-s border-board-hairline bg-background outline-none transition-colors hover:bg-primary/20 focus-visible:bg-primary/30",
               open ? "max-md:hidden" : "hidden",
             )}
             style={{ width: BOARD_SPLIT_DIVIDER }}

@@ -40,6 +40,11 @@ import {
   type RoomBoxProgress,
   type RoomArtifactRead,
   type RoomBoardChange,
+  ROOM_BOARD_ROOM_BOX,
+  type RoomBoardSummaries,
+  type RoomCodePatch,
+  RoomCodePatchError,
+  type RoomCodePatchRequest,
   type RoomCodeState,
   roomCodeStateOf,
   type RoomBoardDrag,
@@ -66,7 +71,12 @@ import {
 import { chatMarkdownImageSources } from "@t3tools/shared/markdownPipeline";
 import { buildGuestLink, buildShortGuestLink } from "@t3tools/shared/guestLinks";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
-import { roomArtifactBody, roomCommentAnswer } from "@t3tools/shared/roomBoard";
+import {
+  roomArtifactBody,
+  roomBoardNoteOfRef,
+  roomCommentAnswer,
+  roomWindowBoxId,
+} from "@t3tools/shared/roomBoard";
 import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 import * as NodeOS from "node:os";
 
@@ -123,6 +133,9 @@ import * as GuestTeamShares from "./GuestTeamShares.ts";
 import * as GuestSignIn from "./GuestSignIn.ts";
 import { guestShareView, guestThreadModel } from "./guestView.ts";
 import * as RoomBoxes from "./RoomBoxes.ts";
+import * as RoomCodeDiffs from "./RoomCodeDiffs.ts";
+import * as RoomPullRequests from "./RoomPullRequests.ts";
+import { summarizeRoomBoard } from "./RoomBoardSummary.ts";
 import { clip, roomUpdatesOf } from "./roomUpdates.ts";
 import {
   classifyGuestUploads,
@@ -151,6 +164,8 @@ const GUEST_TURN_RATE_WINDOW_MS = 60_000;
 const BOARD_CHANGE_RATE_LIMIT = 120;
 // Catch-ups one guest's machine can ask for in a minute. Each is a person pressing a button.
 const ROOM_UPDATES_RATE_LIMIT = 20;
+// Files of code windows one guest can open in a minute. Each is a diff read on the owner's disk.
+const CODE_PATCH_RATE_LIMIT = 30;
 // What one guest's machine can report of its turns in a minute: each start and stop, and what a
 // thread box's agent is doing, which it says every two seconds while that changes.
 const AGENT_ACTIVITY_RATE_LIMIT = 90;
@@ -431,12 +446,33 @@ export class GuestShareService extends Context.Service<
       noteId: string,
     ) => Effect.Effect<GuestSafe<RoomArtifactRead>, GuestShareAccessError>;
     /**
+     * One file's patch of a code window on a thread's board: for its owner, who names the thread,
+     * or for a guest, who shows their session. Only a file the window lists, of a box whose thread
+     * is on this machine; a guest gets it as the rest of the shared thread, redacted.
+     */
+    readonly codePatch: (
+      by: { readonly threadId: ThreadId } | { readonly session: string },
+      request: RoomCodePatchRequest,
+    ) => Effect.Effect<RoomCodePatch, RoomCodePatchError | GuestShareAccessError>;
+    /** What the owner's board list shows of each named thread's board, for those that have one. */
+    readonly boardSummaries: (
+      threadIds: ReadonlyArray<ThreadId>,
+    ) => Effect.Effect<RoomBoardSummaries>;
+    /**
      * Changes one card or note on a shared thread's board: for its owner, who names the thread,
      * or for a guest, who shows their session. Everyone in the room sees the result.
      */
     readonly changeBoard: (
       by: { readonly threadId: ThreadId } | { readonly session: string },
       change: RoomBoardChange,
+    ) => Effect.Effect<void, GuestShareAccessError>;
+    /**
+     * Has the owner's server read a pull request window's pull request again, for its owner or a
+     * guest. Only the owner's GitHub sign-in reads it, at most every so often; never a guest's.
+     */
+    readonly refreshPullRequest: (
+      by: { readonly threadId: ThreadId } | { readonly session: string },
+      noteId: string,
     ) => Effect.Effect<void, GuestShareAccessError>;
     /** The file of an HTML render in the shared thread, and its title. */
     readonly render: (
@@ -516,6 +552,8 @@ const make = Effect.gen(function* () {
   const random = yield* SecureRandom.SecureRandom;
   const analytics = yield* AnalyticsService.AnalyticsService;
   const roomBoxes = yield* RoomBoxes.RoomBoxes;
+  const codeDiffs = yield* RoomCodeDiffs.RoomCodeDiffs;
+  const roomPullRequests = yield* RoomPullRequests.RoomPullRequests;
   const signer = yield* PayloadSigner.make(SIGNING_SECRET_NAME);
   // A value that is set but is not a usable origin counts as none: links stay on this host.
   const hostedAppUrl = yield* configuredHostedAppUrlConfig.pipe(
@@ -1096,6 +1134,10 @@ const make = Effect.gen(function* () {
             ),
             request.cardRefs,
           );
+    // Their lines are marked sent when the owner sends the message, never before.
+    const cardRefs = (request.cardRefs ?? []).filter(
+      (ref) => roomBoardNoteOfRef(share.board, ref) !== undefined,
+    );
     yield* dispatchGuestCommand({
       type: "thread.guest-message.submit",
       commandId: yield* commandId("submit"),
@@ -1109,6 +1151,7 @@ const make = Effect.gen(function* () {
       ...(request.artifactId === undefined ? {} : { artifactId: request.artifactId }),
       ...(request.boxId === undefined ? {} : { boxId: request.boxId }),
       ...(cards.length === 0 ? {} : { cards: [...cards] }),
+      ...(cardRefs.length === 0 ? {} : { cardRefs }),
     }).pipe(Effect.onError(() => removeStored(attachments)));
     if (direct) {
       // The same send the owner's button makes. If it fails, the message waits for the owner.
@@ -1698,6 +1741,7 @@ const make = Effect.gen(function* () {
   const allowBoardChange = rateLimit(BOARD_CHANGE_RATE_LIMIT);
   const allowActivity = rateLimit(AGENT_ACTIVITY_RATE_LIMIT);
   const allowCursorMove = rateLimit(CURSOR_RATE_LIMIT, CURSOR_RATE_WINDOW_MS);
+  const allowCodePatch = rateLimit(CODE_PATCH_RATE_LIMIT);
 
   /** Text another machine sent, as one line the whole room can read, cut to `max`. */
   const oneLine = (text: string, max: number) =>
@@ -1720,6 +1764,7 @@ const make = Effect.gen(function* () {
       artifact: posted,
       boxId: askedBox,
       cards: sentCards,
+      cardRefs: sentRefs,
       model: sentModel,
       comment: postedComment,
       ...turn
@@ -1770,6 +1815,7 @@ const make = Effect.gen(function* () {
           : {
               boxId,
               ...(cards.length === 0 ? {} : { cards }),
+              ...(sentRefs === undefined || sentRefs.length === 0 ? {} : { cardRefs: sentRefs }),
               ...(model === "" ? {} : { model }),
               ...(comment === undefined ? {} : { comment }),
             }),
@@ -2013,6 +2059,99 @@ const make = Effect.gen(function* () {
             { ...change, text: sanitizeLinkedPrompt(change.text).text }
           : change,
     });
+    // A line from one of the owner's boxes to a code window shows its changes now, not next turn.
+    if (change.type === "edge.put") yield* codeDiffs.showBoxChanges(threadId, change.from);
+    // A pull request window shows its pull request as soon as the owner's server reads it.
+    if (change.type === "note.put" && change.kind === "pull-request") {
+      yield* roomPullRequests.refresh(threadId, change.noteId, "added");
+    }
+  });
+
+  const refreshPullRequest = Effect.fn("GuestShareService.refreshPullRequest")(function* (
+    by: { readonly threadId: ThreadId } | { readonly session: string },
+    noteId: string,
+  ) {
+    const { threadId } = yield* boardAuthor(by);
+    yield* roomPullRequests.refresh(threadId, noteId, "asked");
+  });
+
+  const codePatch = Effect.fn("GuestShareService.codePatch")(function* (
+    by: { readonly threadId: ThreadId } | { readonly session: string },
+    request: RoomCodePatchRequest,
+  ) {
+    const fail = (reason: RoomCodePatchError["reason"]) => new RoomCodePatchError({ reason });
+    const thread =
+      "threadId" in by
+        ? yield* orchestrator.getThreadRecords(by.threadId, []).pipe(
+            Effect.map((records) => records.thread),
+            Effect.mapError(() => fail("inactive")),
+          )
+        : yield* Effect.gen(function* () {
+            const { thread, share, guestId } = yield* authorize(by.session, "session");
+            if (guestId === undefined) return yield* unavailable;
+            const now = DateTime.toEpochMillis(yield* DateTime.now);
+            if (!allowCodePatch(`${share.id}:${guestId}`, now)) {
+              return yield* new GuestShareAccessError({ reason: "too_fast" });
+            }
+            return thread;
+          });
+    const room = threadRoomOf(thread);
+    const window = room.board?.notes.find(
+      (note) => note.id === request.noteId && note.kind === "code",
+    );
+    if (room.board === undefined || window === undefined) return yield* fail("window_gone");
+    const boxId = roomWindowBoxId(room.board, window.id);
+    const changes = window.changes;
+    // Only a file the window lists, of the box it shows now.
+    const file = changes?.files.find((candidate) => candidate.path === request.path);
+    if (
+      boxId === undefined ||
+      changes === undefined ||
+      changes.boxId !== boxId ||
+      file === undefined ||
+      (request.scope === "turn" && file.lastTurn === undefined)
+    ) {
+      return yield* fail("unavailable");
+    }
+    if (changes.guestId !== undefined) return yield* fail("elsewhere");
+    const boxThreadId = boxId === ROOM_BOARD_ROOM_BOX ? thread.id : room.boardThreads?.[boxId];
+    if (boxThreadId === undefined) return yield* fail("unavailable");
+    const patch = yield* codeDiffs.filePatch({
+      threadId: boxThreadId,
+      turnCount: changes.turnCount,
+      scope: request.scope,
+      path: file.path,
+    });
+    if ("threadId" in by) return patch;
+    const boxThread = yield* orchestrator.getThreadRecords(boxThreadId, []).pipe(
+      Effect.map((records) => records.thread),
+      Effect.mapError(() => fail("unavailable")),
+    );
+    const { redactor } = yield* redactorFor(boxThread);
+    return redactor.redact<RoomCodePatch>(patch);
+  });
+
+  const boardSummaries = Effect.fn("GuestShareService.boardSummaries")(function* (
+    threadIds: ReadonlyArray<ThreadId>,
+  ) {
+    const nowIso = DateTime.formatIso(yield* DateTime.now);
+    const viewers = yield* SubscriptionRef.get(viewing);
+    const boards = yield* Effect.forEach(
+      threadIds,
+      (threadId) =>
+        orchestrator.getThreadRecords(threadId, []).pipe(
+          Effect.map((records) =>
+            summarizeRoomBoard(records.thread, {
+              nowIso,
+              online: viewers.get(threadId)?.size ?? 0,
+            }),
+          ),
+          // A thread gone since the list was read has no board to show.
+          Effect.orElseSucceed(() => null),
+        ),
+      { concurrency: 4 },
+    );
+    return { boards: boards.filter((board) => board !== null) };
   });
 
   /** An item of the shared thread, read after the session check. */
@@ -2164,7 +2303,10 @@ const make = Effect.gen(function* () {
     moveCursor,
     roomUpdates,
     roomArtifact,
+    codePatch,
+    boardSummaries,
     changeBoard,
+    refreshPullRequest,
     render,
     item,
     history,

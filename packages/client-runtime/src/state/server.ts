@@ -1651,6 +1651,28 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:shared-thread:find-room",
       tag: WS_METHODS.sharedThreadFindRoom,
     }),
+    // One file's patch of a code window on the owner's board. Reads only.
+    readRoomCodePatch: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:guest-share:code-patch",
+      tag: WS_METHODS.guestShareCodePatch,
+    }),
+    // Reads a pull request window's pull request again, with this environment's GitHub sign-in.
+    refreshRoomPullRequest: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:guest-share:refresh-pull-request",
+      tag: WS_METHODS.guestShareRefreshPullRequest,
+    }),
+    // One file's patch of the user's own box's thread here, for a code window on a room's board.
+    readSharedRoomBoxPatch: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:shared-thread:box-patch",
+      tag: WS_METHODS.sharedThreadBoxPatch,
+    }),
+    // What the boards home draws of each board: counts, people and card rectangles. Read only.
+    roomBoardSummaries: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:guest-share:board-summaries",
+      tag: WS_METHODS.guestShareBoardSummaries,
+      staleTimeMs: 10_000,
+      refreshIntervalMs: 30_000,
+    }),
     // Which guests have a shared thread open. Mounted only while the owner's guest list is open.
     guestPresence: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:guest-share:presence",

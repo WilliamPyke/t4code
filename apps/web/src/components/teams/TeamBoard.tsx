@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { changeTeamBoard, readTeamBoard, refreshTeams } from "~/teams/teams";
+import { BoardBackdrop } from "../room/BoardChrome";
 import { type BoardCardSpec, RoomBoard } from "../room/RoomBoard";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
@@ -110,9 +111,14 @@ export function TeamBoard({
   const { board, names, reachable, change } = useTeamBoard(team.id);
   if (board === null) {
     return (
-      <p className="p-6 text-center text-muted-foreground text-sm">
-        {reachable ? "Loading the board..." : "Cannot reach T Connect. Trying again."}
-      </p>
+      <BoardBackdrop className="flex min-h-0 flex-1 items-center justify-center p-6">
+        <p
+          role="status"
+          className="rounded-board border border-board-hairline bg-card px-4 py-2.5 text-center text-muted-foreground text-sm shadow-board"
+        >
+          {reachable ? "Loading the board..." : "Cannot reach T Connect. Trying again."}
+        </p>
+      </BoardBackdrop>
     );
   }
   const memberIds = new Set(team.members.map((member) => member.userId));
