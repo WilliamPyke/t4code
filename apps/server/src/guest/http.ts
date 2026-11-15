@@ -13,6 +13,7 @@ import {
   GUEST_RENDER_ROUTE,
   GUEST_ROOM_ACTIVITY_ROUTE,
   GUEST_ROOM_ARTIFACT_ROUTE,
+  GUEST_ROOM_BOARD_ROUTE,
   GUEST_ROOM_EXPIRES_HEADER,
   GUEST_ROOM_TURN_ROUTE,
   GUEST_ROOM_UPDATES_ROUTE,
@@ -39,6 +40,9 @@ import {
   OrchestrationV2GetTurnItemResult,
   OrchestrationV2ThreadHistoryPage,
   RoomArtifactRead,
+  RoomBoardAgentChangeRequest,
+  RoomBoardAgentResult,
+  RoomBoardAgentView,
   RoomBoardChange,
   RoomBoardNote,
   RoomCodePatchRequest,
@@ -62,6 +66,7 @@ import { assetFileResponse, downloadContentDisposition } from "../http.ts";
 import type { GuestUpload } from "./guestAttachments.ts";
 import type { GuestSafe } from "./guestRedaction.ts";
 import { GuestShareAccessError, GuestShareService } from "./GuestShareService.ts";
+import type { RoomBoardAgentError } from "./RoomBoardAgent.ts";
 
 // Cloudflare closes idle streams after about 100 seconds.
 const HEARTBEAT_INTERVAL = Duration.seconds(20);
@@ -470,6 +475,72 @@ const roomArtifactRoute = HttpRouter.add(
   }),
 );
 
+// A box gone from the board, or not the guest's, is not found; a room gone ends their link.
+const boardAgentErrorResponse = (error: RoomBoardAgentError) =>
+  HttpServerResponse.json(
+    { reason: error.reason, message: error.message },
+    { status: error.reason === "board_gone" ? 410 : 404, headers: NO_STORE },
+  );
+
+const encodeBoardView = encodeForGuest(RoomBoardAgentView);
+const encodeBoardResult = Schema.encodeEffect(RoomBoardAgentResult);
+
+// Read by the guest's own T Code server for the agent of the guest's own box there.
+const roomBoardRoute = HttpRouter.add(
+  "GET",
+  GUEST_ROOM_BOARD_ROUTE,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const boxId = new URLSearchParams(request.url.split("?", 2)[1] ?? "").get("box");
+    if (!boxId) return yield* badRequest;
+    const guestShares = yield* GuestShareService;
+    return yield* guestShares.roomBoard(yield* bearerToken, boxId).pipe(
+      Effect.flatMap((view) =>
+        encodeBoardView(view).pipe(
+          Effect.mapError(() => new GuestShareAccessError({ reason: "unavailable" })),
+        ),
+      ),
+      Effect.map((body) => HttpServerResponse.jsonUnsafe(body, { headers: NO_STORE })),
+      Effect.catchTags({
+        GuestShareAccessError: errorResponse,
+        RoomBoardAgentError: boardAgentErrorResponse,
+      }),
+    );
+  }),
+);
+
+// Twenty cards of the longest text, in the widest characters, JSON-escaped.
+const BOARD_AGENT_MAX_BODY_BYTES = 192 * 1024;
+const decodeBoardAgentChange = Schema.decodeUnknownEffect(RoomBoardAgentChangeRequest);
+
+// Posted by the guest's own T Code server when the agent of the guest's own box there calls a
+// board tool.
+const roomBoardChangeRoute = HttpRouter.add(
+  "POST",
+  GUEST_ROOM_BOARD_ROUTE,
+  Effect.gen(function* () {
+    const token = yield* bearerToken;
+    const body = yield* readJsonWithin(BOARD_AGENT_MAX_BODY_BYTES).pipe(
+      Effect.flatMap(decodeBoardAgentChange),
+      Effect.option,
+    );
+    if (body._tag === "None") return yield* badRequest;
+    const guestShares = yield* GuestShareService;
+    return yield* guestShares.roomBoardChange(token, body.value).pipe(
+      Effect.flatMap((result) =>
+        encodeBoardResult(result).pipe(
+          Effect.mapError(() => new GuestShareAccessError({ reason: "unavailable" })),
+        ),
+      ),
+      Effect.map((body) => HttpServerResponse.jsonUnsafe(body, { headers: NO_STORE })),
+      Effect.catchTags({
+        GuestShareAccessError: errorResponse,
+        RoomBoardAgentError: boardAgentErrorResponse,
+      }),
+    );
+  }),
+);
+
 const decodeBoardChange = Schema.decodeUnknownEffect(RoomBoardChange);
 
 const boardRoute = HttpRouter.add(
@@ -794,6 +865,8 @@ export const layer = Layer.mergeAll(
   roomActivityRoute,
   roomUpdatesRoute,
   roomArtifactRoute,
+  roomBoardRoute,
+  roomBoardChangeRoute,
   boardRoute,
   boardCodeRoute,
   boardPullRequestRoute,

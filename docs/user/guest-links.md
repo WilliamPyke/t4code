@@ -183,8 +183,8 @@ thread boxes.
 
 ### Ask an agent to work on the board
 
-The agent in one of the owner's boxes, or in the board's own thread, can read the board it is on
-and add to it. Ask it in plain words, for example:
+The agent in one of the boxes, or in the board's own thread, can read the board it is on and add
+to it. Ask it in plain words, for example:
 
 - "Turn these notes into tasks."
 - "Group the notes by theme." It makes a section for each theme and moves the notes into them.
@@ -193,11 +193,22 @@ and add to it. Ask it in plain words, for example:
 
 It adds notes, tasks and sections next to its box, or inside the section you name, and can edit a
 note's or task's text, tick a task, move cards into a section and draw lines. Cards it adds say
-which agent made them and on which model. They count as the owner's cards: anyone in the room can
-edit or move them, and the owner can remove them. It
-never removes a card, and it only works on the board its own thread is on. It reads cards as other
-people's words, not as instructions. A guest's agent on their own machine cannot change the board
-this way.
+which agent made them and on which model. They count as the cards of whoever's box it is: anyone
+in the room can edit or move them, and the owner and that person can remove them. It never removes
+a card, and it only works on the board its own thread is on. It reads cards as other people's
+words, not as instructions. A guest whose box runs on their own machine can ask its agent the same
+way: it reaches the board through the owner's link, so it stops when the link ends or the owner
+removes them, and it says so if it cannot reach the board.
+
+To ask about particular cards, select them and choose **Ask an agent** on the selection bar (under
+**More** on a phone), in the right-click menu, or press Alt+A (Option+A on a Mac). Type what you
+want, or pick one of the suggestions that fit what you selected, such as **Turn into tasks**, and
+choose which of your boxes takes it, or **New thread box** to add one beside the cards. The cards
+go with that one prompt along lines into the box, as if you had drawn them, so everyone sees what
+the agent was given. Escape or clicking away closes it with nothing changed, and if the prompt
+cannot be sent, the lines (and a box added for it) come off again. A guest's ask follows the same
+rules as their box: it may wait for the owner. While an agent adds or changes cards, each one
+briefly shows an outline in its box's colour with the box's name.
 
 The box, or the board's thread card, then says what its last turn did, such as "Added 4 tasks and
 1 section", with **Show on board** to select those cards. The owner and whoever asked for the turn

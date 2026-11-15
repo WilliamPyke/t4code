@@ -696,6 +696,8 @@ export const RoomBoardAgentTurn = Schema.Struct({
   boxId: RoomBoardNoteId,
   model: Schema.optional(RoomBoxModelName),
   askedBy: Schema.optional(GuestId),
+  /** The guest whose own machine ran it, whose cards they are. Absent: the owner's server. */
+  guestId: Schema.optional(GuestId),
   /** When it last changed the board. */
   at: IsoDateTime,
   /** Each card it added (no `before`) or changed, as it found it and as it left it. */
@@ -720,6 +722,81 @@ export const RoomBoardAgentTurn = Schema.Struct({
   undone: Schema.optional(Schema.Literal(true)),
 });
 export type RoomBoardAgentTurn = typeof RoomBoardAgentTurn.Type;
+
+/** Changes one board tool call makes at most. */
+const ROOM_BOARD_AGENT_MAX_CHANGES = 20;
+const RoomBoardAgentCardText = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(ROOM_BOARD_NOTE_MAX_LENGTH),
+);
+/** A card as an agent names it: its id, or `thread` for the room thread's own card. */
+const RoomBoardAgentCardId = TrimmedNonEmptyString.check(Schema.isMaxLength(170));
+
+/** The board tools' input and answers, which a guest's machine also sends to the room's owner. */
+export const RoomBoardAgentAddInput = Schema.Struct({
+  cards: Schema.Array(
+    Schema.Struct({ text: RoomBoardAgentCardText, task: Schema.optional(Schema.Boolean) }),
+  ).check(Schema.isMaxLength(ROOM_BOARD_AGENT_MAX_CHANGES)),
+  /** A section's id or title. A title no section has makes a new one. */
+  section: Schema.optional(RoomBoardAgentCardText),
+});
+export type RoomBoardAgentAddInput = typeof RoomBoardAgentAddInput.Type;
+
+export const RoomBoardAgentUpdateInput = Schema.Struct({
+  changes: Schema.Array(
+    Schema.Struct({
+      id: RoomBoardAgentCardId,
+      text: Schema.optional(RoomBoardAgentCardText),
+      done: Schema.optional(Schema.Boolean),
+      section: Schema.optional(RoomBoardAgentCardText),
+      lineTo: Schema.optional(RoomBoardAgentCardId),
+    }),
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(ROOM_BOARD_AGENT_MAX_CHANGES)),
+});
+export type RoomBoardAgentUpdateInput = typeof RoomBoardAgentUpdateInput.Type;
+
+export const RoomBoardAgentView = Schema.Struct({
+  /** The id of this thread's own box. */
+  you: Schema.String,
+  cards: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      kind: Schema.String,
+      text: Schema.String,
+      by: Schema.String,
+      done: Schema.optional(Schema.Boolean),
+      section: Schema.optional(Schema.String),
+    }),
+  ),
+  lines: Schema.Array(Schema.Struct({ from: Schema.String, to: Schema.String })),
+});
+export type RoomBoardAgentView = typeof RoomBoardAgentView.Type;
+
+export const RoomBoardAgentResult = Schema.Struct({
+  /** Cards added, or changed, by id. */
+  done: Schema.Array(Schema.String),
+  /** Sections this call made. */
+  sections: Schema.optional(
+    Schema.Array(Schema.Struct({ id: Schema.String, title: Schema.String })),
+  ),
+  /** What the board did not take, and why. */
+  refused: Schema.Array(Schema.Struct({ card: Schema.String, reason: Schema.String })),
+});
+export type RoomBoardAgentResult = typeof RoomBoardAgentResult.Type;
+
+/**
+ * One board tool call of the agent of a guest's own box, run on their machine. The owner's server
+ * makes it as that guest's, marked as that box's agent in that run (`turnId`).
+ */
+export const RoomBoardAgentChangeRequest = Schema.Struct({
+  boxId: RoomBoardNoteId,
+  turnId: Schema.optional(RoomBoardAgentTurn.fields.id),
+  model: Schema.optional(RoomBoxModelName),
+  change: Schema.Union([
+    Schema.Struct({ add: RoomBoardAgentAddInput }),
+    Schema.Struct({ update: RoomBoardAgentUpdateInput }),
+  ]),
+});
+export type RoomBoardAgentChangeRequest = typeof RoomBoardAgentChangeRequest.Type;
 
 export const RoomBoard = Schema.Struct({
   positions: Schema.Record(Schema.String, RoomBoardPoint),
@@ -1570,6 +1647,11 @@ export const GUEST_ROOM_EXPIRES_HEADER = "t3-room-expires-at";
 export const GUEST_ROOM_UPDATES_ROUTE = `${GUEST_ROUTE_PREFIX}/room/updates`;
 /** One artifact card of the room's board, `?note=<id>`, as a `RoomArtifactRead`, for a room token. */
 export const GUEST_ROOM_ARTIFACT_ROUTE = `${GUEST_ROUTE_PREFIX}/room/artifact`;
+/**
+ * The room's board for the agent of a guest's own box, for a room token: `?box=<id>` reads it as a
+ * `RoomBoardAgentView` (GET), and a `RoomBoardAgentChangeRequest` changes it (POST).
+ */
+export const GUEST_ROOM_BOARD_ROUTE = `${GUEST_ROUTE_PREFIX}/room/board`;
 /** A guest's change to the room's board (POST), a `RoomBoardChange` as JSON: `?share=<id>`. */
 export const GUEST_BOARD_ROUTE = `${GUEST_ROUTE_PREFIX}/board`;
 /** Where a guest's pointer is on the room's board (POST), a `GuestCursorRequest`: `?share=<id>`. */

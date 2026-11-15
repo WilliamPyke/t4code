@@ -176,13 +176,18 @@ export function BoxBoardWork({
       </p>
       <div className="flex gap-1">
         {undone ? null : (
-          <Button size="micro" variant="ghost-muted" onPointerDown={stopPointer} onClick={onShow}>
+          <Button
+            size="micro-touch"
+            variant="ghost-muted"
+            onPointerDown={stopPointer}
+            onClick={onShow}
+          >
             Show on board
           </Button>
         )}
         {onUndo === undefined ? null : (
           <Button
-            size="micro"
+            size="micro-touch"
             variant="ghost-muted"
             onPointerDown={stopPointer}
             onClick={() => onUndo(!undone)}

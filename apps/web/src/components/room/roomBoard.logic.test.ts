@@ -71,6 +71,7 @@ import {
   boardAgentTurnToUndo,
   boardAgentTurnsSeen,
   boardHistoryChanges,
+  boardHistoryRemember,
   boardStepBefore,
   boardHistoryWith,
   boardItemsInRect,
@@ -89,6 +90,7 @@ import {
   type BoardMenuRights,
   boardTidy,
   boardTidySection,
+  boardPushedBelow,
   boardSectionAround,
   boardItemTarget,
   boardItemRects,
@@ -2514,6 +2516,36 @@ describe("selecting several cards", () => {
     }
     // A roomy section keeps its size.
     expect(boardTidySection(items.slice(0, 2), section).size).toEqual({ w: 640, h: 420 });
+    // Growing pushes down what it would cover, what that lands on, and a moved section's cards.
+    const grown = { ...section, height: size.h };
+    const below = [
+      { ref: "note:under", rect: { x: 200, y: 560, width: 200, height: 120 } },
+      { ref: "note:next", rect: { x: 200, y: 700, width: 200, height: 120 } },
+      { ref: "note:lower", rect: { x: 900, y: 700, width: 200, height: 120 } },
+      { ref: "note:beside", rect: { x: 800, y: 120, width: 200, height: 120 } },
+      { ref: "note:far", rect: { x: 200, y: 3_000, width: 200, height: 120 } },
+      {
+        ref: "note:section",
+        rect: { x: 450, y: 600, width: 400, height: 300 },
+        section: true,
+      },
+      { ref: "note:in-section", rect: { x: 760, y: 820, width: 80, height: 60 } },
+    ];
+    const pushed = boardPushedBelow(section, grown, below);
+    expect(pushed.dy).toBe(100 + size.h + 24 - 560);
+    expect(new Set(pushed.refs)).toEqual(
+      new Set(["note:under", "note:next", "note:section", "note:in-section"]),
+    );
+    // A section already touching the old frame still goes with a card of its own that moves.
+    const touching = [
+      { ref: "note:own", rect: { x: 200, y: 560, width: 200, height: 120 } },
+      { ref: "note:frame", rect: { x: 150, y: 500, width: 400, height: 300 }, section: true },
+    ];
+    expect(new Set(boardPushedBelow(section, grown, touching).refs)).toEqual(
+      new Set(["note:own", "note:frame"]),
+    );
+    // Nothing in the way: nothing moves.
+    expect(boardPushedBelow(section, section, below)).toEqual({ dy: 0, refs: [] });
   });
 
   it("moves every selected card and note together, one change each, and leaves pins out", () => {
@@ -2660,6 +2692,25 @@ describe("undo and redo", () => {
     }
     expect(history).toHaveLength(BOARD_HISTORY_MAX);
     expect(history[0]?.[0]?.after).toEqual({ x: 1, y: 0 });
+    // The first text typed into a card just added is part of adding it: one undo takes it off.
+    const blank = { ...note, text: "" };
+    const typed = { ...note, text: "Own note" };
+    const added = boardHistoryRemember([], {
+      steps: [{ target: noteTarget, before: null, after: blank }],
+      seen: "",
+    });
+    const written = boardHistoryRemember(added, {
+      steps: [{ target: noteTarget, before: blank, after: typed }],
+      seen: "t1",
+    });
+    expect(written).toEqual([
+      { steps: [{ target: noteTarget, before: null, after: typed }], seen: "t1" },
+    ]);
+    // Editing it again later, or moving it, is a step of its own.
+    const edit = { target: noteTarget, before: typed, after: { ...typed, text: "Again" } };
+    expect(boardHistoryRemember(written, { steps: [edit], seen: "t1" })).toHaveLength(2);
+    const move = { target: noteTarget, before: blank, after: { ...blank, x: 99 } };
+    expect(boardHistoryRemember(added, { steps: [move], seen: "" })).toHaveLength(2);
   });
 
   it("records a card an Alt-drag made as not there before, so undo takes it off", () => {

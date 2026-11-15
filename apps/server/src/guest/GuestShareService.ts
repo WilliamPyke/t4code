@@ -39,6 +39,9 @@ import {
   ROOM_BOX_PROMPT_MAX_LENGTH,
   type RoomBoxProgress,
   type RoomArtifactRead,
+  type RoomBoardAgentChangeRequest,
+  type RoomBoardAgentResult,
+  type RoomBoardAgentView,
   type RoomBoardChange,
   ROOM_BOARD_ROOM_BOX,
   type RoomBoardSummaries,
@@ -132,6 +135,7 @@ import * as GuestLinkNames from "./GuestLinkNames.ts";
 import * as GuestTeamShares from "./GuestTeamShares.ts";
 import * as GuestSignIn from "./GuestSignIn.ts";
 import { guestShareView, guestThreadModel } from "./guestView.ts";
+import * as RoomBoardAgent from "./RoomBoardAgent.ts";
 import * as RoomBoxes from "./RoomBoxes.ts";
 import * as RoomCodeDiffs from "./RoomCodeDiffs.ts";
 import * as RoomPullRequests from "./RoomPullRequests.ts";
@@ -164,6 +168,8 @@ const GUEST_TURN_RATE_WINDOW_MS = 60_000;
 const BOARD_CHANGE_RATE_LIMIT = 120;
 // Catch-ups one guest's machine can ask for in a minute. Each is a person pressing a button.
 const ROOM_UPDATES_RATE_LIMIT = 20;
+// Board tool calls of a guest's own agents, per minute: each may add or change up to 20 cards.
+const ROOM_BOARD_AGENT_RATE_LIMIT = 30;
 // Files of code windows one guest can open in a minute. Each is a diff read on the owner's disk.
 const CODE_PATCH_RATE_LIMIT = 30;
 // What one guest's machine can report of its turns in a minute: each start and stop, and what a
@@ -456,6 +462,28 @@ export class GuestShareService extends Context.Service<
       noteId: string,
     ) => Effect.Effect<GuestSafe<RoomArtifactRead>, GuestShareAccessError>;
     /**
+     * The board as the agent of the guest's own box `boxId` sees it, for their own machine.
+     * Changes nothing here.
+     */
+    readonly roomBoard: (
+      roomToken: string,
+      boxId: string,
+    ) => Effect.Effect<
+      GuestSafe<RoomBoardAgentView>,
+      GuestShareAccessError | RoomBoardAgent.RoomBoardAgentError
+    >;
+    /**
+     * One board tool call of the agent of the guest's own box, run on their machine: made as the
+     * guest's, marked as that box's agent, by the same rules as the owner's agents.
+     */
+    readonly roomBoardChange: (
+      roomToken: string,
+      request: RoomBoardAgentChangeRequest,
+    ) => Effect.Effect<
+      RoomBoardAgentResult,
+      GuestShareAccessError | RoomBoardAgent.RoomBoardAgentError
+    >;
+    /**
      * One file's patch of a code window on a thread's board: for its owner, who names the thread,
      * or for a guest, who shows their session. Only a file the window lists, of a box whose thread
      * is on this machine; a guest gets it as the rest of the shared thread, redacted.
@@ -562,6 +590,7 @@ const make = Effect.gen(function* () {
   const random = yield* SecureRandom.SecureRandom;
   const analytics = yield* AnalyticsService.AnalyticsService;
   const roomBoxes = yield* RoomBoxes.RoomBoxes;
+  const boardAgent = yield* RoomBoardAgent.RoomBoardAgent;
   const codeDiffs = yield* RoomCodeDiffs.RoomCodeDiffs;
   const roomPullRequests = yield* RoomPullRequests.RoomPullRequests;
   const signer = yield* PayloadSigner.make(SIGNING_SECRET_NAME);
@@ -2030,6 +2059,53 @@ const make = Effect.gen(function* () {
     });
   });
 
+  // A board tool call is one request however many cards it adds, so it has its own budget.
+  const allowBoardAgent = rateLimit(ROOM_BOARD_AGENT_RATE_LIMIT);
+
+  /** The guest's own box `boxId` in the room a token is for, as the board agent takes it. */
+  const roomGuestBox = Effect.fn("GuestShareService.roomGuestBox")(function* (
+    token: string,
+    boxId: string,
+  ) {
+    const { thread, share, guestId } = yield* authorize(token, "room");
+    if (guestId === undefined) return yield* new GuestShareAccessError({ reason: "ended" });
+    if (!allowBoardAgent(`${share.id}:${guestId}`, DateTime.toEpochMillis(yield* DateTime.now))) {
+      return yield* new GuestShareAccessError({ reason: "too_fast" });
+    }
+    const box: RoomBoardAgent.RoomGuestBox = {
+      roomThreadId: thread.id,
+      shareId: share.id,
+      guestId,
+      boxId,
+    };
+    return { thread, box };
+  });
+
+  const roomBoard = Effect.fn("GuestShareService.roomBoard")(function* (
+    token: string,
+    boxId: string,
+  ) {
+    const { thread, box } = yield* roomGuestBox(token, boxId);
+    const view = yield* boardAgent.read(box);
+    const { redactor } = yield* redactorFor(thread);
+    return redactor.redact(view);
+  });
+
+  const roomBoardChange = Effect.fn("GuestShareService.roomBoardChange")(function* (
+    token: string,
+    request: RoomBoardAgentChangeRequest,
+  ) {
+    const { box } = yield* roomGuestBox(token, request.boxId);
+    const asked: RoomBoardAgent.RoomGuestBox = {
+      ...box,
+      ...(request.turnId === undefined ? {} : { turnId: request.turnId }),
+      ...(request.model === undefined ? {} : { model: request.model }),
+    };
+    return yield* "add" in request.change
+      ? boardAgent.add(asked, request.change.add)
+      : boardAgent.update(asked, request.change.update);
+  });
+
   const unavailable = new GuestShareAccessError({ reason: "unavailable" });
 
   /** Who is changing which share's board: a guest by their session, or the thread's owner. */
@@ -2313,6 +2389,8 @@ const make = Effect.gen(function* () {
     moveCursor,
     roomUpdates,
     roomArtifact,
+    roomBoard,
+    roomBoardChange,
     codePatch,
     boardSummaries,
     changeBoard,

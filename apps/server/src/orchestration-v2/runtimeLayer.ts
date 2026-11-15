@@ -404,6 +404,12 @@ const layerSharedRoomLinkProvided = SharedRoomLink.layer.pipe(
     ),
   ),
 );
+// A box whose thread runs here but whose board is on someone else's server asks there.
+const layerRoomBoardAgentProvided = RoomBoardAgent.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(layerOrchestratorProvided, layerRoomBoxesProvided, layerSharedRoomLinkProvided),
+  ),
+);
 
 export const layerProduction = Layer.mergeAll(
   WorktreeBranchSync.layer.pipe(
@@ -418,9 +424,7 @@ export const layerProduction = Layer.mergeAll(
   layerSecretRequestsProvided,
   layerSharedRoomLinkProvided,
   layerRoomBoxesProvided,
-  RoomBoardAgent.layer.pipe(
-    Layer.provide(Layer.merge(layerOrchestratorProvided, layerRoomBoxesProvided)),
-  ),
+  layerRoomBoardAgentProvided,
   SharedThreadJoin.layer.pipe(
     Layer.provide(Layer.merge(layerThreadLaunchProvided, layerSharedRoomLinkProvided)),
   ),
@@ -433,6 +437,7 @@ export const layerProduction = Layer.mergeAll(
         layerRoomBoxesProvided,
         layerRoomCodeDiffsProvided,
         layerRoomPullRequestsProvided,
+        layerRoomBoardAgentProvided,
         GuestSignIn.layer,
         GuestLinkNames.layer,
         GuestTeamShares.layer.pipe(Layer.provide(layerOrchestratorProvided)),

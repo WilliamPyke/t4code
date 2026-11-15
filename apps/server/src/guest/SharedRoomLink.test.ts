@@ -1441,3 +1441,53 @@ it.effect("reads an artifact card for the user to send to their agent, and sends
     assert.lengthOf(yield* Ref.get(posts), 5);
   }),
 );
+
+it.effect("asks the room for its board for the user's own box there, with the room's token", () =>
+  Effect.gen(function* () {
+    const view = { you: "box:mine", cards: [], lines: [] };
+    const { link, posts, layer } = yield* world([
+      { status: 200, body: view },
+      { status: 200, body: { done: ["note:1"], refused: [] } },
+      404,
+      429,
+      { status: 200, body: { done: "not a list" } },
+      410,
+    ]);
+    yield* Effect.gen(function* () {
+      const rooms = yield* SharedRoomLink.SharedRoomLink;
+      const reason = Effect.map(Effect.flip(rooms.readBoard(threadId)), (error) => error.reason);
+      // The thread joined from the room has no box of its own there.
+      yield* rooms.connect(threadId, "owner.t3.test", room);
+      assert.equal(yield* reason, "not_in_room");
+      yield* Ref.update(link, (joined) => joined && { ...joined, boxId: "box:mine" });
+      assert.deepEqual(yield* rooms.readBoard(threadId), view);
+      const change = { turnId: "run:1", change: { add: { cards: [{ text: "Hi" }] } } };
+      assert.deepEqual(yield* rooms.changeBoard(threadId, change), {
+        done: ["note:1"],
+        refused: [],
+      });
+      assert.deepEqual(yield* Ref.get(posts), [
+        {
+          url: "https://owner.t3.test/api/guest/room/board",
+          authorization: "Bearer room-token",
+          params: { box: "box:mine" },
+        },
+        {
+          url: "https://owner.t3.test/api/guest/room/board",
+          authorization: "Bearer room-token",
+          turn: { ...change, boxId: "box:mine" },
+        },
+      ]);
+      // The box is gone; a busy room; an answer past its limits; a room that ended.
+      assert.equal(yield* reason, "thread_unavailable");
+      assert.equal(yield* reason, "too_fast");
+      assert.equal(
+        (yield* Effect.flip(rooms.changeBoard(threadId, change))).reason,
+        "invalid_response",
+      );
+      assert.isNotNull(yield* Ref.get(link));
+      assert.equal(yield* reason, "room_ended");
+      assert.isNull(yield* Ref.get(link));
+    }).pipe(Effect.provide(layer));
+  }),
+);

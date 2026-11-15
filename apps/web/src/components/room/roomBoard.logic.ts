@@ -1831,7 +1831,7 @@ function commentThreadText(note: RoomBoardNote, people: BoardPeople): string {
 }
 
 /** A card as a message from the board carries it, or null for one with nothing written. */
-function boardPromptCard(
+export function boardPromptCard(
   note: RoomBoardNote,
   people: BoardPeople,
   quote?: string,
@@ -2506,6 +2506,50 @@ export function boardTidySection<T extends { readonly ref: string; readonly rect
   };
 }
 
+const rectsMeet = (a: BoardRect, b: BoardRect) =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+/**
+ * What a section grown from `from` to `grown` pushes down, and by how much: the items it now
+ * covers move below it with Tidy's gap, then whatever they would land on, and whatever sits in a
+ * section that moves. All move by the same amount, so what is pushed keeps its own layout.
+ */
+export function boardPushedBelow(
+  from: BoardRect,
+  grown: BoardRect,
+  items: ReadonlyArray<{
+    readonly ref: string;
+    readonly rect: BoardRect;
+    readonly section?: boolean;
+  }>,
+): { readonly dy: number; readonly refs: ReadonlyArray<string> } {
+  const covered = items.filter(({ rect }) => rectsMeet(rect, grown) && !rectsMeet(rect, from));
+  if (covered.length === 0) return { dy: 0, refs: [] };
+  const dy = Math.ceil(
+    Math.max(...covered.map(({ rect }) => grown.y + grown.height + TIDY_GAP - rect.y)),
+  );
+  const moved = new Set(covered);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const item of items) {
+      if (moved.has(item)) continue;
+      const lands = [...moved].some(
+        (other) =>
+          rectsMeet(item.rect, { ...other.rect, y: other.rect.y + dy }) ||
+          (other.section === true &&
+            boardItemsCentredIn([item], other.rect, other.ref).length > 0) ||
+          // A section goes with a card of its own that moves, so the card stays inside it.
+          (item.section === true && boardItemsCentredIn([other], item.rect, item.ref).length > 0),
+      );
+      if (lands) {
+        moved.add(item);
+        grew = true;
+      }
+    }
+  }
+  return { dy, refs: [...moved].map(({ ref }) => ref) };
+}
+
 /** Items in reading order (rows by their tops, then left to right), or as `order` reorders it. */
 function tidyOrder<T extends { readonly rect: BoardRect }>(
   items: ReadonlyArray<T>,
@@ -2723,6 +2767,36 @@ export const boardHistoryWith = <Entry>(
 export type BoardHistoryItem =
   | { readonly steps: BoardHistoryEntry; readonly seen: string }
   | { readonly turnId: string; readonly seen: string };
+
+/**
+ * The undo history with this viewer's newest change. The first text typed into a card they just
+ * added joins the adding, so one undo takes the new card off instead of first emptying it.
+ */
+export function boardHistoryRemember(
+  history: ReadonlyArray<BoardHistoryItem>,
+  item: { readonly steps: BoardHistoryEntry; readonly seen: string },
+): ReadonlyArray<BoardHistoryItem> {
+  const last = history.at(-1);
+  const added = last !== undefined && "steps" in last && last.steps.length === 1 && last.steps[0];
+  const typed = item.steps.length === 1 && item.steps[0];
+  if (
+    added &&
+    typed &&
+    added.before === null &&
+    boardEditKey(added.target) === boardEditKey(typed.target) &&
+    valueKey(added.after) === valueKey(typed.before) &&
+    typed.before !== null &&
+    typed.after !== null &&
+    "text" in typed.before &&
+    typed.before.text === "" &&
+    "text" in typed.after &&
+    valueKey({ ...typed.before, text: typed.after.text }) === valueKey(typed.after)
+  ) {
+    const steps = [{ target: added.target, before: null, after: typed.after }];
+    return [...history.slice(0, -1), { steps, seen: item.seen }];
+  }
+  return boardHistoryWith(history, item);
+}
 
 /** When an agent's turn last changed the board, or "" when none has. */
 export const boardAgentTurnsSeen = (board: RoomBoard): string =>

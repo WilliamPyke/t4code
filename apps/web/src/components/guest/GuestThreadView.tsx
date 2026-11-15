@@ -84,7 +84,7 @@ import { useTheme } from "~/hooks/useTheme";
 import { cn, randomUUID } from "~/lib/utils";
 import { deriveActiveWorkStartedAt, derivePhase, deriveThreadAgentWorking } from "~/session-logic";
 import { useComposerDraftStore } from "~/composerDraftStore";
-import { useEnvironmentProviders } from "~/state/environments";
+import { useEnvironment, useEnvironmentProviders } from "~/state/environments";
 import { serverEnvironment } from "~/state/server";
 import { environmentThreadDetails, threadEnvironment, useEnvironmentThread } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -364,6 +364,7 @@ function GuestThreadSession({
   const { view, online, running, ownerCode } = useAtomValue(guestRoomAtom(share.shareId));
   // Mounting the thread opens the share's stream, which also says who is in the room.
   const thread = useEnvironmentThread(threadRef.environmentId, threadRef.threadId);
+  const retrying = useEnvironment(threadRef.environmentId)?.connection.phase === "reconnecting";
   const projection = Option.getOrNull(thread.data);
   const pendingRequests = useAtomValue(environmentThreadDetails.pendingRequestsAtom(threadRef));
   const loadEarlier = useAtomCommand(threadEnvironment.loadEarlierHistory, {
@@ -402,8 +403,18 @@ function GuestThreadSession({
   if (view === null || projection === null) {
     return (
       <GuestNotice
-        title={Option.isSome(thread.error) ? "Could not load this thread" : "Connecting..."}
-        {...(Option.isSome(thread.error) ? { detail: thread.error.value } : {})}
+        title={
+          retrying
+            ? "Retrying..."
+            : Option.isSome(thread.error)
+              ? "Could not load this thread"
+              : "Connecting..."
+        }
+        {...(retrying
+          ? { detail: "The owner's computer has not answered yet. Trying again." }
+          : Option.isSome(thread.error)
+            ? { detail: thread.error.value }
+            : {})}
       />
     );
   }

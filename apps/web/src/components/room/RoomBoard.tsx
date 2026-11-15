@@ -137,6 +137,7 @@ import {
   boardKeyEditsNote,
   type BoardMenuEntry,
   boardMenuEntries,
+  boardPushedBelow,
   boardTidy,
   boardTidySection,
   boardDragItems,
@@ -170,6 +171,7 @@ import {
   boardAgentTurnToUndo,
   boardAgentTurnsSeen,
   boardHistoryChanges,
+  boardHistoryRemember,
   boardHistoryWith,
   boardStepBefore,
   boardItemsInRect,
@@ -188,7 +190,9 @@ import {
   boardPersonKey,
   boardPersonName,
   boardPinScale,
+  boardPromptCard,
   boardPromptContext,
+  boardThreadBoxTitle,
   boardSelectionItems,
   boardSelectionRemoval,
   boardThreadBoxes,
@@ -255,6 +259,23 @@ import { BoardHistoryButtons } from "./RoomBoardHistory";
 import { AddReaction, ReactionChips } from "./RoomBoardReactions";
 import { CatchUpMark, CatchUpPill, useBoardCatchUp } from "./BoardCatchUp";
 import { VoteButton, boardVoteShortcut } from "./BoardVote";
+import {
+  AgentWorkMark,
+  BoardAskPopover,
+  boardAskShortcut,
+  isBoardAskKey,
+  lastBoardAskTarget,
+  rememberBoardAskTarget,
+  useBoardAgentWork,
+} from "./BoardAsk";
+import {
+  BOARD_ASK_NEW_BOX,
+  boardAskCards,
+  boardAskDefaultTarget,
+  boardAskLines,
+  boardAskSuggestions,
+  boardAskTargets,
+} from "./boardAsk.logic";
 import {
   BOARD_VOTE,
   boardByVotes,
@@ -633,6 +654,7 @@ const edgeAt = (x: number, y: number) =>
 const NO_FORMER_PEOPLE: BoardPeople["guests"] = [];
 const NO_BOXES: ReadonlySet<string> = new Set();
 const NO_SELECTION: ReadonlySet<string> = new Set();
+const NO_AGENT_TURNS: ReadonlyArray<RoomBoardAgentTurn> = [];
 const NO_REACTIONS: ReadonlyArray<RoomBoardReaction> = [];
 const NO_HISTORY: {
   readonly undo: ReadonlyArray<BoardHistoryItem>;
@@ -1109,7 +1131,7 @@ export function RoomBoard({
   const unread = useCommentUnread(shareId, openNote === draftNote ? null : openNote, viewer);
   const catchUp = useBoardCatchUp(viewKey ?? shareId, board.notes, viewer);
   const catchUpLabels = new Map(
-    catchUp.changes.map((note) => [
+    catchUp.changes.map(({ note }) => [
       note.id,
       `${boardPersonName(people, note.changed?.guestId)} added or changed this since you were here`,
     ]),
@@ -1124,6 +1146,18 @@ export function RoomBoard({
       .map((note) => [noteRef(note.id), boardNoteBox(note, view.zoom)] as const),
   ]);
   const threadBoxes = cards === undefined ? boardThreadBoxes(shown, title) : [];
+  // Where an agent is working: the cards its turn just added or changed, in its box's colour.
+  const agentWork = useBoardAgentWork(room === null ? null : (shown.agentTurns ?? NO_AGENT_TURNS));
+  const agentWorkOf = (noteId: string) => {
+    const work = agentWork.get(noteId);
+    if (work === undefined) return undefined;
+    const box = threadBoxes.find((candidate) => candidate.id === work.boxId);
+    return {
+      name: box === undefined ? "Agent" : box.title || boardBoxName(box, people),
+      color: boardCursorColor(guests, box?.guestId),
+      stamp: work.stamp,
+    };
+  };
   const contexts = new Map(
     threadBoxes.map((box) => [box.id, boardPromptContext(shown, people, messages, box.id)]),
   );
@@ -1215,7 +1249,7 @@ export function RoomBoard({
       queueMicrotask(() => {
         batch.current = null;
         setHistory((current) => ({
-          undo: boardHistoryWith(current.undo, { steps, seen }),
+          undo: boardHistoryRemember(current.undo, { steps, seen }),
           redo: [],
         }));
       });
@@ -2067,9 +2101,55 @@ export function RoomBoard({
         { kind: "note", id: section.note.id },
         settleBoardValue({ ...noteNow(section.note), size: laid.size }),
       );
+      // What the grown section would cover moves down, in the same undo step.
+      const self = noteRef(section.note.id);
+      const others = [
+        ...(surfaceRef.current?.querySelectorAll<HTMLElement>(
+          "[data-board-item]:not([data-board-pin])",
+        ) ?? []),
+      ].flatMap((element) => {
+        const ref = element.dataset.boardItem ?? "";
+        return ref === self || items.some((item) => item.ref === ref)
+          ? []
+          : [
+              {
+                ref,
+                rect: drawnRect(element),
+                section: element.hasAttribute("data-board-section"),
+              },
+            ];
+      });
+      const grown = { ...section.rect, width: laid.size.w, height: laid.size.h };
+      const pushed = boardPushedBelow(section.rect, grown, others);
+      for (const { target, value } of boardSelectionItems(shown, positions, pushed.refs)) {
+        const now = "text" in value ? noteNow(value) : value;
+        send(target, settleBoardValue({ ...now, y: now.y + pushed.dy }));
+      }
     }
   };
-  const tidySelection = () => tidyItems(selectedItems);
+  // A selection that sits wholly in one section is tidied inside it, not moved out of it.
+  const sectionOfSelection = () => {
+    const centres = selectedItems.flatMap((item) => {
+      const element = drawnItem(boardEditKey(item.target));
+      if (element === null) return [];
+      const rect = drawnRect(element);
+      return [{ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }];
+    });
+    if (centres.length === 0) return undefined;
+    for (const note of shown.notes) {
+      if (note.section !== true || selected.has(noteRef(note.id))) continue;
+      const element = drawnItem(noteRef(note.id));
+      if (element === null) continue;
+      const rect = drawnRect(element);
+      const holds = centres.every(
+        ({ x, y }) =>
+          x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height,
+      );
+      if (holds) return { note, rect };
+    }
+    return undefined;
+  };
+  const tidySelection = () => tidyItems(selectedItems, false, sectionOfSelection());
   const showChange = (note: RoomBoardNote) => {
     const ref = noteRef(note.id);
     const element = drawnItem(ref);
@@ -2082,7 +2162,7 @@ export function RoomBoard({
     }
     if (element !== null) reveal(drawnRect(element));
   };
-  const sortSelectionByVotes = () => tidyItems(selectedItems, true);
+  const sortSelectionByVotes = () => tidyItems(selectedItems, true, sectionOfSelection());
   // What sits over a section, as dragging it would carry, laid out inside it.
   const tidySection = (section: RoomBoardNote, byVotes = false) => {
     const key = noteRef(section.id);
@@ -2151,6 +2231,113 @@ export function RoomBoard({
     // The artifact and its line wait in the note's queue; the prompt naming it goes after them.
     await queueChange(noteRef(id), () => Promise.resolve(true));
     await onPromptBox(boxId, { text: BOARD_PAGE_TO_ARTIFACT_TEXT, cards: [], artifactId: id });
+  };
+  // Asking an agent about the selection: the cards go along lines into a box, as drawn ones do,
+  // so everyone sees what it was given. `asking` is the selection the ask is anchored to.
+  const [asking, setAsking] = useState<ReadonlySet<string> | null>(null);
+  const askAfterMenu = useRef(false);
+  const askKey = viewKey ?? shareId ?? title;
+  const askNotes = selectedNotes.filter((note) => note.kind !== "thread" && note.section !== true);
+  const askCards = boardAskCards(askNotes, (note) =>
+    boardPromptCard(note, people, boardNoteQuote(note, messages)),
+  );
+  const askTargets =
+    cards !== undefined || onPromptBox === undefined || !canEdit
+      ? []
+      : boardAskTargets(threadBoxes, viewer, cannotAddThread === null);
+  const canAsk = askCards.cards.length > 0 && askTargets.length > 0;
+  // An ask whose cards went, or that this person may no longer send, closes and stays closed.
+  if (asking !== null && !canAsk) setAsking(null);
+  const openAsk = () => {
+    if (canAsk) setAsking(new Set(selected));
+  };
+  // Where the cards asked about are drawn, kept inside the board, for the ask to sit beside.
+  const askAnchor = (refs: ReadonlySet<string>) => {
+    const area = surfaceRef.current?.getBoundingClientRect() ?? new DOMRect();
+    const rects = [...refs].flatMap((ref) => drawnItem(ref)?.getBoundingClientRect() ?? []);
+    if (rects.length === 0) return area;
+    const left = Math.max(area.left, Math.min(...rects.map((rect) => rect.left)));
+    const top = Math.max(area.top, Math.min(...rects.map((rect) => rect.top)));
+    const right = Math.min(area.right, Math.max(...rects.map((rect) => rect.right)));
+    const bottom = Math.min(area.bottom, Math.max(...rects.map((rect) => rect.bottom)));
+    return new DOMRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top));
+  };
+  const revealItem = useStableCallback((ref: string) => {
+    const element = drawnItem(ref);
+    if (element !== null) reveal(drawnRect(element));
+  });
+  const askAgent = async (target: string, text: string): Promise<boolean> => {
+    if (onPromptBox === undefined || onChange === undefined) return false;
+    const made = target === BOARD_ASK_NEW_BOX;
+    const boxId = made ? randomUUID() : target;
+    const boxRef = boardBoxRef(boxId);
+    // The box, its lines and then the prompt go in this order.
+    const queue = made ? noteRef(boxId) : `ask:${boxId}`;
+    const plan = boardAskLines(
+      edges,
+      askCards.cards.map((card) => card.ref),
+      boxRef,
+      ROOM_BOARD_MAX_EDGES,
+    );
+    const lines = plan.add.map((from) => ({ id: randomUUID(), from, to: boxRef }));
+    // Part of asking, which undo does not take back: the lines are marked sent once it goes.
+    unrecorded.current = true;
+    try {
+      if (made) {
+        const bounds = boardBounds(
+          [...selected].flatMap((ref) => {
+            const element = drawnItem(ref);
+            return element === null ? [] : [drawnRect(element)];
+          }),
+        );
+        const size = boardNewNoteSize("thread");
+        const area = boardAreaOf(surfaceRef.current);
+        const at =
+          bounds === null
+            ? freeSpot("thread", size, false)
+            : besideBoardItem(
+                bounds,
+                size,
+                takenRects(),
+                area === null ? undefined : visibleBoardRect(view, area),
+              );
+        send(
+          { kind: "note", id: boxId },
+          settleBoardValue({
+            id: boxId,
+            text: boardThreadBoxTitle(text),
+            ...at,
+            kind: "thread",
+            ...(viewer === null ? {} : { guestId: viewer }),
+          }),
+          queue,
+        );
+      }
+      for (const line of lines) send({ kind: "edge", id: line.id }, line, queue);
+    } finally {
+      unrecorded.current = false;
+    }
+    await queueChange(queue, () => Promise.resolve(true));
+    const going = new Set(plan.going);
+    const artifact = made ? null : (contexts.get(boxId)?.artifact ?? null);
+    const sent = await onPromptBox(boxId, {
+      text,
+      cards: askCards.cards.filter((card) => going.has(card.ref)),
+      artifactId: artifact?.id ?? null,
+    }).catch(() => false);
+    if (!sent) {
+      unrecorded.current = true;
+      try {
+        for (const line of lines) send({ kind: "edge", id: line.id }, null, queue);
+        if (made) send({ kind: "note", id: boxId }, null, queue);
+      } finally {
+        unrecorded.current = false;
+      }
+      return false;
+    }
+    rememberBoardAskTarget(askKey, boxId);
+    revealItem(boxRef);
+    return true;
   };
   // Brings an item into view if it is not, and puts the caret in its prompt box.
   const focusItem = (ref: string) => {
@@ -2679,6 +2866,17 @@ export function RoomBoard({
           : { ...card, actions: card.actions.filter((action) => action.destructive !== true) },
       groups: [
         pick("add-note", "add-task", "add-section", "add-thread", "add-artifact"),
+        // The ask opens once the menu has closed, so the menu does not take its focus back.
+        ref !== null && canAsk
+          ? [
+              {
+                label: "Ask an agent…",
+                run: () => {
+                  askAfterMenu.current = true;
+                },
+              },
+            ]
+          : [],
         pick("vote", "paste", "duplicate", "copy", "copy-link"),
         pick("tidy", "sort-votes", "group", "select-all", "fit"),
         [
@@ -3530,6 +3728,11 @@ export function RoomBoard({
               voteOn(selectedNotes);
               return;
             }
+            if (isBoardAskKey(event) && isBoardKey(event.target) && canAsk) {
+              event.preventDefault();
+              openAsk();
+              return;
+            }
             // Typing on a note selected alone types into it, as a click on it would.
             const only = selected.size === 1 ? [...selected][0] : undefined;
             if (
@@ -3831,6 +4034,11 @@ export function RoomBoard({
                   onMove={dragBy}
                   onDrop={dropItem}
                   footer={roomParts.prompt}
+                  steadyFor={
+                    roomBox === undefined
+                      ? undefined
+                      : { boxId: roomBox.id, begun: messages.length > 0 || agentWorking }
+                  }
                 >
                   {roomParts.body}
                   <RoomCode
@@ -4004,6 +4212,7 @@ export function RoomBoard({
                     onPickColor={pickColor}
                     onReact={reactTo}
                     changedLabel={catchUpLabels.get(note.id)}
+                    agentWork={agentWorkOf(note.id)}
                     compact={view.zoom < COMPACT_CARD_ZOOM}
                     menuOf={noteMenu}
                     box={
@@ -4089,6 +4298,7 @@ export function RoomBoard({
               onDelete={deleteSelection}
               onClear={() => setSelection(NO_SELECTION)}
               actions={[
+                ...(canAsk ? [{ label: "Ask an agent", icon: <BotIcon />, run: openAsk }] : []),
                 ...(canEdit && selected.size > 1
                   ? [{ label: "Tidy", icon: <LayoutGridIcon />, run: tidySelection }]
                   : []),
@@ -4173,6 +4383,10 @@ export function RoomBoard({
                 const added = typeInAfterMenu.current;
                 typeInAfterMenu.current = null;
                 if (added !== null) return typeIn(added);
+                if (askAfterMenu.current) {
+                  askAfterMenu.current = false;
+                  return openAsk();
+                }
                 const surface = surfaceRef.current;
                 if (surface !== null && !surface.contains(document.activeElement)) {
                   surface.focus({ preventScroll: true });
@@ -4180,6 +4394,30 @@ export function RoomBoard({
               }}
             />
           </div>
+        )}
+        {asking === null || !canAsk ? null : (
+          <BoardAskPopover
+            anchor={{ getBoundingClientRect: () => askAnchor(asking) }}
+            count={askCards.cards.length}
+            left={askCards.left}
+            suggestions={boardAskSuggestions(
+              askNotes.filter((note) =>
+                askCards.cards.some((card) => card.ref === noteRef(note.id)),
+              ),
+            )}
+            targets={askTargets}
+            initialTarget={
+              boardAskDefaultTarget(askTargets, {
+                selectedBoxes: threadBoxes
+                  .filter((box) => asking.has(boardBoxRef(box.id)))
+                  .map((box) => box.id),
+                lastUsed: lastBoardAskTarget(askKey),
+              }) ?? BOARD_ASK_NEW_BOX
+            }
+            finalFocus={surfaceRef}
+            onSend={askAgent}
+            onClose={() => setAsking(null)}
+          />
         )}
       </div>
     </div>
@@ -4289,6 +4527,7 @@ function LineLegend() {
           <span className="mt-1 border-t border-board-hairline pt-1.5">
             {boardVoteShortcut()} votes for the selected cards, or takes your votes back
           </span>
+          <span>{boardAskShortcut()} asks an agent about the selected cards</span>
         </div>
       </PopoverPopup>
     </Popover>
@@ -4394,6 +4633,36 @@ function ItemHandles({
   );
 }
 
+/**
+ * A selected note's finger-sized controls on a touch screen: above the note, or below it where the
+ * board's header would cover them.
+ */
+function TouchNoteControls({ children }: { readonly children: ReactNode }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- placed against the header where the browser drew it, after every render that may have panned the note
+  useLayoutEffect(() => {
+    const controls = ref.current;
+    const note = controls?.parentElement;
+    if (controls === null || note === null || note === undefined) return;
+    const header =
+      note
+        .closest('[role="application"]')
+        ?.parentElement?.querySelectorAll('[data-board-chrome="top"]') ?? [];
+    const cover = Math.max(0, ...[...header].map((each) => each.getBoundingClientRect().bottom));
+    const height = controls.getBoundingClientRect().height;
+    controls.toggleAttribute("data-below", note.getBoundingClientRect().top - height < cover);
+  });
+  return (
+    <div
+      ref={ref}
+      className="absolute bottom-full left-0 z-20 hidden origin-bottom-left pb-2 [scale:var(--board-touch-scale,1)] pointer-coarse:flex data-below:top-full data-below:bottom-auto data-below:origin-top-left data-below:pt-2 data-below:pb-0"
+      onPointerDown={stopPointer}
+    >
+      {children}
+    </div>
+  );
+}
+
 function BoardNote({
   note,
   people,
@@ -4429,9 +4698,14 @@ function BoardNote({
   menuOf,
   onAddNext,
   changedLabel,
+  agentWork,
 }: {
   /** Why it is marked as changed since this person was last here; absent when it is not. */
   readonly changedLabel?: string | undefined;
+  /** The box whose agent just added or changed it, for a few seconds. */
+  readonly agentWork?:
+    | { readonly name: string; readonly color: string; readonly stamp: number }
+    | undefined;
   /** Adds a blank note beside this one, ready to type. Absent where none can be added. */
   readonly onAddNext?: (() => void) | undefined;
   /** Drawn too small for its header's buttons, which fold into one menu. */
@@ -4568,6 +4842,9 @@ function BoardNote({
       }}
     >
       {changedLabel === undefined ? null : <CatchUpMark label={changedLabel} />}
+      {agentWork === undefined ? null : (
+        <AgentWorkMark key={agentWork.stamp} name={agentWork.name} color={agentWork.color} />
+      )}
       <div
         className={cn(
           "flex cursor-grab items-center gap-1 active:cursor-grabbing",
@@ -4902,10 +5179,7 @@ function BoardNote({
       {alone && paper && (onAddNext !== undefined || onReact !== undefined) ? (
         // A touch screen has no hover: the selected note's +1 and next note sit above it,
         // finger-sized at any zoom.
-        <div
-          className="absolute bottom-full left-0 z-20 hidden origin-bottom-left pb-2 [scale:var(--board-touch-scale,1)] pointer-coarse:flex"
-          onPointerDown={stopPointer}
-        >
+        <TouchNoteControls>
           <BoardFloat className="gap-1 p-1">
             {onReact === undefined ? null : (
               <VoteButton
@@ -4926,7 +5200,7 @@ function BoardNote({
               </Button>
             )}
           </BoardFloat>
-        </div>
+        </TouchNoteControls>
       ) : null}
       {alone && onAddNext !== undefined ? (
         <span
@@ -5056,11 +5330,17 @@ function BoardCard({
   onDrop,
   footer,
   color,
+  steadyFor,
   children,
 }: {
   readonly at: BoardPoint;
   readonly title: string;
   readonly kind: string;
+  /**
+   * The conversation this card shows. Once it has begun, its content keeps one height and
+   * scrolls, so a run starting or ending does not resize the card under anyone.
+   */
+  readonly steadyFor?: { readonly boxId: string; readonly begun: boolean } | undefined;
   /** Whose card it is, as a dot in their person colour on its title bar. */
   readonly color?: string | undefined;
   readonly dashed?: boolean;
@@ -5086,6 +5366,8 @@ function BoardCard({
     { x: at.x, y: at.y, w: size?.w, h: size?.h },
     useBoardLiveDrag(cardRef(id)),
   );
+  const running = useBoxProgress(steadyFor?.boxId ?? "") !== undefined;
+  const steady = steadyFor !== undefined && (steadyFor.begun || running);
   return (
     <section
       className={cn(
@@ -5119,7 +5401,9 @@ function BoardCard({
         {action}
         <BoardChip tone={boardCardKindTone(kind)}>{kind}</BoardChip>
       </header>
-      <BoardScrollTail className={cn("p-3", size === undefined ? "max-h-80" : "flex-1")}>
+      <BoardScrollTail
+        className={cn("p-3", size !== undefined ? "flex-1" : steady ? "h-80" : "max-h-80")}
+      >
         {children}
       </BoardScrollTail>
       {footer === undefined ? null : (

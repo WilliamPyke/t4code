@@ -6,9 +6,11 @@ import {
   use,
   useLayoutEffect,
   useRef,
+  useState,
 } from "react";
 
 import { useMediaQuery } from "~/hooks/useMediaQuery";
+import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 
 import { useInlineActionConfirm } from "../pullRequest/useInlineActionConfirm";
@@ -113,8 +115,9 @@ export interface SelectionAction {
   readonly run: () => void;
 }
 
-// A finger, or a screen too narrow for the labels, gets the bar docked above the toolbar.
-const DOCKED_QUERY = "(pointer: coarse), (max-width: 639px)";
+// A finger, or a board too narrow for the labels, gets the bar docked above the toolbar.
+const COARSE_QUERY = "(pointer: coarse)";
+const DOCKED_BELOW_WIDTH = 640;
 const DOCK_GAP = 8;
 
 /**
@@ -147,8 +150,18 @@ export function SelectionBar({
 }) {
   const confirm = useInlineActionConfirm("board-selection");
   const armed = confirm.isArmed("delete");
-  const docked = useMediaQuery(DOCKED_QUERY);
+  const coarse = useMediaQuery(COARSE_QUERY);
+  const [narrow, setNarrow] = useState(false);
+  const docked = coarse || narrow;
   const barRef = useRef<HTMLDivElement | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- follows the board surface's own width, which a split pane or narrow window sets, before the bar is painted
+  useLayoutEffect(() => {
+    const board = barRef.current?.offsetParent;
+    if (!(board instanceof HTMLElement)) return;
+    const measure = () => setNarrow(board.clientWidth < DOCKED_BELOW_WIDTH);
+    measure();
+    return observeResize(board, measure);
+  }, []);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- placed against the cards where the browser drew them, after every render that may have moved them or the view
   useLayoutEffect(() => {
     const bar = barRef.current;

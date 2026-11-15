@@ -942,6 +942,19 @@ export function decideGuestShareCommand(input: {
       }
       const { room, withBoard } = named;
       const before = room.board ?? EMPTY_ROOM_BOARD;
+      const agent = command.agent;
+      // A guest's change is their own box's agent's only when they asked it, in a turn of that box.
+      if (
+        agent !== undefined &&
+        command.author !== null &&
+        (roomBoxOn(room, agent.boxId)?.guestId !== command.author ||
+          agent.askedBy !== command.author ||
+          before.agentTurns?.some(
+            (turn) => turn.id === agent.turnId && turn.guestId !== command.author,
+          ) === true)
+      ) {
+        return Result.fail(GUEST_FAILURE.boxNotYours);
+      }
       // A removed thread box forgets its thread, which stays the owner's.
       return Result.map(
         applyRoomBoardChange(
@@ -953,14 +966,15 @@ export function decideGuestShareCommand(input: {
         ),
         (changed) => {
           const board =
-            command.agent === undefined || command.author !== null
+            agent === undefined
               ? changed
               : roomBoardWithAgentChange(
                   before,
                   changed,
                   command.change,
-                  command.agent,
+                  agent,
                   DateTime.formatIso(now),
+                  command.author,
                 );
           return board === before
             ? thread

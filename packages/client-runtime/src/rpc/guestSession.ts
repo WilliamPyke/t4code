@@ -31,6 +31,7 @@ import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -192,6 +193,36 @@ function eventStreamLines(
 }
 
 const DATA_PREFIX = "data: ";
+
+/**
+ * How long a share's stream may take to send its first event. An owner's host that answers the
+ * session check but never starts the stream would otherwise leave the guest connecting forever.
+ */
+export const GUEST_STREAM_FIRST_EVENT_TIMEOUT = "15 seconds";
+
+/** The stream, failing as a dropped connection when its first element takes longer than `wait`. */
+const firstWithin =
+  (wait: Duration.Input) =>
+  <A>(stream: Stream.Stream<A, GuestStreamStopped>): Stream.Stream<A, GuestStreamStopped> =>
+    Stream.unwrap(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const late = yield* Deferred.make<void, GuestStreamStopped>();
+        yield* Effect.sleep(wait).pipe(
+          Effect.andThen(Deferred.isDone(started)),
+          Effect.flatMap((done) =>
+            done ? Effect.void : Deferred.fail(late, new GuestStreamStopped({ status: null })),
+          ),
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        return stream.pipe(
+          Stream.tap(() => Deferred.succeed(started, undefined)),
+          Stream.merge(Stream.fromEffect(Deferred.await(late)).pipe(Stream.drain), {
+            haltStrategy: "left",
+          }),
+        );
+      }),
+    );
 
 /**
  * The `data:` payloads of one of a share's server-sent event routes, until the server closes
@@ -508,6 +539,7 @@ export const connectGuestSession = Effect.fn("GuestSession.connect")(function* (
     RpcClientError.RpcClientError
   > =>
     events(`${GUEST_ROUTE_PREFIX}/stream`).pipe(
+      firstWithin(GUEST_STREAM_FIRST_EVENT_TIMEOUT),
       Stream.map(parseGuestStreamEvent),
       Stream.filter((event) => event !== null),
       Stream.takeUntil((event) => event.type === "ended"),

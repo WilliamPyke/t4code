@@ -1,16 +1,23 @@
 import {
   CommandId,
+  type GuestId,
+  type GuestShareId,
   ROOM_BOARD_MAX_CARD_SIZE,
   ROOM_BOARD_NOTE_MAX_LENGTH,
   ROOM_BOARD_ROOM_BOX,
   ROOM_BOARD_THREAD_CARD,
   type RoomBoard,
+  type RoomBoardAgentAddInput,
+  type RoomBoardAgentChangeRequest,
   type RoomBoardAgentMark,
+  type RoomBoardAgentResult,
+  type RoomBoardAgentUpdateInput,
+  type RoomBoardAgentView,
   type RoomBoardChange,
   type RoomBoardNote,
   type RoomBoardSize,
+  type SharedThreadJoinError,
   type ThreadId,
-  TrimmedNonEmptyString,
   roomBoardCardRef,
   roomBoardNoteRef,
 } from "@t3tools/contracts";
@@ -36,77 +43,40 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { ROOM_THREAD_ORIGIN, roomBoardNoteSize, roomThreadCardSize } from "./RoomBoardSummary.ts";
 import * as RoomBoxes from "./RoomBoxes.ts";
+import * as SharedRoomLink from "./SharedRoomLink.ts";
 
-/** Changes one call makes at most. */
-const ROOM_BOARD_AGENT_MAX_CHANGES = 20;
-
-const CardText = TrimmedNonEmptyString.check(Schema.isMaxLength(ROOM_BOARD_NOTE_MAX_LENGTH));
-/** A card as an agent names it: its id, or `thread` for the room thread's own card. */
-const CardId = TrimmedNonEmptyString.check(Schema.isMaxLength(170));
-/** A section's id or title. A title no section has makes a new one. */
-const SectionName = CardText;
-
-export const RoomBoardAgentAddInput = Schema.Struct({
-  cards: Schema.Array(
-    Schema.Struct({ text: CardText, task: Schema.optional(Schema.Boolean) }),
-  ).check(Schema.isMaxLength(ROOM_BOARD_AGENT_MAX_CHANGES)),
-  section: Schema.optional(SectionName),
-});
-export type RoomBoardAgentAddInput = typeof RoomBoardAgentAddInput.Type;
-
-export const RoomBoardAgentUpdateInput = Schema.Struct({
-  changes: Schema.Array(
-    Schema.Struct({
-      id: CardId,
-      text: Schema.optional(CardText),
-      done: Schema.optional(Schema.Boolean),
-      section: Schema.optional(SectionName),
-      lineTo: Schema.optional(CardId),
-    }),
-  ).check(Schema.isMinLength(1), Schema.isMaxLength(ROOM_BOARD_AGENT_MAX_CHANGES)),
-});
-export type RoomBoardAgentUpdateInput = typeof RoomBoardAgentUpdateInput.Type;
-
-export const RoomBoardAgentView = Schema.Struct({
-  /** The id of this thread's own box. */
-  you: Schema.String,
-  cards: Schema.Array(
-    Schema.Struct({
-      id: Schema.String,
-      kind: Schema.String,
-      text: Schema.String,
-      by: Schema.String,
-      done: Schema.optional(Schema.Boolean),
-      section: Schema.optional(Schema.String),
-    }),
-  ),
-  lines: Schema.Array(Schema.Struct({ from: Schema.String, to: Schema.String })),
-});
-export type RoomBoardAgentView = typeof RoomBoardAgentView.Type;
-
-const Refusal = Schema.Struct({ card: Schema.String, reason: Schema.String });
-const NewSection = Schema.Struct({ id: Schema.String, title: Schema.String });
-
-export const RoomBoardAgentResult = Schema.Struct({
-  /** Cards added, or changed, by id. */
-  done: Schema.Array(Schema.String),
-  /** Sections this call made. */
-  sections: Schema.optional(Schema.Array(NewSection)),
-  /** What the board did not take, and why. */
-  refused: Schema.Array(Refusal),
-});
-export type RoomBoardAgentResult = typeof RoomBoardAgentResult.Type;
+const AGENT_ERROR_MESSAGES = {
+  not_on_board:
+    "This thread is not on a board. Only a board's own thread or one of its thread boxes can use it.",
+  board_gone: "This thread's board is no longer there.",
+  unreachable: "This box can't reach the room's board from here.",
+  too_fast: "The room's board is taking too many changes from this machine. Try again in a minute.",
+} as const;
 
 export class RoomBoardAgentError extends Schema.TaggedError<RoomBoardAgentError>()(
   "RoomBoardAgentError",
-  { reason: Schema.Literals(["not_on_board", "board_gone"]) },
+  { reason: Schema.Literals(["not_on_board", "board_gone", "unreachable", "too_fast"]) },
 ) {
   override get message(): string {
-    return this.reason === "not_on_board"
-      ? "This thread is not on a board. Only a board's own thread or one of its thread boxes can use it."
-      : "This thread's board is no longer there.";
+    return AGENT_ERROR_MESSAGES[this.reason];
   }
 }
+
+/**
+ * A guest's own box on a room this server shares, whose agent runs on the guest's machine and asks
+ * for the board through the room's token. Its changes are that guest's, marked as that box's agent.
+ */
+export interface RoomGuestBox {
+  readonly roomThreadId: ThreadId;
+  readonly shareId: GuestShareId;
+  readonly guestId: GuestId;
+  readonly boxId: string;
+  readonly turnId?: string;
+  readonly model?: string;
+}
+
+/** Who asks: a thread here, by id, or a guest's own box from their machine. */
+type Caller = ThreadId | RoomGuestBox;
 
 /** The board a thread's agent works on, kept up to date with what it changed in this call. */
 interface Target {
@@ -114,6 +84,8 @@ interface Target {
   readonly roomTitle: string;
   readonly room: ThreadRoom;
   readonly boxId: string;
+  /** Whose changes they are: null for the owner, or the guest whose machine runs the agent. */
+  readonly author: GuestId | null;
   readonly agent: RoomBoardAgentMark;
   board: RoomBoard;
 }
@@ -240,18 +212,19 @@ const cleanText = (text: string) =>
 /**
  * The board a thread's agent works on: the one its own thread or thread box is on. It reads it, and
  * adds and changes cards there as the room's owner would, marked as its own, through the same rules
- * as any change. It never removes a card.
+ * as any change. It never removes a card. A thread here whose box is on a room another server shares
+ * asks that server, which does the same for that box, as its guest's.
  */
 export class RoomBoardAgent extends Context.Service<
   RoomBoardAgent,
   {
-    readonly read: (threadId: ThreadId) => Effect.Effect<RoomBoardAgentView, RoomBoardAgentError>;
+    readonly read: (by: Caller) => Effect.Effect<RoomBoardAgentView, RoomBoardAgentError>;
     readonly add: (
-      threadId: ThreadId,
+      by: Caller,
       input: RoomBoardAgentAddInput,
     ) => Effect.Effect<RoomBoardAgentResult, RoomBoardAgentError>;
     readonly update: (
-      threadId: ThreadId,
+      by: Caller,
       input: RoomBoardAgentUpdateInput,
     ) => Effect.Effect<RoomBoardAgentResult, RoomBoardAgentError>;
   }
@@ -263,6 +236,7 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const random = yield* SecureRandom.SecureRandom;
+  const links = yield* SharedRoomLink.SharedRoomLink;
 
   const fail = (reason: RoomBoardAgentError["reason"]) => new RoomBoardAgentError({ reason });
   const uuid = random.uuidV4().pipe(Effect.orDie);
@@ -285,7 +259,7 @@ const make = Effect.gen(function* () {
     return { runId, run: runs.find((run) => run.id === runId), turnItems };
   });
 
-  const targetOf = Effect.fn("RoomBoardAgent.targetOf")(function* (threadId: ThreadId) {
+  const threadTargetOf = Effect.fn("RoomBoardAgent.threadTargetOf")(function* (threadId: ThreadId) {
     const thread = yield* threadOf(threadId, "not_on_board");
     if (thread.deletedAt !== null || thread.archivedAt !== null) return yield* fail("board_gone");
     const providers = yield* providerRegistry.getProviders;
@@ -314,6 +288,7 @@ const make = Effect.gen(function* () {
         roomTitle: thread.title,
         room,
         boxId: ROOM_BOARD_ROOM_BOX,
+        author: null,
         agent: agent(ROOM_BOARD_ROOM_BOX, room),
         board: room.board ?? EMPTY_ROOM_BOARD,
       } satisfies Target;
@@ -336,10 +311,92 @@ const make = Effect.gen(function* () {
       roomTitle: roomThread.title,
       room,
       boxId: box.boxId,
+      author: null,
       agent: agent(box.boxId, room),
       board: room.board ?? EMPTY_ROOM_BOARD,
     } satisfies Target;
   });
+
+  /** A guest's own box here, checked to be theirs on the board the room has now. */
+  const guestTargetOf = Effect.fn("RoomBoardAgent.guestTargetOf")(function* (box: RoomGuestBox) {
+    const thread = yield* threadOf(box.roomThreadId, "board_gone");
+    if (thread.deletedAt !== null || thread.archivedAt !== null) return yield* fail("board_gone");
+    const room = threadRoomOf(thread);
+    if (room.id !== box.shareId) return yield* fail("board_gone");
+    if (roomBoxOn(room, box.boxId)?.guestId !== box.guestId) return yield* fail("not_on_board");
+    const model = sanitizeLinkedPrompt(box.model ?? "")
+      .text.replace(/\s+/g, " ")
+      .trim();
+    return {
+      roomThreadId: thread.id,
+      roomTitle: thread.title,
+      room,
+      boxId: box.boxId,
+      author: box.guestId,
+      agent: {
+        boxId: box.boxId,
+        ...(model === "" ? {} : { model }),
+        ...(box.turnId === undefined ? {} : { turnId: box.turnId }),
+        askedBy: box.guestId,
+      },
+      board: room.board ?? EMPTY_ROOM_BOARD,
+    } satisfies Target;
+  });
+
+  const targetOf = (by: Caller) =>
+    typeof by === "string" ? threadTargetOf(by) : guestTargetOf(by);
+
+  const fromLink = (error: SharedThreadJoinError) =>
+    fail(
+      error.reason === "room_ended" || error.reason === "not_in_room"
+        ? "board_gone"
+        : error.reason === "thread_unavailable"
+          ? "not_on_board"
+          : error.reason === "too_fast"
+            ? "too_fast"
+            : "unreachable",
+    );
+
+  /**
+   * The run and model of a thread here whose own box is on a room another server shares, or null
+   * when the thread's board, if any, is this server's.
+   */
+  const elsewhere = Effect.fn("RoomBoardAgent.elsewhere")(function* (by: Caller) {
+    if (typeof by !== "string") return null;
+    const thread = yield* threadOf(by, "not_on_board");
+    if (
+      thread.roomLink?.boxId === undefined ||
+      thread.guestShare != null ||
+      thread.roomBoard != null
+    ) {
+      return null;
+    }
+    if (thread.deletedAt !== null || thread.archivedAt !== null) return yield* fail("board_gone");
+    const model = RoomBoxes.roomBoxModelName(
+      thread.modelSelection,
+      yield* providerRegistry.getProviders,
+    );
+    const runId = yield* orchestrator.getThreadShell(by).pipe(
+      Effect.map((shell) => shell?.latestRunId ?? null),
+      Effect.orElseSucceed(() => null),
+    );
+    return {
+      threadId: by,
+      request: {
+        ...(runId === null ? {} : { turnId: runId }),
+        ...(model === "" ? {} : { model }),
+      },
+    };
+  });
+
+  const changeElsewhere = (threadId: ThreadId, change: RoomBoardAgentChangeRequest["change"]) =>
+    Effect.flatMap(elsewhere(threadId), (away) =>
+      away === null
+        ? Effect.succeed(null)
+        : links
+            .changeBoard(away.threadId, { ...away.request, change })
+            .pipe(Effect.mapError(fromLink)),
+    );
 
   /**
    * One change, checked against the board as this call left it so a refusal says why, then made
@@ -350,7 +407,13 @@ const make = Effect.gen(function* () {
     change: RoomBoardChange,
   ) {
     const at = DateTime.formatIso(yield* DateTime.now);
-    const checked = applyRoomBoardChange(target.board, roomScope(target.room), null, change, at);
+    const checked = applyRoomBoardChange(
+      target.board,
+      roomScope(target.room),
+      target.author,
+      change,
+      at,
+    );
     if (Result.isFailure(checked)) return checked.failure;
     const commandId = CommandId.make(`server:room-board-agent:${yield* uuid}`);
     const refused = yield* orchestrator
@@ -359,7 +422,7 @@ const make = Effect.gen(function* () {
         commandId,
         threadId: target.roomThreadId,
         shareId: target.room.id,
-        author: null,
+        author: target.author,
         change,
         agent: target.agent,
       })
@@ -448,8 +511,10 @@ const make = Effect.gen(function* () {
     return Result.succeed(id);
   });
 
-  const read = Effect.fn("RoomBoardAgent.read")(function* (threadId: ThreadId) {
-    const target = yield* targetOf(threadId);
+  const read = Effect.fn("RoomBoardAgent.read")(function* (caller: Caller) {
+    const away = yield* elsewhere(caller);
+    if (away !== null) return yield* links.readBoard(away.threadId).pipe(Effect.mapError(fromLink));
+    const target = yield* targetOf(caller);
     const ownerName = yield* serverSettings.getSettings.pipe(
       Effect.map((settings) => settings.guestOwnerName),
       Effect.orElseSucceed(() => ""),
@@ -498,10 +563,12 @@ const make = Effect.gen(function* () {
   });
 
   const add = Effect.fn("RoomBoardAgent.add")(function* (
-    threadId: ThreadId,
+    by: Caller,
     input: RoomBoardAgentAddInput,
   ) {
-    const target = yield* targetOf(threadId);
+    const away = typeof by === "string" ? yield* changeElsewhere(by, { add: input }) : null;
+    if (away !== null) return away;
+    const target = yield* targetOf(by);
     const done: Array<string> = [];
     const refused: Array<{ readonly card: string; readonly reason: string }> = [];
     const made: Array<{ readonly id: string; readonly title: string }> = [];
@@ -544,10 +611,12 @@ const make = Effect.gen(function* () {
   });
 
   const update = Effect.fn("RoomBoardAgent.update")(function* (
-    threadId: ThreadId,
+    by: Caller,
     input: RoomBoardAgentUpdateInput,
   ) {
-    const target = yield* targetOf(threadId);
+    const away = typeof by === "string" ? yield* changeElsewhere(by, { update: input }) : null;
+    if (away !== null) return away;
+    const target = yield* targetOf(by);
     const done: Array<string> = [];
     const refused: Array<{ readonly card: string; readonly reason: string }> = [];
     const made: Array<{ readonly id: string; readonly title: string }> = [];

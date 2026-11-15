@@ -76,7 +76,9 @@ import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as CheckpointDiffQuery from "../checkpointing/CheckpointDiffQuery.ts";
 import * as GuestShareService from "./GuestShareService.ts";
+import * as RoomBoardAgent from "./RoomBoardAgent.ts";
 import * as RoomBoxes from "./RoomBoxes.ts";
+import * as SharedRoomLink from "./SharedRoomLink.ts";
 import * as RoomCodeDiffs from "./RoomCodeDiffs.ts";
 import * as RoomPullRequests from "./RoomPullRequests.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
@@ -349,6 +351,10 @@ const layerPullRequests = Layer.mock(PullRequestService.PullRequestService)({
   activity: () => Effect.fail(new PullRequestUnavailableError({ reason: "provider-unsupported" })),
 });
 const layerTest = GuestShareService.layer.pipe(
+  // Every board here is this server's, so no box asks another.
+  Layer.provideMerge(
+    RoomBoardAgent.layer.pipe(Layer.provide(Layer.mock(SharedRoomLink.SharedRoomLink)({}))),
+  ),
   Layer.provideMerge(RoomBoxes.layer.pipe(Layer.provide(layerLaunches))),
   Layer.provideMerge(RoomCodeDiffs.layer.pipe(Layer.provide(layerDiffs))),
   Layer.provideMerge(RoomPullRequests.layer.pipe(Layer.provide(layerPullRequests))),
@@ -1464,6 +1470,78 @@ it.effect("shows a guest's own thread box running on their machine, and its turn
       ["run:3"],
     );
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("lets the agent of a guest's own box on their machine work on the board as theirs", () =>
+  Effect.gen(function* () {
+    const { orchestrator, guestShares, credential } = yield* shareThread;
+    const roomToken = Effect.fn(function* (name: string) {
+      const session = (yield* guestShares.redeem({ credential, name })).token;
+      const handoff = (yield* guestShares.handoff(session)).token;
+      return { session, room: (yield* guestShares.exportThread(handoff)).room!.token };
+    });
+    const sam = yield* roomToken("Sam");
+    const eve = yield* roomToken("Eve");
+    const box = (by: { threadId: ThreadId } | { session: string }, noteId: string) =>
+      guestShares.changeBoard(by, {
+        type: "note.put",
+        noteId,
+        text: "Box",
+        x: 0,
+        y: 0,
+        kind: "thread",
+      });
+    yield* box({ session: sam.session }, "sams");
+    yield* box({ threadId }, "owners");
+    const ask = (token: string, boxId: string) =>
+      guestShares.roomBoardChange(token, {
+        boxId,
+        turnId: "run:sam",
+        model: "Claude Haiku",
+        change: { add: { cards: [{ text: "From Sam's agent" }] } },
+      });
+
+    const added = yield* ask(sam.room, "sams");
+    assert.deepEqual(added.refused, []);
+    const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+    const samId = thread.guestShare!.guests!.find((guest) => guest.name === "Sam")!.id;
+    const note = thread.guestShare!.board!.notes.find(
+      (candidate) => candidate.id === added.done[0],
+    );
+    assert.deepEqual(
+      [note?.text, note?.guestId, note?.agent],
+      [
+        "From Sam's agent",
+        samId,
+        { boxId: "sams", model: "Claude Haiku", turnId: "run:sam", askedBy: samId },
+      ],
+    );
+    assert.strictEqual((yield* guestShares.roomBoard(sam.room, "sams")).you, "sams");
+
+    // Only a room token, and only for the guest's own box.
+    const reason = <A, E extends { readonly reason: string }>(effect: Effect.Effect<A, E>) =>
+      Effect.map(Effect.flip(effect), (error) => error.reason);
+    assert.equal(yield* reason(ask(sam.session, "sams")), "invalid");
+    assert.equal(yield* reason(ask(sam.room, "owners")), "not_on_board");
+    assert.equal(yield* reason(ask(eve.room, "sams")), "not_on_board");
+    assert.equal(yield* reason(guestShares.roomBoard(eve.room, "sams")), "not_on_board");
+
+    // Thirty calls a minute, each up to twenty cards.
+    for (let call = 3; call < 30; call++) yield* guestShares.roomBoard(sam.room, "sams");
+    assert.equal(yield* reason(guestShares.roomBoard(sam.room, "sams")), "too_fast");
+    yield* TestClock.adjust("61 seconds");
+
+    // A guest the owner removed, or a room that ran out, ends it.
+    yield* orchestrator.dispatch({
+      type: "thread.guest.remove",
+      commandId: CommandId.make("remove-sam-board"),
+      threadId,
+      guestId: samId,
+    });
+    assert.equal(yield* reason(ask(sam.room, "sams")), "ended");
+    yield* TestClock.adjust("25 hours");
+    assert.equal(yield* reason(guestShares.roomBoard(eve.room, "owners")), "ended");
+  }).pipe(Effect.provide(layerTest)),
 );
 
 it.effect("shows each person's pointer on the board to everyone else while they have it open", () =>

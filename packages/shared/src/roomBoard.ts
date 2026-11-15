@@ -260,8 +260,9 @@ const isInState = (note: RoomBoardNote, state: RoomBoardAgentCardState) =>
   sameSize(note.size, state.size);
 
 /**
- * The board after a change a thread box's agent made as the owner: a note it added marked as its
- * own, and its turn's record of what it found and left, which undoing the turn goes by.
+ * The board after a change a thread box's agent made as `author` (null for the owner, or the guest
+ * whose own machine runs it): a note it added marked as its own, and its turn's record of what it
+ * found and left, which undoing the turn goes by.
  */
 export function roomBoardWithAgentChange(
   before: RoomBoard,
@@ -269,6 +270,7 @@ export function roomBoardWithAgentChange(
   change: RoomBoardChange,
   agent: RoomBoardAgentMark,
   at: string,
+  author: GuestId | null = null,
 ): RoomBoard {
   if (after === before) return after;
   const previous =
@@ -320,6 +322,7 @@ export function roomBoardWithAgentChange(
     boxId: agent.boxId,
     ...(agent.model === undefined ? {} : { model: agent.model }),
     ...(agent.askedBy === undefined ? {} : { askedBy: agent.askedBy }),
+    ...(author === null ? {} : { guestId: author }),
     at,
     cards,
     ...(edges.length === 0 ? {} : { edges }),
@@ -427,6 +430,7 @@ export function roomBoardAfterAgentTurn(
       ...state,
       ...(kind === undefined ? {} : { kind }),
       ...(section === true ? { section } : {}),
+      ...(turn.guestId === undefined ? {} : { guestId: turn.guestId }),
       agent,
       changed: { at },
     };

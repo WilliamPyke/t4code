@@ -2,12 +2,19 @@ import { ORCHESTRATION_V2_WS_METHODS, ThreadId, WS_METHODS, WsRpcGroup } from "@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as RpcSchema from "effect/rpc/RpcSchema";
 
 import { GuestConnectionTarget, type PreparedConnection } from "../connection/model.ts";
 import { guestEnvironmentId } from "../environment/guest.ts";
-import { connectGuestSession, GuestShareAccess, GuestShareFetch } from "./guestSession.ts";
+import {
+  connectGuestSession,
+  GUEST_STREAM_FIRST_EVENT_TIMEOUT,
+  GuestShareAccess,
+  GuestShareFetch,
+} from "./guestSession.ts";
 
 const TARGET = new GuestConnectionTarget({
   environmentId: guestEnvironmentId("share-1"),
@@ -45,7 +52,10 @@ interface SentRequest {
 }
 
 /** The owner's host as a guest session sees it: what it was asked, and what it answers. */
-const host = (answer: (path: string) => Response = () => new Response(null, { status: 204 })) => {
+const host = (
+  answer: (path: string) => Response | Promise<Response> = () =>
+    new Response(null, { status: 204 }),
+) => {
   const sent: Array<SentRequest> = [];
   const ended: Array<string> = [];
   const titles: Array<string> = [];
@@ -249,6 +259,31 @@ it.effect("keeps a share while its owner's host is only unreachable", () => {
     Effect.gen(function* () {
       const { session } = yield* connectGuestSession(prepared("guest-token"), TARGET);
       expect((yield* Effect.flip(session.ready))._tag).toBe("ConnectionTransientError");
+      expect(owner.ended).toEqual([]);
+    }),
+  );
+});
+
+it.effect("gives up on a stream that never starts, so the connection retries", () => {
+  // The host answers the session check but never starts the stream's response.
+  const owner = host((path) =>
+    path === "/api/guest/stream"
+      ? new Promise<Response>(() => {})
+      : new Response(null, { status: 204 }),
+  );
+  return owner.run(
+    Effect.gen(function* () {
+      const { session } = yield* connectGuestSession(prepared("guest-token"), TARGET);
+      yield* session.ready;
+      const reading = yield* Stream.runDrain(
+        call(session.client, ORCHESTRATION_V2_WS_METHODS.subscribeThread, {
+          threadId: TARGET.threadId,
+        }) as Stream.Stream<unknown, Refusal>,
+      ).pipe(Effect.flip, Effect.forkChild({ startImmediately: true }));
+      yield* TestClock.adjust(GUEST_STREAM_FIRST_EVENT_TIMEOUT);
+      expect((yield* Fiber.join(reading))._tag).toBe("RpcClientError");
+      // A dropped connection, which reconnects with backoff; the share is kept.
+      expect((yield* Effect.flip(session.closed))._tag).toBe("ConnectionTransientError");
       expect(owner.ended).toEqual([]);
     }),
   );

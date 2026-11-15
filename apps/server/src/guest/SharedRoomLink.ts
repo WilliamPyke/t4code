@@ -4,6 +4,7 @@ import {
   GUEST_AGENT_PROMPT_MAX_LENGTH,
   GUEST_ROOM_ACTIVITY_ROUTE,
   GUEST_ROOM_ARTIFACT_ROUTE,
+  GUEST_ROOM_BOARD_ROUTE,
   GUEST_ROOM_EXPIRES_HEADER,
   GUEST_ROOM_TURN_ROUTE,
   GUEST_ROOM_UPDATES_ROUTE,
@@ -19,6 +20,9 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
   RoomArtifactRead,
+  type RoomBoardAgentChangeRequest,
+  RoomBoardAgentResult,
+  RoomBoardAgentView,
   type RoomCodePatch,
   RoomCodePatchError,
   ROOM_BOARD_ROOM_BOX,
@@ -124,6 +128,8 @@ const MAX_UPDATES_BYTES = 512 * 1024;
 const decodeUpdates = Schema.decodeUnknownEffect(Schema.toCodecJson(RoomUpdates));
 const decodeRoomTask = Schema.decodeUnknownOption(RoomTaskContextPayload);
 const decodeArtifact = Schema.decodeUnknownEffect(RoomArtifactRead);
+const decodeBoardView = Schema.decodeUnknownEffect(RoomBoardAgentView);
+const decodeBoardResult = Schema.decodeUnknownEffect(RoomBoardAgentResult);
 
 /** A room's update as this machine keeps it: no characters nobody can see, a one-line name. */
 const sanitizeUpdate = (update: RoomUpdate): ReadonlyArray<RoomUpdate> => {
@@ -308,6 +314,18 @@ export class SharedRoomLink extends Context.Service<
       host: string,
       shareId: GuestShareId,
     ) => Effect.Effect<SharedThreadFindRoomResult>;
+    /**
+     * The room's board as the agent of the user's own box there sees it, read from the room's
+     * owner for that box's thread here.
+     */
+    readonly readBoard: (
+      threadId: ThreadId,
+    ) => Effect.Effect<RoomBoardAgentView, SharedThreadJoinError>;
+    /** Has the room's owner make one board tool call of the agent of that box's thread here. */
+    readonly changeBoard: (
+      threadId: ThreadId,
+      request: Omit<RoomBoardAgentChangeRequest, "boxId">,
+    ) => Effect.Effect<RoomBoardAgentResult, SharedThreadJoinError>;
     /** Posts one finished run if its thread is connected. Never fails: the turn is local first. */
     readonly publishRun: (threadId: ThreadId, runId: RunId) => Effect.Effect<void>;
     /**
@@ -620,6 +638,74 @@ const make = Effect.gen(function* () {
       path: input.path,
     });
   });
+
+  /**
+   * Asks the room's owner about its board for the user's own box behind `threadId`: a refused or
+   * unanswered request is an error the agent can pass on, and an ended room leaves the thread.
+   */
+  const boardRequest = Effect.fn("SharedRoomLink.boardRequest")(function* <A>(
+    threadId: ThreadId,
+    request: (url: string, boxId: string) => HttpClientRequest.HttpClientRequest,
+    decode: (body: unknown) => Effect.Effect<A, Schema.SchemaError>,
+  ) {
+    const { thread } = yield* orchestrator
+      .getThreadRecords(threadId, [])
+      .pipe(Effect.mapError(() => fail("not_in_room")));
+    const link = thread.roomLink ?? null;
+    if (link?.boxId === undefined) return yield* fail("not_in_room");
+    const url = sharedThreadRouteUrl(link.host, GUEST_ROOM_BOARD_ROUTE);
+    const token = yield* secrets
+      .get(tokenSecretName(threadId))
+      .pipe(Effect.orElseSucceed(() => Option.none<Uint8Array>()));
+    if (url === null || Option.isNone(token)) return yield* fail("unreachable");
+    const response = yield* http
+      .execute(
+        request(url, link.boxId).pipe(
+          HttpClientRequest.bearerToken(new TextDecoder().decode(token.value)),
+        ),
+      )
+      .pipe(
+        Effect.timeout(REQUEST_TIMEOUT),
+        Effect.mapError(() => fail("unreachable")),
+      );
+    if (response.status === 410) {
+      yield* disconnect(threadId);
+      return yield* fail("room_ended");
+    }
+    // The box is no longer on the board, or no longer this user's.
+    if (response.status === 404) return yield* fail("thread_unavailable");
+    if (response.status === 429) return yield* fail("too_fast");
+    if (response.status !== 200) return yield* fail("unreachable");
+    if (Number(response.headers["content-length"] ?? "0") > MAX_UPDATES_BYTES) {
+      return yield* fail("invalid_response");
+    }
+    return yield* response.json.pipe(
+      Effect.flatMap(decode),
+      Effect.timeout(REQUEST_TIMEOUT),
+      Effect.mapError(() => fail("invalid_response")),
+    );
+  }, Effect.scoped);
+
+  const readBoard = (threadId: ThreadId) =>
+    boardRequest(
+      threadId,
+      (url, boxId) =>
+        HttpClientRequest.get(url).pipe(HttpClientRequest.setUrlParams({ box: boxId })),
+      decodeBoardView,
+    );
+
+  const changeBoard = (threadId: ThreadId, request: Omit<RoomBoardAgentChangeRequest, "boxId">) =>
+    boardRequest(
+      threadId,
+      (url, boxId) =>
+        HttpClientRequest.post(url).pipe(
+          HttpClientRequest.bodyJsonUnsafe({
+            ...request,
+            boxId,
+          } satisfies RoomBoardAgentChangeRequest),
+        ),
+      decodeBoardResult,
+    );
 
   const boxMessage = (threadId: ThreadId, commandId: CommandId, message: BoxMessage) =>
     orchestrator.dispatch({
@@ -1349,6 +1435,8 @@ const make = Effect.gen(function* () {
     boxPatch,
     promptBox,
     linkBox,
+    readBoard,
+    changeBoard,
     publishRun,
     publishActivity,
     drain: worker.drain.pipe(Effect.andThen(codeDiffs.drain)),

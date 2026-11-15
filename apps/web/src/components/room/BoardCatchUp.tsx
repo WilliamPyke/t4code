@@ -9,8 +9,11 @@ import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { BoardFloat } from "./BoardChrome";
 import {
+  type BoardCatchUpStep,
   type BoardVisit,
   boardCatchUp,
+  boardCatchUpLine,
+  boardCatchUpStepLabel,
   boardNewestChange,
   boardVisitKey,
   boardVisitsWith,
@@ -69,7 +72,7 @@ export function useBoardCatchUp(
   board: string | undefined,
   notes: ReadonlyArray<RoomBoardNote>,
   viewer: string | null,
-): { readonly changes: ReadonlyArray<RoomBoardNote>; readonly dismiss: () => void } {
+): { readonly changes: ReadonlyArray<BoardCatchUpStep>; readonly dismiss: () => void } {
   const key = board === undefined ? undefined : boardVisitKey(board, viewer);
   const [state, setState] = useState(() => startCatchUp(key));
   const newest = boardNewestChange(notes);
@@ -125,33 +128,34 @@ export function CatchUpMark({ label }: { readonly label: string }) {
   );
 }
 
-/** "N changes since you were here", stepping the view through them, until dismissed. */
+/** "N changes since you were here", stepping the view through them and what is new in each. */
 export function CatchUpPill({
   changes,
   onShow,
   onDismiss,
 }: {
-  readonly changes: ReadonlyArray<RoomBoardNote>;
+  readonly changes: ReadonlyArray<BoardCatchUpStep>;
   readonly onShow: (note: RoomBoardNote) => void;
   readonly onDismiss: () => void;
 }) {
   // The change last stepped to, or null before any.
   const [at, setAt] = useState<number | null>(null);
   const count = changes.length;
+  const current = at === null ? undefined : changes[at];
   const step = (direction: 1 | -1) => {
     const next = at === null ? (direction === 1 ? 0 : count - 1) : (at + direction + count) % count;
-    const note = changes[next];
-    if (note === undefined) return;
+    const change = changes[next];
+    if (change === undefined) return;
     setAt(next);
-    onShow(note);
+    onShow(change.note);
   };
   return (
     <BoardFloat className="gap-0.5 p-1 ps-2.5" role="status">
       <span className="size-2 shrink-0 rounded-full bg-primary" aria-hidden />
       <span className="px-1 text-xs whitespace-nowrap tabular-nums">
-        {at === null || at >= count
-          ? `${count} ${count === 1 ? "change" : "changes"} since you were here`
-          : `Change ${at + 1} of ${count}`}
+        {at === null || current === undefined
+          ? boardCatchUpLine(changes)
+          : `${boardCatchUpStepLabel(current)} · ${at + 1} of ${count}`}
       </span>
       <Button size="icon-sm" variant="ghost" aria-label="Previous change" onClick={() => step(-1)}>
         <ChevronLeftIcon />

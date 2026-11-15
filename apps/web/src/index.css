@@ -230,6 +230,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --animate-stash-pulse-row: stash-pulse-row 1400ms;
   --animate-stash-pulse-row-alt: stash-pulse-row-alt 1400ms;
   --animate-stash-pulse-count: stash-pulse-count 1400ms step-start;
+  /* Plays once, as long as BOARD_AGENT_WORK_MS keeps the mark. */
+  --animate-board-agent-work: board-agent-work 4s ease-out forwards;
   --color-warning-foreground: var(--warning-foreground);
   --color-warning: var(--warning);
   --color-warning-surface: var(--warning-surface);
@@ -573,6 +575,20 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
       color-mix(in srgb, var(--stage-fade) 96%, transparent) 85%,
       var(--stage-fade) 93%
     );
+  }
+}
+
+/* A board card an agent just changed: its mark shows, holds a few seconds, then fades once. */
+@keyframes board-agent-work {
+  0% {
+    opacity: 0;
+  }
+  6%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
   }
 }
 
