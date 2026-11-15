@@ -97,7 +97,7 @@ import {
 import { observeResize } from "~/lib/observeResize";
 import { useStableCallback } from "~/hooks/useStableCallback";
 
-import { cn, randomUUID } from "~/lib/utils";
+import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
@@ -304,6 +304,7 @@ import {
 import {
   BoardSelectionContext,
   SelectionBar,
+  boardKeyFocus,
   isBoardKey,
   useBoardMarquee,
   useBoardSelected,
@@ -349,6 +350,7 @@ import {
   boardAgentActivity,
   boardAgentModel,
   boardAgentRunTasks,
+  boardAltShortcutAllowed,
   isBoardAgentsKey,
 } from "./boardAgents.logic";
 import {
@@ -413,6 +415,9 @@ const OWN_KEYS_OUTSIDE =
 /** A focused element outside the board whose keys the board may take: not a field or a widget. */
 const isBoardKeyOutside = (target: Element) =>
   isBoardKey(target) && target.closest(OWN_KEYS_OUTSIDE) === null;
+/** Whether the board's Alt+G and Alt+A act from where this key went. */
+const altShortcutHere = (target: EventTarget | null) =>
+  boardAltShortcutAllowed(boardKeyFocus(target), isMacPlatform(navigator.platform));
 // About what three clamped lines of a quote hold on a note of the default width.
 const QUOTE_CLAMP_LENGTH = 90;
 const BOARD_CODE_WINDOW_HINT =
@@ -3361,6 +3366,7 @@ export function RoomBoard({
           fallback={fallback}
           approval={renderBoxApproval?.(box.id)}
           onStop={stopBox?.(box.id)}
+          ended={boxRunEnd?.(box.id)?.outcome}
         />
         {work === undefined ? null : (
           <BoxBoardWork
@@ -4160,14 +4166,14 @@ export function RoomBoard({
               voteOn(selectedNotes);
               return;
             }
-            if (isBoardAskKey(event) && isBoardKey(event.target) && canAsk) {
+            if (isBoardAskKey(event) && altShortcutHere(event.target) && canAsk) {
               event.preventDefault();
               openAsk();
               return;
             }
             if (
               isBoardAgentsKey(event) &&
-              isBoardKey(event.target) &&
+              altShortcutHere(event.target) &&
               cards === undefined &&
               room !== null
             ) {

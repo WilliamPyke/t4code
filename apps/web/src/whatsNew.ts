@@ -28,6 +28,7 @@ export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
       "Stop a thread box's agent from the box itself, beside its working status, or from its row in the Agents list.",
       "In the Agents list, a box running tasks says “Working on:” and the task. Click the task to go to it.",
       "A task run in a box whose agent is slow to start keeps saying “Starting” until the run begins or ends, instead of “Didn't finish” after 30 seconds, wherever your T3 Code can see that box's runs.",
+      "A thread box you stopped says Stopped where its working status was, or Failed if its run ended with an error, until it runs again.",
     ],
   },
   {

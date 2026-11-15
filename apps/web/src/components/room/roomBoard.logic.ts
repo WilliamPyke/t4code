@@ -2710,10 +2710,9 @@ export function boardSelectionItems(
 const SELECTION_BAR_GAP = 8;
 
 /**
- * Where the selection's bar goes, in the board's screen pixels: centred just above the selected
- * cards, or just below them when there is no room above, and always inside the board between
- * the header and the toolbar floating over it (`cover`, how far each reaches in), so it never
- * covers the cards being worked on nor slides under the chrome.
+ * Where the selection's bar goes, in board screen pixels: centred above the cards, else below,
+ * else beside them (right, then left), else docked at the board's bottom middle; always between
+ * the header and toolbar floating over the board (`cover`, how far each reaches in).
  */
 export function selectionBarSpot(
   selection: BoardRect,
@@ -2724,16 +2723,19 @@ export function selectionBarSpot(
   const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max));
   const highest = cover.top + SELECTION_BAR_GAP;
   const lowest = Math.max(highest, board.height - cover.bottom - SELECTION_BAR_GAP - bar.height);
+  const leftmost = SELECTION_BAR_GAP;
+  const rightmost = Math.max(leftmost, board.width - SELECTION_BAR_GAP - bar.width);
+  const centred = clamp(selection.x + selection.width / 2 - bar.width / 2, leftmost, rightmost);
   const above = selection.y - SELECTION_BAR_GAP - bar.height;
+  if (above >= highest) return { left: centred, top: Math.min(above, lowest) };
   const below = selection.y + selection.height + SELECTION_BAR_GAP;
-  return {
-    left: clamp(
-      selection.x + selection.width / 2 - bar.width / 2,
-      SELECTION_BAR_GAP,
-      Math.max(SELECTION_BAR_GAP, board.width - SELECTION_BAR_GAP - bar.width),
-    ),
-    top: clamp(above >= highest ? above : below, highest, lowest),
-  };
+  if (below <= lowest) return { left: centred, top: below };
+  const besideTop = clamp(selection.y, highest, lowest);
+  const right = selection.x + selection.width + SELECTION_BAR_GAP;
+  if (right <= rightmost) return { left: right, top: besideTop };
+  const left = selection.x - SELECTION_BAR_GAP - bar.width;
+  if (left >= leftmost) return { left, top: besideTop };
+  return { left: clamp((board.width - bar.width) / 2, leftmost, rightmost), top: lowest };
 }
 
 /** Every selected item moved by the same amount, in board pixels, so they land together. */

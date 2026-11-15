@@ -17,6 +17,7 @@ import {
   newBoardProjectKey,
   teamBoardShapes,
 } from "./boardsHome.logic";
+import { boardCardBox, boardConnector } from "../room/roomBoard.logic";
 
 const thread = (id: string, extra: Partial<OwnBoardSource> = {}): OwnBoardSource => ({
   environmentId: "env-a",
@@ -258,6 +259,28 @@ describe("board templates", () => {
           const y = from.y + from.h / 2 + ((to.y + to.h / 2 - from.y - from.h / 2) * step) / 100;
           if (covers(from, x, y) || covers(to, x, y)) continue;
           expect(others.filter((shape) => covers(shape, x, y))).toEqual([]);
+        }
+        // The line as drawn keeps 16px clear of every section border it passes.
+        const box = (shape: (typeof shapes)[number]) =>
+          boardCardBox({ x: shape.x, y: shape.y }, { w: shape.w, h: shape.h });
+        const [x0, y0, x1, y1, x2, y2, x3, y3] = (
+          boardConnector(box(from), box(to)).path.match(/-?[\d.]+/g) ?? []
+        ).map(Number) as [number, number, number, number, number, number, number, number];
+        const sections = others.filter((shape) => shape.kind === "section");
+        for (let step = 0; step <= 100; step += 1) {
+          const t = step / 100;
+          const at = (a: number, b: number, c: number, d: number) =>
+            (1 - t) ** 3 * a + 3 * (1 - t) ** 2 * t * b + 3 * (1 - t) * t ** 2 * c + t ** 3 * d;
+          const x = at(x0, x1, x2, x3);
+          const y = at(y0, y1, y2, y3);
+          const near = sections.filter(
+            (shape) =>
+              x > shape.x - 16 &&
+              x < shape.x + shape.w + 16 &&
+              y > shape.y - 16 &&
+              y < shape.y + shape.h + 16,
+          );
+          expect(near).toEqual([]);
         }
       }
     },

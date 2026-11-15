@@ -26,6 +26,7 @@ import { ComposerPendingApprovalActions } from "../chat/ComposerPendingApprovalA
 import { guestMessageArtifactTitle } from "../chat/roomBoardPrompt";
 import { BoardProgressLine } from "./RoomBoardArtifact";
 import { BoardChip } from "./BoardChrome";
+import type { BoardAgentOutcome } from "./boardAgents.logic";
 import {
   type BoardPeople,
   boardAgentTurnLine,
@@ -210,6 +211,7 @@ export function BoxProgress({
   fallback,
   approval,
   onStop,
+  ended,
 }: {
   readonly boxId: string;
   /** What shows when the server reports no runs for boxes, or none for this one. */
@@ -218,9 +220,21 @@ export function BoxProgress({
   readonly approval?: ReactNode;
   /** Absent where this person may not stop the box's agent. */
   readonly onStop?: (() => void) | undefined;
+  /** How its last run ended, shown where the working status was until the next run. */
+  readonly ended?: BoardAgentOutcome | undefined;
 }) {
   const progress = useBoxProgress(boxId);
-  if (progress === undefined) return fallback ?? null;
+  if (progress === undefined) {
+    if (fallback != null) return fallback;
+    if (ended !== "stopped" && ended !== "failed") return null;
+    return (
+      <div role="status" className="flex items-center">
+        <BoardChip tone={ended === "failed" ? "error" : "neutral"}>
+          {ended === "failed" ? "Failed" : "Stopped"}
+        </BoardChip>
+      </div>
+    );
+  }
   const preview =
     progress.phase === "writing" && progress.preview !== undefined
       ? roomBoxExcerpt(progress.preview, ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH)

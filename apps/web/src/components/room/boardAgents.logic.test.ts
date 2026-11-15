@@ -11,6 +11,7 @@ import {
   boardAgentRunStep,
   boardAgentStatus,
   boardAgentStatusLabel,
+  boardAltShortcutAllowed,
   sortBoardAgents,
 } from "./boardAgents.logic";
 
@@ -100,7 +101,32 @@ describe("boardAgentStatus", () => {
   });
 });
 
+describe("boardAltShortcutAllowed", () => {
+  it.each([
+    { focus: "board", mac: false, allowed: true },
+    { focus: "board", mac: true, allowed: true },
+    { focus: "field", mac: false, allowed: true },
+    // Option+G types © on a Mac.
+    { focus: "field", mac: true, allowed: false },
+    { focus: "dialog-field", mac: false, allowed: false },
+  ] as const)("from $focus, Mac $mac: $allowed", ({ focus, mac, allowed }) => {
+    expect(boardAltShortcutAllowed(focus, mac)).toBe(allowed);
+  });
+});
+
 describe("boardAgentRunTasks", () => {
+  it("lists the task run first first, before tasks lower down run later", () => {
+    const note = (id: string, y: number, at: string) =>
+      ({ id, text: id, x: 0, y, kind: "task", run: { boxId: "box", at } }) satisfies RoomBoardNote;
+    const notes = [
+      note("top, run later", 0, "2026-11-15T10:05:00.000Z"),
+      note("below, run first", 300, "2026-11-15T10:00:00.000Z"),
+    ];
+    expect(boardAgentRunTasks(notes, "box").map((task) => task.id)).toEqual([
+      "below, run first",
+      "top, run later",
+    ]);
+  });
   it("lists a box's open run tasks top to bottom, then left to right", () => {
     const run = { boxId: "box", at: "2026-11-15T10:00:00.000Z" };
     const note = (id: string, x: number, y: number, extra: Partial<RoomBoardNote> = {}) =>

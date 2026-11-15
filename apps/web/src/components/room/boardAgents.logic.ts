@@ -137,16 +137,18 @@ export function sortBoardAgents<
   );
 }
 
-/** The open tasks a box runs from "Run with an agent", in the order the run listed them. */
+/** The open tasks a box runs from "Run with an agent": the one run first first, then by place. */
 export const boardAgentRunTasks = <
   Note extends Pick<RoomBoardNote, "kind" | "done" | "run" | "x" | "y">,
 >(
   notes: ReadonlyArray<Note>,
   boxId: string,
-): ReadonlyArray<Note> =>
-  notes
+): ReadonlyArray<Note> => {
+  const ranAt = (note: Note) => Date.parse(note.run?.at ?? "") || 0;
+  return notes
     .filter((note) => note.kind === "task" && note.done !== true && note.run?.boxId === boxId)
-    .toSorted((a, b) => a.y - b.y || a.x - b.x);
+    .toSorted((a, b) => ranAt(a) - ranAt(b) || a.y - b.y || a.x - b.x);
+};
 
 /** When a box last did something: its run's start, its last reply or its last change to the board. */
 export const boardAgentActivity = (times: ReadonlyArray<string | undefined>): number =>
@@ -220,6 +222,16 @@ export function boardAgentRunOutcome(
   if (turnKey !== watched.turnKey) return "done";
   return waited ? "ended" : null;
 }
+
+/**
+ * Whether a board Alt shortcut (Alt+G, Alt+A) may act from where the focus is: on the board, or
+ * in a board text field off a Mac, where Alt with a letter types nothing. On a Mac Option types a
+ * character (©, å), and a field in a dialog or popover keeps its keys.
+ */
+export const boardAltShortcutAllowed = (
+  focus: "board" | "field" | "dialog-field",
+  mac: boolean,
+): boolean => focus === "board" || (focus === "field" && !mac);
 
 /** Alt+G on the board (Option+G on a Mac, by the key's place) opens the Agents panel. */
 export const isBoardAgentsKey = (event: {

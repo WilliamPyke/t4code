@@ -266,4 +266,20 @@ describe("boardPopoverAnchor", () => {
       height: 480,
     });
   });
+  it("clears the selection's bar too, wherever the bar sits", () => {
+    const selection = { x: 100, y: 100, width: 400, height: 300 };
+    // Bar below the selection, wider than it: the popover goes below the bar, at the selection's left.
+    expect(
+      boardPopoverAnchor(selection, bounds, room, 8, { x: 50, y: 408, width: 500, height: 32 }),
+    ).toEqual({ x: 100, y: 100, width: 400, height: 340 });
+    // Bar beside a tall selection: the popover goes right of the bar.
+    expect(
+      boardPopoverAnchor({ x: 10, y: 120, width: 200, height: 600 }, bounds, room, 8, {
+        x: 218,
+        y: 120,
+        width: 300,
+        height: 32,
+      }),
+    ).toEqual({ x: 530, y: 112, width: 320, height: 0 });
+  });
 });

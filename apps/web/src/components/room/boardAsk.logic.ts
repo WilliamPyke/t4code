@@ -232,17 +232,19 @@ export function boardAgentWorkFresh(
 const POPOVER_SIDE_GAP = 12;
 
 /**
- * Where a popover drawn under its anchor (start-aligned, `offset` below) anchors: the selection
- * itself while the popover fits below or above it; else a flat line beside the selection, right
- * then left, so the popover sits next to it; else a line `room.height` above the bounds' bottom,
- * so it covers only the selection's lower part instead of being cut short by the toolbar.
+ * Where a popover drawn under its anchor (start-aligned, `offset` below) anchors: the selection,
+ * with its floating `bar`, while the popover fits below or above; else a flat line beside it,
+ * right then left; else a line `room.height` above the bounds' bottom, so it covers only the
+ * selection's lower part instead of being cut short by the toolbar.
  */
 export function boardPopoverAnchor(
-  selection: BoardScreenRect,
+  selected: BoardScreenRect,
   bounds: BoardScreenRect | undefined,
   room: { readonly width: number; readonly height: number },
   offset = 0,
+  bar?: BoardScreenRect,
 ): BoardScreenRect {
+  const selection = bar === undefined ? selected : boardPopoverAvoid(selected, bar);
   if (bounds === undefined) return selection;
   const bottom = bounds.y + bounds.height;
   const selectionBottom = selection.y + selection.height;
@@ -260,6 +262,20 @@ export function boardPopoverAnchor(
   const line = Math.max(bounds.y, Math.min(selectionBottom, bottom - room.height));
   const top = Math.min(selection.y, line);
   return { x: selection.x, y: top, width: selection.width, height: line - top };
+}
+
+/**
+ * The selection grown to take in its bar: down or up only, keeping the selection's left edge for
+ * the popover to align to, while the bar is above or below it; both ways when it is beside it.
+ */
+function boardPopoverAvoid(selection: BoardScreenRect, bar: BoardScreenRect): BoardScreenRect {
+  const top = Math.min(selection.y, bar.y);
+  const bottom = Math.max(selection.y + selection.height, bar.y + bar.height);
+  const stacked = bar.y >= selection.y + selection.height || bar.y + bar.height <= selection.y;
+  if (stacked) return { x: selection.x, y: top, width: selection.width, height: bottom - top };
+  const left = Math.min(selection.x, bar.x);
+  const right = Math.max(selection.x + selection.width, bar.x + bar.width);
+  return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
 export interface BoardScreenRect {

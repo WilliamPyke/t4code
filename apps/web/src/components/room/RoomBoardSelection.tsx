@@ -37,6 +37,14 @@ export const isBoardKey = (target: EventTarget | null) =>
   !(target instanceof Element) ||
   target.closest("input, textarea, select, [contenteditable]") === null;
 
+/** Where a key went: the board itself, a text field on it, or a field in a dialog or popover. */
+export const boardKeyFocus = (target: EventTarget | null): "board" | "field" | "dialog-field" =>
+  isBoardKey(target)
+    ? "board"
+    : target instanceof Element && target.closest('[role="dialog"], [role="alertdialog"]') !== null
+      ? "dialog-field"
+      : "field";
+
 interface ClientRect {
   readonly x: number;
   readonly y: number;
@@ -214,6 +222,7 @@ export function SelectionBar({
     <div
       ref={barRef}
       data-board-overlay
+      data-selection-bar
       data-selection-docked={docked ? "" : undefined}
       className={cn(
         "absolute top-2 left-2 z-20 flex items-center gap-1 rounded-board border border-board-hairline bg-card py-1 ps-2.5 pe-1 text-xs text-card-foreground shadow-board",

@@ -247,10 +247,22 @@ export const boardPopoverFit = (
       bounds,
       BOARD_POPOVER_ROOM,
       BOARD_POPOVER_OFFSET,
+      floatingSelectionBar(),
     );
     return new DOMRect(rect.x, rect.y, rect.width, rect.height);
   },
 });
+
+/** The selection's bar where it floats by the selection, not docked or hidden. */
+function floatingSelectionBar(): BoardScreenRect | undefined {
+  for (const bar of document.querySelectorAll(
+    "[data-selection-bar]:not([data-selection-docked])",
+  )) {
+    const rect = bar.getBoundingClientRect();
+    if (rect.height > 0 && getComputedStyle(bar).visibility !== "hidden") return rect;
+  }
+  return undefined;
+}
 
 /**
  * Where on screen the ask may sit: inside the board, below its header, above its toolbar and zoom

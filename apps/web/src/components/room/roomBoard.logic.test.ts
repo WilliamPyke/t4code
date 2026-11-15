@@ -229,6 +229,16 @@ describe("selectionBarSpot", () => {
       cover: { top: 52, bottom: 60 },
       spot: { left: 350, top: 600 },
     },
+    {
+      name: "sits right of a column too tall for room above or below",
+      selection: { x: 100, y: 20, width: 200, height: 660 },
+      spot: { left: 308, top: 20 },
+    },
+    {
+      name: "sits left of a tall column at the board's right edge",
+      selection: { x: 700, y: 20, width: 250, height: 660 },
+      spot: { left: 392, top: 20 },
+    },
   ])("$name", ({ selection, cover, spot }) => {
     expect(selectionBarSpot(selection, bar, board, cover)).toEqual(spot);
   });
