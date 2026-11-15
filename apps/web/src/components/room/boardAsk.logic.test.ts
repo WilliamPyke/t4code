@@ -233,18 +233,37 @@ describe("boardAgentWorkFresh", () => {
 
 describe("boardPopoverAnchor", () => {
   const bounds = { x: 0, y: 60, width: 1000, height: 780 };
-  it("anchors at the selection while the popover fits below or above it, else over its lower part", () => {
+  const room = { width: 320, height: 240 };
+  it("anchors at the selection while the popover fits below or above it", () => {
     const high = { x: 10, y: 100, width: 200, height: 100 };
-    expect(boardPopoverAnchor(high, bounds, 240)).toBe(high);
+    expect(boardPopoverAnchor(high, bounds, room)).toBe(high);
     const low = { x: 10, y: 700, width: 200, height: 100 };
-    expect(boardPopoverAnchor(low, bounds, 240)).toBe(low);
-    // Tall, from near the header to near the toolbar: the popover's room above the toolbar.
-    expect(boardPopoverAnchor({ x: 10, y: 120, width: 200, height: 600 }, bounds, 240)).toEqual({
-      x: 10,
+    expect(boardPopoverAnchor(low, bounds, room)).toBe(low);
+    expect(boardPopoverAnchor(high, undefined, room)).toBe(high);
+  });
+  it("puts the popover beside a tall selection, right then left, and over it only as a last resort", () => {
+    // Tall, from near the header to near the toolbar: a flat line right of it, `offset` above
+    // the selection's top, so the popover's top lines up with the selection's.
+    expect(boardPopoverAnchor({ x: 10, y: 120, width: 200, height: 600 }, bounds, room, 8)).toEqual(
+      { x: 222, y: 112, width: 320, height: 0 },
+    );
+    // No room on the right: on the left.
+    expect(
+      boardPopoverAnchor({ x: 600, y: 120, width: 300, height: 600 }, bounds, room, 8),
+    ).toEqual({ x: 268, y: 112, width: 320, height: 0 });
+    // Starting above the visible area: the popover's top stays inside the bounds.
+    expect(boardPopoverAnchor({ x: 10, y: -200, width: 200, height: 1000 }, bounds, room)).toEqual({
+      x: 222,
+      y: 60,
+      width: 320,
+      height: 0,
+    });
+    // Neither side has room: over the selection's lower part, the popover's room above the toolbar.
+    expect(boardPopoverAnchor({ x: 200, y: 120, width: 600, height: 600 }, bounds, room)).toEqual({
+      x: 200,
       y: 120,
-      width: 200,
+      width: 600,
       height: 480,
     });
-    expect(boardPopoverAnchor(high, undefined, 240)).toBe(high);
   });
 });

@@ -34,6 +34,8 @@ import {
   appendNoteToDraft,
   BOARD_SPLIT_DIVIDER,
   besideBoardItem,
+  boardBounds,
+  boardBoxColumn,
   boardDragItems,
   boardTakenRects,
   boardAddSection,
@@ -472,6 +474,33 @@ describe("placeBoardItem", () => {
       x: 480,
       y: 100,
     });
+  });
+
+  it("puts new boxes for tasks in one column right of them, level with each, a gap apart", () => {
+    const box = boardNewNoteSize("thread");
+    // Two rows of two tasks, given out of order.
+    const tasks = [
+      { x: 300, y: 340, width: 192, height: 184 },
+      { x: 100, y: 100, width: 192, height: 184 },
+      { x: 300, y: 100, width: 192, height: 184 },
+      { x: 100, y: 340, width: 192, height: 184 },
+    ];
+    const selection = boardBounds(tasks)!;
+    const spots = boardBoxColumn(selection, tasks, box, tasks);
+    expect(new Set(spots.map((at) => at.x))).toEqual(new Set([selection.x + selection.width + 40]));
+    // Each box starts level with its task where the one above leaves room, then stacks below it.
+    expect(spots.map((at) => at.y)).toEqual([
+      100 + (box.h + 40) * 2,
+      100,
+      100 + box.h + 40,
+      100 + (box.h + 40) * 3,
+    ]);
+    // Something in the way moves the whole column right, keeping the gap.
+    const neighbour = { x: 560, y: 900, width: 200, height: 100 };
+    const moved = boardBoxColumn(selection, tasks, box, [...tasks, neighbour]);
+    expect(new Set(moved.map((at) => at.x))).toEqual(new Set([800]));
+    // One box for the whole selection sits level with its top.
+    expect(boardBoxColumn(selection, [selection], box, tasks)).toEqual([{ x: 532, y: 100 }]);
   });
 });
 

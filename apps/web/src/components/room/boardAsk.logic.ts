@@ -229,21 +229,35 @@ export function boardAgentWorkFresh(
   return [...fresh].map(([id, boxId]) => ({ id, boxId }));
 }
 
+const POPOVER_SIDE_GAP = 12;
+
 /**
- * Where a popover under the selection anchors: the selection itself while the popover fits below
- * or above it, else a line `room` above the bounds' bottom, so it covers the selection's lower
- * part instead of being cut short by the toolbar.
+ * Where a popover drawn under its anchor (start-aligned, `offset` below) anchors: the selection
+ * itself while the popover fits below or above it; else a flat line beside the selection, right
+ * then left, so the popover sits next to it; else a line `room.height` above the bounds' bottom,
+ * so it covers only the selection's lower part instead of being cut short by the toolbar.
  */
 export function boardPopoverAnchor(
   selection: BoardScreenRect,
   bounds: BoardScreenRect | undefined,
-  room: number,
+  room: { readonly width: number; readonly height: number },
+  offset = 0,
 ): BoardScreenRect {
   if (bounds === undefined) return selection;
   const bottom = bounds.y + bounds.height;
   const selectionBottom = selection.y + selection.height;
-  if (bottom - selectionBottom >= room || selection.y - bounds.y >= room) return selection;
-  const line = Math.max(bounds.y, Math.min(selectionBottom, bottom - room));
+  if (bottom - selectionBottom >= room.height || selection.y - bounds.y >= room.height) {
+    return selection;
+  }
+  const right = selection.x + selection.width + POPOVER_SIDE_GAP;
+  const left = selection.x - POPOVER_SIDE_GAP - room.width;
+  const beside =
+    right + room.width <= bounds.x + bounds.width ? right : left >= bounds.x ? left : undefined;
+  if (beside !== undefined) {
+    const besideTop = Math.max(bounds.y, Math.min(selection.y, bottom - room.height));
+    return { x: beside, y: besideTop - offset, width: room.width, height: 0 };
+  }
+  const line = Math.max(bounds.y, Math.min(selectionBottom, bottom - room.height));
   const top = Math.min(selection.y, line);
   return { x: selection.x, y: top, width: selection.width, height: line - top };
 }

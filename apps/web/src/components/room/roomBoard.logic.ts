@@ -588,6 +588,42 @@ export const besideBoardItem = (
   );
 
 /**
+ * Where new boxes for `items` go, in their order: one column right of `selection`, a card gap
+ * clear of it, each box level with its item unless the box above reaches past that, then stacked
+ * a card gap below it. The column moves right until it keeps that gap from everything `taken`.
+ */
+export function boardBoxColumn(
+  selection: BoardRect,
+  items: ReadonlyArray<BoardRect>,
+  size: RoomBoardSize,
+  taken: ReadonlyArray<BoardRect>,
+): Array<BoardPoint> {
+  const ys: Array<number> = [];
+  let below = -Infinity;
+  const fromTop = items
+    .map((item, index) => ({ item, index }))
+    .toSorted((a, b) => a.item.y - b.item.y);
+  for (const { item, index } of fromTop) {
+    const y = Math.max(item.y, below);
+    ys[index] = y;
+    below = y + size.h + CARD_GAP;
+  }
+  const padded = (x: number, y: number) => ({
+    x: x - CARD_GAP + 1,
+    y: y - CARD_GAP + 1,
+    width: size.w + CARD_GAP * 2 - 2,
+    height: size.h + CARD_GAP * 2 - 2,
+  });
+  let x = selection.x + selection.width + CARD_GAP;
+  for (;;) {
+    const blocking = taken.filter((rect) => ys.some((y) => rectsMeet(padded(x, y), rect)));
+    if (blocking.length === 0) break;
+    x = Math.max(...blocking.map((rect) => rect.x + rect.width)) + CARD_GAP;
+  }
+  return ys.map((y) => ({ x, y }));
+}
+
+/**
  * What a new card must stay clear of: everything drawn, cards that grow with their content at
  * their full height, notes not drawn (just added, or hidden resolved pins), and the grid slots
  * `upcoming` cards will take, such as a guest's agent card. Sections are not: cards land in them.

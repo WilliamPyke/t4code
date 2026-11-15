@@ -7,7 +7,13 @@ import { randomUUID } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup } from "../ui/popover";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
-import { BoardAskTargetSelect, boardPopoverFit, useBoardAskBounds } from "./BoardAsk";
+import {
+  BOARD_POPOVER_OFFSET,
+  BoardAskTargetSelect,
+  boardPopoverFit,
+  useBoardAskBounds,
+} from "./BoardAsk";
+import type { BoardAgentEnd } from "./boardAgents.logic";
 import { BOARD_ASK_NEW_BOX, type BoardAskTarget } from "./boardAsk.logic";
 import {
   BOARD_RUN_STARTING_MS,
@@ -98,7 +104,7 @@ export function BoardRunPopover({
         anchor={boardPopoverFit(anchor, bounds)}
         side="bottom"
         align="start"
-        sideOffset={8}
+        sideOffset={BOARD_POPOVER_OFFSET}
         width="md"
         padding="compact"
         collisionBoundary={bounds}
@@ -161,16 +167,19 @@ export function BoardRunPopover({
   );
 }
 
-/** The time to read a run by: now, again once a run that has not started stops being new. */
-function useRunClock(at: string): number {
+/**
+ * The time to read a run by: now, again once a run that has not started stops being new. Only
+ * `timed` runs need it: the rest go by the record of the machine that runs their box.
+ */
+function useRunClock(at: string, timed: boolean): number {
   const [now, setNow] = useState(() => Date.now());
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a run that has not started reads as starting only for a while: one timer says when that ends
   useEffect(() => {
     const wait = Date.parse(at) + BOARD_RUN_STARTING_MS - Date.now();
-    if (wait <= 0) return;
+    if (!timed || wait <= 0) return;
     const timer = setTimeout(() => setNow(Date.now()), wait + 50);
     return () => clearTimeout(timer);
-  }, [at]);
+  }, [at, timed]);
   return Math.max(now, Date.parse(at));
 }
 
@@ -185,6 +194,7 @@ export function TaskRunChip({
   boxName,
   color,
   waiting,
+  end,
   onShowBox,
   onStop,
   onClear,
@@ -195,6 +205,8 @@ export function TaskRunChip({
   readonly color: string;
   /** A guest's request for the box waits on the owner. */
   readonly waiting: boolean;
+  /** How the box's last run ended on the machine that runs it; undefined where this client cannot read it. */
+  readonly end: BoardAgentEnd | null | undefined;
   readonly onShowBox: () => void;
   /** Absent where this person may not stop the box's agent. */
   readonly onStop: (() => void) | undefined;
@@ -202,11 +214,12 @@ export function TaskRunChip({
   readonly onClear: (() => void) | undefined;
 }) {
   const progress = useBoxProgress(run.boxId);
-  const now = useRunClock(run.at);
-  const state = boardTaskRunState({ run, done }, progress, waiting, now);
+  const now = useRunClock(run.at, end === undefined);
+  const state = boardTaskRunState({ run, done }, progress, waiting, end, now);
   if (state === null) return null;
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-1 px-2 pb-1.5" role="status">
+    // The state sits beside the box's name, and wraps under it rather than past a narrow card.
+    <div className="flex min-w-0 flex-wrap items-center gap-1 px-2 pb-1" role="status">
       <Button
         size="micro"
         variant="outline"
@@ -219,9 +232,11 @@ export function TaskRunChip({
           className="size-1.5 shrink-0 rounded-full"
           style={{ backgroundColor: color }}
         />
-        <span className="max-w-32 truncate">{boxName}</span>
-        <span className="shrink-0 text-muted-foreground">· {BOARD_TASK_RUN_LABEL[state]}</span>
+        <span className="max-w-28 truncate">{boxName}</span>
       </Button>
+      <span aria-hidden className="px-0.5 text-2xs text-paint-ink-muted">
+        {BOARD_TASK_RUN_LABEL[state]}
+      </span>
       {boardTaskRunStoppable(state) && onStop !== undefined ? (
         <Button size="micro" variant="ghost-muted" onPointerDown={stopPointer} onClick={onStop}>
           <SquareIcon />

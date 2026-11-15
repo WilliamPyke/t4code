@@ -125,7 +125,7 @@ export function BoardAskPopover({
         anchor={boardPopoverFit(anchor, bounds)}
         side="bottom"
         align="start"
-        sideOffset={8}
+        sideOffset={BOARD_POPOVER_OFFSET}
         width="md"
         padding="compact"
         collisionBoundary={bounds}
@@ -232,16 +232,22 @@ export function BoardAskTargetSelect({
   );
 }
 
-// About as tall as the ask or run popover drawn whole.
-const BOARD_POPOVER_ROOM = 240;
+// About the ask or run popover drawn whole: its `md` width and its height.
+const BOARD_POPOVER_ROOM = { width: 320, height: 240 };
+export const BOARD_POPOVER_OFFSET = 8;
 
-/** A popover's anchor under the selection, moved up over it when neither side has room. */
+/** A popover's anchor under the selection, moved beside it, or over it, when below lacks room. */
 export const boardPopoverFit = (
   anchor: { readonly getBoundingClientRect: () => DOMRect },
   bounds: BoardScreenRect | undefined,
 ) => ({
   getBoundingClientRect: () => {
-    const rect = boardPopoverAnchor(anchor.getBoundingClientRect(), bounds, BOARD_POPOVER_ROOM);
+    const rect = boardPopoverAnchor(
+      anchor.getBoundingClientRect(),
+      bounds,
+      BOARD_POPOVER_ROOM,
+      BOARD_POPOVER_OFFSET,
+    );
     return new DOMRect(rect.x, rect.y, rect.width, rect.height);
   },
 });

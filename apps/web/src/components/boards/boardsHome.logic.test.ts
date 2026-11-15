@@ -237,6 +237,29 @@ describe("board templates", () => {
           expect(shape.kind === "section" ? inside(other, shape) : inside(shape, other)).toBe(true);
         }
       }
+      // No line runs over a card or section other than its two ends and the sections they sit in.
+      const shapeOf = (end: (typeof template.lines)[number]["from"]) =>
+        typeof end === "string"
+          ? shapes[template.items.findIndex((item) => item.key === end) + 1]!
+          : shapes[0]!;
+      const covers = (shape: (typeof shapes)[number], x: number, y: number) =>
+        x > shape.x && x < shape.x + shape.w && y > shape.y && y < shape.y + shape.h;
+      for (const line of template.lines) {
+        const from = shapeOf(line.from);
+        const to = shapeOf(line.to);
+        const others = shapes.filter(
+          (shape) =>
+            shape !== from &&
+            shape !== to &&
+            !(shape.kind === "section" && (inside(from, shape) || inside(to, shape))),
+        );
+        for (let step = 0; step <= 100; step += 1) {
+          const x = from.x + from.w / 2 + ((to.x + to.w / 2 - from.x - from.w / 2) * step) / 100;
+          const y = from.y + from.h / 2 + ((to.y + to.h / 2 - from.y - from.h / 2) * step) / 100;
+          if (covers(from, x, y) || covers(to, x, y)) continue;
+          expect(others.filter((shape) => covers(shape, x, y))).toEqual([]);
+        }
+      }
     },
   );
 

@@ -99,24 +99,23 @@ describe("what a run task shows", () => {
   const at = "2026-11-15T10:00:00.000Z";
   const ran = task("t", { run: { boxId: "box", at } });
   const now = Date.parse(at);
+  const later = now + BOARD_RUN_STARTING_MS;
+  const before = { at: "2026-11-15T09:00:00.000Z" };
+  const after = { at: "2026-11-15T10:00:05.000Z" };
   it.each([
-    ["no run", task("t"), undefined, false, now, null],
-    ["a done task", { ...ran, done: true }, { phase: "thinking" }, false, now, null],
-    ["its box thinking", ran, { phase: "thinking" }, false, now, "working"],
-    ["its box writing", ran, { phase: "writing" }, false, now, "working"],
-    ["its box queued", ran, { phase: "queued" }, false, now, "queued"],
-    ["its box waiting on approval", ran, { phase: "approval" }, false, now, "approval"],
-    ["a guest's request waiting on the owner", ran, undefined, true, now + 60_000, "waiting"],
-    ["just run, its box not started", ran, undefined, false, now + 1_000, "starting"],
-    [
-      "run a while ago, its box not running",
-      ran,
-      undefined,
-      false,
-      now + BOARD_RUN_STARTING_MS,
-      "stopped",
-    ],
-  ] as const)("%s", (_, note, progress, waiting, at, expected) => {
-    expect(boardTaskRunState(note, progress, waiting, at)).toBe(expected);
+    ["no run", task("t"), undefined, false, undefined, now, null],
+    ["a done task", { ...ran, done: true }, { phase: "thinking" }, false, undefined, now, null],
+    ["its box thinking", ran, { phase: "thinking" }, false, undefined, now, "working"],
+    ["its box writing", ran, { phase: "writing" }, false, undefined, now, "working"],
+    ["its box queued", ran, { phase: "queued" }, false, undefined, now, "queued"],
+    ["its box waiting on approval", ran, { phase: "approval" }, false, undefined, now, "approval"],
+    ["a guest's request waiting on the owner", ran, undefined, true, undefined, later, "waiting"],
+    ["just run, its box not started", ran, undefined, false, undefined, now + 1_000, "starting"],
+    ["run a while ago, its box not running", ran, undefined, false, undefined, later, "stopped"],
+    ["slow to start, its box never ran", ran, undefined, false, null, later, "starting"],
+    ["slow to start, its box's last run older", ran, undefined, false, before, later, "starting"],
+    ["its box's run ended since it was run", ran, undefined, false, after, now, "stopped"],
+  ] as const)("%s", (_, note, progress, waiting, end, at, expected) => {
+    expect(boardTaskRunState(note, progress, waiting, end, at)).toBe(expected);
   });
 });

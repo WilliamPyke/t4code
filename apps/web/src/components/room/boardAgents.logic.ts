@@ -1,4 +1,4 @@
-import type { OrchestrationV2RunStatus, RoomBoxProgress } from "@t3tools/contracts";
+import type { OrchestrationV2RunStatus, RoomBoardNote, RoomBoxProgress } from "@t3tools/contracts";
 
 import { formatBoardElapsed } from "./roomBoard.logic";
 
@@ -136,6 +136,17 @@ export function sortBoardAgents<
     (a, b) => statusRank(a.status) - statusRank(b.status) || b.activity - a.activity,
   );
 }
+
+/** The open tasks a box runs from "Run with an agent", in the order the run listed them. */
+export const boardAgentRunTasks = <
+  Note extends Pick<RoomBoardNote, "kind" | "done" | "run" | "x" | "y">,
+>(
+  notes: ReadonlyArray<Note>,
+  boxId: string,
+): ReadonlyArray<Note> =>
+  notes
+    .filter((note) => note.kind === "task" && note.done !== true && note.run?.boxId === boxId)
+    .toSorted((a, b) => a.y - b.y || a.x - b.x);
 
 /** When a box last did something: its run's start, its last reply or its last change to the board. */
 export const boardAgentActivity = (times: ReadonlyArray<string | undefined>): number =>

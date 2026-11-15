@@ -1,12 +1,16 @@
 import { ROOM_BOARD_ROOM_BOX, type RoomBoardNote, type RoomBoxProgress } from "@t3tools/contracts";
 
+import type { BoardAgentEnd } from "./boardAgents.logic";
 import type { BoardAskTarget } from "./boardAsk.logic";
 import { BOARD_PROMPT_MAX_CARDS } from "./roomBoard.logic";
 
 /** How many new thread boxes "A box per task" makes at once. */
 export const BOARD_RUN_MAX_BOXES = 4;
 
-/** How long a run whose box has not started yet reads as starting, not as unfinished. */
+/**
+ * How long a run whose box has not started yet reads as starting, not as unfinished, where this
+ * client cannot read the record of the machine that runs the box.
+ */
 export const BOARD_RUN_STARTING_MS = 30_000;
 
 /** Whether a task can be run by `viewer` (null for the owner): open, written, no one's or theirs. */
@@ -84,14 +88,15 @@ export type BoardTaskRunState =
   | "stopped";
 
 /**
- * Where a run task stands: its box's live run says how it goes; a request of a guest's waiting on
- * the owner says it waits; else it is starting for a short while after it was run, and after that
- * it did not finish. A done task, or one with no run, shows none: a finished turn takes the run off.
+ * Where a run task stands: its box's live run, else a guest's request waiting on the owner, else
+ * whether the box's machine records a run ended since (`end`, null for none). Where this client
+ * cannot read that machine (undefined) it is starting for a while, then not finished.
  */
 export function boardTaskRunState(
   task: Pick<RoomBoardNote, "run" | "done">,
   progress: Pick<RoomBoxProgress, "phase"> | undefined,
   waiting: boolean,
+  end: Pick<BoardAgentEnd, "at"> | null | undefined,
   now: number,
 ): BoardTaskRunState | null {
   if (task.run === undefined || task.done === true) return null;
@@ -101,7 +106,9 @@ export function boardTaskRunState(
       : "working";
   }
   if (waiting) return "waiting";
-  return now - Date.parse(task.run.at) < BOARD_RUN_STARTING_MS ? "starting" : "stopped";
+  const at = Date.parse(task.run.at);
+  if (end !== undefined) return end !== null && Date.parse(end.at) >= at ? "stopped" : "starting";
+  return now - at < BOARD_RUN_STARTING_MS ? "starting" : "stopped";
 }
 
 export const BOARD_TASK_RUN_LABEL: Readonly<Record<BoardTaskRunState, string>> = {

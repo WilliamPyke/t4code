@@ -25,6 +25,7 @@ import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popov
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { BoardChip, type BoardChipTone, BoardFloat, PersonDot } from "./BoardChrome";
+import { BoxStopButton } from "./RoomBoardThreadBox";
 import {
   type BoardAgentEnd,
   type BoardAgentOutcome,
@@ -64,6 +65,10 @@ export interface BoardAgentEntry {
   readonly end?: BoardAgentEnd | null | undefined;
   /** What its agent last did to the board, when that still stands. */
   readonly work: string | undefined;
+  /** The open tasks it runs from "Run with an agent", in the order the run listed them. */
+  readonly tasks: ReadonlyArray<{ readonly id: string; readonly text: string }>;
+  /** Stops its agent; absent where the viewer may not. */
+  readonly stop: (() => void) | undefined;
   readonly requests: ReadonlyArray<ThreadGuestMessage>;
   /** The viewer is the one who sends or dismisses the guests' prompts on it. */
   readonly canResolve: boolean;
@@ -276,6 +281,7 @@ export function BoardAgents({
   open,
   onOpenChange,
   onShow,
+  onShowTask,
   isOnScreen,
   renderNeeds,
   hasThreadBoxes,
@@ -286,6 +292,8 @@ export function BoardAgents({
   readonly onOpenChange: (open: boolean) => void;
   /** Pans the board to a box and selects it. */
   readonly onShow: (boxId: string) => void;
+  /** Pans the board to a task and selects it. */
+  readonly onShowTask: (noteId: string) => void;
   readonly isOnScreen: (boxId: string) => boolean;
   /** What a box shows for what needs this person: its own Send and Dismiss, or its approval. */
   readonly renderNeeds: (entry: BoardAgentEntry, need: "request" | "approval") => ReactNode;
@@ -442,32 +450,59 @@ export function BoardAgents({
           <ol className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
             {rows.map(({ entry, run, status }) => (
               <li key={entry.id} className="flex flex-col gap-1">
-                <button
-                  type="button"
-                  className="flex w-full min-w-0 flex-col gap-0.5 rounded-md px-1.5 py-1.5 text-start outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-                  onClick={() => {
-                    onOpenChange(false);
-                    onShow(entry.id);
-                  }}
-                >
-                  <span className="flex min-w-0 items-center gap-2">
-                    <PersonDot color={entry.color} className="size-2" />
-                    <span className="min-w-0 flex-1 truncate text-xs font-medium">
-                      {entry.name}
+                <div className="flex min-w-0 items-start gap-0.5">
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-md px-1.5 py-1.5 text-start outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                    onClick={() => {
+                      onOpenChange(false);
+                      onShow(entry.id);
+                    }}
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <PersonDot color={entry.color} className="size-2" />
+                      <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                        {entry.name}
+                      </span>
+                      <StatusChip status={status} run={run} />
                     </span>
-                    <StatusChip status={status} run={run} />
-                  </span>
-                  <span className="truncate ps-4 text-2xs text-muted-foreground">
-                    {[entry.whose, run?.model ?? entry.model]
-                      .filter((part) => part !== undefined && part !== "")
-                      .join(" · ")}
-                  </span>
-                  {entry.work === undefined ? null : (
                     <span className="truncate ps-4 text-2xs text-muted-foreground">
-                      {entry.work}
+                      {[entry.whose, run?.model ?? entry.model]
+                        .filter((part) => part !== undefined && part !== "")
+                        .join(" · ")}
                     </span>
-                  )}
-                </button>
+                    {entry.work === undefined ? null : (
+                      <span className="truncate ps-4 text-2xs text-muted-foreground">
+                        {entry.work}
+                      </span>
+                    )}
+                  </button>
+                  {run !== undefined && entry.stop !== undefined ? (
+                    <span className="pt-1.5">
+                      <BoxStopButton onStop={entry.stop} />
+                    </span>
+                  ) : null}
+                </div>
+                {run !== undefined && entry.tasks[0] !== undefined ? (
+                  <p className="flex min-w-0 items-baseline gap-1 ps-5.5 pe-1.5 text-2xs text-muted-foreground">
+                    <span className="shrink-0">Working on:</span>
+                    <button
+                      type="button"
+                      className="min-w-0 truncate rounded-sm text-start text-foreground outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                      onClick={() => {
+                        const first = entry.tasks[0];
+                        if (first === undefined) return;
+                        onOpenChange(false);
+                        onShowTask(first.id);
+                      }}
+                    >
+                      {entry.tasks[0].text}
+                    </button>
+                    {entry.tasks.length > 1 ? (
+                      <span className="shrink-0">and {entry.tasks.length - 1} more</span>
+                    ) : null}
+                  </p>
+                ) : null}
                 {status.kind === "needs-you" ? (
                   <div className="ps-5.5 pe-1.5 pb-1">{renderNeeds(entry, status.need)}</div>
                 ) : null}

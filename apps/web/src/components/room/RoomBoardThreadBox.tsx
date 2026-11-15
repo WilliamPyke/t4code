@@ -13,7 +13,7 @@ import {
   type ThreadGuestMessage,
 } from "@t3tools/contracts";
 import { roomBoxExcerpt } from "@t3tools/shared/roomBoard";
-import { AppWindowIcon } from "lucide-react";
+import { AppWindowIcon, SquareIcon } from "lucide-react";
 import { type PointerEvent, type ReactNode, useState } from "react";
 
 import { useEnvironmentScope } from "~/state/session";
@@ -21,6 +21,7 @@ import { environmentThreadDetails, threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { Button } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ComposerPendingApprovalActions } from "../chat/ComposerPendingApprovalActions";
 import { guestMessageArtifactTitle } from "../chat/roomBoardPrompt";
 import { BoardProgressLine } from "./RoomBoardArtifact";
@@ -208,12 +209,15 @@ export function BoxProgress({
   boxId,
   fallback,
   approval,
+  onStop,
 }: {
   readonly boxId: string;
   /** What shows when the server reports no runs for boxes, or none for this one. */
   readonly fallback?: ReactNode;
   /** Mounted only while the run waits on approval, so it reads the box's requests only then. */
   readonly approval?: ReactNode;
+  /** Absent where this person may not stop the box's agent. */
+  readonly onStop?: (() => void) | undefined;
 }) {
   const progress = useBoxProgress(boxId);
   if (progress === undefined) return fallback ?? null;
@@ -223,11 +227,12 @@ export function BoxProgress({
       : "";
   return (
     <div role="status" className="flex flex-col gap-1">
-      <p className="flex">
+      <div className="flex items-center gap-1">
         <BoardChip tone={progress.phase === "approval" ? "warning" : "primary"}>
           <BoardProgressLine progress={progress} />
         </BoardChip>
-      </p>
+        {onStop === undefined ? null : <BoxStopButton onStop={onStop} />}
+      </div>
       {progress.phase === "approval" ? (
         approval
       ) : (
@@ -240,6 +245,31 @@ export function BoxProgress({
         </p>
       )}
     </div>
+  );
+}
+
+/** Stops a box's agent: quiet beside its working status, or on its row in the Agents panel. */
+export function BoxStopButton({ onStop }: { readonly onStop: () => void }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            size="icon-tiny"
+            variant="ghost-muted"
+            aria-label="Stop the agent"
+            onPointerDown={stopPointer}
+            onClick={(event) => {
+              event.stopPropagation();
+              onStop();
+            }}
+          />
+        }
+      >
+        <SquareIcon />
+      </TooltipTrigger>
+      <TooltipPopup side="top">Stop the agent</TooltipPopup>
+    </Tooltip>
   );
 }
 

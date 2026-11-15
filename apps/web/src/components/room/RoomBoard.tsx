@@ -133,6 +133,7 @@ import {
   NO_BOARD_EDITS,
   besideBoardItem,
   boardBounds,
+  boardBoxColumn,
   boardDuplicates,
   boardCentreSpot,
   boardKeyEditsNote,
@@ -347,6 +348,7 @@ import {
   type BoardAgentEnd,
   boardAgentActivity,
   boardAgentModel,
+  boardAgentRunTasks,
   isBoardAgentsKey,
 } from "./boardAgents.logic";
 import {
@@ -1872,10 +1874,16 @@ export function RoomBoard({
     const last = lastCard.current === null ? null : drawnItem(lastCard.current);
     const lastRect = last === null ? null : drawnRect(last);
     if (!intoSection) {
+      // Clear of the header and toolbar floating over the board, where it would hide.
+      const cover = chromeCoverOf(surfaceRef.current);
       return boardAddSpot(
         size,
         [...takenRects(), ...sections.map(({ rect }) => rect)],
-        within,
+        {
+          ...within,
+          y: within.y + cover.top / view.zoom,
+          height: Math.max(0, within.height - (cover.top + cover.bottom) / view.zoom),
+        },
         null,
       );
     }
@@ -2414,16 +2422,9 @@ export function RoomBoard({
           }),
         );
         const size = boardNewNoteSize("thread");
-        const area = boardAreaOf(surfaceRef.current);
         const at =
-          bounds === null
-            ? freeSpot("thread", size, false)
-            : besideBoardItem(
-                bounds,
-                size,
-                takenRects(),
-                area === null ? undefined : visibleBoardRect(view, area),
-              );
+          (bounds === null ? undefined : boardBoxColumn(bounds, [bounds], size, takenRects())[0]) ??
+          freeSpot("thread", size, false);
         send(
           { kind: "note", id: boxId },
           settleBoardValue({
@@ -2585,33 +2586,32 @@ export function RoomBoard({
     const tasks = runPlan.tasks;
     setRunningTasks(null);
     const size = boardNewNoteSize("thread");
-    const area = boardAreaOf(surfaceRef.current);
-    const within = area === null ? undefined : visibleBoardRect(view, area);
-    const taken = takenRects();
-    const spotBeside = (cards: ReadonlyArray<RoomBoardNote>): BoardPoint => {
-      const bounds = boardBounds(
-        cards.flatMap((task) => {
-          const element = drawnItem(noteRef(task.id));
-          return element === null ? [] : [drawnRect(element)];
-        }),
-      );
-      const at =
-        bounds === null
-          ? freeSpot("thread", size, false)
-          : besideBoardItem(bounds, size, taken, within);
-      taken.push({ ...at, width: size.w, height: size.h });
-      return at;
-    };
+    const drawn = tasks.map((task) => {
+      const element = drawnItem(noteRef(task.id));
+      return element === null ? null : drawnRect(element);
+    });
+    const bounds = boardBounds(drawn.filter((rect) => rect !== null));
+    // New boxes go in one column right of the tasks, each level with its own task.
+    const spots = (items: ReadonlyArray<BoardRect | null>): ReadonlyArray<BoardPoint> =>
+      bounds === null
+        ? items.map(() => freeSpot("thread", size, false))
+        : boardBoxColumn(
+            bounds,
+            items.map((rect) => rect ?? bounds),
+            size,
+            takenRects(),
+          );
+    const eachAt = mode === "each" ? spots(drawn) : [];
     const groups: ReadonlyArray<RunGroup> =
       mode === "each"
         ? tasks.map((task, index) => ({
             tasks: [task],
             boxId: index === 0 ? run.newBoxId : randomUUID(),
-            at: spotBeside([task]),
+            at: eachAt[index] ?? null,
           }))
         : [
             target === BOARD_ASK_NEW_BOX
-              ? { tasks, boxId: run.newBoxId, at: spotBeside(tasks) }
+              ? { tasks, boxId: run.newBoxId, at: spots([bounds])[0] ?? null }
               : { tasks, boxId: target, at: null },
           ];
     const failed: Array<RunGroup> = [];
@@ -3356,7 +3356,12 @@ export function RoomBoard({
     const body = (
       <>
         {tail}
-        <BoxProgress boxId={box.id} fallback={fallback} approval={renderBoxApproval?.(box.id)} />
+        <BoxProgress
+          boxId={box.id}
+          fallback={fallback}
+          approval={renderBoxApproval?.(box.id)}
+          onStop={stopBox?.(box.id)}
+        />
         {work === undefined ? null : (
           <BoxBoardWork
             turn={work}
@@ -3480,6 +3485,8 @@ export function RoomBoard({
           ]),
       end: boxRunEnd?.(box.id),
       work: workLine === "" ? undefined : workLine,
+      tasks: boardAgentRunTasks(shown.notes, box.id),
+      stop: stopBox?.(box.id),
       requests: boardBoxRequests(room?.messages ?? NO_GUEST_MESSAGES, box.id),
       canResolve: onResolveRequest !== undefined,
       answered: (isRoom ? messages.length > 0 : turn !== undefined) || work !== undefined,
@@ -3563,6 +3570,7 @@ export function RoomBoard({
                 open={agentsOpen}
                 onOpenChange={setAgentsOpen}
                 onShow={showBox}
+                onShowTask={(noteId) => showCards([noteId])}
                 isOnScreen={boxOnScreen}
                 hasThreadBoxes={threadBoxes.length > 1}
                 renderNeeds={(entry, need) =>
@@ -4639,6 +4647,7 @@ export function RoomBoard({
                             threadBoxes.find((box) => box.id === note.run?.boxId)?.guestId,
                           )}
                           waiting={boxWaiting(note.run.boxId)}
+                          end={boxRunEnd?.(note.run.boxId)}
                           onShowBox={() => note.run !== undefined && showBox(note.run.boxId)}
                           onStop={stopBox?.(note.run.boxId)}
                           onClear={

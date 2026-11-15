@@ -1,4 +1,4 @@
-import { GuestId } from "@t3tools/contracts";
+import { GuestId, type RoomBoardNote } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -7,6 +7,7 @@ import {
   boardAgentEndOf,
   boardAgentModel,
   boardAgentRunOutcome,
+  boardAgentRunTasks,
   boardAgentRunStep,
   boardAgentStatus,
   boardAgentStatusLabel,
@@ -96,6 +97,27 @@ describe("boardAgentStatus", () => {
     expect(
       boardAgentStatusLabel({ kind: "working" }, run(), Date.parse("2026-11-15T10:01:12.000Z")),
     ).toBe("Working · 1m 12s");
+  });
+});
+
+describe("boardAgentRunTasks", () => {
+  it("lists a box's open run tasks top to bottom, then left to right", () => {
+    const run = { boxId: "box", at: "2026-11-15T10:00:00.000Z" };
+    const note = (id: string, x: number, y: number, extra: Partial<RoomBoardNote> = {}) =>
+      ({ id, text: id, x, y, kind: "task", run, ...extra }) satisfies RoomBoardNote;
+    const notes: ReadonlyArray<RoomBoardNote> = [
+      note("low", 0, 200),
+      note("right", 300, 0),
+      note("left", 0, 0),
+      note("done", 0, 100, { done: true }),
+      note("other box", 0, 50, { run: { ...run, boxId: "other" } }),
+      note("thread", 0, 60, { kind: "thread" }),
+    ];
+    expect(boardAgentRunTasks(notes, "box").map((task) => task.id)).toEqual([
+      "left",
+      "right",
+      "low",
+    ]);
   });
 });
 

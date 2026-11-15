@@ -25,6 +25,9 @@ export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
       "Two new templates with agents: Research with agents has questions, Researcher and Reviewer boxes and a Findings artifact; Build with agents has Backlog, Doing and Done and a Builder box. Plan a feature now has a Spec its agent writes. Their boxes start empty and use your default model.",
       "Run tasks with an agent: select tasks and choose Run with an agent on the selection bar or in the right-click menu, Run with an agent on a task, or Run this section's tasks in a section's menu. Send them all to one thread box, or give each its own new box beside it, up to 4 at once.",
       "A task being run shows its box's name and how it is going, like “Working” or “Didn't finish”, for everyone. Click it to go to the box. A finished turn ticks the task off; Stop ends the run, and Clear takes the mark off a run that did not finish.",
+      "Stop a thread box's agent from the box itself, beside its working status, or from its row in the Agents list.",
+      "In the Agents list, a box running tasks says “Working on:” and the task. Click the task to go to it.",
+      "A task run in a box whose agent is slow to start keeps saying “Starting” until the run begins or ends, instead of “Didn't finish” after 30 seconds, wherever your T3 Code can see that box's runs.",
     ],
   },
   {
