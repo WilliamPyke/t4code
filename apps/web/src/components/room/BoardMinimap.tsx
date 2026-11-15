@@ -5,6 +5,7 @@ import { type PointerEvent, type RefObject, memo, useEffect, useState } from "re
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { observeResize } from "~/lib/observeResize";
 
+import { MinimapAgentMarks } from "./BoardAgents";
 import { BoardFloat } from "./BoardChrome";
 import {
   type MinimapFrame,
@@ -153,6 +154,7 @@ export function BoardMinimap({
   }, [surfaceRef]);
 
   const items = minimapItems(board, cardIds);
+  const drawn = minimapKey(items);
   const content = boardBounds(items);
   // While a drag pans the view, the map holds still under the pointer.
   const [held, setHeld] = useState<{
@@ -206,7 +208,8 @@ export function BoardMinimap({
         onPointerCancel={() => setHeld(null)}
       >
         <g transform={worldTransform}>
-          <MinimapCards items={items} drawn={minimapKey(items)} />
+          <MinimapCards items={items} drawn={drawn} />
+          <MinimapAgentMarks items={items} drawn={drawn} />
         </g>
         <rect
           x={viewRect.x}

@@ -258,9 +258,12 @@ function registerThreadUndoCommands(
               terminalFocus: isTerminalFocused(),
               previewFocus: isPreviewFocused(),
               ...readRoutePanelsOpen(router),
-              // A collapsed sidebar hides the notice, so text fields keep their own undo.
+              // A collapsed sidebar hides the notice, so text fields keep their own undo, as
+              // does a widget that takes its own keys, such as a board.
               editableFocus:
-                isEditableFocused(event.target) &&
+                (isEditableFocused(event.target) ||
+                  (event.target instanceof Element &&
+                    event.target.closest('[role="application"]') !== null)) &&
                 !(readSidebarVisible() && threadUndoClaimsShortcut()),
               modelPickerOpen: isModelPickerOpen(),
             },

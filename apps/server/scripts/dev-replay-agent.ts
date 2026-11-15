@@ -71,8 +71,55 @@ export const SCENARIOS = [
 const BOARD_SCENARIO = { id: "board-tasks", name: "Board: notes to tasks" } as const;
 // Not a recording either: a long markdown reply streamed slowly, to watch a box hold its size.
 const LONG_REPLY_SCENARIO = { id: "long-reply", name: "Long reply" } as const;
-const MODELS = [...SCENARIOS, BOARD_SCENARIO, LONG_REPLY_SCENARIO];
+// Replies an artifact card can show: a short document, then a small complete page, in turn.
+const ARTIFACT_SCENARIO = { id: "artifact-rewrite", name: "Artifact: rewrite" } as const;
+const MODELS = [...SCENARIOS, BOARD_SCENARIO, LONG_REPLY_SCENARIO, ARTIFACT_SCENARIO];
 const LONG_REPLY_MS = 20_000;
+const ARTIFACT_REPLY_MS = 4_000;
+
+const ARTIFACT_DOCUMENT = [
+  "# Launch plan",
+  "",
+  "A shorter plan, rewritten from what the card said.",
+  "",
+  "## This week",
+  "",
+  "- Finish the sign-up page",
+  "- Write the release notes",
+  "- Ask two people to try it",
+  "",
+  "## Next week",
+  "",
+  "1. Fix what they found",
+  "2. Ship it",
+].join("\n");
+
+const ARTIFACT_PAGE = [
+  "```html",
+  "<!doctype html>",
+  '<html lang="en">',
+  "<head>",
+  '<meta charset="utf-8">',
+  "<title>Launch plan</title>",
+  "<style>",
+  "  body { font: 15px/1.5 system-ui, sans-serif; margin: 24px; color: #1f2933; }",
+  "  h1 { font-size: 20px; margin: 0 0 12px; }",
+  "  ul { padding-left: 20px; }",
+  "  .done { color: #2f855a; }",
+  "</style>",
+  "</head>",
+  "<body>",
+  "<h1>Launch plan</h1>",
+  "<p>The same plan, as a page.</p>",
+  "<ul>",
+  '  <li class="done">Finish the sign-up page</li>',
+  "  <li>Write the release notes</li>",
+  "  <li>Ask two people to try it</li>",
+  "</ul>",
+  "</body>",
+  "</html>",
+  "```",
+].join("\n");
 
 /** About 150 lines of mixed markdown: headings, lists, a table and a code block. */
 export function longReplyText(): string {
@@ -409,9 +456,10 @@ function runAgent(): void {
     }
   };
 
-  const playLongReply = async (sessionId: string, signal: AbortSignal) => {
-    const chunks = streamChunks(longReplyText());
-    const delay = Math.max(1, Math.round(LONG_REPLY_MS / chunks.length));
+  /** Streams `text` as one reply over about `ms`. */
+  const playSlowly = async (sessionId: string, text: string, ms: number, signal: AbortSignal) => {
+    const chunks = streamChunks(text);
+    const delay = Math.max(1, Math.round(ms / chunks.length));
     for (const chunk of chunks) {
       await sleep(delay, signal);
       if (signal.aborted) return;
@@ -556,16 +604,21 @@ function runAgent(): void {
         if (session === undefined) throw new Error(`Unknown session ${sessionId}`);
         const board = session.model === BOARD_SCENARIO.id;
         const long = session.model === LONG_REPLY_SCENARIO.id;
-        const turns = board || long ? [] : loadTurns(session.model);
+        const artifact = session.model === ARTIFACT_SCENARIO.id;
+        const turns = board || long || artifact ? [] : loadTurns(session.model);
         const turn = turns[session.promptCount % Math.max(turns.length, 1)];
+        const artifactReply = session.promptCount % 2 === 0 ? ARTIFACT_DOCUMENT : ARTIFACT_PAGE;
         session.promptCount += 1;
         const controller = new AbortController();
         session.cancel = () => controller.abort();
         let ended: "cancelled" | undefined;
         try {
           if (board) await playBoardTurn(sessionId, controller.signal);
-          else if (long) await playLongReply(sessionId, controller.signal);
-          else if (turn !== undefined) ended = await playTurn(sessionId, turn, controller.signal);
+          else if (long) {
+            await playSlowly(sessionId, longReplyText(), LONG_REPLY_MS, controller.signal);
+          } else if (artifact) {
+            await playSlowly(sessionId, artifactReply, ARTIFACT_REPLY_MS, controller.signal);
+          } else if (turn !== undefined) ended = await playTurn(sessionId, turn, controller.signal);
         } finally {
           session.cancel = undefined;
         }

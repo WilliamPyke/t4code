@@ -203,10 +203,12 @@ removes them, and it says so if it cannot reach the board.
 To ask about particular cards, select them and choose **Ask an agent** on the selection bar (under
 **More** on a phone), in the right-click menu, or press Alt+A (Option+A on a Mac). Type what you
 want, or pick one of the suggestions that fit what you selected, such as **Turn into tasks**, and
-choose which of your boxes takes it, or **New thread box** to add one beside the cards. The cards
-go with that one prompt along lines into the box, as if you had drawn them, so everyone sees what
-the agent was given. Escape or clicking away closes it with nothing changed, and if the prompt
-cannot be sent, the lines (and a box added for it) come off again. A guest's ask follows the same
+choose which of your boxes takes it, or **New thread box** to add one beside the cards. Each box
+shows the model it last ran on, and the model picker beside the list sets the model the prompt runs
+on, a new box's too. The cards go with that one prompt along lines into the box, as if you had
+drawn them, so everyone sees what the agent was given. Escape or clicking away closes it with
+nothing changed. It closes as soon as you send; if the prompt cannot be sent, the lines (and a box
+added for it) come off again and it opens again with what you typed. A guest's ask follows the same
 rules as their box: it may wait for the owner. While an agent adds or changes cards, each one
 briefly shows an outline in its box's colour with the box's name.
 
@@ -214,6 +216,18 @@ The box, or the board's thread card, then says what its last turn did, such as "
 1 section", with **Show on board** to select those cards. The owner and whoever asked for the turn
 can **Undo** everything it did in one step, or press Ctrl+Z (Cmd+Z) when it is the newest thing
 they could undo, and **Redo** it. A card someone changed after the agent did stays as it is.
+
+### See every agent at once
+
+**Agents** in the board's header (Alt+G, Option+G on a Mac, or under **More** on a phone) lists
+every thread box and the board's own thread: whose it is, its model, what it is doing (such as
+"Working · 1m 12s", "Waiting for approval", "Needs you", "Done" or "Failed") and what it last did
+to the board. What needs you comes first, then what is working. Click one to go to it. A guest's
+prompt waiting for you, or an approval your own agent asks for, can be answered right there, and
+the button shows how many need you. When an agent you asked finishes, fails or needs you while its
+box is out of view, a notice says so, with **Show** to go to it. The minimap outlines the boxes
+whose agents are working. "Failed" means the run ended without a reply while you had the board
+open.
 
 ### Votes and catching up
 
@@ -279,6 +293,14 @@ until it is done, so a half-written page never runs. Once it finishes, the artif
 final reply: markdown as text, or, when the
 reply holds a whole HTML page in an `html` code block, the live page. An interrupted or failed
 turn leaves the artifact as it was.
+
+To change an artifact without drawing anything, choose **Ask an agent** on the artifact, or select
+it (with any cards that should go along) and press Alt+A (Option+A on a Mac). Pick **Rewrite
+this**, **Make it shorter** or **Turn into a web page**, or say what to change. The box you choose
+gets a line to the artifact if it has none, a box of yours that already writes it is picked first,
+and its reply replaces the artifact as above. One ask edits one artifact: with several selected,
+the popup names the one it edits, and the others go along as cards. A box with lines to several artifacts fills
+the one an ask names, and otherwise the first one it has a line to.
 
 Several boxes can point at one artifact, and the last turn to finish wins. The artifact says which
 box wrote it, from which prompt and cards, on which model, and for whom. Each artifact keeps the

@@ -46,6 +46,14 @@ describe("boardAskCards", () => {
     expect(boardAskCards([note("box", { kind: "thread" })], card).cards).toEqual([]);
   });
 
+  it("takes the first artifact out as the one it edits, even an empty one", () => {
+    const plan = note("plan", { kind: "artifact", text: "" });
+    const asked = boardAskCards([note("idea"), plan, note("other", { kind: "artifact" })], card);
+    expect(asked.artifact).toBe(plan);
+    expect(asked.cards.map((one) => one.ref)).toEqual(["note:idea", "note:other"]);
+    expect(boardAskCards([note("idea")], card).artifact).toBeNull();
+  });
+
   it("stops at what one prompt takes and says how many it left", () => {
     const many = Array.from({ length: BOARD_PROMPT_MAX_CARDS + 3 }, (_, index) =>
       note(`n${index}`),
@@ -72,13 +80,37 @@ describe("boardAskSuggestions", () => {
       [{}, { kind: "code" }],
       ["Review the changes", "Summarise"],
     ],
-    [[{ kind: "artifact" }], ["Suggest improvements", "Summarise"]],
     [
       [{}, { kind: "link" }],
       ["Summarise", "Turn into tasks", "Find what's missing"],
     ],
   ] as const)("fits what is selected: %j", (kinds, labels) => {
     expect(boardAskSuggestions(kinds).map((one) => one.label)).toEqual(labels);
+  });
+
+  const content = (body: string) => ({ artifact: { body } });
+  it.each([
+    ["an empty artifact", [], {}, ["Write a first draft", "Make a web page"]],
+    [
+      "an empty artifact with cards",
+      [{}],
+      {},
+      ["Write a first draft", "Write it from the cards", "Make a web page"],
+    ],
+    [
+      "a document",
+      [],
+      content("# Plan"),
+      ["Rewrite this", "Make it shorter", "Turn into a web page"],
+    ],
+    [
+      "a page with cards",
+      [{ kind: "task" }],
+      content("<!doctype html><html></html>"),
+      ["Rewrite this", "Make it shorter", "Turn into a document", "Work in the cards"],
+    ],
+  ] as const)("edits the artifact asked about: %s", (_, kinds, artifact, labels) => {
+    expect(boardAskSuggestions(kinds, artifact).map((one) => one.label)).toEqual(labels);
   });
 });
 
@@ -96,20 +128,24 @@ describe("boardAskTargets and boardAskDefaultTarget", () => {
     ]);
     expect(boardAskTargets(boxes, null, false)).toEqual([{ id: "thread", label: "Room" }]);
     expect(boardAskTargets(boxes, "ann", false)).toEqual([]);
+    expect(
+      boardAskTargets(boxes, null, false, (id) => (id === "thread" ? "Haiku" : undefined)),
+    ).toEqual([{ id: "thread", label: "Room", model: "Haiku" }]);
   });
 
   it.each([
-    ["a selected box first", ["eves", "mine"], "thread", "mine"],
-    ["then the one last asked", [], "thread", "thread"],
-    ["a gone last box falls back to the first box", [], "deleted", "mine"],
-    ["the first box when none was asked yet", [], null, "mine"],
-  ] as const)("starts on %s", (_, selectedBoxes, lastUsed, expected) => {
+    ["a selected box first", ["eves", "mine"], "thread", "thread", "mine"],
+    ["then the box that writes the artifact", [], "thread", "deleted", "thread"],
+    ["then the one last asked", [], null, "thread", "thread"],
+    ["a gone last box falls back to the first box", [], "gone", "deleted", "mine"],
+    ["the first box when none was asked yet", [], null, null, "mine"],
+  ] as const)("starts on %s", (_, selectedBoxes, artifactBox, lastUsed, expected) => {
     const targets = [
       { id: "mine", label: "Mine" },
       { id: "thread", label: "Room" },
       { id: BOARD_ASK_NEW_BOX, label: "New thread box" },
     ];
-    expect(boardAskDefaultTarget(targets, { selectedBoxes, lastUsed })).toBe(expected);
+    expect(boardAskDefaultTarget(targets, { selectedBoxes, artifactBox, lastUsed })).toBe(expected);
   });
 
   it("starts on a new box when there is none, and on nothing when nothing is offered", () => {
@@ -127,13 +163,27 @@ describe("boardAskLines", () => {
       { from: "note:a", to: "note:box" },
       { from: "note:b", to: "note:other" },
     ];
+    const into = (from: string) => ({ from, to: "note:box" });
     expect(boardAskLines(edges, ["note:a", "note:b", "note:c"], "note:box", 10)).toEqual({
-      add: ["note:b", "note:c"],
+      add: [into("note:b"), into("note:c")],
       going: ["note:a", "note:b", "note:c"],
     });
     expect(boardAskLines(edges, ["note:a", "note:b", "note:c"], "note:box", 3)).toEqual({
-      add: ["note:b"],
+      add: [into("note:b")],
       going: ["note:a", "note:b"],
+    });
+  });
+
+  it("draws the box's line to the artifact it edits first, unless it has one", () => {
+    const edges = [{ from: "note:a", to: "note:box" }];
+    const toArtifact = { from: "note:box", to: "note:art" };
+    expect(boardAskLines(edges, ["note:b"], "note:box", 2, "note:art")).toEqual({
+      add: [toArtifact],
+      going: [],
+    });
+    expect(boardAskLines([...edges, toArtifact], ["note:b"], "note:box", 3, "note:art")).toEqual({
+      add: [{ from: "note:b", to: "note:box" }],
+      going: ["note:b"],
     });
   });
 });

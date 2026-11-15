@@ -168,12 +168,19 @@ export function SelectionBar({
     const board = bar?.offsetParent;
     if (hidden || bar === null || !(board instanceof HTMLElement)) return;
     const area = board.getBoundingClientRect();
-    if (docked) {
-      const chrome = board.parentElement?.querySelectorAll('[data-board-chrome="bottom"]') ?? [];
-      const cover = Math.max(
+    // How far the header, and the toolbar and zoom controls, float into the board.
+    const reach = (selector: string, edge: "top" | "bottom") =>
+      Math.max(
         0,
-        ...[...chrome].map((element) => area.bottom - element.getBoundingClientRect().top),
+        ...[...(board.parentElement?.querySelectorAll(selector) ?? [])].map((element) => {
+          const drawn = element.getBoundingClientRect();
+          if (drawn.height === 0) return 0;
+          return edge === "top" ? drawn.bottom - area.top : area.bottom - drawn.top;
+        }),
       );
+    if (docked) {
+      // Above the zoom corner too, whose minimap hides while the bar is docked.
+      const cover = reach('[data-board-chrome="bottom"], [data-board-corner]', "bottom");
       bar.style.left = `${Math.max(DOCK_GAP, (board.clientWidth - bar.offsetWidth) / 2)}px`;
       bar.style.top = `${Math.max(DOCK_GAP, board.clientHeight - cover - DOCK_GAP - bar.offsetHeight)}px`;
       return;
@@ -194,6 +201,10 @@ export function SelectionBar({
       },
       { width: bar.offsetWidth, height: bar.offsetHeight },
       { width: board.clientWidth, height: board.clientHeight },
+      {
+        top: reach('[data-board-chrome="top"]', "top"),
+        bottom: reach('[data-board-chrome="bottom"]', "bottom"),
+      },
     );
     bar.style.left = `${spot.left}px`;
     bar.style.top = `${spot.top}px`;
@@ -203,6 +214,7 @@ export function SelectionBar({
     <div
       ref={barRef}
       data-board-overlay
+      data-selection-docked={docked ? "" : undefined}
       className={cn(
         "absolute top-2 left-2 z-20 flex items-center gap-1 rounded-board border border-board-hairline bg-card py-1 ps-2.5 pe-1 text-xs text-card-foreground shadow-board",
         hidden && "invisible",

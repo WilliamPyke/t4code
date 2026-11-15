@@ -31,13 +31,14 @@ export function VoteButton({
   readonly onVote: () => void;
 }) {
   const voted = boardVotedBy(note, viewer);
+  // Read out as "Vote, pressed": the pressed state, not the name, says it is this person's.
   const label = voted ? "Remove my vote" : "Vote";
   if (touch) {
     return (
       <Button
         size="icon"
         variant={voted ? "secondary" : "ghost"}
-        aria-label={label}
+        aria-label="Vote"
         aria-pressed={voted}
         onClick={onVote}
       >
@@ -51,7 +52,7 @@ export function VoteButton({
         render={
           <button
             type="button"
-            aria-label={label}
+            aria-label="Vote"
             aria-pressed={voted}
             className={cn(BOARD_ICON_BUTTON_CLASS, voted && "text-primary opacity-100")}
             onPointerDown={stopPointer}

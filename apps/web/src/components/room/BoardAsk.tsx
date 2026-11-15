@@ -1,8 +1,8 @@
 import type { RoomBoardAgentTurn } from "@t3tools/contracts";
 import { ArrowUpIcon } from "lucide-react";
-import { type RefObject, useEffect, useState } from "react";
+import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useState } from "react";
 
-import { isMacPlatform } from "~/lib/utils";
+import { isMacPlatform, randomUUID } from "~/lib/utils";
 
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup } from "../ui/popover";
@@ -10,6 +10,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Textarea } from "../ui/textarea";
 import {
   BOARD_AGENT_WORK_MS,
+  BOARD_ASK_NEW_BOX,
   type BoardAskSuggestion,
   type BoardAskTarget,
   boardAgentWorkFresh,
@@ -34,19 +35,44 @@ export const lastBoardAskTarget = (board: string) => lastTargets.get(board) ?? n
 export const rememberBoardAskTarget = (board: string, target: string) =>
   lastTargets.set(board, target);
 
+/** An ask being written: the cards it is anchored to, and what a failed send left in it. */
+export interface BoardAsking {
+  readonly refs: ReadonlySet<string>;
+  /** The id a new thread box made for it takes, so a model picked for that box stays with it. */
+  readonly newBoxId: string;
+  readonly text: string;
+  /** The box it went to, after a failed send. */
+  readonly target: string | null;
+  readonly failed: boolean;
+}
+
+export const newBoardAsking = (refs: Iterable<string>): BoardAsking => ({
+  refs: new Set(refs),
+  newBoxId: randomUUID(),
+  text: "",
+  target: null,
+  failed: false,
+});
+
 /**
- * Asking an agent about the selected cards: what to ask, a few asks that fit them, and which of
- * this person's thread boxes takes it. It stays open while it sends, and on a failure keeps what
- * was typed.
+ * Asking an agent about the selected cards, or to edit the artifact among them: what to ask, a
+ * few asks that fit, which of this person's thread boxes takes it and on which model. Sending
+ * closes it at once; a send that fails opens it again with what was typed.
  */
 export function BoardAskPopover({
   anchor,
   count,
   left,
+  artifactTitle,
   suggestions,
   targets,
   initialTarget,
+  initialText,
+  failed,
+  newBoxId,
+  renderModel,
   finalFocus,
+  board,
   onSend,
   onClose,
 }: {
@@ -56,33 +82,42 @@ export function BoardAskPopover({
   readonly count: number;
   /** How many more were selected than one prompt takes. */
   readonly left: number;
+  /** The title of the artifact the reply rewrites, "" for an untitled one; null for none. */
+  readonly artifactTitle: string | null;
   readonly suggestions: ReadonlyArray<BoardAskSuggestion>;
   readonly targets: ReadonlyArray<BoardAskTarget>;
   readonly initialTarget: string;
+  readonly initialText: string;
+  /** The last send failed, and nothing it added stayed on the board. */
+  readonly failed: boolean;
+  readonly newBoxId: string;
+  /** The model picker a box's own prompt has; absent where the board has none. */
+  readonly renderModel: ((boxId: string) => ReactNode) | undefined;
   readonly finalFocus: RefObject<HTMLElement | null>;
-  /** Sends it to a target and says whether it went. */
-  readonly onSend: (target: string, text: string) => Promise<boolean>;
+  /** The board surface, whose header and toolbar it stays between. */
+  readonly board: RefObject<HTMLElement | null>;
+  readonly onSend: (target: string, text: string) => void;
   readonly onClose: () => void;
 }) {
-  const [text, setText] = useState("");
+  const bounds = useBoardAskBounds(board);
+  const [text, setText] = useState(initialText);
   const [target, setTarget] = useState(initialTarget);
-  const [sending, setSending] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const send = async (message: string) => {
-    if (message.trim() === "" || sending) return;
-    setSending(true);
-    setFailed(false);
-    const sent = await onSend(target, message.trim()).catch(() => false);
-    setSending(false);
-    if (sent) onClose();
-    else setFailed(true);
+  const send = (message: string) => {
+    if (message.trim() !== "") onSend(target, message.trim());
   };
   const targetLabel = targets.find((one) => one.id === target)?.label ?? "";
+  const cardsPart = count === 0 ? "" : count === 1 ? "1 card" : `${count} cards`;
+  const heading =
+    artifactTitle === null
+      ? `Ask about ${cardsPart}`
+      : [artifactTitle === "" ? "Edit this artifact" : `Edit "${artifactTitle}"`, cardsPart]
+          .filter((part) => part !== "")
+          .join(" · with ");
   return (
     <Popover
       open
       onOpenChange={(open) => {
-        if (!open && !sending) onClose();
+        if (!open) onClose();
       }}
     >
       <PopoverPopup
@@ -92,13 +127,14 @@ export function BoardAskPopover({
         sideOffset={8}
         width="md"
         padding="compact"
+        collisionBoundary={bounds}
         touchBackdrop
         finalFocus={finalFocus}
         aria-label="Ask an agent"
       >
         <div className="flex flex-col gap-2">
-          <p className="text-2xs text-muted-foreground">
-            {count === 1 ? "Ask about 1 card" : `Ask about ${count} cards`}
+          <p className="truncate text-2xs text-muted-foreground">
+            {heading}
             {left === 0 ? "" : ` · ${left} more left out, one ask takes ${count}`}
           </p>
           <Textarea
@@ -106,16 +142,18 @@ export function BoardAskPopover({
             rows={2}
             autoFocus
             aria-label="What to ask"
-            placeholder="Ask an agent about these cards"
+            placeholder={
+              artifactTitle === null
+                ? "Ask an agent about these cards"
+                : "How should the agent change it?"
+            }
             value={text}
-            readOnly={sending}
-            aria-busy={sending}
             onChange={(event) => setText(event.target.value)}
             onKeyDown={(event) => {
               // As in the app composer: Enter sends, Shift+Enter adds a line.
               if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
-                void send(text);
+                send(text);
               }
             }}
           />
@@ -125,18 +163,16 @@ export function BoardAskPopover({
                 key={suggestion.label}
                 size="micro"
                 variant="outline"
-                disabled={sending}
-                onClick={() => void send(suggestion.prompt)}
+                onClick={() => send(suggestion.prompt)}
               >
                 {suggestion.label}
               </Button>
             ))}
           </div>
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 items-center gap-1.5">
             <div className="min-w-0 flex-1">
               <Select
                 value={target}
-                disabled={sending}
                 onValueChange={(value) => {
                   if (value !== null) setTarget(value);
                 }}
@@ -148,16 +184,23 @@ export function BoardAskPopover({
                   {targets.map((option) => (
                     <SelectItem key={option.id} value={option.id}>
                       {option.label}
+                      {option.model === undefined ? null : (
+                        <span className="text-muted-foreground"> · {option.model}</span>
+                      )}
                     </SelectItem>
                   ))}
                 </SelectPopup>
               </Select>
             </div>
+            {/* The model the prompt runs on; a new box's pick is kept under the id it will take. */}
+            <div className="flex max-w-36 min-w-0 shrink-0 items-center">
+              {renderModel?.(target === BOARD_ASK_NEW_BOX ? newBoxId : target)}
+            </div>
             <Button
               size="icon-xs"
-              aria-label={sending ? "Sending..." : "Send"}
-              disabled={sending || text.trim() === ""}
-              onClick={() => void send(text)}
+              aria-label="Send"
+              disabled={text.trim() === ""}
+              onClick={() => send(text)}
             >
               <ArrowUpIcon />
             </Button>
@@ -171,6 +214,51 @@ export function BoardAskPopover({
       </PopoverPopup>
     </Popover>
   );
+}
+
+interface ScreenRect {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * Where on screen the ask may sit: inside the board, below its header, above its toolbar and zoom
+ * controls and above an on-screen keyboard, measured again as the keyboard opens or the window
+ * resizes. On a phone the popover is about as tall as that gap, so a looser fit would cover them.
+ */
+function useBoardAskBounds(board: RefObject<HTMLElement | null>): ScreenRect | undefined {
+  const [bounds, setBounds] = useState<ScreenRect | undefined>(undefined);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- follows the board's chrome where the browser drew it and the visual viewport, which a keyboard shrinks without a render
+  useLayoutEffect(() => {
+    const viewport = window.visualViewport;
+    const measure = () => {
+      const surface = board.current;
+      const root = surface?.parentElement;
+      if (surface === null || root === null || root === undefined) return;
+      const area = surface.getBoundingClientRect();
+      const chrome = (edge: "top" | "bottom") =>
+        [...root.querySelectorAll(`[data-board-chrome="${edge}"]`)]
+          .map((element) => element.getBoundingClientRect())
+          .filter((rect) => rect.height > 0);
+      const top = Math.max(area.top, ...chrome("top").map((rect) => rect.bottom));
+      const bottom = Math.min(
+        area.bottom,
+        viewport === null ? area.bottom : viewport.offsetTop + viewport.height,
+        ...chrome("bottom").map((rect) => rect.top),
+      );
+      setBounds({ x: area.left, y: top, width: area.width, height: Math.max(0, bottom - top) });
+    };
+    measure();
+    viewport?.addEventListener("resize", measure);
+    window.addEventListener("resize", measure);
+    return () => {
+      viewport?.removeEventListener("resize", measure);
+      window.removeEventListener("resize", measure);
+    };
+  }, [board]);
+  return bounds;
 }
 
 /** A card an agent just added or changed: whose box did it, and which mark shows it. */

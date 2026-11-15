@@ -92,6 +92,7 @@ import {
   boardTidySection,
   boardPushedBelow,
   boardSectionAround,
+  boardSectionHolding,
   boardItemTarget,
   boardItemRects,
   boardMessages,
@@ -213,8 +214,20 @@ describe("selectionBarSpot", () => {
       selection: { x: 0, y: 0, width: 1000, height: 700 },
       spot: { left: 350, top: 660 },
     },
-  ])("$name", ({ selection, spot }) => {
-    expect(selectionBarSpot(selection, bar, board)).toEqual(spot);
+    {
+      name: "goes below a selection just under the header rather than under it",
+      selection: { x: 400, y: 70, width: 200, height: 100 },
+      cover: { top: 52, bottom: 60 },
+      spot: { left: 350, top: 178 },
+    },
+    {
+      name: "stays above the toolbar when the selection fills the board",
+      selection: { x: 0, y: 0, width: 1000, height: 700 },
+      cover: { top: 52, bottom: 60 },
+      spot: { left: 350, top: 600 },
+    },
+  ])("$name", ({ selection, cover, spot }) => {
+    expect(selectionBarSpot(selection, bar, board, cover)).toEqual(spot);
   });
 });
 
@@ -2376,6 +2389,27 @@ describe("selecting several cards", () => {
       { ref: "card:thread", rect: { x: 0, y: 400, width: 320, height: 200 } },
     ];
     expect(boardItemsCentredIn(items, items[0]!.rect, "note:frame")).toEqual(["note:mine"]);
+    const sections = [
+      { id: "wide", rect: { x: 0, y: 0, width: 400, height: 300 } },
+      { id: "low", rect: { x: 0, y: 350, width: 400, height: 300 } },
+    ];
+    // A right-click on its empty space, and a selection centred wholly inside it.
+    expect(boardSectionHolding(sections, [{ x: 390, y: 400 }])?.id).toBe("low");
+    expect(
+      boardSectionHolding(sections, [
+        { x: 60, y: 60 },
+        { x: 300, y: 250 },
+      ])?.id,
+    ).toBe("wide");
+    // Split across two sections, outside every one, or no points: none.
+    expect(
+      boardSectionHolding(sections, [
+        { x: 60, y: 60 },
+        { x: 60, y: 400 },
+      ]),
+    ).toBeUndefined();
+    expect(boardSectionHolding(sections, [{ x: 500, y: 60 }])).toBeUndefined();
+    expect(boardSectionHolding(sections, [])).toBeUndefined();
     expect(
       boardSectionAround([
         { x: 100, y: 100, width: 200, height: 100 },
@@ -2541,9 +2575,10 @@ describe("selecting several cards", () => {
       { ref: "note:own", rect: { x: 200, y: 560, width: 200, height: 120 } },
       { ref: "note:frame", rect: { x: 150, y: 500, width: 400, height: 300 }, section: true },
     ];
-    expect(new Set(boardPushedBelow(section, grown, touching).refs)).toEqual(
-      new Set(["note:own", "note:frame"]),
-    );
+    const withFrame = boardPushedBelow(section, grown, touching);
+    expect(new Set(withFrame.refs)).toEqual(new Set(["note:own", "note:frame"]));
+    // Far enough that the frame, which started higher than its card, clears the grown section.
+    expect(withFrame.dy).toBe(100 + size.h + 24 - 500);
     // Nothing in the way: nothing moves.
     expect(boardPushedBelow(section, section, below)).toEqual({ dy: 0, refs: [] });
   });

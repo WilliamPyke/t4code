@@ -1,0 +1,425 @@
+import {
+  ROOM_BOARD_ROOM_BOX,
+  ROOM_BOARD_THREAD_CARD,
+  type RoomBoxProgress,
+  type ThreadGuestMessage,
+} from "@t3tools/contracts";
+import { BotIcon } from "lucide-react";
+import {
+  type ReactNode,
+  memo,
+  use,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+
+import { useStableCallback } from "~/hooks/useStableCallback";
+import { isMacPlatform } from "~/lib/utils";
+
+import { Badge } from "../ui/badge";
+import { Button } from "../ui/button";
+import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
+import { toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { BoardChip, type BoardChipTone, BoardFloat, PersonDot } from "./BoardChrome";
+import {
+  type BoardAgentRun,
+  type BoardAgentStatus,
+  type BoardAgentWatched,
+  boardAgentRunOutcome,
+  boardAgentRunStep,
+  boardAgentStatus,
+  boardAgentStatusLabel,
+  sortBoardAgents,
+} from "./boardAgents.logic";
+import type { MinimapItem } from "./boardMinimap.logic";
+import { RoomLiveContext, type RoomLiveStore, useBoardNow } from "./roomBoardLive";
+
+/** How long a run that ended may wait for its reply to reach the board before it reads as failed. */
+const REPLY_GRACE_MS = 5_000;
+
+/** How the Agents shortcut reads on this device. */
+const boardAgentsShortcut = () =>
+  typeof navigator !== "undefined" && isMacPlatform(navigator.platform) ? "⌥G" : "Alt+G";
+
+/** A thread box as the Agents panel lists it. The board builds these; runs come from the live store. */
+export interface BoardAgentEntry {
+  readonly id: string;
+  readonly name: string;
+  /** Whose box it is, as the board names them: "You", "Sam", the owner. */
+  readonly whose: string;
+  readonly color: string;
+  /** The model its last reply ran on. */
+  readonly model: string | undefined;
+  /** What its agent last did to the board, when that still stands. */
+  readonly work: string | undefined;
+  readonly requests: ReadonlyArray<ThreadGuestMessage>;
+  /** The viewer is the one who sends or dismisses the guests' prompts on it. */
+  readonly canResolve: boolean;
+  readonly answered: boolean;
+  /** When it last replied or changed the board, in ms. */
+  readonly activity: number;
+  /** Its last reply and board work, which a finished run changes. */
+  readonly turnKey: string;
+  /** For a server that reports no box runs: what the room thread's agent is doing. */
+  readonly fallback?: "working" | "approval" | undefined;
+}
+
+// What of a run the panel shows: never its streaming text, so a token renders nothing here.
+const runKey = (progress: RoomBoxProgress | undefined) =>
+  progress === undefined
+    ? ""
+    : `${progress.phase}|${progress.startedAt}|${progress.guestId ?? ""}|${progress.model ?? ""}`;
+
+function entryRun(store: RoomLiveStore, entry: BoardAgentEntry): BoardAgentRun | undefined {
+  const progress = store.box(entry.id);
+  if (progress !== undefined || entry.fallback === undefined) return progress;
+  return { phase: entry.fallback === "approval" ? "approval" : "thinking", startedAt: "" };
+}
+
+/** The runs of these boxes, read again only when one starts, ends or changes phase. */
+function useAgentRuns(entries: ReadonlyArray<BoardAgentEntry>) {
+  const store = use(RoomLiveContext);
+  useSyncExternalStore(store.subscribe, () =>
+    entries.map((entry) => runKey(store.box(entry.id))).join(";"),
+  );
+  return (entry: BoardAgentEntry) => entryRun(store, entry);
+}
+
+/** Boxes whose last run ended without a reply while this board was open. */
+interface FailedRuns {
+  readonly has: (boxId: string) => boolean;
+  readonly set: (boxId: string, failed: boolean) => void;
+  readonly subscribe: (listener: () => void) => () => void;
+  readonly version: () => number;
+}
+
+function createFailedRuns(): FailedRuns {
+  const failed = new Set<string>();
+  const listeners = new Set<() => void>();
+  let version = 0;
+  return {
+    has: (boxId) => failed.has(boxId),
+    set: (boxId, value) => {
+      if (failed.has(boxId) === value) return;
+      if (value) failed.add(boxId);
+      else failed.delete(boxId);
+      version += 1;
+      for (const listener of listeners) listener();
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    version: () => version,
+  };
+}
+
+const STATUS_TONES: Readonly<Record<BoardAgentStatus["kind"], BoardChipTone>> = {
+  "needs-you": "warning",
+  working: "primary",
+  queued: "neutral",
+  waiting: "neutral",
+  failed: "error",
+  done: "neutral",
+  idle: "neutral",
+};
+
+function StatusChip({
+  status,
+  run,
+}: {
+  readonly status: BoardAgentStatus;
+  readonly run: BoardAgentRun | undefined;
+}) {
+  return (
+    <BoardChip tone={STATUS_TONES[status.kind]} dashed={status.kind === "idle"}>
+      {status.kind === "working" && run !== undefined && run.startedAt !== "" ? (
+        <WorkingFor run={run} />
+      ) : (
+        boardAgentStatusLabel(status, undefined, 0)
+      )}
+    </BoardChip>
+  );
+}
+
+/** "Working · 1m 12s": only this ticks with the board's clock. */
+function WorkingFor({ run }: { readonly run: BoardAgentRun }) {
+  const now = useBoardNow();
+  return <>{boardAgentStatusLabel({ kind: "working" }, run, now)}</>;
+}
+
+/**
+ * Every agent on the board at a glance: a quiet button in the board's header, with how many need
+ * this person and whether any is working, and its panel. Also tells this person, once a turn, when
+ * a box they asked finishes, fails or needs them while it is out of view.
+ */
+export function BoardAgents({
+  entries,
+  viewer,
+  open,
+  onOpenChange,
+  onShow,
+  isOnScreen,
+  renderNeeds,
+  hasThreadBoxes,
+}: {
+  readonly entries: ReadonlyArray<BoardAgentEntry>;
+  readonly viewer: string | null;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  /** Pans the board to a box and selects it. */
+  readonly onShow: (boxId: string) => void;
+  readonly isOnScreen: (boxId: string) => boolean;
+  /** What a box shows for what needs this person: its own Send and Dismiss, or its approval. */
+  readonly renderNeeds: (entry: BoardAgentEntry, need: "request" | "approval") => ReactNode;
+  /** Whether anyone added a thread box, besides the board's own thread. */
+  readonly hasThreadBoxes: boolean;
+}) {
+  const store = use(RoomLiveContext);
+  const runOf = useAgentRuns(entries);
+  const [failed] = useState(createFailedRuns);
+  useSyncExternalStore(failed.subscribe, failed.version);
+  const rows = sortBoardAgents(
+    entries.map((entry) => {
+      const run = runOf(entry);
+      return {
+        entry,
+        run,
+        activity: Math.max(entry.activity, run === undefined ? 0 : Date.parse(run.startedAt) || 0),
+        status: boardAgentStatus({
+          run,
+          requests: entry.requests.length,
+          canResolve: entry.canResolve,
+          failed: failed.has(entry.id),
+          answered: entry.answered,
+          viewer,
+        }),
+      };
+    }),
+  );
+  const needs = rows.filter((row) => row.status.kind === "needs-you").length;
+  const working = rows.some((row) => row.status.kind === "working");
+
+  const entriesNow = useStableCallback(() => entries);
+  const notify = useStableCallback((boxId: string, kind: "needs-you" | "finished" | "failed") => {
+    const entry = entries.find((candidate) => candidate.id === boxId);
+    if (entry === undefined || (document.visibilityState === "visible" && isOnScreen(boxId))) {
+      return;
+    }
+    toastManager.add({
+      type: kind === "failed" ? "error" : kind === "needs-you" ? "warning" : "info",
+      title:
+        kind === "needs-you"
+          ? `${entry.name} needs you`
+          : kind === "failed"
+            ? `${entry.name} failed`
+            : `${entry.name} finished`,
+      description:
+        kind === "needs-you"
+          ? "Its agent asks you to approve something."
+          : kind === "failed"
+            ? "It stopped without a reply."
+            : entry.work,
+      actionProps: { children: "Show", onClick: () => onShow(boxId) },
+    });
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- watches the live store's runs, outside React, to tell when one this person asked ends or needs them
+  useEffect(() => {
+    const watched = new Map<string, BoardAgentWatched>();
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const turnKeyOf = (boxId: string) =>
+      entriesNow().find((entry) => entry.id === boxId)?.turnKey ?? "";
+    const ended = (boxId: string, run: BoardAgentWatched, tell: boolean) => {
+      const settle = (last: boolean) => {
+        const outcome = boardAgentRunOutcome(run, turnKeyOf(boxId));
+        if (outcome === "failed" && !last) return false;
+        failed.set(boxId, outcome === "failed");
+        if (tell) notify(boxId, outcome);
+        return true;
+      };
+      if (settle(false)) return;
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        settle(true);
+      }, REPLY_GRACE_MS);
+      timers.add(timer);
+    };
+    const step = () => {
+      for (const entry of entriesNow()) {
+        const progress = store.box(entry.id);
+        const before = watched.get(entry.id);
+        const { next, notice } = boardAgentRunStep(before, progress, viewer, entry.turnKey);
+        if (next === undefined) watched.delete(entry.id);
+        else watched.set(entry.id, next);
+        if (progress !== undefined && before?.startedAt !== progress.startedAt) {
+          failed.set(entry.id, false);
+        }
+        if (before !== undefined && next === undefined) ended(entry.id, before, notice === "ended");
+        if (notice === "needs-you") notify(entry.id, "needs-you");
+      }
+    };
+    step();
+    const unsubscribe = store.subscribe(step);
+    return () => {
+      unsubscribe();
+      for (const timer of timers) clearTimeout(timer);
+    };
+  }, [store, viewer, failed, entriesNow, notify]);
+
+  const trigger = useRef<HTMLButtonElement | null>(null);
+  // From the More menu on a phone the header button is hidden: the panel opens above the toolbar.
+  const anchor = {
+    getBoundingClientRect: () => {
+      const button = trigger.current;
+      return button !== null && button.offsetWidth > 0
+        ? button.getBoundingClientRect()
+        : new DOMRect(window.innerWidth / 2, window.innerHeight - 64, 0, 0);
+    },
+  };
+  const label = [
+    "Agents",
+    needs === 0 ? "" : `${needs} need${needs === 1 ? "s" : ""} you`,
+    working ? "working" : "",
+  ]
+    .filter((part) => part !== "")
+    .join(", ");
+
+  return (
+    <Popover open={open} onOpenChange={onOpenChange}>
+      <BoardFloat className="p-1 @max-2xl/board:hidden">
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <PopoverTrigger
+                render={<Button ref={trigger} size="sm" variant="ghost" aria-label={label} />}
+              />
+            }
+          >
+            <BotIcon />
+            <span className="sr-only @5xl/board:not-sr-only">Agents</span>
+            {working ? <span aria-hidden className="size-1.5 rounded-full bg-primary" /> : null}
+            {needs === 0 ? null : (
+              <Badge size="sm" variant="warning">
+                {needs}
+              </Badge>
+            )}
+          </TooltipTrigger>
+          <TooltipPopup side="bottom">Agents · {boardAgentsShortcut()}</TooltipPopup>
+        </Tooltip>
+      </BoardFloat>
+      <PopoverPopup
+        anchor={anchor}
+        side="bottom"
+        align="end"
+        sideOffset={8}
+        width="lg"
+        padding="compact"
+        touchBackdrop
+        aria-label="Agents"
+      >
+        <div className="flex max-h-[min(32rem,70dvh)] flex-col gap-1.5">
+          <div className="flex items-center justify-between px-1.5">
+            <PopoverTitle>Agents</PopoverTitle>
+            <span className="text-2xs text-muted-foreground">{boardAgentsShortcut()}</span>
+          </div>
+          <ol className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
+            {rows.map(({ entry, run, status }) => (
+              <li key={entry.id} className="flex flex-col gap-1">
+                <button
+                  type="button"
+                  className="flex w-full min-w-0 flex-col gap-0.5 rounded-md px-1.5 py-1.5 text-start outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                  onClick={() => {
+                    onOpenChange(false);
+                    onShow(entry.id);
+                  }}
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <PersonDot color={entry.color} className="size-2" />
+                    <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                      {entry.name}
+                    </span>
+                    <StatusChip status={status} run={run} />
+                  </span>
+                  <span className="truncate ps-4 text-2xs text-muted-foreground">
+                    {[entry.whose, run?.model ?? entry.model]
+                      .filter((part) => part !== undefined && part !== "")
+                      .join(" · ")}
+                  </span>
+                  {entry.work === undefined ? null : (
+                    <span className="truncate ps-4 text-2xs text-muted-foreground">
+                      {entry.work}
+                    </span>
+                  )}
+                </button>
+                {status.kind === "needs-you" ? (
+                  <div className="ps-5.5 pe-1.5 pb-1">{renderNeeds(entry, status.need)}</div>
+                ) : null}
+              </li>
+            ))}
+          </ol>
+          {hasThreadBoxes ? null : (
+            <p className="px-1.5 pb-1 text-2xs text-muted-foreground">
+              Add an agent with Thread in the toolbar, or select cards and choose Ask an agent.
+            </p>
+          )}
+        </div>
+      </PopoverPopup>
+    </Popover>
+  );
+}
+
+/** The box a minimap item draws, when it is one. */
+const minimapBoxId = (itemId: string): string | null =>
+  itemId === `card:${ROOM_BOARD_THREAD_CARD}`
+    ? ROOM_BOARD_ROOM_BOX
+    : itemId.startsWith("note:")
+      ? itemId.slice("note:".length)
+      : null;
+
+/**
+ * An outline on each box in the minimap whose agent is working, amber while it waits for an
+ * approval. Reads the live store itself and only a run starting, ending or waiting renders it.
+ */
+export const MinimapAgentMarks = memo(
+  function MinimapAgentMarks({
+    items,
+  }: {
+    readonly items: ReadonlyArray<MinimapItem>;
+    readonly drawn: string;
+  }) {
+    const store = use(RoomLiveContext);
+    const marked = useSyncExternalStore(store.subscribe, () =>
+      items
+        .flatMap((item) => {
+          const boxId = minimapBoxId(item.id);
+          const progress = boxId === null ? undefined : store.box(boxId);
+          return progress === undefined
+            ? []
+            : [`${item.id}=${progress.phase === "approval" ? "a" : "w"}`];
+        })
+        .join(";"),
+    );
+    if (marked === "") return null;
+    const tones = new Map(marked.split(";").map((part) => part.split("=") as [string, string]));
+    return items.map((item) =>
+      tones.has(item.id) ? (
+        <rect
+          key={item.id}
+          x={item.x}
+          y={item.y}
+          width={item.width}
+          height={item.height}
+          rx={8}
+          fill="none"
+          stroke={tones.get(item.id) === "a" ? "var(--color-warning)" : "var(--color-primary)"}
+          strokeWidth={1.5}
+          vectorEffect="non-scaling-stroke"
+        />
+      ) : null,
+    );
+  },
+  (before, after) => before.drawn === after.drawn,
+);

@@ -151,6 +151,7 @@ import {
   boardArtifactWriting,
   boardBoxAgentLabel,
   boardBoxName,
+  boardAgentTurnLine,
   boardBoxRef,
   boardBoxRequests,
   boardGuestWaiting,
@@ -177,6 +178,7 @@ import {
   boardItemsInRect,
   boardItemsCentredIn,
   boardSectionAround,
+  boardSectionHolding,
   BOARD_SECTION_SIZE,
   type BoardSelected,
   boardNoteBox,
@@ -261,10 +263,12 @@ import { CatchUpMark, CatchUpPill, useBoardCatchUp } from "./BoardCatchUp";
 import { VoteButton, boardVoteShortcut } from "./BoardVote";
 import {
   AgentWorkMark,
+  type BoardAsking,
   BoardAskPopover,
   boardAskShortcut,
   isBoardAskKey,
   lastBoardAskTarget,
+  newBoardAsking,
   rememberBoardAskTarget,
   useBoardAgentWork,
 } from "./BoardAsk";
@@ -322,6 +326,8 @@ import {
   PersonDot,
 } from "./BoardChrome";
 import { BoxBoardWork, BoxProgress, BoxRequests, BoxTurns } from "./RoomBoardThreadBox";
+import { type BoardAgentEntry, BoardAgents } from "./BoardAgents";
+import { boardAgentActivity, isBoardAgentsKey } from "./boardAgents.logic";
 import {
   RoomLiveContext,
   boardLiveRect,
@@ -854,6 +860,8 @@ export function RoomBoard({
     readonly y: number;
     readonly at: BoardPoint;
     readonly ref: string | null;
+    /** The section whose empty space it opened on, by note id; its frame takes no pointer. */
+    readonly section: string | undefined;
     readonly canPaste: boolean;
   } | null>(null);
   const [linking, setLinking] = useState<Linking | null>(null);
@@ -1683,6 +1691,7 @@ export function RoomBoard({
     for (const note of boardVoteToggles(notes, viewer)) reactTo(note, BOARD_VOTE);
   };
   const [minimapShown, toggleMinimap] = useBoardMinimap();
+  const [agentsOpen, setAgentsOpen] = useState(false);
   const zoomBy = (factor: number) => {
     const area = boardAreaOf(surfaceRef.current);
     const center = { x: (area?.width ?? 0) / 2, y: (area?.height ?? 0) / 2 };
@@ -2127,28 +2136,24 @@ export function RoomBoard({
       }
     }
   };
-  // A selection that sits wholly in one section is tidied inside it, not moved out of it.
-  const sectionOfSelection = () => {
-    const centres = selectedItems.flatMap((item) => {
-      const element = drawnItem(boardEditKey(item.target));
-      if (element === null) return [];
-      const rect = drawnRect(element);
-      return [{ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }];
-    });
-    if (centres.length === 0) return undefined;
-    for (const note of shown.notes) {
-      if (note.section !== true || selected.has(noteRef(note.id))) continue;
+  // The sections where the browser drew them, but those in `leaving`.
+  const drawnSections = (leaving: ReadonlySet<string> = NO_SELECTION) =>
+    shown.notes.flatMap((note) => {
+      if (note.section !== true || leaving.has(noteRef(note.id))) return [];
       const element = drawnItem(noteRef(note.id));
-      if (element === null) continue;
-      const rect = drawnRect(element);
-      const holds = centres.every(
-        ({ x, y }) =>
-          x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height,
-      );
-      if (holds) return { note, rect };
-    }
-    return undefined;
-  };
+      return element === null ? [] : [{ note, rect: drawnRect(element) }];
+    });
+  // A selection that sits wholly in one section is tidied inside it, not moved out of it.
+  const sectionOfSelection = () =>
+    boardSectionHolding(
+      drawnSections(selected),
+      selectedItems.flatMap((item) => {
+        const element = drawnItem(boardEditKey(item.target));
+        if (element === null) return [];
+        const rect = drawnRect(element);
+        return [{ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }];
+      }),
+    );
   const tidySelection = () => tidyItems(selectedItems, false, sectionOfSelection());
   const showChange = (note: RoomBoardNote) => {
     const ref = noteRef(note.id);
@@ -2233,8 +2238,9 @@ export function RoomBoard({
     await onPromptBox(boxId, { text: BOARD_PAGE_TO_ARTIFACT_TEXT, cards: [], artifactId: id });
   };
   // Asking an agent about the selection: the cards go along lines into a box, as drawn ones do,
-  // so everyone sees what it was given. `asking` is the selection the ask is anchored to.
-  const [asking, setAsking] = useState<ReadonlySet<string> | null>(null);
+  // so everyone sees what it was given. A selected artifact is the one the ask edits: the box gets
+  // a line to it and the prompt names it, so the reply rewrites that artifact alone.
+  const [asking, setAsking] = useState<BoardAsking | null>(null);
   const askAfterMenu = useRef(false);
   const askKey = viewKey ?? shareId ?? title;
   const askNotes = selectedNotes.filter((note) => note.kind !== "thread" && note.section !== true);
@@ -2244,12 +2250,33 @@ export function RoomBoard({
   const askTargets =
     cards !== undefined || onPromptBox === undefined || !canEdit
       ? []
-      : boardAskTargets(threadBoxes, viewer, cannotAddThread === null);
-  const canAsk = askCards.cards.length > 0 && askTargets.length > 0;
+      : boardAskTargets(
+          threadBoxes,
+          viewer,
+          cannotAddThread === null,
+          (boxId) => shown.notes.find((note) => note.id === boxId)?.thread?.turns.at(-1)?.model,
+        );
+  const canAsk = (askCards.cards.length > 0 || askCards.artifact !== null) && askTargets.length > 0;
   // An ask whose cards went, or that this person may no longer send, closes and stays closed.
   if (asking !== null && !canAsk) setAsking(null);
   const openAsk = () => {
-    if (canAsk) setAsking(new Set(selected));
+    if (canAsk) setAsking(newBoardAsking(selected));
+  };
+  // The artifact card's own way in: the ask opens on that artifact alone.
+  const askAboutArtifact = (note: RoomBoardNote) => {
+    const ref = noteRef(note.id);
+    setSelection(new Set([ref]));
+    lastCard.current = ref;
+    setAsking(newBoardAsking([ref]));
+  };
+  // It closes at once; a failure opens it again on the same cards, with what was typed.
+  const sendAsk = (ask: BoardAsking, target: string, text: string) => {
+    setAsking(null);
+    void askAgent(target, text, ask).then((sent) => {
+      if (sent) return;
+      setSelection(new Set(ask.refs));
+      setAsking({ ...ask, text, target, failed: true });
+    });
   };
   // Where the cards asked about are drawn, kept inside the board, for the ask to sit beside.
   const askAnchor = (refs: ReadonlySet<string>) => {
@@ -2266,26 +2293,32 @@ export function RoomBoard({
     const element = drawnItem(ref);
     if (element !== null) reveal(drawnRect(element));
   });
-  const askAgent = async (target: string, text: string): Promise<boolean> => {
+  const askAgent = async (
+    target: string,
+    text: string,
+    ask: Pick<BoardAsking, "refs" | "newBoxId">,
+  ): Promise<boolean> => {
     if (onPromptBox === undefined || onChange === undefined) return false;
     const made = target === BOARD_ASK_NEW_BOX;
-    const boxId = made ? randomUUID() : target;
+    const boxId = made ? ask.newBoxId : target;
     const boxRef = boardBoxRef(boxId);
     // The box, its lines and then the prompt go in this order.
     const queue = made ? noteRef(boxId) : `ask:${boxId}`;
+    const edited = askCards.artifact;
     const plan = boardAskLines(
       edges,
       askCards.cards.map((card) => card.ref),
       boxRef,
       ROOM_BOARD_MAX_EDGES,
+      edited === null ? null : noteRef(edited.id),
     );
-    const lines = plan.add.map((from) => ({ id: randomUUID(), from, to: boxRef }));
+    const lines = plan.add.map((line) => ({ id: randomUUID(), ...line }));
     // Part of asking, which undo does not take back: the lines are marked sent once it goes.
     unrecorded.current = true;
     try {
       if (made) {
         const bounds = boardBounds(
-          [...selected].flatMap((ref) => {
+          [...ask.refs].flatMap((ref) => {
             const element = drawnItem(ref);
             return element === null ? [] : [drawnRect(element)];
           }),
@@ -2319,7 +2352,8 @@ export function RoomBoard({
     }
     await queueChange(queue, () => Promise.resolve(true));
     const going = new Set(plan.going);
-    const artifact = made ? null : (contexts.get(boxId)?.artifact ?? null);
+    // Else, as from the box's own prompt, the artifact the box already rewrites.
+    const artifact = edited ?? (made ? null : (contexts.get(boxId)?.artifact ?? null));
     const sent = await onPromptBox(boxId, {
       text,
       cards: askCards.cards.filter((card) => going.has(card.ref)),
@@ -2374,6 +2408,27 @@ export function RoomBoard({
     setFollowing(null);
     setView(fitBoardOnSurface(rects, area, chromeCoverOf(surfaceRef.current), FIT_MARGIN));
   };
+  // Stable, as a toast's Show keeps it after the view has moved on.
+  const showBox = useStableCallback((boxId: string) => {
+    const ref = boardBoxRef(boxId);
+    const element = drawnItem(ref);
+    if (element === null) return;
+    setSelection(new Set([ref]));
+    lastCard.current = ref;
+    reveal(drawnRect(element));
+  });
+  const boxOnScreen = useStableCallback((boxId: string) => {
+    const drawn = drawnItem(boardBoxRef(boxId))?.getBoundingClientRect();
+    const area = surfaceRef.current?.getBoundingClientRect();
+    return (
+      drawn !== undefined &&
+      area !== undefined &&
+      drawn.right > area.left &&
+      drawn.left < area.right &&
+      drawn.bottom > area.top &&
+      drawn.top < area.bottom
+    );
+  });
   const attachAgentOf = (note: RoomBoardNote) => {
     if (note.kind !== "artifact" || cards !== undefined || room === null) return undefined;
     const existing = boardOwnBoxFor(shown, viewer, note.id);
@@ -2750,11 +2805,13 @@ export function RoomBoard({
       lastCard.current = on;
     }
     setSelectedEdge(null);
+    const at = pointerOnBoard({ clientX: x, clientY: y }) ?? viewCentre();
     setContextMenu({
       x,
       y,
-      at: pointerOnBoard({ clientX: x, clientY: y }) ?? viewCentre(),
+      at,
       ref: on,
+      section: on === null ? boardSectionHolding(drawnSections(), [at])?.note.id : undefined,
       canPaste: false,
     });
     void clipboardReadable().then((canPaste) => {
@@ -2852,7 +2909,12 @@ export function RoomBoard({
         ? undefined
         : threadBoxes.find((candidate) => boardBoxRef(candidate.id) === ref);
     const boxEntries = box === undefined ? [] : boxMenuActions(box);
-    const own = note === undefined || several ? undefined : noteMenu(note);
+    // Empty space in a section offers the section's own actions beside the board's.
+    const menuNote =
+      ref === null
+        ? shown.notes.find((one) => one.section === true && one.id === contextMenu.section)
+        : note;
+    const own = several || menuNote === undefined ? undefined : noteMenu(menuNote);
     const card: CardMenu | undefined =
       own !== undefined
         ? { ...own, actions: [...boxEntries, ...own.actions] }
@@ -3114,6 +3176,34 @@ export function RoomBoard({
             </div>
           ) : undefined,
         );
+  // Every thread box as the Agents panel lists it; their runs it reads from the live store.
+  const agentEntries = threadBoxes.map((box): BoardAgentEntry => {
+    const turn = shown.notes.find((note) => note.id === box.id)?.thread?.turns.at(-1);
+    const work = shown.agentTurns?.findLast((candidate) => candidate.boxId === box.id);
+    const workLine = work === undefined || work.undone === true ? "" : boardAgentTurnLine(work);
+    const isRoom = box.id === ROOM_BOARD_ROOM_BOX;
+    return {
+      id: box.id,
+      name: box.title || "Untitled thread",
+      whose: boardPersonName(people, box.guestId),
+      color: boardCursorColor(guests, box.guestId),
+      model: turn?.model ?? work?.model,
+      work: workLine === "" ? undefined : workLine,
+      requests: boardBoxRequests(room?.messages ?? NO_GUEST_MESSAGES, box.id),
+      canResolve: onResolveRequest !== undefined,
+      answered: (isRoom ? messages.length > 0 : turn !== undefined) || work !== undefined,
+      activity: boardAgentActivity([turn?.at, work?.at]),
+      turnKey: `${isRoom ? (messages.at(-1)?.id ?? "") : (turn?.id ?? "")}|${work?.id ?? ""}|${work?.at ?? ""}`,
+      fallback:
+        !isRoom || hasProgress
+          ? undefined
+          : needsApproval
+            ? "approval"
+            : agentWorking
+              ? "working"
+              : undefined,
+    };
+  });
 
   // Something is being dragged, resized or nudged: each such step renders the board again.
   // oxlint-disable-next-line react-hooks/refs -- held edits are what the drag has reached, and every step sets them in state too
@@ -3132,7 +3222,7 @@ export function RoomBoard({
   return (
     <div className="@container/board flex min-h-0 min-w-0 flex-1 flex-col overflow-clip overscroll-none">
       {/* The board fills this; its chrome floats over the canvas. */}
-      <div className="relative flex min-h-0 flex-1 flex-col">
+      <div className="group/room relative flex min-h-0 flex-1 flex-col">
         <header
           data-board-chrome="top"
           className={cn(
@@ -3174,6 +3264,31 @@ export function RoomBoard({
                   Stop following
                 </Button>
               </BoardFloat>
+            )}
+            {cards !== undefined || room === null ? null : (
+              <BoardAgents
+                entries={agentEntries}
+                viewer={viewer}
+                open={agentsOpen}
+                onOpenChange={setAgentsOpen}
+                onShow={showBox}
+                isOnScreen={boxOnScreen}
+                hasThreadBoxes={threadBoxes.length > 1}
+                renderNeeds={(entry, need) =>
+                  need === "approval" ? (
+                    (renderBoxApproval?.(entry.id) ?? null)
+                  ) : (
+                    <BoxRequests
+                      requests={entry.requests}
+                      board={shown}
+                      people={people}
+                      onResolve={onResolveRequest}
+                      resolving={resolvingRequests}
+                      model={renderRequestModel?.(entry.id)}
+                    />
+                  )
+                }
+              />
             )}
             {sharing === undefined ? null : (
               <BoardFloat className="min-w-0 gap-1.5 p-1 ps-2">{sharing}</BoardFloat>
@@ -3406,6 +3521,12 @@ export function RoomBoard({
                             : `Show resolved comments (${resolvedComments})`}
                         </MenuItem>
                       ) : null}
+                      {cards === undefined && room !== null ? (
+                        <MenuItem onClick={() => setAgentsOpen(true)}>
+                          <BotIcon />
+                          Agents
+                        </MenuItem>
+                      ) : null}
                     </MenuPopup>
                   </Menu>
                 </span>
@@ -3459,18 +3580,24 @@ export function RoomBoard({
             />
           </BoardFloat>
         </div>
-        <div className="absolute bottom-16 left-3 z-30 flex flex-col items-start gap-2 @4xl/board:bottom-3">
+        <div
+          data-board-corner
+          className="absolute bottom-16 left-3 z-30 flex flex-col items-start gap-2 @4xl/board:bottom-3"
+        >
           {minimapShown ? (
-            <BoardMinimap
-              board={shown}
-              cardIds={cardIds}
-              view={view}
-              surfaceRef={surfaceRef}
-              onView={(next) => {
-                setFollowing(null);
-                setView(next);
-              }}
-            />
+            // A selection docked above the toolbar would sit under it.
+            <div className="group-has-[[data-selection-docked]]/room:hidden">
+              <BoardMinimap
+                board={shown}
+                cardIds={cardIds}
+                view={view}
+                surfaceRef={surfaceRef}
+                onView={(next) => {
+                  setFollowing(null);
+                  setView(next);
+                }}
+              />
+            </div>
           ) : null}
           {catchUp.changes.length === 0 ? null : (
             <CatchUpPill
@@ -3650,6 +3777,11 @@ export function RoomBoard({
             lastCard.current = ref;
           }}
           onKeyDown={(event) => {
+            // A menu or popover opened from a card or the selection is drawn elsewhere on the
+            // page; its keys, Escape among them, are its own.
+            if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) {
+              return;
+            }
             if (event.key === "Escape") {
               if (dropHeldPointer()) cancelGesture();
               else if (placingComment) setPlacingComment(false);
@@ -3731,6 +3863,16 @@ export function RoomBoard({
             if (isBoardAskKey(event) && isBoardKey(event.target) && canAsk) {
               event.preventDefault();
               openAsk();
+              return;
+            }
+            if (
+              isBoardAgentsKey(event) &&
+              isBoardKey(event.target) &&
+              cards === undefined &&
+              room !== null
+            ) {
+              event.preventDefault();
+              setAgentsOpen((shown) => !shown);
               return;
             }
             // Typing on a note selected alone types into it, as a click on it would.
@@ -4209,6 +4351,11 @@ export function RoomBoard({
                     boxName={boxName}
                     onRestore={restoreOf(note)}
                     onAttachAgent={attachAgentOf(note)}
+                    onAsk={
+                      note.kind === "artifact" && askTargets.length > 0
+                        ? () => askAboutArtifact(note)
+                        : undefined
+                    }
                     onPickColor={pickColor}
                     onReact={reactTo}
                     changedLabel={catchUpLabels.get(note.id)}
@@ -4397,25 +4544,39 @@ export function RoomBoard({
         )}
         {asking === null || !canAsk ? null : (
           <BoardAskPopover
-            anchor={{ getBoundingClientRect: () => askAnchor(asking) }}
+            anchor={{ getBoundingClientRect: () => askAnchor(asking.refs) }}
             count={askCards.cards.length}
             left={askCards.left}
+            artifactTitle={askCards.artifact?.text.trim() ?? null}
             suggestions={boardAskSuggestions(
               askNotes.filter((note) =>
                 askCards.cards.some((card) => card.ref === noteRef(note.id)),
               ),
+              askCards.artifact,
             )}
             targets={askTargets}
             initialTarget={
               boardAskDefaultTarget(askTargets, {
-                selectedBoxes: threadBoxes
-                  .filter((box) => asking.has(boardBoxRef(box.id)))
-                  .map((box) => box.id),
+                selectedBoxes: [
+                  ...(asking.target === null ? [] : [asking.target]),
+                  ...threadBoxes
+                    .filter((box) => asking.refs.has(boardBoxRef(box.id)))
+                    .map((box) => box.id),
+                ],
+                artifactBox:
+                  askCards.artifact === null
+                    ? null
+                    : boardOwnBoxFor(shown, viewer, askCards.artifact.id),
                 lastUsed: lastBoardAskTarget(askKey),
               }) ?? BOARD_ASK_NEW_BOX
             }
+            initialText={asking.text}
+            failed={asking.failed}
+            newBoxId={asking.newBoxId}
+            renderModel={renderBoxModel}
             finalFocus={surfaceRef}
-            onSend={askAgent}
+            board={surfaceRef}
+            onSend={(target, text) => sendAsk(asking, target, text)}
             onClose={() => setAsking(null)}
           />
         )}
@@ -4690,6 +4851,7 @@ function BoardNote({
   boxName,
   onRestore,
   onAttachAgent,
+  onAsk,
   onPickColor,
   onReact,
   box,
@@ -4754,6 +4916,8 @@ function BoardNote({
   readonly onAttachAgent:
     | { readonly label: string; readonly hint?: string; readonly run: () => void }
     | undefined;
+  /** Opens Ask an agent on this artifact alone. Absent where the viewer cannot ask. */
+  readonly onAsk?: (() => void) | undefined;
   /** Colours a plain note. Absent where notes are not coloured. */
   readonly onPickColor: ((note: RoomBoardNote, color: RoomBoardNoteColor) => void) | undefined;
   /** Toggles the viewer's own reaction. Absent where they cannot react. */
@@ -5118,19 +5282,28 @@ function BoardNote({
             {author}
           </p>
         ) : null}
-        {artifact && onAttachAgent !== undefined ? (
-          <div className="flex shrink-0 px-3 pb-1.5">
-            <WhatItDoes hint={onAttachAgent.hint}>
-              <Button
-                size="micro"
-                variant="outline"
-                onPointerDown={stopPointer}
-                onClick={onAttachAgent.run}
-              >
-                <BotIcon />
-                {onAttachAgent.label}
-              </Button>
-            </WhatItDoes>
+        {artifact && (onAttachAgent !== undefined || onAsk !== undefined) ? (
+          <div className="flex shrink-0 flex-wrap gap-1 px-3 pb-1.5">
+            {onAsk === undefined ? null : (
+              <WhatItDoes hint="Ask one of your thread boxes to change this artifact. Its reply replaces what it shows, for everyone; Restore previous brings this version back.">
+                <Button size="micro" variant="outline" onPointerDown={stopPointer} onClick={onAsk}>
+                  Ask an agent
+                </Button>
+              </WhatItDoes>
+            )}
+            {onAttachAgent === undefined ? null : (
+              <WhatItDoes hint={onAttachAgent.hint}>
+                <Button
+                  size="micro"
+                  variant="outline"
+                  onPointerDown={stopPointer}
+                  onClick={onAttachAgent.run}
+                >
+                  <BotIcon />
+                  {onAttachAgent.label}
+                </Button>
+              </WhatItDoes>
+            )}
           </div>
         ) : null}
         {artifact ? (

@@ -2373,6 +2373,23 @@ export const boardItemsCentredIn = (
     })
     .map(({ ref }) => ref);
 
+/**
+ * The first section whose rect holds every one of `points`: the one a selection centred inside it
+ * is tidied in, and the one whose menu a right-click on its empty space opens. None for no points.
+ */
+export const boardSectionHolding = <Section extends { readonly rect: BoardRect }>(
+  sections: ReadonlyArray<Section>,
+  points: ReadonlyArray<BoardPoint>,
+): Section | undefined =>
+  points.length === 0
+    ? undefined
+    : sections.find(({ rect }) =>
+        points.every(
+          ({ x, y }) =>
+            x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height,
+        ),
+      );
+
 /** A section that frames these rects, with room for its title, or null for none. */
 export function boardSectionAround(
   rects: ReadonlyArray<BoardRect>,
@@ -2525,9 +2542,10 @@ export function boardPushedBelow(
 ): { readonly dy: number; readonly refs: ReadonlyArray<string> } {
   const covered = items.filter(({ rect }) => rectsMeet(rect, grown) && !rectsMeet(rect, from));
   if (covered.length === 0) return { dy: 0, refs: [] };
-  const dy = Math.ceil(
-    Math.max(...covered.map(({ rect }) => grown.y + grown.height + TIDY_GAP - rect.y)),
-  );
+  const clear = (rect: BoardRect) => grown.y + grown.height + TIDY_GAP - rect.y;
+  const beside = (rect: BoardRect) =>
+    rect.x < grown.x + grown.width && grown.x < rect.x + rect.width;
+  let dy = Math.ceil(Math.max(...covered.map(({ rect }) => clear(rect))));
   const moved = new Set(covered);
   for (let grew = true; grew;) {
     grew = false;
@@ -2545,6 +2563,14 @@ export function boardPushedBelow(
         moved.add(item);
         grew = true;
       }
+    }
+    // A frame that came along started higher than its cards: everything moves far enough for it.
+    const needed = Math.ceil(
+      Math.max(...[...moved].filter(({ rect }) => beside(rect)).map(({ rect }) => clear(rect)), dy),
+    );
+    if (needed > dy) {
+      dy = needed;
+      grew = true;
     }
   }
   return { dy, refs: [...moved].map(({ ref }) => ref) };
@@ -2631,21 +2657,28 @@ const SELECTION_BAR_GAP = 8;
 
 /**
  * Where the selection's bar goes, in the board's screen pixels: centred just above the selected
- * cards, or just below them when there is no room above, and always inside the board, so it
- * never covers the cards being worked on nor the spot new ones land in.
+ * cards, or just below them when there is no room above, and always inside the board between
+ * the header and the toolbar floating over it (`cover`, how far each reaches in), so it never
+ * covers the cards being worked on nor slides under the chrome.
  */
 export function selectionBarSpot(
   selection: BoardRect,
   bar: BoardSize,
   board: BoardSize,
+  cover: { readonly top: number; readonly bottom: number } = { top: 0, bottom: 0 },
 ): { readonly left: number; readonly top: number } {
-  const clamp = (value: number, max: number) =>
-    Math.max(SELECTION_BAR_GAP, Math.min(value, max - SELECTION_BAR_GAP));
+  const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max));
+  const highest = cover.top + SELECTION_BAR_GAP;
+  const lowest = Math.max(highest, board.height - cover.bottom - SELECTION_BAR_GAP - bar.height);
   const above = selection.y - SELECTION_BAR_GAP - bar.height;
   const below = selection.y + selection.height + SELECTION_BAR_GAP;
   return {
-    left: clamp(selection.x + selection.width / 2 - bar.width / 2, board.width - bar.width),
-    top: clamp(above >= SELECTION_BAR_GAP ? above : below, board.height - bar.height),
+    left: clamp(
+      selection.x + selection.width / 2 - bar.width / 2,
+      SELECTION_BAR_GAP,
+      Math.max(SELECTION_BAR_GAP, board.width - SELECTION_BAR_GAP - bar.width),
+    ),
+    top: clamp(above >= highest ? above : below, highest, lowest),
   };
 }
 

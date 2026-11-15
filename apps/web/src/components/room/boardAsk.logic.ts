@@ -5,6 +5,7 @@ import {
   type BoardPromptCard,
   type BoardThreadBox,
   canPromptBoardBox,
+  isBoardHtmlArtifact,
 } from "./roomBoard.logic";
 
 /** The target that adds a thread box beside the selection. Box ids are UUIDs or "thread". */
@@ -14,19 +15,27 @@ export const BOARD_ASK_NEW_BOX = "new";
 export const BOARD_AGENT_WORK_MS = 4_000;
 
 /**
- * The selected cards an agent can be asked about, as a prompt carries them, at most as many as one
- * prompt takes. Thread boxes and sections never go; nor does a card with nothing written.
+ * What an ask about the selection takes: the artifact it edits, the first one selected, even an
+ * empty one, whose reply then rewrites it; and the other cards, as a prompt carries them, at most
+ * as many as one prompt takes. Thread boxes and sections never go; nor does a card with nothing
+ * written. Other artifacts go as cards.
  */
 export function boardAskCards(
   notes: ReadonlyArray<RoomBoardNote>,
   toCard: (note: RoomBoardNote) => BoardPromptCard | null,
-): { readonly cards: ReadonlyArray<BoardPromptCard>; readonly left: number } {
+): {
+  readonly artifact: RoomBoardNote | null;
+  readonly cards: ReadonlyArray<BoardPromptCard>;
+  readonly left: number;
+} {
+  const artifact = notes.find((note) => note.kind === "artifact") ?? null;
   const cards = notes.flatMap((note) => {
-    if (note.kind === "thread" || note.section === true) return [];
+    if (note === artifact || note.kind === "thread" || note.section === true) return [];
     const card = toCard(note);
     return card === null ? [] : [card];
   });
   return {
+    artifact,
     cards: cards.slice(0, BOARD_PROMPT_MAX_CARDS),
     left: Math.max(0, cards.length - BOARD_PROMPT_MAX_CARDS),
   };
@@ -40,10 +49,37 @@ export interface BoardAskSuggestion {
 
 const suggestion = (label: string, prompt: string): BoardAskSuggestion => ({ label, prompt });
 
-/** A few asks that fit what is selected, by the kinds of card in it. */
+/**
+ * A few asks that fit what is selected: edits to the artifact the ask rewrites when there is one,
+ * else by the kinds of the cards that go.
+ */
 export function boardAskSuggestions(
   notes: ReadonlyArray<Pick<RoomBoardNote, "kind">>,
+  artifact: { readonly artifact?: { readonly body: string } | undefined } | null = null,
 ): ReadonlyArray<BoardAskSuggestion> {
+  if (artifact !== null) {
+    const withCards = notes.length > 0;
+    const body = artifact.artifact?.body.trim() ?? "";
+    if (body === "") {
+      return [
+        suggestion("Write a first draft", "Write a first draft of this artifact."),
+        ...(withCards
+          ? [suggestion("Write it from the cards", "Write this artifact from the cards I sent.")]
+          : []),
+        suggestion("Make a web page", "Write this artifact as a complete web page."),
+      ];
+    }
+    return [
+      suggestion("Rewrite this", "Rewrite this artifact so it reads clearly."),
+      suggestion("Make it shorter", "Make this artifact shorter, keeping what matters."),
+      isBoardHtmlArtifact(body)
+        ? suggestion("Turn into a document", "Turn this page into a plain markdown document.")
+        : suggestion("Turn into a web page", "Turn this artifact into a complete web page."),
+      ...(withCards
+        ? [suggestion("Work in the cards", "Rewrite this artifact to take in the cards I sent.")]
+        : []),
+    ];
+  }
   const one = notes.length === 1;
   const all = (kind: RoomBoardNote["kind"]) => notes.every((note) => note.kind === kind);
   const any = (kind: RoomBoardNote["kind"]) => notes.some((note) => note.kind === kind);
@@ -72,15 +108,14 @@ export function boardAskSuggestions(
   if (any("code") || any("pull-request")) {
     return [suggestion("Review the changes", "Review these changes."), summarise];
   }
-  if (any("artifact")) {
-    return [suggestion("Suggest improvements", `Suggest improvements to ${these}.`), summarise];
-  }
   return [summarise, suggestion("Turn into tasks", `Turn ${these} into tasks.`), missing];
 }
 
 export interface BoardAskTarget {
   readonly id: string;
   readonly label: string;
+  /** The model the box last ran on, when it ran. */
+  readonly model?: string | undefined;
 }
 
 /** Where this person can send an ask: their own thread boxes, then a new box when they may add one. */
@@ -88,48 +123,74 @@ export function boardAskTargets(
   boxes: ReadonlyArray<BoardThreadBox>,
   viewer: string | null,
   canAddBox: boolean,
+  modelOf: (boxId: string) => string | undefined = () => undefined,
 ): ReadonlyArray<BoardAskTarget> {
   return [
     ...boxes
       .filter((box) => canPromptBoardBox(box, viewer))
-      .map((box) => ({ id: box.id, label: box.title === "" ? "Untitled thread" : box.title })),
+      .map((box) => {
+        const model = modelOf(box.id);
+        return {
+          id: box.id,
+          label: box.title === "" ? "Untitled thread" : box.title,
+          ...(model === undefined || model.trim() === "" ? {} : { model }),
+        };
+      }),
     ...(canAddBox ? [{ id: BOARD_ASK_NEW_BOX, label: "New thread box" }] : []),
   ];
 }
 
 /**
- * Which target an ask starts on: a box selected with the cards, else the box last asked from here,
- * else the first box, else a new one.
+ * Which target an ask starts on: a box selected with the cards, else the box that already writes
+ * the artifact asked about, else the box last asked from here, else the first box, else a new one.
  */
 export function boardAskDefaultTarget(
   targets: ReadonlyArray<BoardAskTarget>,
-  hints: { readonly selectedBoxes: ReadonlyArray<string>; readonly lastUsed: string | null },
+  hints: {
+    readonly selectedBoxes: ReadonlyArray<string>;
+    readonly artifactBox?: string | null;
+    readonly lastUsed: string | null;
+  },
 ): string | null {
-  const offered = (id: string | null) => id !== null && targets.some((target) => target.id === id);
+  const offered = (id: string | null | undefined): id is string =>
+    id !== null && id !== undefined && targets.some((target) => target.id === id);
   const selected = hints.selectedBoxes.find(offered);
   if (selected !== undefined) return selected;
+  if (offered(hints.artifactBox)) return hints.artifactBox;
   if (offered(hints.lastUsed)) return hints.lastUsed;
   return (targets.find((target) => target.id !== BOARD_ASK_NEW_BOX) ?? targets[0])?.id ?? null;
 }
 
 /**
- * The lines an ask draws into its box: one from each card with no line straight there yet, while
- * the board has room for them. `going` is every card that then has one, in the order given; a card
- * left without a line does not go, so everyone sees what the agent was given.
+ * The lines an ask draws while the board has room: the box's line to the artifact it edits, if
+ * missing, then one into the box from each card with none there yet. `going` is every card that
+ * then has a line; one left without does not go, so everyone sees what the agent was given.
  */
 export function boardAskLines(
   edges: ReadonlyArray<Pick<RoomBoardEdge, "from" | "to">>,
   refs: ReadonlyArray<string>,
   boxRef: string,
   maxEdges: number,
-): { readonly add: ReadonlyArray<string>; readonly going: ReadonlyArray<string> } {
-  const add: Array<string> = [];
+  artifactRef: string | null = null,
+): {
+  readonly add: ReadonlyArray<{ readonly from: string; readonly to: string }>;
+  readonly going: ReadonlyArray<string>;
+} {
+  const add: Array<{ readonly from: string; readonly to: string }> = [];
   const going: Array<string> = [];
+  const room = () => edges.length + add.length < maxEdges;
+  if (
+    artifactRef !== null &&
+    !edges.some((edge) => edge.from === boxRef && edge.to === artifactRef) &&
+    room()
+  ) {
+    add.push({ from: boxRef, to: artifactRef });
+  }
   for (const ref of refs) {
     if (edges.some((edge) => edge.from === ref && edge.to === boxRef)) {
       going.push(ref);
-    } else if (edges.length + add.length < maxEdges) {
-      add.push(ref);
+    } else if (room()) {
+      add.push({ from: ref, to: boxRef });
       going.push(ref);
     }
   }
