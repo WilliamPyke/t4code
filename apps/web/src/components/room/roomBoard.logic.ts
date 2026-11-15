@@ -17,6 +17,7 @@ import {
   type RoomAgentActivity,
   type RoomArtifactContent,
   type RoomBoard,
+  type RoomBoardAgentTurn,
   type RoomBoardChange,
   type RoomBoardDrag,
   type RoomBoardDragItem,
@@ -36,6 +37,7 @@ import {
   type ThreadGuestMessage,
 } from "@t3tools/contracts";
 import {
+  canUndoRoomAgentTurn,
   isRoomCardOwnedBy,
   roomBoardCardChangedAt,
   roomPullRequestLabel,
@@ -449,29 +451,81 @@ export function panToShowAdded(view: BoardView, rect: BoardRect, area: BoardSize
 
 /**
  * The view that shows every rect in the surface, centred, at no more than full size. Cards too
- * spread out to fit even at the smallest zoom show from their top-left.
+ * spread out to fit even at `minZoom` show from their top: the top card at the top-left.
  */
 export function fitBoardView(
   rects: ReadonlyArray<BoardRect>,
   area: BoardSize,
-  margin = 40,
+  margin: number | BoardInsets = 40,
+  minZoom = BOARD_MIN_ZOOM,
 ): BoardView {
   const bounds = boardBounds(rects);
   if (bounds === null) return INITIAL_BOARD_VIEW;
-  const room = { width: area.width - margin * 2, height: area.height - margin * 2 };
+  const inset =
+    typeof margin === "number"
+      ? { top: margin, right: margin, bottom: margin, left: margin }
+      : margin;
+  const room = {
+    width: Math.max(1, area.width - inset.left - inset.right),
+    height: Math.max(1, area.height - inset.top - inset.bottom),
+  };
   const zoom = Math.min(
     1,
-    Math.max(BOARD_MIN_ZOOM, Math.min(room.width / bounds.width, room.height / bounds.height)),
+    Math.max(minZoom, Math.min(room.width / bounds.width, room.height / bounds.height)),
   );
-  const place = (start: number, length: number, space: number) =>
+  // Too wide to show whole, the view starts at the top card, so it never opens on empty board.
+  const top = rects.reduce((first, rect) =>
+    rect.y < first.y || (rect.y === first.y && rect.x < first.x) ? rect : first,
+  );
+  const place = (start: number, length: number, space: number, before: number, from: number) =>
     length * zoom > space
-      ? Math.round(margin - start * zoom)
-      : Math.round(margin + (space - length * zoom) / 2 - start * zoom);
+      ? Math.round(before - from * zoom)
+      : Math.round(before + (space - length * zoom) / 2 - start * zoom);
   return {
     zoom,
-    x: place(bounds.x, bounds.width, room.width),
-    y: place(bounds.y, bounds.height, room.height),
+    x: place(bounds.x, bounds.width, room.width, inset.left, top.x),
+    y: place(bounds.y, bounds.height, room.height, inset.top, bounds.y),
   };
+}
+
+/** Space kept clear on each side of a surface, in screen pixels. */
+export interface BoardInsets {
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+  readonly left: number;
+}
+
+/** Below this width the board is a phone's: Fit keeps clear of its chrome and stays readable. */
+const BOARD_NARROW_WIDTH = 640;
+/** The smallest zoom Fit goes to on a narrow board, where smaller text cannot be read. */
+export const BOARD_READABLE_ZOOM = 0.35;
+const NARROW_GUTTER = 16;
+const NARROW_CHROME_GAP = 12;
+
+/**
+ * Fit for this surface. A wide one keeps `margin` on every side. A narrow one keeps a 16px gutter
+ * on the sides, clears the chrome floating over its top and bottom (`covered`, in screen pixels),
+ * and never goes below 35%: a board too big for that shows from its top card at 35%.
+ */
+export function fitBoardOnSurface(
+  rects: ReadonlyArray<BoardRect>,
+  area: BoardSize,
+  covered: { readonly top: number; readonly bottom: number },
+  margin: number,
+): BoardView {
+  if (area.width >= BOARD_NARROW_WIDTH) return fitBoardView(rects, area, margin);
+  return fitBoardView(
+    rects,
+    area,
+    {
+      top: covered.top + NARROW_CHROME_GAP,
+      right: NARROW_GUTTER,
+      bottom: covered.bottom + NARROW_CHROME_GAP,
+      left: NARROW_GUTTER,
+    },
+    BOARD_READABLE_ZOOM,
+  );
 }
 
 /** How wide the line between the board and the conversation is. */
@@ -1004,7 +1058,9 @@ export function resolveBoard(board: RoomBoard, edits: BoardEdits): RoomBoard {
   }
   const noteRefs = new Set(notes.map((note) => boardEditKey({ kind: "note", id: note.id })));
   const present = (ref: string) => ref.startsWith(CARD_REF) || noteRefs.has(ref);
+  // The rest of the room's copy (agent turns, past people) shows as the server has it.
   return {
+    ...board,
     positions,
     notes,
     edges: edges.filter((edge) => present(edge.from) && present(edge.to)),
@@ -2408,7 +2464,54 @@ export function boardTidy<T extends { readonly ref: string; readonly rect: Board
 ): Array<{ readonly ref: string; readonly x: number; readonly y: number }> {
   const bounds = boardBounds(items.map(({ rect }) => rect));
   if (bounds === null) return [];
-  const rows: Array<Array<(typeof items)[number]>> = [];
+  const ordered = tidyOrder(items, order);
+  const grid = tidyGrid(ordered, Math.ceil(Math.sqrt(ordered.length)));
+  const origin = searchBoardSpot(
+    { w: grid.width, h: grid.height },
+    { x: bounds.x + grid.width / 2, y: bounds.y + grid.height / 2 },
+    taken,
+    undefined,
+    true,
+  )?.at ?? { x: bounds.x, y: bounds.y };
+  return grid.at(origin);
+}
+
+/**
+ * Tidy inside a section: the same grid, as many columns as fit its width, from its top-left
+ * inside its padding, and the size it grows to so the grid stays inside it.
+ */
+export function boardTidySection<T extends { readonly ref: string; readonly rect: BoardRect }>(
+  items: ReadonlyArray<T>,
+  section: BoardRect,
+  order: (inReadingOrder: ReadonlyArray<T>) => ReadonlyArray<T> = (same) => same,
+): {
+  readonly places: Array<{ readonly ref: string; readonly x: number; readonly y: number }>;
+  readonly size: RoomBoardSize;
+} {
+  const ordered = tidyOrder(items, order);
+  const cell = Math.max(0, ...ordered.map(({ rect }) => rect.width));
+  const fit = Math.floor((section.width - SECTION_PADDING * 2 + TIDY_GAP) / (cell + TIDY_GAP));
+  const grid = tidyGrid(ordered, Math.max(1, Math.min(ordered.length, fit)));
+  return {
+    places: grid.at({
+      x: section.x + SECTION_PADDING,
+      y: section.y + SECTION_TITLE_HEIGHT + SECTION_PADDING,
+    }),
+    size: clampBoardSize({
+      w: Math.ceil(Math.max(section.width, grid.width + SECTION_PADDING * 2)),
+      h: Math.ceil(
+        Math.max(section.height, grid.height + SECTION_PADDING * 2 + SECTION_TITLE_HEIGHT),
+      ),
+    }),
+  };
+}
+
+/** Items in reading order (rows by their tops, then left to right), or as `order` reorders it. */
+function tidyOrder<T extends { readonly rect: BoardRect }>(
+  items: ReadonlyArray<T>,
+  order: (inReadingOrder: ReadonlyArray<T>) => ReadonlyArray<T>,
+): ReadonlyArray<T> {
+  const rows: Array<Array<T>> = [];
   let rowEnd = -Infinity;
   for (const item of items.toSorted((left, right) => left.rect.y - right.rect.y)) {
     const row = rows.at(-1);
@@ -2417,38 +2520,40 @@ export function boardTidy<T extends { readonly ref: string; readonly rect: Board
       rowEnd = item.rect.y + item.rect.height / 2;
     } else row.push(item);
   }
-  const ordered = order(
-    rows.flatMap((row) => row.toSorted((left, right) => left.rect.x - right.rect.x)),
-  );
-  const columns = Math.ceil(Math.sqrt(ordered.length));
-  const cell = Math.max(...ordered.map(({ rect }) => rect.width));
+  return order(rows.flatMap((row) => row.toSorted((left, right) => left.rect.x - right.rect.x)));
+}
+
+/** Tidy's grid: columns as wide as the widest item, rows as tall as their tallest, even gaps. */
+function tidyGrid(
+  ordered: ReadonlyArray<{ readonly ref: string; readonly rect: BoardRect }>,
+  columns: number,
+) {
+  const cell = Math.max(0, ...ordered.map(({ rect }) => rect.width));
   const heights: Array<number> = [];
   ordered.forEach(({ rect }, index) => {
     const row = Math.floor(index / columns);
     heights[row] = Math.max(heights[row] ?? 0, rect.height);
   });
-  const width = columns * cell + (columns - 1) * TIDY_GAP;
-  const height =
-    heights.reduce((sum, rowHeight) => sum + rowHeight, 0) + (heights.length - 1) * TIDY_GAP;
-  const origin = searchBoardSpot(
-    { w: width, h: height },
-    { x: bounds.x + width / 2, y: bounds.y + height / 2 },
-    taken,
-    undefined,
-    true,
-  )?.at ?? { x: bounds.x, y: bounds.y };
-  return ordered.map(({ ref }, index) => {
-    const row = Math.floor(index / columns);
-    return {
-      ref,
-      x: Math.round(origin.x + (index % columns) * (cell + TIDY_GAP)),
-      y: Math.round(
-        origin.y +
-          heights.slice(0, row).reduce((sum, rowHeight) => sum + rowHeight, 0) +
-          row * TIDY_GAP,
-      ),
-    };
-  });
+  const used = Math.min(columns, ordered.length);
+  return {
+    width: used * cell + Math.max(0, used - 1) * TIDY_GAP,
+    height:
+      heights.reduce((sum, rowHeight) => sum + rowHeight, 0) +
+      Math.max(0, heights.length - 1) * TIDY_GAP,
+    at: (origin: BoardPoint) =>
+      ordered.map(({ ref }, index) => {
+        const row = Math.floor(index / columns);
+        return {
+          ref,
+          x: Math.round(origin.x + (index % columns) * (cell + TIDY_GAP)),
+          y: Math.round(
+            origin.y +
+              heights.slice(0, row).reduce((sum, rowHeight) => sum + rowHeight, 0) +
+              row * TIDY_GAP,
+          ),
+        };
+      }),
+  };
 }
 
 /** A selected card or note and where it is now. */
@@ -2606,10 +2711,65 @@ export const boardStepBefore = (
 };
 
 /** The history with one more entry, the oldest dropped past the cap. */
-export const boardHistoryWith = (
-  history: ReadonlyArray<BoardHistoryEntry>,
-  entry: BoardHistoryEntry,
-): ReadonlyArray<BoardHistoryEntry> => [...history, entry].slice(-BOARD_HISTORY_MAX);
+export const boardHistoryWith = <Entry>(
+  history: ReadonlyArray<Entry>,
+  entry: Entry,
+): ReadonlyArray<Entry> => [...history, entry].slice(-BOARD_HISTORY_MAX);
+
+/**
+ * One step of this viewer's undo or redo: their own change, or an agent's turn they took back or
+ * did again. `seen` is when the newest agent turn the board had then last changed it.
+ */
+export type BoardHistoryItem =
+  | { readonly steps: BoardHistoryEntry; readonly seen: string }
+  | { readonly turnId: string; readonly seen: string };
+
+/** When an agent's turn last changed the board, or "" when none has. */
+export const boardAgentTurnsSeen = (board: RoomBoard): string =>
+  (board.agentTurns ?? []).reduce((newest, turn) => (turn.at > newest ? turn.at : newest), "");
+
+/**
+ * The agent turn Undo takes back before this viewer's own last step: the newest one they may undo,
+ * when it changed the board after that step.
+ */
+export function boardAgentTurnToUndo(
+  board: RoomBoard,
+  viewer: GuestId | null,
+  last: BoardHistoryItem | undefined,
+): RoomBoardAgentTurn | undefined {
+  const turn = (board.agentTurns ?? []).findLast(
+    (candidate) => candidate.undone !== true && canUndoRoomAgentTurn(candidate, viewer),
+  );
+  return turn !== undefined && (last === undefined || turn.at > last.seen) ? turn : undefined;
+}
+
+const counted = (count: number, one: string, many: string) =>
+  `${count} ${count === 1 ? one : many}`;
+const listed = (parts: ReadonlyArray<string>) =>
+  parts.length < 2 ? parts.join("") : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+
+/** What an agent's turn did to the board, as one line: "Added 4 tasks and 1 section". */
+export function boardAgentTurnLine(turn: RoomBoardAgentTurn): string {
+  const added = turn.cards.filter((card) => card.before === undefined);
+  const tasks = added.filter((card) => card.after.kind === "task").length;
+  const sections = added.filter((card) => card.after.section === true).length;
+  const notes = added.length - tasks - sections;
+  const changed = turn.cards.length - added.length;
+  const lines = turn.edges?.length ?? 0;
+  const adds = [
+    tasks === 0 ? "" : counted(tasks, "task", "tasks"),
+    notes === 0 ? "" : counted(notes, "note", "notes"),
+    sections === 0 ? "" : counted(sections, "section", "sections"),
+  ].filter((part) => part !== "");
+  const line = [
+    adds.length === 0 ? "" : `added ${listed(adds)}`,
+    changed === 0 ? "" : `changed ${counted(changed, "card", "cards")}`,
+    lines === 0 ? "" : `drew ${counted(lines, "line", "lines")}`,
+  ]
+    .filter((part) => part !== "")
+    .join(", ");
+  return line.charAt(0).toUpperCase() + line.slice(1);
+}
 
 /** A card's reactions as its chips show them: each emoji once, in the fixed order, with who. */
 export function boardReactionChips(
@@ -2639,14 +2799,15 @@ const NOTE_CASCADE = 24;
 const NOTE_CASCADE_MAX = 40;
 
 /**
- * Where a note or task added from the toolbar goes: centred in the view when that is clear, else
- * the nearest clear spot about a note's size from the centre, else on the centre, stepped down and
- * right past any card already starting there, so it never lands far from where people look.
+ * Where a toolbar note or task goes: the clear spot nearest the centre of the view, near it first,
+ * else anywhere in view, else with `offView` (a phone, where a thread box can fill the screen) just
+ * out of view for it to pan to, else on the centre, stepped down and right past any card there.
  */
 export function boardCentreSpot(
   size: RoomBoardSize,
   taken: ReadonlyArray<BoardRect>,
   view: BoardRect,
+  offView = false,
 ): BoardPoint {
   const middle = { x: view.x + view.width / 2, y: view.y + view.height / 2 };
   const left = Math.max(view.x, middle.x - size.w * 1.5);
@@ -2662,6 +2823,14 @@ export function boardCentreSpot(
       ? searchBoardSpot(size, middle, taken, near)
       : null;
   if (clear !== null && clear.cover === 0) return clear.at;
+  // A big card on the middle, as a thread box on a phone, sends it to the nearest clear spot in view.
+  const inView =
+    view.width >= size.w + PLACE_GAP * 2 && view.height >= size.h + PLACE_GAP * 2
+      ? searchBoardSpot(size, middle, taken, view)
+      : null;
+  if (inView !== null && inView.cover === 0) return inView.at;
+  const nearby = offView ? searchBoardSpot(size, middle, taken, undefined) : null;
+  if (nearby !== null && nearby.cover === 0) return nearby.at;
   const start = { x: Math.round(middle.x - size.w / 2), y: Math.round(middle.y - size.h / 2) };
   for (let step = 0; step < NOTE_CASCADE_MAX; step += 1) {
     const at = { x: start.x + step * NOTE_CASCADE, y: start.y + step * NOTE_CASCADE };
@@ -2672,6 +2841,51 @@ export function boardCentreSpot(
     if (!sitting) return at;
   }
   return start;
+}
+
+/** How long a finger rests on a card, still, before it picks the card up instead of panning. */
+export const BOARD_TOUCH_HOLD_MS = 350;
+/** How far a resting finger may drift and still be resting, in screen pixels. */
+export const BOARD_TOUCH_SLOP = 8;
+
+/**
+ * What one finger pressed on the board is doing so far: still resting (`wait`), moving before it
+ * rested long enough (`pan`: the board pans, even from a card), or resting long enough (`hold`: the
+ * card under it is picked up, or the board's menu opens if it lets go without moving).
+ */
+export function boardTouchPress(heldMs: number, distance: number): "wait" | "pan" | "hold" {
+  if (heldMs >= BOARD_TOUCH_HOLD_MS) return "hold";
+  return distance >= BOARD_TOUCH_SLOP ? "pan" : "wait";
+}
+
+const TOUCH_CONTROL_MAX_SCALE = 4;
+
+/**
+ * How much a selected card's touch controls are scaled so they stay finger-sized as the board
+ * zooms out: not at all at full size or more, inversely to the zoom below it, at most 4 times.
+ */
+export const boardTouchScale = (zoom: number): number =>
+  Math.min(TOUCH_CONTROL_MAX_SCALE, Math.max(1, 1 / zoom));
+
+/** About how much of a phone's screen, from the top, its keyboard leaves in sight. */
+const KEYBOARD_FREE_SHARE = 0.5;
+
+/**
+ * Where on a phone's board a new note goes so the keyboard opening for it leaves it in sight:
+ * below the header floating over the board, and in the top half of the surface.
+ */
+export function boardTypingRect(
+  view: BoardView,
+  area: BoardSize,
+  covered: { readonly top: number; readonly bottom: number },
+): BoardRect {
+  const bottom = Math.min(area.height - covered.bottom, area.height * KEYBOARD_FREE_SHARE);
+  const height = Math.max(bottom - covered.top, area.height * 0.25);
+  return {
+    ...screenToBoard(view, { x: 0, y: covered.top }),
+    width: area.width / view.zoom,
+    height: height / view.zoom,
+  };
 }
 
 /** An entry of the board's right-click menu, beside a card's own actions. */
@@ -2781,16 +2995,17 @@ const NEXT_NOTE_GAP = 24;
 
 /**
  * Where the note after `from` goes, as FigJam puts the next sticky: just to its right, top edges
- * level, else just below it, left edges level, else the clear spot nearest its right, so it always
- * lands beside the note it follows.
+ * level, else just below it, left edges level, else the first clear spot scanning right along its
+ * row and then down row by row. Never above it or left of it, and never over another card.
  */
 export function boardNextNoteSpot(
   from: BoardRect,
   size: RoomBoardSize,
   taken: ReadonlyArray<BoardRect>,
 ): BoardPoint {
+  const blocking = [from, ...taken];
   const clear = (at: BoardPoint) =>
-    !taken.some(
+    !blocking.some(
       (rect) =>
         at.x < rect.x + rect.width + PLACE_GAP &&
         at.x + size.w + PLACE_GAP > rect.x &&
@@ -2801,5 +3016,13 @@ export function boardNextNoteSpot(
   if (clear(right)) return right;
   const below = { x: Math.round(from.x), y: Math.round(from.y + from.height + NEXT_NOTE_GAP) };
   if (clear(below)) return below;
-  return placeBoardItem(size, { x: right.x + size.w / 2, y: right.y + size.h / 2 }, taken);
+  for (let dy = 0; dy <= PLACE_REACH; dy += PLACE_GAP) {
+    for (let dx = 0; dx <= PLACE_REACH; dx += PLACE_GAP) {
+      const at = { x: Math.round(from.x + dx), y: Math.round(from.y + dy) };
+      if (clear(at)) return at;
+    }
+  }
+  // Below everything, which nothing can cover.
+  const lowest = Math.max(...blocking.map((rect) => rect.y + rect.height));
+  return { x: Math.round(from.x), y: Math.round(lowest + NEXT_NOTE_GAP) };
 }

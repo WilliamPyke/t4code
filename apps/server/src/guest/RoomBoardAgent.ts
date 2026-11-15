@@ -273,16 +273,16 @@ const make = Effect.gen(function* () {
       Effect.mapError(() => fail(reason)),
     );
 
-  /** The box a thread runs behind, also from its latest message when the share is new here. */
-  const boxOf = Effect.fn("RoomBoardAgent.boxOf")(function* (threadId: ThreadId) {
-    const known = yield* boxes.boxOfThread(threadId, []);
-    if (known !== null) return known;
+  /** The run a thread's agent is in now, and that run's first message. */
+  const runOf = Effect.fn("RoomBoardAgent.runOf")(function* (threadId: ThreadId) {
     const runId = (yield* orchestrator.getThreadShell(threadId))?.latestRunId ?? null;
     if (runId === null) return null;
-    const { turnItems } = yield* orchestrator.getThreadRecords(threadId, ["turnItems"], {
-      turnItemRunIds: [runId],
-    });
-    return yield* boxes.boxOfThread(threadId, turnItems);
+    const { runs, turnItems } = yield* orchestrator.getThreadRecords(
+      threadId,
+      ["runs", "turnItems"],
+      { runIds: [runId], turnItemRunIds: [runId] },
+    );
+    return { runId, run: runs.find((run) => run.id === runId), turnItems };
   });
 
   const targetOf = Effect.fn("RoomBoardAgent.targetOf")(function* (threadId: ThreadId) {
@@ -290,10 +290,23 @@ const make = Effect.gen(function* () {
     if (thread.deletedAt !== null || thread.archivedAt !== null) return yield* fail("board_gone");
     const providers = yield* providerRegistry.getProviders;
     const model = RoomBoxes.roomBoxModelName(thread.modelSelection, providers);
-    const agent = (boxId: string): RoomBoardAgentMark => ({
-      boxId,
-      ...(model === "" ? {} : { model }),
-    });
+    const current = yield* runOf(threadId).pipe(Effect.orElseSucceed(() => null));
+    // The guest whose message the owner sent into this run, as RoomBoxes finds it.
+    const agent = (boxId: string, room: ThreadRoom): RoomBoardAgentMark => {
+      const guestMessageId = current?.turnItems.find((item) => item.type === "user_message")
+        ?.context?.guest?.guestMessageId;
+      const asked = room.messages.find(
+        (message) =>
+          message.id === guestMessageId ||
+          (current?.run !== undefined && message.sentAs === current.run.userMessageId),
+      );
+      return {
+        boxId,
+        ...(model === "" ? {} : { model }),
+        ...(current === null ? {} : { turnId: current.runId }),
+        ...(asked === undefined ? {} : { askedBy: asked.guestId }),
+      };
+    };
     if (thread.guestShare != null || thread.roomBoard != null) {
       const room = threadRoomOf(thread);
       return {
@@ -301,11 +314,15 @@ const make = Effect.gen(function* () {
         roomTitle: thread.title,
         room,
         boxId: ROOM_BOARD_ROOM_BOX,
-        agent: agent(ROOM_BOARD_ROOM_BOX),
+        agent: agent(ROOM_BOARD_ROOM_BOX, room),
         board: room.board ?? EMPTY_ROOM_BOARD,
       } satisfies Target;
     }
-    const box = yield* boxOf(threadId).pipe(Effect.mapError(() => fail("not_on_board")));
+    // Also from the run's first message when the share is new here.
+    const boxFrom = (items: Parameters<typeof boxes.boxOfThread>[1]) =>
+      boxes.boxOfThread(threadId, items).pipe(Effect.mapError(() => fail("not_on_board")));
+    const known = yield* boxFrom([]);
+    const box = known ?? (current === null ? null : yield* boxFrom(current.turnItems));
     if (box === null) return yield* fail("not_on_board");
     const roomThread = yield* threadOf(box.roomThreadId, "board_gone");
     if (roomThread.deletedAt !== null || roomThread.archivedAt !== null) {
@@ -319,7 +336,7 @@ const make = Effect.gen(function* () {
       roomTitle: roomThread.title,
       room,
       boxId: box.boxId,
-      agent: agent(box.boxId),
+      agent: agent(box.boxId, room),
       board: room.board ?? EMPTY_ROOM_BOARD,
     } satisfies Target;
   });

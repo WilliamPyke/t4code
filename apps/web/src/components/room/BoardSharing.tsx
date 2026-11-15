@@ -20,7 +20,7 @@ export function BoardSharing({
 }) {
   const canShare = useAtomValue(canShareWithGuestAtom(threadRef.environmentId));
   return (
-    <span className="flex min-w-0 shrink-0 items-center gap-1">
+    <span className="flex min-w-0 items-center gap-1">
       {shared ? (
         <GuestShareIndicator threadRef={threadRef} onBoard />
       ) : (

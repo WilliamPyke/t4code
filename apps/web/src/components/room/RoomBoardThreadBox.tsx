@@ -7,6 +7,7 @@ import {
   AuthOrchestrationOperateScope,
   ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH,
   type RoomBoard,
+  type RoomBoardAgentTurn,
   type RoomBoxTurn,
   type ScopedThreadRef,
   type ThreadGuestMessage,
@@ -26,6 +27,7 @@ import { BoardProgressLine } from "./RoomBoardArtifact";
 import { BoardChip } from "./BoardChrome";
 import {
   type BoardPeople,
+  boardAgentTurnLine,
   boardCardsLine,
   boardHtmlTitle,
   boardPersonName,
@@ -147,6 +149,53 @@ export function BoxTurns({
 }
 
 /**
+ * What a box's agent last did to the board, for everyone to see, with a way to find those cards
+ * and, for the owner and whoever asked for it, to take it all back or do it again.
+ */
+export function BoxBoardWork({
+  turn,
+  onShow,
+  onUndo,
+}: {
+  readonly turn: RoomBoardAgentTurn;
+  readonly onShow: () => void;
+  /** Absent for whoever may not undo it. */
+  readonly onUndo: ((undone: boolean) => void) | undefined;
+}) {
+  const line = boardAgentTurnLine(turn);
+  if (line === "") return null;
+  const undone = turn.undone === true;
+  return (
+    <div
+      role="group"
+      aria-label="What the agent did on the board"
+      className="flex flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-muted-foreground"
+    >
+      <p className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+        {undone ? `Undone: ${line.charAt(0).toLowerCase()}${line.slice(1)}` : line}
+      </p>
+      <div className="flex gap-1">
+        {undone ? null : (
+          <Button size="micro" variant="ghost-muted" onPointerDown={stopPointer} onClick={onShow}>
+            Show on board
+          </Button>
+        )}
+        {onUndo === undefined ? null : (
+          <Button
+            size="micro"
+            variant="ghost-muted"
+            onPointerDown={stopPointer}
+            onClick={() => onUndo(!undone)}
+          >
+            {undone ? "Redo" : "Undo"}
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * What a box's agent is doing now: its phase, model and how long it has run, and the start of
  * what it is writing. Reads only its own box's run, so another box's tick does not render it.
  */
@@ -174,9 +223,14 @@ export function BoxProgress({
           <BoardProgressLine progress={progress} />
         </BoardChip>
       </p>
-      {progress.phase === "approval" ? approval : null}
-      {preview === "" ? null : (
-        <p className="line-clamp-4 rounded-md bg-foreground/4 px-2 py-1 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
+      {progress.phase === "approval" ? (
+        approval
+      ) : (
+        // Four lines from the start of the run, so the box keeps its size as the reply streams.
+        <p
+          aria-hidden={preview === "" ? true : undefined}
+          className="line-clamp-4 h-[calc(4lh+0.5rem)] rounded-md bg-foreground/4 px-2 py-1 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]"
+        >
           {preview}
         </p>
       )}

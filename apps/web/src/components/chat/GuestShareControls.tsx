@@ -28,7 +28,7 @@ import {
   roomSummaryOutcome,
 } from "@t3tools/client-runtime/room-catch-up";
 import { useNavigate } from "@tanstack/react-router";
-import { CheckIcon, CopyIcon, RadioIcon, UserIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, EllipsisIcon, RadioIcon, UserIcon } from "lucide-react";
 import { useState } from "react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
@@ -487,9 +487,19 @@ export function GuestShareIndicator({
   const stopSharing = useStopSharing(threadRef);
   const navigate = useNavigate();
   if (share === null) return null;
+  const stop = (
+    <Button
+      size="xs"
+      variant="ghost-muted"
+      disabled={stopSharing.closing}
+      onClick={() => void stopSharing.stop(share)}
+    >
+      Stop sharing
+    </Button>
+  );
   return (
     <div className="flex shrink-0 items-center gap-1 text-muted-foreground text-xs">
-      <UserIcon aria-hidden className="size-3.5" />
+      <UserIcon aria-hidden className="size-3.5 shrink-0" />
       <GuestShareStatus share={share} threadRef={threadRef} />
       {onBoard ? null : (
         <Button
@@ -500,17 +510,41 @@ export function GuestShareIndicator({
           Board
         </Button>
       )}
-      <Button
-        size="xs"
-        variant="ghost-muted"
-        disabled={stopSharing.closing}
-        onClick={() => void stopSharing.stop(share)}
-      >
-        Stop sharing
-      </Button>
+      {onBoard ? (
+        <>
+          {/* A narrow board keeps Share in reach: Stop sharing waits behind More. */}
+          <span className="contents @max-xl/board:hidden">{stop}</span>
+          <span className="contents @xl/board:hidden">
+            <Menu>
+              <MenuTrigger
+                render={<Button size="icon-xs" variant="ghost-muted" aria-label="More sharing" />}
+              >
+                <EllipsisIcon />
+              </MenuTrigger>
+              <MenuPopup align="end">
+                <MenuItem
+                  disabled={stopSharing.closing}
+                  onClick={() => void stopSharing.stop(share)}
+                >
+                  Stop sharing
+                </MenuItem>
+              </MenuPopup>
+            </Menu>
+          </span>
+        </>
+      ) : (
+        stop
+      )}
     </div>
   );
 }
+
+/** The few words a narrow board's header has room for: how many guests, not who. */
+const guestShareShortLabel = (share: ThreadGuestShare): string => {
+  const count = (share.guests ?? []).length;
+  if (count === 0) return "Shared";
+  return count === 1 ? "1 guest" : `${count} guests`;
+};
 
 /** Ends a thread's share for everyone on it, once the owner confirms. */
 function useStopSharing(threadRef: ScopedThreadRef) {
@@ -555,12 +589,21 @@ function GuestShareStatus({
       : (share.guests ?? []).length === 0
         ? `Shared with ${share.team.name}`
         : `${share.team.name}: ${guestShareStatusLabel(share)}`;
+  // Inside a board's narrow header the short words show; elsewhere the full label always does.
+  const shown = (
+    <>
+      <span className="@max-xl/board:hidden">{label}</span>
+      <span className="hidden @max-xl/board:inline">{guestShareShortLabel(share)}</span>
+    </>
+  );
   // Only a server that lists guests can remove one or say who is viewing.
   const guests = share.guests ?? [];
-  if (guests.length === 0) return <span>{label}</span>;
+  if (guests.length === 0) return <span>{shown}</span>;
   return (
     <Menu>
-      <MenuTrigger render={<Button size="xs" variant="ghost-muted" />}>{label}</MenuTrigger>
+      <MenuTrigger render={<Button size="xs" variant="ghost-muted" aria-label={label} />}>
+        {shown}
+      </MenuTrigger>
       <MenuPopup align="end" width="content">
         <GuestList
           guests={guests}

@@ -15,6 +15,7 @@ import {
   listHomeBoards,
   newBoardProject,
   newBoardProjectKey,
+  teamBoardShapes,
 } from "./boardsHome.logic";
 
 const thread = (id: string, extra: Partial<OwnBoardSource> = {}): OwnBoardSource => ({
@@ -130,6 +131,25 @@ describe("boardThumbnail", () => {
       { width: 100, height: 100, padding: 0 },
     ).slice(1);
     expect(tiny).toMatchObject({ width: 2, height: 2 });
+  });
+
+  it("draws a team board from its notes and cards, sections behind, reply comments left out", () => {
+    const board: RoomBoard = {
+      ...EMPTY_ROOM_BOARD,
+      positions: { "thread:a": { x: 0, y: 0 } },
+      sizes: { "thread:a": { w: 400, h: 300 } },
+      notes: [
+        { id: "n", text: "Idea", x: 500, y: 0, color: "pink" },
+        { id: "s", text: "Plan", x: -50, y: -50, section: true, size: { w: 900, h: 500 } },
+        { id: "c", text: "On a reply", x: 0, y: 0, kind: "comment", pinnedTo: "message-1" },
+      ],
+    };
+    expect(teamBoardShapes(board).map(({ kind, w, h }) => ({ kind, w, h }))).toEqual([
+      { kind: "section", w: 900, h: 500 },
+      { kind: "card", w: 400, h: 300 },
+      { kind: "note", w: 192, h: 144 },
+    ]);
+    expect(teamBoardShapes(board)[2]).toMatchObject({ color: "pink" });
   });
 });
 

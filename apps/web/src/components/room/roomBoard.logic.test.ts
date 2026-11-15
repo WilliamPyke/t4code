@@ -68,6 +68,8 @@ import {
   boardDraftIsPage,
   boardEditKey,
   boardGroupMove,
+  boardAgentTurnToUndo,
+  boardAgentTurnsSeen,
   boardHistoryChanges,
   boardStepBefore,
   boardHistoryWith,
@@ -75,10 +77,18 @@ import {
   boardItemsCentredIn,
   boardDuplicates,
   boardCentreSpot,
+  BOARD_READABLE_ZOOM,
+  BOARD_TOUCH_HOLD_MS,
+  BOARD_TOUCH_SLOP,
+  boardTouchPress,
+  boardTouchScale,
+  boardTypingRect,
+  fitBoardOnSurface,
   boardKeyEditsNote,
   boardMenuEntries,
   type BoardMenuRights,
   boardTidy,
+  boardTidySection,
   boardSectionAround,
   boardItemTarget,
   boardItemRects,
@@ -296,6 +306,19 @@ describe("placeBoardItem", () => {
       ),
     ).toBe(false);
     expect(Math.hypot(spot.x - 316, spot.y - 50)).toBeLessThan(size.w);
+    expect(spot).toEqual({ x: 388, y: 50 });
+    // Right and below taken, the space above free: further along the row, never above.
+    const under = { x: 100, y: 218, width: 192, height: 144 };
+    expect(boardNextNoteSpot(from, size, [from, beside, under])).toEqual({ x: 532, y: 50 });
+    // The whole row taken as far as it scans: the next row down, still never left of the note.
+    const wall = { x: 300, y: 0, width: 1_200, height: 150 };
+    const next = boardNextNoteSpot(from, size, [from, wall, under]);
+    expect(next.x).toBeGreaterThanOrEqual(from.x);
+    expect(next.y).toBeGreaterThan(from.y);
+    expect(next).toEqual({ x: 308, y: 178 });
+    // Nothing clear within reach: below everything.
+    const sky = { x: 0, y: 0, width: 3_000, height: 2_000 };
+    expect(boardNextNoteSpot(from, size, [sky])).toEqual({ x: 100, y: 2_024 });
   });
 
   it("centres a new item on the spot asked for when nothing is there", () => {
@@ -557,6 +580,9 @@ describe("resolveBoard", () => {
     });
     // Until the server answers, the card stays where it was dropped.
     expect(resolveBoard(room(0), sent).positions.thread).toEqual({ x: 40, y: 0 });
+    // What only the server writes, such as an agent's turns, shows through the edits.
+    const turn = { id: "run:1", boxId: "box", at: "2026-11-15T00:00:00.000Z", cards: [] };
+    expect(resolveBoard({ ...room(0), agentTurns: [turn] }, sent).agentTurns).toEqual([turn]);
     // A later move by someone else wins, and the edit is forgotten on the next one.
     expect(resolveBoard(room(900), sent).positions.thread).toEqual({ x: 900, y: 0 });
     const note = { kind: "note", id: "n" } as const;
@@ -2135,6 +2161,36 @@ describe("the visible board area", () => {
     expect(spread.x + -500 * spread.zoom).toBe(40);
   });
 
+  it("fits a phone's board between its header and toolbar, and never below 35%", () => {
+    const phone = { width: 390, height: 700 };
+    const covered = { top: 90, bottom: 110 };
+    const rects = [
+      { x: 0, y: 0, width: 600, height: 400 },
+      { x: 0, y: 500, width: 300, height: 200 },
+    ];
+    const fit = fitBoardOnSurface(rects, phone, covered, 72);
+    expect(fit.zoom).toBeCloseTo(358 / 600);
+    expect(fit.x).toBe(16);
+    expect(fit.y).toBeGreaterThanOrEqual(102);
+    expect(fit.y + 700 * fit.zoom).toBeLessThanOrEqual(700 - 122);
+    // Too big to read whole: from its top card, at 35%, just under the header.
+    const big = fitBoardOnSurface(
+      [
+        { x: 0, y: 3_000, width: 300, height: 200 },
+        { x: 2_000, y: -100, width: 300, height: 200 },
+      ],
+      phone,
+      covered,
+      72,
+    );
+    expect(big.zoom).toBe(BOARD_READABLE_ZOOM);
+    expect(big.x + 2_000 * big.zoom).toBe(16);
+    expect(big.y + -100 * big.zoom).toBe(102);
+    // A wide surface fits as it always has.
+    const desk = { width: 1_200, height: 800 };
+    expect(fitBoardOnSurface(rects, desk, covered, 72)).toEqual(fitBoardView(rects, desk, 72));
+  });
+
   it("keeps the board the larger side of the row, whatever width the conversation kept", () => {
     // The board's half is its own: the divider comes out of the conversation's.
     expect(boardPanelMaxWidth(1_018)).toBe(509 - BOARD_SPLIT_DIVIDER);
@@ -2442,6 +2498,24 @@ describe("selecting several cards", () => {
     }).toEqual(at);
   });
 
+  it("tidies a section's cards inside it, as many columns as fit, growing it to hold them", () => {
+    const section = { x: 100, y: 100, width: 640, height: 420 };
+    const items = Array.from({ length: 11 }, (_, index) => ({
+      ref: `note:${index}`,
+      rect: { x: 150 + (index % 4) * 30, y: 160 + index * 40, width: 200, height: 120 },
+    }));
+    const { places, size } = boardTidySection(items, section);
+    // Two 200px columns fit in 640 less padding; six rows need it taller, never narrower.
+    expect(new Set(places.map(({ x }) => x))).toEqual(new Set([132, 356]));
+    expect(size.w).toBe(640);
+    for (const { x, y } of places) {
+      expect(x >= section.x && x + 200 <= section.x + size.w).toBe(true);
+      expect(y >= section.y + 40 && y + 120 <= section.y + size.h).toBe(true);
+    }
+    // A roomy section keeps its size.
+    expect(boardTidySection(items.slice(0, 2), section).size).toEqual({ w: 640, h: 420 });
+  });
+
   it("moves every selected card and note together, one change each, and leaves pins out", () => {
     const refs = ["note:mine", "card:thread", "note:pin", "note:gone", "line:x"];
     const items = boardSelectionItems(board, positions, refs);
@@ -2606,6 +2680,33 @@ describe("undo and redo", () => {
     // A card the gesture did not hold is as the board shows it, at whole pixels.
     expect(boardStepBefore(new Map(), drawn, copyTarget)).toEqual({ ...copy, x: 41, y: 12 });
   });
+
+  it("undoes the newest agent turn its viewer may undo first, when it came after their own step", () => {
+    const sam = GuestId.make("sam");
+    const turn = (id: string, at: string, fields: object = {}) => ({
+      id,
+      boxId: "box",
+      at,
+      cards: [],
+      ...fields,
+    });
+    const agentBoard: RoomBoard = {
+      ...board,
+      agentTurns: [
+        turn("for-sam", "2026-11-15T10:00:00.000Z", { askedBy: sam }),
+        turn("owner's", "2026-11-15T10:01:00.000Z"),
+        turn("undone", "2026-11-15T10:02:00.000Z", { askedBy: sam, undone: true }),
+      ],
+    };
+    const own = (seen: string) => ({ steps: [], seen });
+    expect(boardAgentTurnsSeen(agentBoard)).toBe("2026-11-15T10:02:00.000Z");
+    expect(boardAgentTurnToUndo(agentBoard, sam, undefined)?.id).toBe("for-sam");
+    expect(boardAgentTurnToUndo(agentBoard, null, undefined)?.id).toBe("owner's");
+    // Sam's own step after the turn comes first; one before it comes after.
+    expect(boardAgentTurnToUndo(agentBoard, sam, own("2026-11-15T10:00:00.000Z"))).toBeUndefined();
+    expect(boardAgentTurnToUndo(agentBoard, sam, own(""))?.id).toBe("for-sam");
+    expect(boardAgentTurnToUndo(board, null, undefined)).toBeUndefined();
+  });
 });
 
 describe("boardReactionChips", () => {
@@ -2646,6 +2747,71 @@ describe("boardCentreSpot", () => {
     const stacked = [wall, { ...centred, width: 200, height: 150 }];
     expect(boardCentreSpot(note, [wall], view)).toEqual(centred);
     expect(boardCentreSpot(note, stacked, view)).toEqual({ x: 1_524, y: 2_349 });
+  });
+
+  it("lands clear of a big card over the middle, as a thread box on a phone, still in view", () => {
+    const box = { x: 1_350, y: 2_100, width: 500, height: 600 };
+    const at = boardCentreSpot(note, [box], view);
+    const overlaps =
+      at.x < box.x + box.width &&
+      at.x + note.w > box.x &&
+      at.y < box.y + box.height &&
+      at.y + note.h > box.y;
+    expect(overlaps).toBe(false);
+    expect(at.x).toBeGreaterThanOrEqual(view.x);
+    expect(at.y).toBeGreaterThanOrEqual(view.y);
+    expect(at.x + note.w).toBeLessThanOrEqual(view.x + view.width);
+    expect(at.y + note.h).toBeLessThanOrEqual(view.y + view.height);
+  });
+
+  it("lands a phone's note off view, clear of a thread box wider than the screen", () => {
+    const typing = { x: 0, y: 100, width: 390, height: 320 };
+    const box = { x: -120, y: 60, width: 640, height: 560 };
+    // On a desktop it stays on the middle; on a phone it goes to the nearest clear spot.
+    expect(boardCentreSpot(note, [box], typing)).toEqual({ x: 95, y: 185 });
+    const at = boardCentreSpot(note, [box], typing, true);
+    expect(
+      at.x < box.x + box.width &&
+        at.x + note.w > box.x &&
+        at.y < box.y + box.height &&
+        at.y + note.h > box.y,
+    ).toBe(false);
+  });
+
+  it("puts a phone's new note below its header, in the half of the screen the keyboard leaves", () => {
+    const area = { width: 390, height: 700 };
+    expect(boardTypingRect({ x: 0, y: 0, zoom: 0.5 }, area, { top: 90, bottom: 110 })).toEqual({
+      x: 0,
+      y: 180,
+      width: 780,
+      height: 520,
+    });
+    // A short surface still gets a quarter of itself.
+    expect(
+      boardTypingRect(
+        { x: -100, y: 0, zoom: 1 },
+        { width: 390, height: 300 },
+        { top: 90, bottom: 60 },
+      ).height,
+    ).toBe(75);
+  });
+});
+
+describe("boardTouchPress", () => {
+  it.each([
+    ["a finger just down", 0, 0, "wait"],
+    ["a finger resting with a little drift", BOARD_TOUCH_HOLD_MS - 1, BOARD_TOUCH_SLOP - 1, "wait"],
+    ["a finger moving off at once pans", 120, BOARD_TOUCH_SLOP, "pan"],
+    ["a finger resting long enough holds", BOARD_TOUCH_HOLD_MS, 2, "hold"],
+  ] as const)("%s", (_, heldMs, distance, decision) => {
+    expect(boardTouchPress(heldMs, distance)).toBe(decision);
+  });
+
+  it("scales touch controls up only as the board zooms out, and only so far", () => {
+    expect(boardTouchScale(2)).toBe(1);
+    expect(boardTouchScale(1)).toBe(1);
+    expect(boardTouchScale(0.5)).toBe(2);
+    expect(boardTouchScale(0.2)).toBe(4);
   });
 });
 

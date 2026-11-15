@@ -1,7 +1,7 @@
 import type { RoomBoardNote } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 
@@ -12,6 +12,7 @@ import {
   type BoardVisit,
   boardCatchUp,
   boardNewestChange,
+  boardVisitKey,
   boardVisitsWith,
 } from "./boardCatchUp.logic";
 
@@ -60,26 +61,49 @@ const startCatchUp = (key: string | undefined): CatchUpState => ({
 });
 
 /**
- * The cards others added or changed since this device last had the board open, named by `key`
- * (none without one). The board's newest change is kept as the visit while it is open.
+ * The cards and comments others added, changed or replied to since this person last had the
+ * board open on this device, the board named by `board` (none without one). The visit moves on
+ * only when they dismiss the changes or leave with none left to show, so a reload keeps them.
  */
 export function useBoardCatchUp(
-  key: string | undefined,
+  board: string | undefined,
   notes: ReadonlyArray<RoomBoardNote>,
   viewer: string | null,
 ): { readonly changes: ReadonlyArray<RoomBoardNote>; readonly dismiss: () => void } {
+  const key = board === undefined ? undefined : boardVisitKey(board, viewer);
   const [state, setState] = useState(() => startCatchUp(key));
   const newest = boardNewestChange(notes);
   const current = state.key === key ? state : startCatchUp(key);
   if (current !== state) setState(current);
+  const changes = current.dismissed
+    ? []
+    : boardCatchUp(notes, current.since, viewer, current.openedAt);
   const loaded = notes.length > 0;
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps this visit in this device's storage, which outlives the board
+  const pending = changes.length > 0;
+  const last = useRef<{ key: string; newest: BoardVisit; pending: boolean } | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- what leaving saves, read by the leave effect's cleanup after the board has gone
   useEffect(() => {
-    if (key !== undefined && loaded) rememberVisit(key, newest);
-  }, [key, loaded, newest]);
+    last.current = key === undefined || !loaded ? null : { key, newest, pending };
+  }, [key, loaded, newest, pending]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- saves the visit to this device's storage when the page or the board is left
+  useEffect(() => {
+    if (key === undefined) return;
+    const leave = () => {
+      const visit = last.current;
+      if (visit !== null && !visit.pending) rememberVisit(visit.key, visit.newest);
+    };
+    window.addEventListener("pagehide", leave);
+    return () => {
+      window.removeEventListener("pagehide", leave);
+      leave();
+    };
+  }, [key]);
   return {
-    changes: current.dismissed ? [] : boardCatchUp(notes, current.since, viewer, current.openedAt),
-    dismiss: () => setState({ ...current, dismissed: true }),
+    changes,
+    dismiss: () => {
+      if (key !== undefined && loaded) rememberVisit(key, newest);
+      setState({ ...current, dismissed: true });
+    },
   };
 }
 

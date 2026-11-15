@@ -69,7 +69,57 @@ export const SCENARIOS = [
 // Not a recording: it reads the board its thread is on through T3's MCP server and adds a task
 // for each note there, so the board's agent tools can be tried for free.
 const BOARD_SCENARIO = { id: "board-tasks", name: "Board: notes to tasks" } as const;
-const MODELS = [...SCENARIOS, BOARD_SCENARIO];
+// Not a recording either: a long markdown reply streamed slowly, to watch a box hold its size.
+const LONG_REPLY_SCENARIO = { id: "long-reply", name: "Long reply" } as const;
+const MODELS = [...SCENARIOS, BOARD_SCENARIO, LONG_REPLY_SCENARIO];
+const LONG_REPLY_MS = 20_000;
+
+/** About 150 lines of mixed markdown: headings, lists, a table and a code block. */
+export function longReplyText(): string {
+  const parts = ["Here is a long reply, so you can watch it stream inside a fixed box.", ""];
+  for (let section = 1; section <= 6; section += 1) {
+    parts.push(`## Part ${section}: notes on step ${section}`, "");
+    parts.push(
+      `Step ${section} keeps the same shape as the others, with enough text to wrap across a narrow box and push the reply well past its height.`,
+      "",
+    );
+    for (let item = 1; item <= 8; item += 1) {
+      parts.push(`- Item ${section}.${item}: check the **part ${item}** and note what changed`);
+    }
+    parts.push("");
+    parts.push(
+      "### Why it matters",
+      "",
+      `Without step ${section}, the \`next\` step has nothing to use.`,
+      "",
+    );
+    for (let item = 1; item <= 3; item += 1) {
+      parts.push(`${item}. Then do the ${["first", "second", "third"][item - 1]} thing`);
+    }
+    parts.push("");
+    if (section === 2) {
+      parts.push("| Step | Owner | State |", "| --- | --- | --- |");
+      for (let row = 1; row <= 6; row += 1) {
+        parts.push(`| ${row} | Person ${row} | ${row % 2 === 0 ? "Done" : "Open"} |`);
+      }
+      parts.push("");
+    }
+    if (section === 4) {
+      parts.push("```ts");
+      parts.push("export function total(values: ReadonlyArray<number>): number {");
+      parts.push("  let sum = 0;");
+      parts.push("  for (const value of values) {");
+      parts.push("    sum += value;");
+      parts.push("  }");
+      parts.push("  return sum;");
+      parts.push("}");
+      parts.push("```", "");
+    }
+    parts.push(`> Part ${section} is done. The next part starts below.`, "");
+  }
+  parts.push("That is the end of the long reply.");
+  return parts.join("\n");
+}
 
 // Session setup and vendor state stay out: they would replace the replay agent's own models.
 const REPLAYED_UPDATES = new Set([
@@ -359,6 +409,22 @@ function runAgent(): void {
     }
   };
 
+  const playLongReply = async (sessionId: string, signal: AbortSignal) => {
+    const chunks = streamChunks(longReplyText());
+    const delay = Math.max(1, Math.round(LONG_REPLY_MS / chunks.length));
+    for (const chunk of chunks) {
+      await sleep(delay, signal);
+      if (signal.aborted) return;
+      send({
+        method: "session/update",
+        params: {
+          sessionId,
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: chunk } },
+        },
+      });
+    }
+  };
+
   /** Reads the board through T3's tools and adds a task for each note on it, in a section. */
   const playBoardTurn = async (sessionId: string, signal: AbortSignal) => {
     const mcp = sessions.get(sessionId)?.mcp;
@@ -400,7 +466,7 @@ function runAgent(): void {
     };
     try {
       const board = (await tool("t3_board_read", {})) as
-        | { cards?: ReadonlyArray<{ kind?: string; text?: string }> }
+        | { cards?: ReadonlyArray<{ id?: string; kind?: string; text?: string }> }
         | undefined;
       const notes = (board?.cards ?? [])
         .filter((card) => card.kind === "note" && (card.text ?? "").trim() !== "")
@@ -411,9 +477,18 @@ function runAgent(): void {
         section: "Tasks",
         cards: notes.map((note) => ({ text: note.text, task: true })),
       })) as { done?: ReadonlyArray<string>; refused?: ReadonlyArray<{ reason?: string }> };
-      const refused = added.refused ?? [];
+      if (signal.aborted) return;
+      // Changes cards that were there before the turn too, so undoing it has something to put back.
+      const moved = (await tool("t3_board_update", {
+        changes: notes.flatMap((note) =>
+          note.id === undefined ? [] : [{ id: note.id, section: "Turned into tasks" }],
+        ),
+      })) as { done?: ReadonlyArray<string>; refused?: ReadonlyArray<{ reason?: string }> };
+      const refused = [...(added.refused ?? []), ...(moved.refused ?? [])];
       await say(
-        `Added ${added.done?.length ?? 0} tasks to the "Tasks" section.${
+        `Added ${added.done?.length ?? 0} tasks to the "Tasks" section and moved ${
+          moved.done?.length ?? 0
+        } notes into "Turned into tasks".${
           refused.length === 0 ? "" : ` The board refused ${refused.length}: ${refused[0]?.reason}`
         }`,
       );
@@ -480,7 +555,8 @@ function runAgent(): void {
         const session = sessions.get(sessionId);
         if (session === undefined) throw new Error(`Unknown session ${sessionId}`);
         const board = session.model === BOARD_SCENARIO.id;
-        const turns = board ? [] : loadTurns(session.model);
+        const long = session.model === LONG_REPLY_SCENARIO.id;
+        const turns = board || long ? [] : loadTurns(session.model);
         const turn = turns[session.promptCount % Math.max(turns.length, 1)];
         session.promptCount += 1;
         const controller = new AbortController();
@@ -488,6 +564,7 @@ function runAgent(): void {
         let ended: "cancelled" | undefined;
         try {
           if (board) await playBoardTurn(sessionId, controller.signal);
+          else if (long) await playLongReply(sessionId, controller.signal);
           else if (turn !== undefined) ended = await playTurn(sessionId, turn, controller.signal);
         } finally {
           session.cancel = undefined;

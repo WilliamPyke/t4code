@@ -9,10 +9,11 @@ import {
   ROOM_BOARD_SUMMARY_MAX_BOARDS,
   ThreadId,
   type RoomBoardSummary,
+  type RoomBoardSummaryShape,
 } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { ChevronDownIcon, MegaphoneIcon, PlusIcon, SearchIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { isElectron } from "~/env";
 import { guestSharesAtom } from "~/guest/guestShares";
@@ -25,7 +26,7 @@ import {
 } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
-import { useTeams } from "~/teams/teams";
+import { readTeamBoard, useTeams } from "~/teams/teams";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 import { useWhatsNewSeen } from "~/whatsNew";
 
@@ -39,7 +40,7 @@ import { Input } from "../ui/input";
 import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { BoardThumbnail } from "./BoardThumbnail";
-import { type HomeBoard, listHomeBoards } from "./boardsHome.logic";
+import { type HomeBoard, listHomeBoards, teamBoardShapes } from "./boardsHome.logic";
 import { openBoardTemplates, useStartNewBoard } from "./newBoard";
 
 const NO_THREAD_IDS: ReadonlyArray<ThreadId> = [];
@@ -225,6 +226,7 @@ function BoardTile({
   readonly nowMs: number;
 }) {
   const summary = useBoardSummary(board, summaryThreadIds);
+  const teamShapes = useTeamBoardShapes(board.kind === "team" ? board.teamId : null);
   const subtitle =
     board.kind === "own"
       ? projectName
@@ -243,7 +245,7 @@ function BoardTile({
         className="flex h-full flex-col overflow-hidden rounded-board border border-board-hairline bg-card shadow-paint transition-shadow outline-none hover:shadow-board focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       >
         <div className="border-b border-board-hairline">
-          <BoardThumbnail shapes={summary?.shapes} />
+          <BoardThumbnail shapes={summary?.shapes ?? teamShapes} />
         </div>
         <div className="flex min-w-0 flex-col gap-1 p-3">
           <div className="flex min-w-0 items-center gap-2">
@@ -318,6 +320,29 @@ function useBoardSummary(
   );
   if (board.kind !== "own") return null;
   return data?.boards.find((summary) => summary.threadId === board.threadId) ?? null;
+}
+
+/** A team board's cards, read once from T Connect as the board itself reads them. */
+function useTeamBoardShapes(
+  teamId: string | null,
+): ReadonlyArray<RoomBoardSummaryShape> | undefined {
+  const [read, setRead] = useState<{
+    readonly teamId: string;
+    readonly shapes: ReadonlyArray<RoomBoardSummaryShape>;
+  } | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the team's board from T Connect once for its tile
+  useEffect(() => {
+    if (teamId === null) return;
+    let stopped = false;
+    void readTeamBoard(teamId, null).then((result) => {
+      if (stopped || !result.ok || result.value.board === null) return;
+      setRead({ teamId, shapes: teamBoardShapes(result.value.board) });
+    });
+    return () => {
+      stopped = true;
+    };
+  }, [teamId]);
+  return read !== null && read.teamId === teamId ? read.shapes : undefined;
 }
 
 function tileLink(board: HomeBoard) {

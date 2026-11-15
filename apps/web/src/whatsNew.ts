@@ -12,6 +12,24 @@ export interface WhatsNewEntry {
 /** Newest first. Shortcuts are written for Windows and Linux with the Mac key in brackets. */
 export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
   {
+    date: "2026-11-15",
+    title: "Undo what an agent did, and a board you can use on a phone",
+    items: [
+      "A thread box says what its agent last did to the board, like “Added 4 tasks and 1 section”. Show on board selects those cards.",
+      "Undo an agent's whole turn on the board in one step: Undo on its box, or Ctrl+Z (Cmd+Z). Redo brings it back, and cards someone changed since stay as they are.",
+      "Select a section to find Tidy and Sort by votes on its toolbar.",
+      "Ctrl+Enter (Cmd+Enter) on a note, or its + handle, puts the next note to its right, else below, else further along the row. It never covers another card.",
+      "“Changes since you were here” now counts new comments and replies too, and stays until you dismiss it, even after a reload.",
+      "Scrolling a thread box's reply no longer moves the board when you reach the end, and Latest takes you back to the newest text.",
+      "Team boards show a preview on Boards, like your other boards.",
+      "On a phone, Note and Task open the keyboard at once, and the new card lands in clear space above it.",
+      "On a phone, dragging a card pans the board. Rest your finger on a card first to pick it up and move it, or let go without moving to open its menu.",
+      "On a phone, Fit keeps the board readable: it fills the screen between the header and toolbar, and never zooms out below 35%. A bigger board shows from its top card.",
+      "On a touch screen, a selected note shows its +1 and next note buttons above it, big enough to tap at any zoom.",
+      "A shared board's header fits a phone: Share stays in view, and Stop sharing moves under More.",
+    ],
+  },
+  {
     date: "2026-11-14",
     title: "Agents that work on the board, votes and catch-up",
     items: [

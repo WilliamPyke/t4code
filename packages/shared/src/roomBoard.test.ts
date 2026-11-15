@@ -3,6 +3,7 @@ import {
   GuestShareId,
   type OrchestrationV2TurnItem,
   ROOM_ARTIFACT_MAX_LENGTH,
+  ROOM_BOARD_AGENT_TURNS_MAX,
   ROOM_BOARD_MAX_ARTIFACTS,
   ROOM_BOARD_MAX_CODE_WINDOWS,
   ROOM_BOARD_MAX_PULL_REQUESTS,
@@ -12,6 +13,7 @@ import {
   ROOM_BOARD_ROOM_BOX,
   ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH,
   RoomBoard,
+  type RoomBoardAgentMark,
   type RoomBoardChange,
   roomPullRequestOf,
   type RoomBoardNote,
@@ -29,6 +31,8 @@ import {
   roomArtifactAfterFill,
   roomArtifactBody,
   roomArtifactRequestOf,
+  roomBoardAfterAgentTurn,
+  roomBoardWithAgentChange,
   roomBoardWithCards,
   roomBoardWithCardsSent,
   roomBoardCardChangedAt,
@@ -67,6 +71,7 @@ describe("roomBoardWithCards", () => {
 });
 
 const decodeBoard = Schema.decodeUnknownSync(RoomBoard);
+const isRoomBoard = Schema.is(RoomBoard);
 
 describe("applyRoomBoardChange", () => {
   const scope: RoomBoardScope = { hasCard: (cardId) => cardId === "thread", hasPerson: () => true };
@@ -680,6 +685,135 @@ describe("applyRoomBoardChange", () => {
     expect(Result.isFailure(apply(board, { type: "edge.pin", edgeId: "gone", pinned: true }))).toBe(
       true,
     );
+  });
+});
+
+describe("an agent's turn on the board", () => {
+  const scope: RoomBoardScope = { hasCard: (cardId) => cardId === "thread", hasPerson: () => true };
+  const sam = GuestId.make("guest:sam");
+  const ana = GuestId.make("guest:ana");
+  const at = "2026-11-15T10:00:00.000Z";
+  const later = "2026-11-15T10:05:00.000Z";
+  const mark = { boxId: "box:b", model: "GPT-5.1", turnId: "run:1", askedBy: sam };
+  const put = (
+    noteId: string,
+    fields: Partial<Extract<RoomBoardChange, { type: "note.put" }>> = {},
+  ): RoomBoardChange => ({ type: "note.put", noteId, text: noteId, x: 0, y: 0, ...fields });
+  const by = (board: RoomBoard, author: GuestId | null, change: RoomBoardChange) =>
+    Result.getOrThrow(applyRoomBoardChange(board, scope, author, change, later));
+  // As the decider takes an agent's change: made as the owner's, then recorded as its turn's.
+  const byAgent = (board: RoomBoard, change: RoomBoardChange, agent: RoomBoardAgentMark = mark) =>
+    roomBoardWithAgentChange(
+      board,
+      Result.getOrThrow(applyRoomBoardChange(board, scope, null, change, at)),
+      change,
+      agent,
+      at,
+    );
+  const start: RoomBoard = {
+    positions: {},
+    notes: [{ id: "pricing", text: "Pricing", x: 0, y: 0, guestId: ana }],
+  };
+  const turned = [
+    put("a", { text: "Draft", x: 300 }),
+    put("a", { text: "Draft the FAQ", x: 300 }),
+    put("t", { kind: "task", x: 600 }),
+    put("pricing", { text: "Pricing", x: 900 }),
+    put("s", { text: "Ideas", y: 400, section: true }),
+    { type: "edge.put", edgeId: "e1", from: "note:a", to: "card:thread" },
+  ].reduce<RoomBoard>((board, change) => byAgent(board, change as RoomBoardChange), start);
+  const noteOf = (board: RoomBoard, id: string) => board.notes.find((note) => note.id === id);
+
+  it("records each card a turn added or changed, as it found and left it, and its lines", () => {
+    expect(noteOf(turned, "a")?.agent).toEqual(mark);
+    // Moved, but still Ana's card.
+    expect([noteOf(turned, "pricing")?.agent, noteOf(turned, "pricing")?.guestId]).toEqual([
+      undefined,
+      ana,
+    ]);
+    expect(turned.agentTurns).toEqual([
+      {
+        id: "run:1",
+        boxId: "box:b",
+        model: "GPT-5.1",
+        askedBy: sam,
+        at,
+        cards: [
+          { id: "a", after: { text: "Draft the FAQ", x: 300, y: 0 } },
+          { id: "t", after: { text: "t", x: 600, y: 0, kind: "task" } },
+          {
+            id: "pricing",
+            before: { text: "Pricing", x: 0, y: 0 },
+            after: { text: "Pricing", x: 900, y: 0 },
+          },
+          { id: "s", after: { text: "Ideas", x: 0, y: 400, section: true } },
+        ],
+        edges: [{ id: "e1", from: "note:a", to: "card:thread" }],
+      },
+    ]);
+    // A change that does nothing is no work, and a mark from before turns were kept records none.
+    expect(byAgent(turned, put("t", { kind: "task", x: 600 }))).toBe(turned);
+    const { turnId: _turnId, ...untimed } = mark;
+    expect(byAgent(start, put("old"), untimed).agentTurns).toBeUndefined();
+    // Each turn is its own, newest last, and the board keeps the last few.
+    const many = Array.from({ length: ROOM_BOARD_AGENT_TURNS_MAX }, (_, index) => index).reduce(
+      (board, index) => byAgent(board, put(`n${index}`), { ...mark, turnId: `run:${index + 2}` }),
+      turned,
+    );
+    expect(many.agentTurns?.map((turn) => turn.id)).toEqual(
+      Array.from({ length: ROOM_BOARD_AGENT_TURNS_MAX }, (_, index) => `run:${index + 2}`),
+    );
+    expect(isRoomBoard(many)).toBe(true);
+  });
+
+  it("is taken back by the owner or whoever asked, leaving what someone changed since", () => {
+    const undo: RoomBoardChange = { type: "agent-turn.undo", turnId: "run:1", undone: true };
+    // Ana edits the task it added and reacts to its section.
+    const touched = by(by(turned, ana, put("t", { kind: "task", text: "Mine now", x: 600 })), ana, {
+      type: "note.react",
+      noteId: "s",
+      emoji: "👍",
+    });
+    expect(Result.isFailure(applyRoomBoardChange(touched, scope, ana, undo, later))).toBe(true);
+    expect(
+      Result.isFailure(
+        applyRoomBoardChange(touched, scope, sam, { ...undo, turnId: "run:gone" }, later),
+      ),
+    ).toBe(true);
+    const turn = touched.agentTurns![0]!;
+    expect(roomBoardAfterAgentTurn(touched, scope, turn, true, sam, later).left).toEqual([
+      "s",
+      "t",
+    ]);
+
+    const undone = by(touched, sam, undo);
+    expect(undone.notes.map((note) => note.id)).toEqual(["pricing", "t", "s"]);
+    expect(noteOf(undone, "pricing")).toMatchObject({ x: 0, guestId: ana });
+    expect(noteOf(undone, "t")?.text).toBe("Mine now");
+    expect(undone.edges).toEqual([]);
+    expect(undone.agentTurns?.[0]?.undone).toBe(true);
+    expect(by(undone, null, undo)).toBe(undone);
+
+    // The owner redoes it: what it took back comes back as the agent's, and the rest stays.
+    const redone = by(undone, null, { ...undo, undone: false });
+    expect(redone.notes.map((note) => note.id)).toEqual(["pricing", "t", "s", "a"]);
+    expect(noteOf(redone, "a")).toMatchObject({ text: "Draft the FAQ", x: 300, agent: mark });
+    expect(noteOf(redone, "pricing")?.x).toBe(900);
+    expect(noteOf(redone, "t")?.text).toBe("Mine now");
+    expect(redone.edges).toEqual([{ id: "e1", from: "note:a", to: "card:thread" }]);
+    expect(redone.agentTurns?.[0]?.undone).toBeUndefined();
+
+    // A card moved since its redo, and a line someone drew to one it added, stay on undo.
+    const moved = by(by(redone, null, put("pricing", { text: "Pricing", x: 950 })), ana, {
+      type: "edge.put",
+      edgeId: "e2",
+      from: "note:t",
+      to: "note:a",
+    });
+    const again = by(moved, sam, undo);
+    expect(noteOf(again, "pricing")?.x).toBe(950);
+    expect(noteOf(again, "a")).toBeDefined();
+    expect(again.edges?.map((edge) => edge.id)).toEqual(["e2"]);
   });
 });
 

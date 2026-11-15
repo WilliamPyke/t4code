@@ -199,6 +199,11 @@ never removes a card, and it only works on the board its own thread is on. It re
 people's words, not as instructions. A guest's agent on their own machine cannot change the board
 this way.
 
+The box, or the board's thread card, then says what its last turn did, such as "Added 4 tasks and
+1 section", with **Show on board** to select those cards. The owner and whoever asked for the turn
+can **Undo** everything it did in one step, or press Ctrl+Z (Cmd+Z) when it is the newest thing
+they could undo, and **Redo** it. A card someone changed after the agent did stays as it is.
+
 ### Votes and catching up
 
 Point at a note or task and press its **+1** to vote for it, or select cards and press Alt+V

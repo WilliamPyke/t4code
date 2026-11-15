@@ -1,6 +1,9 @@
-import type { ComponentProps, ReactNode } from "react";
+import { ArrowDownIcon } from "lucide-react";
+import { type ComponentProps, type ReactNode, useState } from "react";
 
 import { cn } from "~/lib/utils";
+
+import { Button } from "../ui/button";
 
 /**
  * The board's shared looks. Chrome is quiet (the theme's card, a hairline, a soft shadow) so the
@@ -49,11 +52,30 @@ export function BoardFloat({ className, ...props }: ComponentProps<"div">) {
  * `mb-auto` keeps short content at the top of a card taller than it.
  */
 export function BoardScrollTail({ className, children }: ComponentProps<"div">) {
+  const [away, setAway] = useState(false);
   return (
     <div
       data-board-scroll
-      className={cn("flex min-h-0 flex-col-reverse overflow-y-auto", className)}
+      className={cn("flex min-h-0 flex-col-reverse overflow-y-auto overscroll-contain", className)}
+      // `column-reverse` counts scrollTop down from 0 at the bottom.
+      onScroll={(event) => setAway(event.currentTarget.scrollTop < -24)}
     >
+      {away ? (
+        <div className="sticky bottom-1.5 z-10 flex h-0 shrink-0 items-end justify-center">
+          <Button
+            size="micro"
+            variant="outline"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              const scroller = event.currentTarget.closest("[data-board-scroll]");
+              scroller?.scrollTo({ top: 0 });
+            }}
+          >
+            <ArrowDownIcon />
+            Latest
+          </Button>
+        </div>
+      ) : null}
       <div className="mb-auto flex flex-col gap-2">{children}</div>
     </div>
   );

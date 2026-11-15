@@ -1,5 +1,7 @@
 import type { PointerEvent } from "react";
 
+import { BOARD_TOUCH_HOLD_MS, BOARD_TOUCH_SLOP, boardTouchPress } from "./roomBoard.logic";
+
 /** How far a held pointer may move and still be a click, in screen pixels. */
 export const CLICK_SLOP = 4;
 
@@ -49,23 +51,66 @@ export function dropHeldPointer(): boolean {
   return true;
 }
 
+/** How far a held pointer of this kind may move and still be a tap: a finger drifts more. */
+export const pressSlop = (pointerType: string) =>
+  pointerType === "touch" ? BOARD_TOUCH_SLOP : CLICK_SLOP;
+
+interface Press {
+  readonly x: number;
+  readonly y: number;
+  readonly on: EventTarget;
+  moved: boolean;
+  last: { x: number; y: number };
+  /** A finger's press: when it began, whether it rested, and whether it stopped resting. */
+  readonly touch: { readonly at: number; held: boolean; done: boolean; timer: number } | null;
+}
+
 // `last` is where the pointer was at its previous move: touch pointers in Safari report no
 // `movementX`, so how far it went is measured from client points.
-const presses = new WeakMap<
-  Element,
-  {
-    readonly x: number;
-    readonly y: number;
-    readonly on: EventTarget;
-    moved: boolean;
-    last: { x: number; y: number };
-  }
->();
+const presses = new WeakMap<Element, Press>();
+
+const boardOf = (element: Element) => element.closest<HTMLElement>("[role=application]");
+
+/** A finger resting on the board now: it keeps the browser's own long-press menu and callout off. */
+let touchResting = 0;
+export const isTouchResting = () => touchResting > 0;
+
+const endTouch = (element: Element, press: Press | undefined) => {
+  const touch = press?.touch;
+  if (touch === null || touch === undefined || touch.done) return;
+  touch.done = true;
+  clearTimeout(touch.timer);
+  element.removeAttribute("data-board-lifted");
+  touchResting = Math.max(0, touchResting - 1);
+  if (touchResting === 0) boardOf(element)?.removeAttribute("data-board-resting");
+};
 
 /**
- * Pointer handlers that report how far a held pointer moved, in screen pixels, once it moved further
- * than a click would, and when it is let go after that, or `onTap`, with where the press began, when
- * it never moved that far. A press on text or a control is left alone.
+ * A finger moved off a card before resting on it: the board pans instead, as if pressed there.
+ * The board's own handlers take the pointer from here, carrying on from where the finger is.
+ */
+function panInstead(card: HTMLElement, event: PointerEvent<HTMLElement>, press: Press) {
+  const board = boardOf(card);
+  endTouch(card, press);
+  presses.delete(card);
+  if (board === null || board === card) return;
+  card.releasePointerCapture(event.pointerId);
+  board.setPointerCapture(event.pointerId);
+  holding = { element: board, pointerId: event.pointerId };
+  presses.set(board, {
+    x: press.x,
+    y: press.y,
+    on: board,
+    moved: true,
+    last: { x: press.x, y: press.y },
+    touch: null,
+  });
+}
+
+/**
+ * Pointer handlers reporting how far a held pointer moved past a click's slop, its release, or a
+ * tap (`onTap`). Text and controls are left alone. A finger on a card pans the board unless it
+ * rests first, which lifts the card for the drag; resting and letting go opens the board's menu.
  */
 export function dragHandlers(
   onMove: (dx: number, dy: number, event: PointerEvent<HTMLElement>) => void,
@@ -73,12 +118,32 @@ export function dragHandlers(
   onTap?: (event: PointerEvent<HTMLElement>, on: EventTarget) => void,
 ) {
   const release = (event: PointerEvent<HTMLElement>) => {
-    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-    event.currentTarget.releasePointerCapture(event.pointerId);
-    const press = presses.get(event.currentTarget);
-    presses.delete(event.currentTarget);
+    const element = event.currentTarget;
+    if (!element.hasPointerCapture(event.pointerId)) return;
+    element.releasePointerCapture(event.pointerId);
+    const press = presses.get(element);
+    presses.delete(element);
+    endTouch(element, press);
     if (press?.moved === true) onEnd?.(event);
-    else if (press !== undefined && event.type === "pointerup") onTap?.(event, press.on);
+    else if (press?.touch?.held === true && event.type === "pointerup") {
+      element.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          button: 2,
+          clientX: event.clientX,
+          clientY: event.clientY,
+        }),
+      );
+    } else if (press !== undefined && event.type === "pointerup") onTap?.(event, press.on);
+  };
+  const hold = (element: HTMLElement, pointerId: number) => {
+    const press = presses.get(element);
+    const touch = press?.touch;
+    if (touch === null || touch === undefined || touch.done) return;
+    if (press?.moved !== false || !element.hasPointerCapture(pointerId)) return;
+    touch.held = true;
+    if (boardOf(element) !== element) element.setAttribute("data-board-lifted", "");
   };
   return {
     onPointerDown: (event: PointerEvent<HTMLElement>) => {
@@ -90,12 +155,28 @@ export function dragHandlers(
       // The board under a card must not start panning too.
       event.stopPropagation();
       holdPointer(event);
-      presses.set(event.currentTarget, {
+      const element = event.currentTarget;
+      const pointerId = event.pointerId;
+      const touch =
+        event.pointerType === "touch"
+          ? {
+              at: event.timeStamp,
+              held: false,
+              done: false,
+              timer: window.setTimeout(() => hold(element, pointerId), BOARD_TOUCH_HOLD_MS),
+            }
+          : null;
+      if (touch !== null) {
+        touchResting += 1;
+        boardOf(element)?.setAttribute("data-board-resting", "");
+      }
+      presses.set(element, {
         x: event.clientX,
         y: event.clientY,
         on: event.target,
         moved: false,
         last: { x: event.clientX, y: event.clientY },
+        touch,
       });
     },
     onPointerMove: (event: PointerEvent<HTMLElement>) => {
@@ -113,13 +194,31 @@ export function dragHandlers(
       }
       const dx = event.clientX - press.x;
       const dy = event.clientY - press.y;
-      if (Math.hypot(dx, dy) < CLICK_SLOP) return;
+      const distance = Math.hypot(dx, dy);
+      if (press.touch !== null && !press.touch.held && !press.touch.done) {
+        const decision = boardTouchPress(event.timeStamp - press.touch.at, distance);
+        if (decision === "wait") return;
+        if (decision === "hold") hold(event.currentTarget, event.pointerId);
+        else if (boardOf(event.currentTarget) !== event.currentTarget) {
+          return panInstead(event.currentTarget, event, press);
+        } else endTouch(event.currentTarget, press);
+      }
+      if (distance < pressSlop(event.pointerType)) return;
       press.moved = true;
       press.last = { x: event.clientX, y: event.clientY };
       onMove(dx, dy, event);
     },
     onPointerUp: release,
     onPointerCancel: release,
+    // A pinch's second finger, or a menu, can take the pointer away mid-press.
+    onLostPointerCapture: (event: PointerEvent<HTMLElement>) => {
+      // A card's lost capture bubbles to the board, which may just have taken the pointer.
+      if (event.target !== event.currentTarget) return;
+      const press = presses.get(event.currentTarget);
+      if (press === undefined) return;
+      presses.delete(event.currentTarget);
+      endTouch(event.currentTarget, press);
+    },
   };
 }
 

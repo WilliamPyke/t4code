@@ -22,8 +22,6 @@ import {
   type RoomArtifactContent,
   type RoomCodeChanges,
   type RoomBoard,
-  type RoomBoardAgentMark,
-  type RoomBoardChange,
   type RoomBoardNote,
   type RoomBoardReply,
   type GuestId,
@@ -52,6 +50,7 @@ import {
   roomArtifactAfterFill,
   roomBoardCardIdentity,
   roomBoardNoteOfRef,
+  roomBoardWithAgentChange,
   roomBoardWithCardsSent,
   roomBoardWithEdges,
   roomBoardWithoutCards,
@@ -401,22 +400,6 @@ function boardWithBoxChanges(
     notes: board.notes.map((note) =>
       windows.has(note) && !shows(note) ? { ...note, changes: { ...changes, boxId } } : note,
     ),
-  };
-}
-
-/** The board with the note a box's agent just added marked as that agent's; else as it was. */
-function boardWithAgentNote(
-  before: RoomBoard,
-  after: RoomBoard,
-  change: RoomBoardChange,
-  agent: RoomBoardAgentMark,
-): RoomBoard {
-  if (change.type !== "note.put" || before.notes.some((note) => note.id === change.noteId)) {
-    return after;
-  }
-  return {
-    ...after,
-    notes: after.notes.map((note) => (note.id === change.noteId ? { ...note, agent } : note)),
   };
 }
 
@@ -972,7 +955,13 @@ export function decideGuestShareCommand(input: {
           const board =
             command.agent === undefined || command.author !== null
               ? changed
-              : boardWithAgentNote(before, changed, command.change, command.agent);
+              : roomBoardWithAgentChange(
+                  before,
+                  changed,
+                  command.change,
+                  command.agent,
+                  DateTime.formatIso(now),
+                );
           return board === before
             ? thread
             : withBoard(board, liveBoardThreads(board, room.boardThreads));

@@ -1,4 +1,4 @@
-import { Trash2Icon, XIcon } from "lucide-react";
+import { EllipsisIcon, Trash2Icon, XIcon } from "lucide-react";
 import {
   createContext,
   type PointerEvent,
@@ -8,10 +8,12 @@ import {
   useRef,
 } from "react";
 
+import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { cn } from "~/lib/utils";
 
 import { useInlineActionConfirm } from "../pullRequest/useInlineActionConfirm";
 import { Button } from "../ui/button";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { selectionBarSpot } from "./roomBoard.logic";
 import { holdPointer } from "./roomBoardPointer";
 
@@ -104,9 +106,21 @@ export function useBoardMarquee(onSelect: (rect: ClientRect) => void) {
   };
 }
 
+/** Something a selection can do, which the bar shows as a labelled button or in its menu. */
+export interface SelectionAction {
+  readonly label: string;
+  readonly icon: ReactNode;
+  readonly run: () => void;
+}
+
+// A finger, or a screen too narrow for the labels, gets the bar docked above the toolbar.
+const DOCKED_QUERY = "(pointer: coarse), (max-width: 639px)";
+const DOCK_GAP = 8;
+
 /**
- * How many cards are selected, with Delete for the ones this viewer may remove (asked twice) and
- * Clear. It sits beside the selected cards, on the board, and steps out of the way while they move.
+ * How many cards are selected, what they can do, Delete for the ones this viewer may remove (asked
+ * twice) and Clear. It sits beside the selected cards and steps out of the way while they move;
+ * on a phone it docks above the toolbar, clear of the cards' own controls, with icons and a menu.
  */
 export function SelectionBar({
   refs,
@@ -115,6 +129,7 @@ export function SelectionBar({
   removable,
   onDelete,
   onClear,
+  actions,
   children,
 }: {
   /** The selected cards, by `data-board-item`, which it is placed against as they are drawn. */
@@ -123,7 +138,8 @@ export function SelectionBar({
   readonly hidden: boolean;
   readonly count: number;
   readonly removable: number;
-  /** What else the selection can do, before Delete. */
+  readonly actions: ReadonlyArray<SelectionAction>;
+  /** Controls shown first, such as the colour picker. */
   readonly children?: ReactNode;
   /** Its button, `data-selection-delete`, is what the Delete key presses. */
   readonly onDelete: () => void;
@@ -131,6 +147,7 @@ export function SelectionBar({
 }) {
   const confirm = useInlineActionConfirm("board-selection");
   const armed = confirm.isArmed("delete");
+  const docked = useMediaQuery(DOCKED_QUERY);
   const barRef = useRef<HTMLDivElement | null>(null);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- placed against the cards where the browser drew them, after every render that may have moved them or the view
   useLayoutEffect(() => {
@@ -138,6 +155,16 @@ export function SelectionBar({
     const board = bar?.offsetParent;
     if (hidden || bar === null || !(board instanceof HTMLElement)) return;
     const area = board.getBoundingClientRect();
+    if (docked) {
+      const chrome = board.parentElement?.querySelectorAll('[data-board-chrome="bottom"]') ?? [];
+      const cover = Math.max(
+        0,
+        ...[...chrome].map((element) => area.bottom - element.getBoundingClientRect().top),
+      );
+      bar.style.left = `${Math.max(DOCK_GAP, (board.clientWidth - bar.offsetWidth) / 2)}px`;
+      bar.style.top = `${Math.max(DOCK_GAP, board.clientHeight - cover - DOCK_GAP - bar.offsetHeight)}px`;
+      return;
+    }
     const rects = [...refs].flatMap((ref) => {
       const item = board.querySelector(`[data-board-item="${CSS.escape(ref)}"]`);
       return item === null ? [] : [item.getBoundingClientRect()];
@@ -158,6 +185,7 @@ export function SelectionBar({
     bar.style.left = `${spot.left}px`;
     bar.style.top = `${spot.top}px`;
   });
+  const deleteLabel = armed ? `Confirm delete ${removable}` : `Delete ${removable}`;
   return (
     <div
       ref={barRef}
@@ -168,26 +196,82 @@ export function SelectionBar({
       )}
       onPointerDown={(event) => event.stopPropagation()}
     >
-      <span role="status" className="tabular-nums">
+      <span role="status" className="whitespace-nowrap tabular-nums">
         {count} selected
       </span>
       {children}
-      {removable === 0 ? null : (
-        <Button
-          size="micro"
-          variant={armed ? "destructive-outline" : "ghost-muted"}
-          aria-label={armed ? `Confirm delete ${removable}` : `Delete ${removable}`}
-          data-selection-delete
-          {...confirm.props("delete", onDelete)}
-        >
-          <Trash2Icon />
-          {armed ? `Delete ${removable}?` : "Delete"}
-        </Button>
+      {docked ? (
+        <>
+          {actions.length === 0 ? null : (
+            <Menu>
+              <MenuTrigger
+                render={
+                  <Button
+                    size="icon-lg"
+                    variant="ghost-muted"
+                    aria-label="More for the selection"
+                  />
+                }
+              >
+                <EllipsisIcon />
+              </MenuTrigger>
+              <MenuPopup align="center" side="top">
+                {actions.map((action) => (
+                  <MenuItem key={action.label} onClick={action.run}>
+                    {action.icon}
+                    {action.label}
+                  </MenuItem>
+                ))}
+              </MenuPopup>
+            </Menu>
+          )}
+          {removable === 0 ? null : (
+            <Button
+              size={armed ? "lg" : "icon-lg"}
+              variant={armed ? "destructive-outline" : "ghost-muted"}
+              aria-label={deleteLabel}
+              data-selection-delete
+              {...confirm.props("delete", onDelete)}
+            >
+              <Trash2Icon />
+              {armed ? `Delete ${removable}?` : null}
+            </Button>
+          )}
+          <Button
+            size="icon-lg"
+            variant="ghost-muted"
+            aria-label="Clear selection"
+            onClick={onClear}
+          >
+            <XIcon />
+          </Button>
+        </>
+      ) : (
+        <>
+          {actions.map((action) => (
+            <Button key={action.label} size="micro" variant="ghost-muted" onClick={action.run}>
+              {action.icon}
+              {action.label}
+            </Button>
+          ))}
+          {removable === 0 ? null : (
+            <Button
+              size="micro"
+              variant={armed ? "destructive-outline" : "ghost-muted"}
+              aria-label={deleteLabel}
+              data-selection-delete
+              {...confirm.props("delete", onDelete)}
+            >
+              <Trash2Icon />
+              {armed ? `Delete ${removable}?` : "Delete"}
+            </Button>
+          )}
+          <Button size="micro" variant="ghost-muted" onClick={onClear}>
+            <XIcon />
+            Clear
+          </Button>
+        </>
       )}
-      <Button size="micro" variant="ghost-muted" onClick={onClear}>
-        <XIcon />
-        Clear
-      </Button>
     </div>
   );
 }

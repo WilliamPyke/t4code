@@ -532,6 +532,10 @@ export type RoomBoardReply = typeof RoomBoardReply.Type;
 export const RoomBoardAgentMark = Schema.Struct({
   boxId: RoomBoardNoteId,
   model: Schema.optional(RoomBoxModelName),
+  /** The run that made the change. Absent on cards from before it was kept. */
+  turnId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
+  /** The guest whose request the owner's agent ran. Absent: the owner's own. */
+  askedBy: Schema.optional(GuestId),
 });
 export type RoomBoardAgentMark = typeof RoomBoardAgentMark.Type;
 
@@ -671,6 +675,52 @@ export const RoomBoardPastPerson = Schema.Struct({
 });
 export type RoomBoardPastPerson = typeof RoomBoardPastPerson.Type;
 
+/** A card as an agent's turn found it or left it. `kind` and `section` never change. */
+export const RoomBoardAgentCardState = Schema.Struct({
+  text: RoomBoardNote.fields.text,
+  ...RoomBoardPoint.fields,
+  done: RoomBoardNote.fields.done,
+  size: RoomBoardNote.fields.size,
+  kind: RoomBoardNote.fields.kind,
+  section: RoomBoardNote.fields.section,
+});
+export type RoomBoardAgentCardState = typeof RoomBoardAgentCardState.Type;
+
+/** The agent turns a board remembers, newest last, so each can be shown and taken back. */
+export const ROOM_BOARD_AGENT_TURNS_MAX = 8;
+
+/** What one turn of a thread box's agent did to the board. Only the owner's server writes it. */
+export const RoomBoardAgentTurn = Schema.Struct({
+  /** The run, as `RoomBoardAgentMark.turnId`. */
+  id: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  boxId: RoomBoardNoteId,
+  model: Schema.optional(RoomBoxModelName),
+  askedBy: Schema.optional(GuestId),
+  /** When it last changed the board. */
+  at: IsoDateTime,
+  /** Each card it added (no `before`) or changed, as it found it and as it left it. */
+  cards: Schema.Array(
+    Schema.Struct({
+      id: RoomBoardNoteId,
+      before: Schema.optional(RoomBoardAgentCardState),
+      after: RoomBoardAgentCardState,
+    }),
+  ).check(Schema.isMaxLength(ROOM_BOARD_MAX_NOTES * 2)),
+  /** The lines it drew. */
+  edges: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        id: RoomBoardEdge.fields.id,
+        from: RoomBoardEdge.fields.from,
+        to: RoomBoardEdge.fields.to,
+      }),
+    ).check(Schema.isMaxLength(ROOM_BOARD_MAX_EDGES)),
+  ),
+  /** Taken back with `agent-turn.undo`; a redo clears it. */
+  undone: Schema.optional(Schema.Literal(true)),
+});
+export type RoomBoardAgentTurn = typeof RoomBoardAgentTurn.Type;
+
 export const RoomBoard = Schema.Struct({
   positions: Schema.Record(Schema.String, RoomBoardPoint),
   notes: Schema.Array(RoomBoardNote),
@@ -683,6 +733,10 @@ export const RoomBoard = Schema.Struct({
    * room, so what they added is nobody's: only the owner can remove it. No board change sets it.
    */
   people: Schema.optional(Schema.Array(RoomBoardPastPerson)),
+  /** The last few agent turns that changed it, newest last. Absent until an agent changes it. */
+  agentTurns: Schema.optional(
+    Schema.Array(RoomBoardAgentTurn).check(Schema.isMaxLength(ROOM_BOARD_AGENT_TURNS_MAX)),
+  ),
 });
 export type RoomBoard = typeof RoomBoard.Type;
 
@@ -770,6 +824,15 @@ export const RoomBoardChange = Schema.Union([
     type: Schema.Literal("note.react"),
     noteId: RoomBoardNote.fields.id,
     emoji: RoomBoardReactionEmoji,
+  }),
+  /**
+   * Takes back everything one agent turn did to the board (`undone: true`), or does it again,
+   * leaving each card someone changed since. For the owner and whoever asked for the turn.
+   */
+  Schema.Struct({
+    type: Schema.Literal("agent-turn.undo"),
+    turnId: RoomBoardAgentTurn.fields.id,
+    undone: Schema.Boolean,
   }),
 ]);
 export type RoomBoardChange = typeof RoomBoardChange.Type;

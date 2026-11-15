@@ -1,4 +1,11 @@
-import type { RoomBoardSummaryShape } from "@t3tools/contracts";
+import {
+  ROOM_BOARD_SUMMARY_MAX_SHAPES,
+  type RoomBoard,
+  type RoomBoardSize,
+  type RoomBoardSummaryShape,
+} from "@t3tools/contracts";
+
+import { boardNewNoteSize, boardNoteSize } from "../room/roomBoard.logic";
 
 /** A board this client owns: a thread with a board, on one of its environments. */
 export interface OwnBoardSource {
@@ -124,6 +131,45 @@ export function listHomeBoards(input: {
       board.kind === "joined" ? board.owner : undefined,
     ].some((text) => typeof text === "string" && text.toLowerCase().includes(query)),
   );
+}
+
+// A team board's thread and member cards, at about the size the board draws them.
+const TEAM_CARD: RoomBoardSize = { w: 320, h: 200 };
+const SECTION: RoomBoardSize = { w: 640, h: 420 };
+
+/**
+ * A team board's cards as a thumbnail draws them, as a machine's summary gives its own boards:
+ * sections first so they sit behind, then the thread and member cards, then the notes. Comments
+ * pinned to a reply are not on the canvas.
+ */
+export function teamBoardShapes(board: RoomBoard): ReadonlyArray<RoomBoardSummaryShape> {
+  const notes = board.notes
+    .filter((note) => note.pinnedTo === undefined)
+    .map((note): RoomBoardSummaryShape => {
+      const size =
+        note.section === true
+          ? (note.size ?? SECTION)
+          : (boardNoteSize(note) ?? boardNewNoteSize(note.kind));
+      return {
+        x: note.x,
+        y: note.y,
+        w: size.w,
+        h: size.h,
+        kind: note.section === true ? "section" : (note.kind ?? "note"),
+        ...(note.color === undefined ? {} : { color: note.color }),
+      };
+    });
+  const cards = Object.entries(board.positions).map(([id, at]): RoomBoardSummaryShape => ({
+    x: at.x,
+    y: at.y,
+    ...(board.sizes?.[id] ?? TEAM_CARD),
+    kind: "card",
+  }));
+  return [
+    ...notes.filter((shape) => shape.kind === "section"),
+    ...cards,
+    ...notes.filter((shape) => shape.kind !== "section"),
+  ].slice(0, ROOM_BOARD_SUMMARY_MAX_SHAPES);
 }
 
 export interface ThumbnailRect {

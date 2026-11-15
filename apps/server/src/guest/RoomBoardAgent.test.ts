@@ -33,7 +33,8 @@ const roomThreadId = ThreadId.make("thread:room");
 const boxThreadId = ThreadId.make("thread:box");
 const loneThreadId = ThreadId.make("thread:lone");
 const sam = GuestId.make("guest:sam");
-const agentMark = { boxId: "box:b", model: "GPT-5.1 Codex" };
+// Sam asked for the run the box's agent is in, which the owner sent as `message:run`.
+const agentMark = { boxId: "box:b", model: "GPT-5.1 Codex", turnId: "run:1", askedBy: sam };
 
 const thread = (id: ThreadId, fields: object = {}) =>
   ({
@@ -69,7 +70,7 @@ const makeThreads = (notes: ReadonlyArray<RoomBoardNote> = []) => ({
         ],
       },
       guests: [{ id: sam, name: "Sam" }],
-      messages: [],
+      messages: [{ id: "guest-message:1", guestId: sam, sentAs: "message:run" }],
       boardThreads: { "box:b": boxThreadId },
     },
   }),
@@ -81,11 +82,15 @@ const layerWith = (threads: Record<string, OrchestrationV2AppThread>) =>
   RoomBoardAgent.layer.pipe(
     Layer.provide(
       Layer.mock(Orchestrator.OrchestratorV2)({
-        getThreadShell: () => Effect.succeed(null),
+        getThreadShell: () => Effect.succeed({ latestRunId: "run:1" } as never),
         getThreadRecords: (threadId) =>
           threads[threadId] === undefined
             ? Effect.fail({ _tag: "OrchestratorProjectionError" } as never)
-            : Effect.succeed({ thread: threads[threadId], turnItems: [] } as never),
+            : Effect.succeed({
+                thread: threads[threadId],
+                turnItems: [],
+                runs: [{ id: "run:1", userMessageId: "message:run" }],
+              } as never),
         // The decider's own rules, so what the board takes here is what it takes for real.
         dispatch: (dispatched: OrchestrationV2ServerCommand) =>
           Effect.gen(function* () {
@@ -216,6 +221,21 @@ it.effect("groups cards into a section it makes, ticks tasks and draws lines", (
     assert.strictEqual(
       (yield* agent.read(boxThreadId)).cards.find((card) => card.id === more.done[0])?.section,
       section?.id,
+    );
+    // Both calls are one turn of its run, for Sam or the owner to take back in one go.
+    const turns = threads[roomThreadId]?.guestShare?.board?.agentTurns ?? [];
+    assert.deepEqual(
+      turns.map((turn) => [turn.id, turn.boxId, turn.askedBy, turn.edges?.length]),
+      [["run:1", "box:b", sam, 1]],
+    );
+    assert.deepEqual(
+      turns[0]?.cards.map((card) => [card.id, card.before?.x]),
+      [
+        [section?.id, undefined],
+        ["note:sam", 900],
+        ["task:1", 900],
+        [more.done[0], undefined],
+      ],
     );
   }).pipe(Effect.provide(layerWith(threads)));
 });

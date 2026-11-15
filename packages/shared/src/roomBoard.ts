@@ -1,5 +1,6 @@
 import {
   ROOM_ARTIFACT_MAX_LENGTH,
+  ROOM_BOARD_AGENT_TURNS_MAX,
   ROOM_BOARD_MAX_ARTIFACTS,
   ROOM_BOARD_MAX_CODE_WINDOWS,
   ROOM_BOARD_MAX_EDGES,
@@ -28,6 +29,9 @@ import {
   type OrchestrationV2TurnItem,
   type RoomArtifactContent,
   type RoomBoard,
+  type RoomBoardAgentCardState,
+  type RoomBoardAgentMark,
+  type RoomBoardAgentTurn,
   type RoomBoardChange,
   type RoomBoardContextCard,
   type RoomBoardEdge,
@@ -237,6 +241,213 @@ const withNote = (board: RoomBoard, note: RoomBoardNote, next: RoomBoardNote): R
   ...board,
   notes: board.notes.map((other) => (other === note ? next : other)),
 });
+
+const agentCardState = (note: RoomBoardNote): RoomBoardAgentCardState => ({
+  text: note.text,
+  x: note.x,
+  y: note.y,
+  ...(note.done === true ? { done: true } : {}),
+  ...(note.size === undefined ? {} : { size: note.size }),
+  ...(note.kind === undefined ? {} : { kind: note.kind }),
+  ...(note.section === true ? { section: true as const } : {}),
+});
+
+const isInState = (note: RoomBoardNote, state: RoomBoardAgentCardState) =>
+  note.text === state.text &&
+  note.x === state.x &&
+  note.y === state.y &&
+  (note.done === true) === (state.done === true) &&
+  sameSize(note.size, state.size);
+
+/**
+ * The board after a change a thread box's agent made as the owner: a note it added marked as its
+ * own, and its turn's record of what it found and left, which undoing the turn goes by.
+ */
+export function roomBoardWithAgentChange(
+  before: RoomBoard,
+  after: RoomBoard,
+  change: RoomBoardChange,
+  agent: RoomBoardAgentMark,
+  at: string,
+): RoomBoard {
+  if (after === before) return after;
+  const previous =
+    change.type === "note.put" ? before.notes.find((note) => note.id === change.noteId) : undefined;
+  const board =
+    change.type === "note.put" && previous === undefined
+      ? {
+          ...after,
+          notes: after.notes.map((note) => (note.id === change.noteId ? { ...note, agent } : note)),
+        }
+      : after;
+  if (agent.turnId === undefined) return board;
+  const turns = board.agentTurns ?? [];
+  const known = turns.find((turn) => turn.id === agent.turnId);
+  let cards = known?.cards ?? [];
+  let edges = known?.edges ?? [];
+  if (change.type === "note.put") {
+    const note = board.notes.find((candidate) => candidate.id === change.noteId);
+    if (note === undefined) return board;
+    const step = cards.find((card) => card.id === note.id);
+    if (step !== undefined) {
+      cards = cards.map((card) =>
+        card === step ? { ...card, after: agentCardState(note) } : card,
+      );
+    } else if (cards.length < ROOM_BOARD_MAX_NOTES * 2) {
+      cards = [
+        ...cards,
+        {
+          id: note.id,
+          ...(previous === undefined ? {} : { before: agentCardState(previous) }),
+          after: agentCardState(note),
+        },
+      ];
+    }
+  } else if (change.type === "edge.put") {
+    const drawn = board.edges?.find((edge) => edge.id === change.edgeId);
+    if (drawn === undefined || before.edges?.some((edge) => edge.id === drawn.id) === true) {
+      return board;
+    }
+    if (edges.length < ROOM_BOARD_MAX_EDGES) {
+      edges = [...edges, { id: drawn.id, from: drawn.from, to: drawn.to }];
+    }
+  } else {
+    return board;
+  }
+  // More work after an undo makes the turn one to undo again.
+  const turn: RoomBoardAgentTurn = {
+    id: agent.turnId,
+    boxId: agent.boxId,
+    ...(agent.model === undefined ? {} : { model: agent.model }),
+    ...(agent.askedBy === undefined ? {} : { askedBy: agent.askedBy }),
+    at,
+    cards,
+    ...(edges.length === 0 ? {} : { edges }),
+  };
+  return {
+    ...board,
+    agentTurns: [...turns.filter((other) => other !== known), turn].slice(
+      -ROOM_BOARD_AGENT_TURNS_MAX,
+    ),
+  };
+}
+
+/** Whether `person` (null for the room's owner) may undo or redo an agent's turn. */
+export const canUndoRoomAgentTurn = (
+  turn: Pick<RoomBoardAgentTurn, "askedBy">,
+  person: GuestId | null,
+) => person === null || turn.askedBy === person;
+
+/** A card put back to how an agent's turn found or left it, signed as `author`'s change. */
+function noteInState(
+  note: RoomBoardNote,
+  state: RoomBoardAgentCardState,
+  author: GuestId | null,
+  at: string,
+): RoomBoardNote {
+  const { done: _done, size: _size, ...rest } = note;
+  const edited = note.text !== state.text || (note.done === true) !== (state.done === true);
+  return {
+    ...rest,
+    text: state.text,
+    x: state.x,
+    y: state.y,
+    ...(state.done === true ? { done: true } : {}),
+    ...(state.size === undefined ? {} : { size: state.size }),
+    ...(edited
+      ? { editedAt: at, changed: { at, ...(author === null ? {} : { guestId: author }) } }
+      : {}),
+  };
+}
+
+/**
+ * The board with an agent's turn taken back (`undone`) or done again, and the cards that stay as
+ * they are because someone changed them since: moved, edited, or, for a card it added, reacted
+ * to, assigned, coloured or joined by a line of someone else's. Its own lines go unless pinned.
+ */
+export function roomBoardAfterAgentTurn(
+  board: RoomBoard,
+  scope: RoomBoardScope,
+  turn: RoomBoardAgentTurn,
+  undone: boolean,
+  author: GuestId | null,
+  at: string,
+): { readonly board: RoomBoard; readonly left: ReadonlyArray<string> } {
+  const left: Array<string> = [];
+  let next = board;
+  if (undone) {
+    // Its lines first, so a line still on a card it added is someone else's.
+    for (const drawn of turn.edges ?? []) {
+      const edge = next.edges?.find((candidate) => candidate.id === drawn.id);
+      if (edge !== undefined && edge.pinned !== true) {
+        next = roomBoardWithEdges(next, (other) => other !== edge);
+      }
+    }
+    for (const step of [...turn.cards].reverse()) {
+      const note = next.notes.find((candidate) => candidate.id === step.id);
+      if (note === undefined) continue;
+      const ref = roomBoardNoteRef(note.id);
+      const kept =
+        !isInState(note, step.after) ||
+        (step.before === undefined &&
+          (note.reactions !== undefined ||
+            note.assignee !== undefined ||
+            note.color !== undefined ||
+            next.edges?.some((edge) => edge.from === ref || edge.to === ref) === true));
+      if (kept) left.push(note.id);
+      else if (step.before !== undefined) {
+        next = withNote(next, note, noteInState(note, step.before, author, at));
+      } else next = { ...next, notes: next.notes.filter((other) => other !== note) };
+    }
+    return { board: next, left };
+  }
+  for (const step of turn.cards) {
+    const note = next.notes.find((candidate) => candidate.id === step.id);
+    if (step.before !== undefined) {
+      if (note === undefined) continue;
+      if (isInState(note, step.before)) {
+        next = withNote(next, note, noteInState(note, step.after, author, at));
+      } else left.push(note.id);
+      continue;
+    }
+    if (note !== undefined) continue;
+    if (next.notes.length >= ROOM_BOARD_MAX_NOTES) {
+      left.push(step.id);
+      continue;
+    }
+    const { kind, section, ...state } = step.after;
+    const agent: RoomBoardAgentMark = {
+      boxId: turn.boxId,
+      ...(turn.model === undefined ? {} : { model: turn.model }),
+      turnId: turn.id,
+      ...(turn.askedBy === undefined ? {} : { askedBy: turn.askedBy }),
+    };
+    const added: RoomBoardNote = {
+      id: step.id,
+      ...state,
+      ...(kind === undefined ? {} : { kind }),
+      ...(section === true ? { section } : {}),
+      agent,
+      changed: { at },
+    };
+    next = { ...next, notes: [...next.notes, added] };
+  }
+  for (const drawn of turn.edges ?? []) {
+    const edges = next.edges ?? [];
+    if (
+      edges.length >= ROOM_BOARD_MAX_EDGES ||
+      edges.some(
+        (edge) => edge.id === drawn.id || (edge.from === drawn.from && edge.to === drawn.to),
+      ) ||
+      !isOnBoard(scope, next, drawn.from) ||
+      !isOnBoard(scope, next, drawn.to)
+    ) {
+      continue;
+    }
+    next = { ...next, edges: [...edges, drawn] };
+  }
+  return { board: next, left };
+}
 
 /**
  * The board after one change by `author` (null for the room's owner) at `at` (the ISO time the
@@ -474,6 +685,23 @@ export function applyRoomBoardChange(
       return Result.succeed(
         withNote(board, note, { ...rest, reactions: [...reactions, reaction] }),
       );
+    }
+    case "agent-turn.undo": {
+      const turn = board.agentTurns?.find((candidate) => candidate.id === change.turnId);
+      if (turn === undefined) {
+        return Result.fail("The board no longer keeps this agent's work to undo.");
+      }
+      if (!canUndoRoomAgentTurn(turn, author)) {
+        return Result.fail("Only the owner and whoever asked for it can undo an agent's work.");
+      }
+      if ((turn.undone === true) === change.undone) return Result.succeed(board);
+      const { undone: _undone, ...rest } = turn;
+      const marked = change.undone ? { ...rest, undone: true as const } : rest;
+      const next = roomBoardAfterAgentTurn(board, scope, turn, change.undone, author, at).board;
+      return Result.succeed({
+        ...next,
+        agentTurns: next.agentTurns?.map((candidate) => (candidate === turn ? marked : candidate)),
+      });
     }
   }
 }

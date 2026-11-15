@@ -1,7 +1,12 @@
 import { GuestId, type RoomBoardNote } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { boardCatchUp, boardNewestChange, boardVisitsWith } from "./boardCatchUp.logic";
+import {
+  boardCatchUp,
+  boardNewestChange,
+  boardVisitKey,
+  boardVisitsWith,
+} from "./boardCatchUp.logic";
 
 const sam = GuestId.make("sam");
 const card = (id: string, at: string | null, by?: GuestId, extra = {}): RoomBoardNote => ({
@@ -29,6 +34,7 @@ describe("boardCatchUp", () => {
   it("shows what others changed since the last visit, oldest first", () => {
     // The owner looks: Sam's changes after 10:10 count, their own does not.
     expect(boardCatchUp(notes, t(10), null).map(({ id }) => id)).toEqual([
+      "comment",
       "edited",
       "late",
       "newest",
@@ -40,7 +46,52 @@ describe("boardCatchUp", () => {
     // A first visit shows nothing.
     expect(boardCatchUp(notes, undefined, null)).toEqual([]);
     // What changes after this visit began happens in front of the viewer.
-    expect(boardCatchUp(notes, t(10), null, t(40)).map(({ id }) => id)).toEqual(["edited", "late"]);
+    expect(boardCatchUp(notes, t(10), null, t(40)).map(({ id }) => id)).toEqual([
+      "comment",
+      "edited",
+      "late",
+    ]);
+  });
+
+  it("counts new replies in an older comment thread as one step, at the newest", () => {
+    const reply = (id: string, at: string, by?: GuestId) => ({
+      id,
+      text: id,
+      at,
+      ...(by === undefined ? {} : { guestId: by }),
+    });
+    const thread = card("thread", t(1), sam, {
+      kind: "comment",
+      replies: [
+        reply("r1", t(2), sam),
+        reply("r2", t(35), sam),
+        reply("r3", t(36)),
+        reply("r4", t(45), sam),
+      ],
+    });
+    const board = [thread, card("late", t(30), sam)];
+    // The owner: Sam's replies at 10:35 and 10:45 make one step, after the 10:30 card.
+    expect(boardCatchUp(board, t(10), null).map(({ id }) => id)).toEqual(["late", "thread"]);
+    // Before this visit began only the 10:35 reply counts, still after the card.
+    expect(boardCatchUp(board, t(10), null, t(40)).map(({ id }) => id)).toEqual(["late", "thread"]);
+    // Only one's own replies since: nothing to show there.
+    expect(boardCatchUp([thread], t(40), sam)).toEqual([]);
+    // Sam sees the owner's reply.
+    expect(boardCatchUp([thread], t(10), sam).map(({ id }) => id)).toEqual(["thread"]);
+    // Dismissing keeps the newest reply as the visit, so none of them comes back.
+    expect(boardNewestChange(board)).toBe(t(45));
+    expect(boardCatchUp(board, boardNewestChange(board), null)).toEqual([]);
+  });
+
+  it("keeps each person's visit to each board apart", () => {
+    const keys = [
+      boardVisitKey("guest:a", sam),
+      boardVisitKey("guest:a", GuestId.make("kim")),
+      boardVisitKey("guest:b", sam),
+      boardVisitKey("guest:a", null),
+    ];
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(boardVisitKey("guest:a", sam)).toBe(boardVisitKey("guest:a", sam));
   });
 
   it("remembers the newest stamp a board showed, and a bounded number of boards", () => {
