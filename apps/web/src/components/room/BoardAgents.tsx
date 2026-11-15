@@ -6,6 +6,7 @@ import {
 } from "@t3tools/contracts";
 import { BotIcon } from "lucide-react";
 import {
+  type ComponentProps,
   type ReactNode,
   memo,
   use,
@@ -25,6 +26,8 @@ import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { BoardChip, type BoardChipTone, BoardFloat, PersonDot } from "./BoardChrome";
 import {
+  type BoardAgentEnd,
+  type BoardAgentOutcome,
   type BoardAgentRun,
   type BoardAgentStatus,
   type BoardAgentWatched,
@@ -37,8 +40,9 @@ import {
 import type { MinimapItem } from "./boardMinimap.logic";
 import { RoomLiveContext, type RoomLiveStore, useBoardNow } from "./roomBoardLive";
 
-/** How long a run that ended may wait for its reply to reach the board before it reads as failed. */
-const REPLY_GRACE_MS = 5_000;
+/** How long a run that ended may wait for word of how it ended, checked this often. */
+const END_GRACE_MS = 5_000;
+const END_CHECK_MS = 1_000;
 
 /** How the Agents shortcut reads on this device. */
 const boardAgentsShortcut = () =>
@@ -51,8 +55,13 @@ export interface BoardAgentEntry {
   /** Whose box it is, as the board names them: "You", "Sam", the owner. */
   readonly whose: string;
   readonly color: string;
-  /** The model its last reply ran on. */
+  /** The model it last ran on or was last set to. */
   readonly model: string | undefined;
+  /**
+   * How its last run ended, from the record of the machine that ran it: null when this client
+   * reads that machine and no run of it ended yet, absent when this client cannot read it.
+   */
+  readonly end?: BoardAgentEnd | null | undefined;
   /** What its agent last did to the board, when that still stands. */
   readonly work: string | undefined;
   readonly requests: ReadonlyArray<ThreadGuestMessage>;
@@ -88,24 +97,92 @@ function useAgentRuns(entries: ReadonlyArray<BoardAgentEntry>) {
   return (entry: BoardAgentEntry) => entryRun(store, entry);
 }
 
-/** Boxes whose last run ended without a reply while this board was open. */
-interface FailedRuns {
-  readonly has: (boxId: string) => boolean;
-  readonly set: (boxId: string, failed: boolean) => void;
+/** How many of these boxes need this person now: their approval, or a request to send. */
+function useAgentsNeedingViewer(entries: ReadonlyArray<BoardAgentEntry>, viewer: string | null) {
+  const runOf = useAgentRuns(entries);
+  return entries.filter(
+    (entry) =>
+      boardAgentStatus({
+        run: runOf(entry),
+        requests: entry.requests.length,
+        canResolve: entry.canResolve,
+        ended: undefined,
+        answered: false,
+        viewer,
+      }).kind === "needs-you",
+  ).length;
+}
+
+/**
+ * The More button of a narrow board, where the header's Agents button is hidden: it carries how
+ * many agents need this person. Reads the live store itself, so a run's tick renders only this.
+ */
+export function BoardAgentsMoreButton({
+  entries,
+  viewer,
+  children,
+  ...props
+}: Omit<ComponentProps<typeof Button>, "size" | "variant"> & {
+  readonly entries: ReadonlyArray<BoardAgentEntry>;
+  readonly viewer: string | null;
+}) {
+  const needs = useAgentsNeedingViewer(entries, viewer);
+  return (
+    <Button
+      {...props}
+      size={needs === 0 ? "icon" : "sm"}
+      variant="ghost"
+      aria-label={
+        needs === 0 ? "More tools" : `More tools, ${needs} agent${needs === 1 ? "" : "s"} need you`
+      }
+    >
+      {children}
+      {needs === 0 ? null : (
+        <Badge size="sm" variant="warning">
+          {needs}
+        </Badge>
+      )}
+    </Button>
+  );
+}
+
+/** The More menu's count beside Agents. */
+export function BoardAgentsNeedsBadge({
+  entries,
+  viewer,
+}: {
+  readonly entries: ReadonlyArray<BoardAgentEntry>;
+  readonly viewer: string | null;
+}) {
+  const needs = useAgentsNeedingViewer(entries, viewer);
+  return needs === 0 ? null : (
+    <Badge size="sm" variant="warning" aria-label={`${needs} need you`}>
+      {needs}
+    </Badge>
+  );
+}
+
+/**
+ * How the runs of boxes whose machine this client cannot read ended while this board was open,
+ * from what reached the board. The rest go by their machine's record.
+ */
+interface EndedRuns {
+  readonly get: (boxId: string) => BoardAgentOutcome | undefined;
+  readonly set: (boxId: string, outcome: BoardAgentOutcome | undefined) => void;
   readonly subscribe: (listener: () => void) => () => void;
   readonly version: () => number;
 }
 
-function createFailedRuns(): FailedRuns {
-  const failed = new Set<string>();
+function createEndedRuns(): EndedRuns {
+  const ended = new Map<string, BoardAgentOutcome>();
   const listeners = new Set<() => void>();
   let version = 0;
   return {
-    has: (boxId) => failed.has(boxId),
-    set: (boxId, value) => {
-      if (failed.has(boxId) === value) return;
-      if (value) failed.add(boxId);
-      else failed.delete(boxId);
+    get: (boxId) => ended.get(boxId),
+    set: (boxId, outcome) => {
+      if (ended.get(boxId) === outcome) return;
+      if (outcome === undefined) ended.delete(boxId);
+      else ended.set(boxId, outcome);
       version += 1;
       for (const listener of listeners) listener();
     },
@@ -123,6 +200,8 @@ const STATUS_TONES: Readonly<Record<BoardAgentStatus["kind"], BoardChipTone>> = 
   queued: "neutral",
   waiting: "neutral",
   failed: "error",
+  stopped: "neutral",
+  ended: "neutral",
   done: "neutral",
   idle: "neutral",
 };
@@ -134,7 +213,7 @@ function StatusChip({
   readonly status: BoardAgentStatus;
   readonly run: BoardAgentRun | undefined;
 }) {
-  return (
+  const chip = (
     <BoardChip tone={STATUS_TONES[status.kind]} dashed={status.kind === "idle"}>
       {status.kind === "working" && run !== undefined && run.startedAt !== "" ? (
         <WorkingFor run={run} />
@@ -143,7 +222,42 @@ function StatusChip({
       )}
     </BoardChip>
   );
+  if (status.kind !== "ended") return chip;
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span />}>{chip}</TooltipTrigger>
+      <TooltipPopup side="top">
+        It ran on another machine and no reply came back, so this board cannot tell how it ended.
+      </TooltipPopup>
+    </Tooltip>
+  );
 }
+
+/** What this person hears, once a turn, about a box they asked while it is out of view. */
+const AGENT_NOTICES: Readonly<
+  Record<
+    "needs-you" | BoardAgentOutcome,
+    {
+      readonly type: "info" | "warning" | "error";
+      readonly title: string;
+      readonly description?: string;
+    }
+  >
+> = {
+  "needs-you": {
+    type: "warning",
+    title: "needs you",
+    description: "Its agent asks you to approve something.",
+  },
+  done: { type: "info", title: "finished" },
+  stopped: {
+    type: "info",
+    title: "stopped",
+    description: "Its run was stopped before it finished.",
+  },
+  failed: { type: "error", title: "failed", description: "Its run ended with an error." },
+  ended: { type: "info", title: "ended", description: "No reply came back to the board." },
+};
 
 /** "Working · 1m 12s": only this ticks with the board's clock. */
 function WorkingFor({ run }: { readonly run: BoardAgentRun }) {
@@ -180,8 +294,8 @@ export function BoardAgents({
 }) {
   const store = use(RoomLiveContext);
   const runOf = useAgentRuns(entries);
-  const [failed] = useState(createFailedRuns);
-  useSyncExternalStore(failed.subscribe, failed.version);
+  const [ended] = useState(createEndedRuns);
+  useSyncExternalStore(ended.subscribe, ended.version);
   const rows = sortBoardAgents(
     entries.map((entry) => {
       const run = runOf(entry);
@@ -193,7 +307,7 @@ export function BoardAgents({
           run,
           requests: entry.requests.length,
           canResolve: entry.canResolve,
-          failed: failed.has(entry.id),
+          ended: ended.get(entry.id) ?? entry.end?.outcome,
           answered: entry.answered,
           viewer,
         }),
@@ -204,25 +318,16 @@ export function BoardAgents({
   const working = rows.some((row) => row.status.kind === "working");
 
   const entriesNow = useStableCallback(() => entries);
-  const notify = useStableCallback((boxId: string, kind: "needs-you" | "finished" | "failed") => {
+  const notify = useStableCallback((boxId: string, kind: "needs-you" | BoardAgentOutcome) => {
     const entry = entries.find((candidate) => candidate.id === boxId);
     if (entry === undefined || (document.visibilityState === "visible" && isOnScreen(boxId))) {
       return;
     }
+    const notice = AGENT_NOTICES[kind];
     toastManager.add({
-      type: kind === "failed" ? "error" : kind === "needs-you" ? "warning" : "info",
-      title:
-        kind === "needs-you"
-          ? `${entry.name} needs you`
-          : kind === "failed"
-            ? `${entry.name} failed`
-            : `${entry.name} finished`,
-      description:
-        kind === "needs-you"
-          ? "Its agent asks you to approve something."
-          : kind === "failed"
-            ? "It stopped without a reply."
-            : entry.work,
+      type: notice.type,
+      title: `${entry.name} ${notice.title}`,
+      description: kind === "done" ? entry.work : notice.description,
       actionProps: { children: "Show", onClick: () => onShow(boxId) },
     });
   });
@@ -230,22 +335,29 @@ export function BoardAgents({
   useEffect(() => {
     const watched = new Map<string, BoardAgentWatched>();
     const timers = new Set<ReturnType<typeof setTimeout>>();
-    const turnKeyOf = (boxId: string) =>
-      entriesNow().find((entry) => entry.id === boxId)?.turnKey ?? "";
-    const ended = (boxId: string, run: BoardAgentWatched, tell: boolean) => {
-      const settle = (last: boolean) => {
-        const outcome = boardAgentRunOutcome(run, turnKeyOf(boxId));
-        if (outcome === "failed" && !last) return false;
-        failed.set(boxId, outcome === "failed");
+    const settled = (boxId: string, run: BoardAgentWatched, tell: boolean) => {
+      const settle = (waited: number) => {
+        const entry = entriesNow().find((candidate) => candidate.id === boxId);
+        const end = entry?.end;
+        const outcome = boardAgentRunOutcome(
+          run,
+          end,
+          entry?.turnKey ?? "",
+          waited >= END_GRACE_MS,
+        );
+        if (outcome === null) {
+          const timer = setTimeout(() => {
+            timers.delete(timer);
+            settle(waited + END_CHECK_MS);
+          }, END_CHECK_MS);
+          timers.add(timer);
+          return;
+        }
+        // A box whose machine this client reads shows that machine's record instead.
+        ended.set(boxId, end === undefined ? outcome : undefined);
         if (tell) notify(boxId, outcome);
-        return true;
       };
-      if (settle(false)) return;
-      const timer = setTimeout(() => {
-        timers.delete(timer);
-        settle(true);
-      }, REPLY_GRACE_MS);
-      timers.add(timer);
+      settle(0);
     };
     const step = () => {
       for (const entry of entriesNow()) {
@@ -255,9 +367,11 @@ export function BoardAgents({
         if (next === undefined) watched.delete(entry.id);
         else watched.set(entry.id, next);
         if (progress !== undefined && before?.startedAt !== progress.startedAt) {
-          failed.set(entry.id, false);
+          ended.set(entry.id, undefined);
         }
-        if (before !== undefined && next === undefined) ended(entry.id, before, notice === "ended");
+        if (before !== undefined && next === undefined) {
+          settled(entry.id, before, notice === "ended");
+        }
         if (notice === "needs-you") notify(entry.id, "needs-you");
       }
     };
@@ -267,7 +381,7 @@ export function BoardAgents({
       unsubscribe();
       for (const timer of timers) clearTimeout(timer);
     };
-  }, [store, viewer, failed, entriesNow, notify]);
+  }, [store, viewer, ended, entriesNow, notify]);
 
   const trigger = useRef<HTMLButtonElement | null>(null);
   // From the More menu on a phone the header button is hidden: the panel opens above the toolbar.

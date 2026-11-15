@@ -51,8 +51,10 @@ each guest has waiting for you, and you can add notes.
 
 To start a new board from a layout, open the arrow beside **New board** on Boards, or **New board
 from template…** in the command palette: **Plan a feature**, **Bug bash**, **Design review** and
-**Retro** come with sections, placeholder notes to fill in and lines into the thread box. **Blank**
-is the default, and **New board** itself still makes a blank board in one click.
+**Retro** come with sections, placeholder notes to fill in and lines into the thread box. **Research
+with agents** and **Build with agents** also add named thread boxes and an artifact; their boxes
+start empty and use your default model unless you pick another. **Blank** is the default,
+and **New board** itself still makes a blank board in one click.
 
 You can plan on a board before inviting anyone. A thread you have not shared opens on an empty
 board, kept on the thread from your first change, and its header says **Not shared**. Everything
@@ -140,8 +142,10 @@ to my agent**: it opens as a draft in their own T Code, as a task does below.
 
 A thread box is a conversation of its own on the board. The thread's own card is the owner's
 first one; anyone in the room can add more, and each belongs to whoever added it. Write in a box's
-message box and press Send. The model the box will use shows beside it, and the owner can pick
-another there.
+message box and press Send. The model the box will use shows beside it, and whoever added the box
+can pick another there. The box keeps that model for everyone, after a reload too, until someone
+picks another or it runs on another. A box you add starts on the model you last picked for one of
+your boxes on that board.
 
 - **The owner's box** runs on the owner's agent. Its first prompt starts a new thread on the
   owner's machine, in the same project, worktree and branch as the shared thread, named after the
@@ -152,7 +156,8 @@ another there.
   the app they read the board in. Its first prompt starts a thread on their machine beside the
   one they joined with, named after the box, on their own provider login; nothing waits for the
   owner and nothing is billed to them. The model shows beside the box's message box, where they
-  can pick another: a new box starts on the model of the thread they joined with. The room sees what
+  can pick another: a new box starts on the model they last picked for one of their boxes there,
+  or else on the model of the thread they joined with. The room sees what
   [any turn of theirs shows](#your-turns-show-in-the-room): the prompt, the cards that went with
   it, the model, what the agent is doing, and its reply, on the box and in the artifact it fills.
   **Open conversation** on the box opens that thread.
@@ -221,13 +226,13 @@ they could undo, and **Redo** it. A card someone changed after the agent did sta
 
 **Agents** in the board's header (Alt+G, Option+G on a Mac, or under **More** on a phone) lists
 every thread box and the board's own thread: whose it is, its model, what it is doing (such as
-"Working · 1m 12s", "Waiting for approval", "Needs you", "Done" or "Failed") and what it last did
-to the board. What needs you comes first, then what is working. Click one to go to it. A guest's
-prompt waiting for you, or an approval your own agent asks for, can be answered right there, and
-the button shows how many need you. When an agent you asked finishes, fails or needs you while its
-box is out of view, a notice says so, with **Show** to go to it. The minimap outlines the boxes
-whose agents are working. "Failed" means the run ended without a reply while you had the board
-open.
+"Working · 1m 12s", "Waiting for approval", "Needs you", "Done", "Stopped" or "Failed") and what it
+last did to the board. What needs you comes first, then what is working. Click one to go to it. A
+guest's prompt waiting for you, or an approval your own agent asks for, can be answered right
+there, and the button (or **More** on a phone) shows how many need you. When an agent you asked
+finishes, stops, fails or needs you while its box is out of view, a notice says so, with **Show**
+to go to it. The minimap outlines the boxes whose agents are working. "Ended" means the run was on
+someone else's machine and no reply came back, so the board cannot tell whether it finished.
 
 ### Votes and catching up
 
@@ -345,6 +350,22 @@ have not. Nothing runs until you send it. While a guest's agent works on the tas
 so; when that turn finishes, the card shows **Answered by** their agent, or the owner's, with the
 start of its reply, and the task is ticked off. Untick it if the work is not done. An interrupted
 or failed turn leaves the task unanswered, and nobody's turn answers a task someone else has.
+
+### Run tasks with an agent
+
+To hand tasks to agents in one step, select them and choose **Run with an agent** on the
+selection bar or in the right-click menu, choose **Run with an agent** on one task, or choose
+**Run this section's tasks** in a section's menu. **One box for all** sends them, in order, as one
+prompt to one of your thread boxes that is not busy, or to a new one. **A box per task** puts each
+in a new thread box of its own beside it, up to 4 at once. The model shown is the one they run on.
+A guest's run waits for the owner like any other prompt of theirs, unless it runs on their own
+machine.
+
+Each task being run shows its box's name and how it is going, such as **Working**, **Waiting for
+the owner** or **Didn't finish**; click it to go to the box. When the box's turn finishes, the task
+is ticked off and answered by that box. Whoever runs the box's agent can **Stop** it from the task;
+a stopped or failed run leaves the task open, and **Clear** takes its mark off. Tasks run only in
+your own thread boxes, not in the room thread's own card; use **Take it to my agent** for that.
 
 ### See where everyone's code is
 

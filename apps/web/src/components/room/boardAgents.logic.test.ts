@@ -4,6 +4,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   type BoardAgentRun,
   type BoardAgentStatus,
+  boardAgentEndOf,
+  boardAgentModel,
   boardAgentRunOutcome,
   boardAgentRunStep,
   boardAgentStatus,
@@ -18,7 +20,7 @@ const run = (fields: Partial<BoardAgentRun> = {}): BoardAgentRun => ({
 });
 
 const sam = GuestId.make("sam");
-const idle = { requests: 0, canResolve: false, failed: false, answered: false };
+const idle = { requests: 0, canResolve: false, ended: undefined, answered: false };
 
 describe("boardAgentStatus", () => {
   it.each<[string, Parameters<typeof boardAgentStatus>[0], BoardAgentStatus]>([
@@ -54,9 +56,19 @@ describe("boardAgentStatus", () => {
       { kind: "queued" },
     ],
     [
-      "a run that ended without a reply",
-      { ...idle, run: undefined, failed: true, answered: true, viewer: null },
+      "a run that failed",
+      { ...idle, run: undefined, ended: "failed", answered: true, viewer: null },
       { kind: "failed" },
+    ],
+    [
+      "a run someone stopped",
+      { ...idle, run: undefined, ended: "stopped", answered: true, viewer: null },
+      { kind: "stopped" },
+    ],
+    [
+      "a run whose end this client cannot read",
+      { ...idle, run: undefined, ended: "ended", viewer: "sam" },
+      { kind: "ended" },
     ],
     [
       "a box that answered",
@@ -66,6 +78,18 @@ describe("boardAgentStatus", () => {
     ["a box never prompted", { ...idle, run: undefined, viewer: null }, { kind: "idle" }],
   ])("%s", (_, input, expected) => {
     expect(boardAgentStatus(input)).toEqual(expected);
+  });
+
+  it("names the model a box last ran on or was last set to, whichever came later", () => {
+    expect(
+      boardAgentModel([
+        { model: "GPT-5.4", at: "2026-11-15T10:00:00.000Z" },
+        { model: "Mini", at: "2026-11-15T11:00:00.000Z" },
+        undefined,
+        { at: "2026-11-15T12:00:00.000Z" },
+      ]),
+    ).toBe("Mini");
+    expect(boardAgentModel([undefined])).toBeUndefined();
   });
 
   it("says how long a run has worked", () => {
@@ -142,8 +166,56 @@ describe("boardAgentRunStep", () => {
     expect(second.next).toMatchObject({ turnKey: "b", notified: false });
   });
 
-  it("tells a finished run from one that ended without a reply", () => {
-    expect(boardAgentRunOutcome({ turnKey: "a" }, "b")).toBe("finished");
-    expect(boardAgentRunOutcome({ turnKey: "a" }, "a")).toBe("failed");
+  it("takes how a run ended from the record of the machine that ran it, or else from its reply", () => {
+    const watched = { turnKey: "a", startedAt: "2026-11-15T10:00:00.000Z" };
+    const end = (outcome: "done" | "stopped" | "failed", at = "2026-11-15T10:02:00.000Z") => ({
+      outcome,
+      at,
+    });
+    const rows: ReadonlyArray<
+      readonly [Parameters<typeof boardAgentRunOutcome>[1], string, boolean, string | null]
+    > = [
+      // This client reads the box's thread: its record decides, even when a reply came.
+      [end("stopped"), "b", false, "stopped"],
+      [end("failed"), "a", false, "failed"],
+      [end("done"), "b", false, "done"],
+      // The record is of an earlier run, or none yet: wait for it, then go by the reply.
+      [end("done", "2026-11-15T09:00:00.000Z"), "b", false, null],
+      [null, "a", false, null],
+      [null, "b", true, "done"],
+      [null, "a", true, "ended"],
+      // No record to read, as for a guest's own machine: a reply is enough, silence is Ended.
+      [undefined, "b", false, "done"],
+      [undefined, "a", false, null],
+      [undefined, "a", true, "ended"],
+    ];
+    for (const [known, turnKey, waited, expected] of rows) {
+      expect(boardAgentRunOutcome(watched, known, turnKey, waited)).toBe(expected);
+    }
+  });
+
+  it.each<[string, Parameters<typeof boardAgentEndOf>, ReturnType<typeof boardAgentEndOf>]>([
+    ["completed", [{ status: "completed", completedAt: "t" }, false], { outcome: "done", at: "t" }],
+    [
+      "interrupted",
+      [{ status: "interrupted", completedAt: "t" }, true],
+      { outcome: "stopped", at: "t" },
+    ],
+    [
+      "cancelled",
+      [{ status: "cancelled", completedAt: "t" }, false],
+      { outcome: "stopped", at: "t" },
+    ],
+    ["failed", [{ status: "failed", completedAt: "t" }, false], { outcome: "failed", at: "t" }],
+    [
+      "failed once stopped",
+      [{ status: "failed", completedAt: "t" }, true],
+      { outcome: "stopped", at: "t" },
+    ],
+    ["still running", [{ status: "running", completedAt: null }, false], undefined],
+    ["rolled back", [{ status: "rolled_back", completedAt: "t" }, false], undefined],
+    ["never ran", [null, false], undefined],
+  ])("reads a %s run's end", (_, args, expected) => {
+    expect(boardAgentEndOf(...args)).toEqual(expected);
   });
 });

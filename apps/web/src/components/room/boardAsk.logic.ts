@@ -228,3 +228,29 @@ export function boardAgentWorkFresh(
   }
   return [...fresh].map(([id, boxId]) => ({ id, boxId }));
 }
+
+/**
+ * Where a popover under the selection anchors: the selection itself while the popover fits below
+ * or above it, else a line `room` above the bounds' bottom, so it covers the selection's lower
+ * part instead of being cut short by the toolbar.
+ */
+export function boardPopoverAnchor(
+  selection: BoardScreenRect,
+  bounds: BoardScreenRect | undefined,
+  room: number,
+): BoardScreenRect {
+  if (bounds === undefined) return selection;
+  const bottom = bounds.y + bounds.height;
+  const selectionBottom = selection.y + selection.height;
+  if (bottom - selectionBottom >= room || selection.y - bounds.y >= room) return selection;
+  const line = Math.max(bounds.y, Math.min(selectionBottom, bottom - room));
+  const top = Math.min(selection.y, line);
+  return { x: selection.x, y: top, width: selection.width, height: line - top };
+}
+
+export interface BoardScreenRect {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}

@@ -9,6 +9,7 @@ import {
   boardAskLines,
   boardAskSuggestions,
   boardAskTargets,
+  boardPopoverAnchor,
 } from "./boardAsk.logic";
 import { BOARD_PROMPT_MAX_CARDS } from "./roomBoard.logic";
 
@@ -227,5 +228,23 @@ describe("boardAgentWorkFresh", () => {
     const redone = turn("t1", "2026-11-15T10:02:00Z", cards);
     expect(boardAgentWorkFresh([done], [undone])).toEqual([]);
     expect(boardAgentWorkFresh([undone], [redone])).toEqual([]);
+  });
+});
+
+describe("boardPopoverAnchor", () => {
+  const bounds = { x: 0, y: 60, width: 1000, height: 780 };
+  it("anchors at the selection while the popover fits below or above it, else over its lower part", () => {
+    const high = { x: 10, y: 100, width: 200, height: 100 };
+    expect(boardPopoverAnchor(high, bounds, 240)).toBe(high);
+    const low = { x: 10, y: 700, width: 200, height: 100 };
+    expect(boardPopoverAnchor(low, bounds, 240)).toBe(low);
+    // Tall, from near the header to near the toolbar: the popover's room above the toolbar.
+    expect(boardPopoverAnchor({ x: 10, y: 120, width: 200, height: 600 }, bounds, 240)).toEqual({
+      x: 10,
+      y: 120,
+      width: 200,
+      height: 480,
+    });
+    expect(boardPopoverAnchor(high, undefined, 240)).toBe(high);
   });
 });

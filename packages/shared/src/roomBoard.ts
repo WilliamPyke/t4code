@@ -19,6 +19,7 @@ import {
   roomPullRequestOf,
   roomBoardCardRef,
   roomBoardNoteRef,
+  roomTaskAnswerExcerpt,
   RoomArtifactContextRecord,
   RoomBoxContextPayload,
   RoomCardsContextRecord,
@@ -38,6 +39,7 @@ import {
   type RoomBoardNote,
   type RoomBoardReaction,
   type RoomBoardSize,
+  type RoomBoxModel,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
@@ -707,7 +709,82 @@ export function applyRoomBoardChange(
         agentTurns: next.agentTurns?.map((candidate) => (candidate === turn ? marked : candidate)),
       });
     }
+    case "box.model": {
+      const picked = { selection: change.modelSelection, name: change.name, at };
+      const same = (current: RoomBoxModel | undefined) =>
+        current !== undefined &&
+        current.name === change.name &&
+        JSON.stringify(current.selection) === JSON.stringify(change.modelSelection);
+      if (change.noteId === ROOM_BOARD_ROOM_BOX) {
+        if (author !== null) return Result.fail("Only the owner can pick the room thread's model.");
+        return Result.succeed(
+          same(board.roomBoxModel) ? board : { ...board, roomBoxModel: picked },
+        );
+      }
+      const box = board.notes.find((note) => note.id === change.noteId && note.kind === "thread");
+      if (box === undefined) return Result.fail("This thread box is not on the board.");
+      if (!isRoomCardOwnedBy(box, author)) {
+        return Result.fail("Only the owner and whoever added this thread box can pick its model.");
+      }
+      if (same(box.boxModel)) return Result.succeed(board);
+      return Result.succeed(withNote(board, box, { ...box, boxModel: picked }));
+    }
+    case "task.run": {
+      const task = board.notes.find((candidate) => candidate.id === change.noteId);
+      if (task?.kind !== "task") return Result.fail("This task is not on the board.");
+      const { run: _run, ...rest } = task;
+      if (change.boxId === null) {
+        return Result.succeed(task.run === undefined ? board : withNote(board, task, rest));
+      }
+      const box = board.notes.find((note) => note.id === change.boxId && note.kind === "thread");
+      if (box === undefined) return Result.fail("This thread box is not on the board.");
+      if ((box.guestId ?? null) !== author) {
+        return Result.fail("A task runs only in a thread box of your own.");
+      }
+      if (task.done === true) return Result.fail("This task is done already.");
+      if (task.assignee !== undefined && (task.assignee.guestId ?? null) !== author) {
+        return Result.fail("This task is someone else's.");
+      }
+      return Result.succeed(
+        withNote(board, task, {
+          ...rest,
+          assignee: author === null ? {} : { guestId: author },
+          run: { boxId: box.id, at },
+        }),
+      );
+    }
   }
+}
+
+/**
+ * The board once a thread box's turn shows on it: each task run in that box before the turn is
+ * ticked off and answered by it, as the box owner's; one someone else took since only loses its
+ * run. Any other board is left as it was.
+ */
+export function roomBoardWithBoxRunDone(
+  board: RoomBoard,
+  boxId: string,
+  turn: { readonly id: string; readonly reply: string; readonly at: string },
+): RoomBoard {
+  const box = board.notes.find((note) => note.id === boxId && note.kind === "thread");
+  const ran = (note: RoomBoardNote) =>
+    note.run?.boxId === boxId && Date.parse(note.run.at) <= Date.parse(turn.at);
+  if (box === undefined || !board.notes.some(ran)) return board;
+  const person = box.guestId === undefined ? {} : { guestId: box.guestId };
+  return {
+    ...board,
+    notes: board.notes.map((note) => {
+      if (!ran(note)) return note;
+      const { run: _run, ...rest } = note;
+      if (note.assignee !== undefined && note.assignee.guestId !== box.guestId) return rest;
+      return {
+        ...rest,
+        done: true,
+        assignee: person,
+        answer: { ...person, excerpt: roomTaskAnswerExcerpt(turn.reply), turnId: turn.id, boxId },
+      };
+    }),
+  };
 }
 
 /**

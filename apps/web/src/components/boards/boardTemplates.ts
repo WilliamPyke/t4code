@@ -29,7 +29,8 @@ type BoardTemplateItem =
     }
   | {
       readonly key: string;
-      readonly kind: "task" | "artifact";
+      /** A thread box is named by its text, and starts empty on the default model. */
+      readonly kind: "task" | "artifact" | "thread";
       readonly text: string;
       readonly x: number;
       readonly y: number;
@@ -52,8 +53,11 @@ const THREAD = Symbol("thread");
 
 // The board draws these sizes for cards that carry none; the thumbnail draws them the same.
 const NOTE_SIZE = { w: 192, h: 144 };
+// A task card is taller than a note: it carries its assignee and run buttons.
+const TASK_SIZE = { w: 192, h: 184 };
 const ARTIFACT_SIZE = { w: 380, h: 400 };
 const THREAD_SIZE = { w: 320, h: 420 };
+const BOX_SIZE = { w: 340, h: 460 };
 
 export const BLANK_BOARD_TEMPLATE: BoardTemplate = {
   id: "blank",
@@ -69,7 +73,8 @@ export const BOARD_TEMPLATES: ReadonlyArray<BoardTemplate> = [
   {
     id: "plan-feature",
     name: "Plan a feature",
-    description: "Goal, ideas, tasks and open questions. The goal goes with every prompt.",
+    description:
+      "Goal, ideas, tasks and open questions, and a spec the agent writes. The goal goes with every prompt.",
     thread: { x: 80, y: 40 },
     items: [
       {
@@ -139,11 +144,115 @@ export const BOARD_TEMPLATES: ReadonlyArray<BoardTemplate> = [
         y: 384,
         color: "pink",
       },
+      { key: "spec", kind: "artifact", text: "Spec", x: 1480, y: 40 },
     ],
     lines: [
       { from: "goal-what", to: THREAD },
       { from: "goal-done", to: THREAD },
+      { from: THREAD, to: "spec" },
     ],
+  },
+  {
+    id: "research-agents",
+    name: "Research with agents",
+    description: "Questions for a researcher agent, its findings, and a reviewer to check them.",
+    thread: { x: 80, y: 40 },
+    items: [
+      {
+        key: "questions",
+        kind: "section",
+        text: "Questions",
+        x: 440,
+        y: 40,
+        w: 480,
+        h: 248,
+        color: "blue",
+      },
+      {
+        key: "question",
+        kind: "note",
+        text: "What do we want to find out?",
+        x: 464,
+        y: 96,
+        color: "blue",
+      },
+      {
+        key: "question-next",
+        kind: "note",
+        text: "Another question",
+        x: 680,
+        y: 96,
+        color: "blue",
+      },
+      {
+        key: "how",
+        kind: "note",
+        text: "How to use this board: select the questions, choose Ask an agent, and pick Researcher.",
+        x: 440,
+        y: 328,
+        color: "yellow",
+      },
+      { key: "researcher", kind: "thread", text: "Researcher", x: 960, y: 40 },
+      { key: "findings", kind: "artifact", text: "Findings", x: 1340, y: 40 },
+      { key: "reviewer", kind: "thread", text: "Reviewer", x: 1760, y: 40 },
+    ],
+    lines: [
+      { from: "researcher", to: "findings" },
+      { from: "findings", to: "reviewer" },
+    ],
+  },
+  {
+    id: "build-agents",
+    name: "Build with agents",
+    description: "A backlog of tasks and a builder agent to work through them.",
+    thread: { x: 80, y: 40 },
+    items: [
+      {
+        key: "backlog",
+        kind: "section",
+        text: "Backlog",
+        x: 440,
+        y: 40,
+        w: 240,
+        h: 680,
+        color: "blue",
+      },
+      {
+        key: "doing",
+        kind: "section",
+        text: "Doing",
+        x: 720,
+        y: 40,
+        w: 240,
+        h: 680,
+        color: "yellow",
+      },
+      {
+        key: "done",
+        kind: "section",
+        text: "Done",
+        x: 1000,
+        y: 40,
+        w: 240,
+        h: 680,
+        color: "green",
+      },
+      { key: "task-first", kind: "task", text: "Write the first version", x: 464, y: 96 },
+      { key: "task-tests", kind: "task", text: "Add tests for it", x: 464, y: 296 },
+      { key: "task-docs", kind: "task", text: "Update the docs", x: 464, y: 496 },
+      { key: "task-doing", kind: "task", text: "Set up the project", x: 744, y: 96 },
+      { key: "task-done", kind: "task", text: "Agree on what to build", x: 1024, y: 96 },
+      { key: "builder", kind: "thread", text: "Builder", x: 1280, y: 40 },
+      {
+        key: "how",
+        kind: "note",
+        text: "Select tasks, then Run with an agent and pick Builder.",
+        x: 1660,
+        y: 40,
+        color: "yellow",
+      },
+    ],
+    lines: [],
   },
   {
     id: "bug-bash",
@@ -335,6 +444,7 @@ export function boardTemplateChanges(
           return { ...base, color: item.color };
         case "task":
         case "artifact":
+        case "thread":
           return { ...base, kind: item.kind };
       }
     }),
@@ -358,9 +468,11 @@ export function boardTemplateShapes(template: BoardTemplate): ReadonlyArray<Room
         case "note":
           return { kind: "note", x: item.x, y: item.y, ...NOTE_SIZE, color: item.color };
         case "task":
-          return { kind: "task", x: item.x, y: item.y, ...NOTE_SIZE };
+          return { kind: "task", x: item.x, y: item.y, ...TASK_SIZE };
         case "artifact":
           return { kind: "artifact", x: item.x, y: item.y, ...ARTIFACT_SIZE };
+        case "thread":
+          return { kind: "thread", x: item.x, y: item.y, ...BOX_SIZE };
       }
     }),
   ];

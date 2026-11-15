@@ -2,6 +2,7 @@ import {
   GuestId,
   GuestShareId,
   type OrchestrationV2TurnItem,
+  ProviderInstanceId,
   ROOM_ARTIFACT_MAX_LENGTH,
   ROOM_BOARD_AGENT_TURNS_MAX,
   ROOM_BOARD_MAX_ARTIFACTS,
@@ -33,6 +34,7 @@ import {
   roomArtifactRequestOf,
   roomBoardAfterAgentTurn,
   roomBoardWithAgentChange,
+  roomBoardWithBoxRunDone,
   roomBoardWithCards,
   roomBoardWithCardsSent,
   roomBoardCardChangedAt,
@@ -384,7 +386,7 @@ describe("applyRoomBoardChange", () => {
     ).toBe(true);
   });
 
-  it("lets only a card's person, or the owner, remove it or rename a thread box", () => {
+  it("lets only a card's person, or the owner, remove it, rename a thread box or pick its model", () => {
     const eve = GuestId.make("guest:eve");
     const board: RoomBoard = {
       positions: {},
@@ -396,7 +398,19 @@ describe("applyRoomBoardChange", () => {
       ],
     };
     const remove = (noteId: string): RoomBoardChange => ({ type: "note.remove", noteId });
+    const pickModel = (noteId: string): RoomBoardChange => ({
+      type: "box.model",
+      noteId,
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4-mini" },
+      name: "GPT-5.4 Mini",
+    });
     const rows: ReadonlyArray<readonly [RoomBoardChange, typeof sam | null, boolean]> = [
+      [pickModel("box"), sam, true],
+      [pickModel("box"), null, true],
+      [pickModel("box"), eve, false],
+      [pickModel("sams"), sam, false],
+      [pickModel(ROOM_BOARD_ROOM_BOX), null, true],
+      [pickModel(ROOM_BOARD_ROOM_BOX), sam, false],
       [remove("sams"), sam, true],
       [remove("sams"), null, true],
       [remove("sams"), eve, false],
@@ -423,6 +437,22 @@ describe("applyRoomBoardChange", () => {
         allowed,
       );
     }
+    // The pick is the box's, timed by the board, and stays when the box is renamed or moved.
+    const picked = Result.getOrThrow(applyRoomBoardChange(board, scope, sam, pickModel("box"), at));
+    const boxModel = {
+      selection: { instanceId: "codex", model: "gpt-5.4-mini" },
+      name: "GPT-5.4 Mini",
+      at,
+    };
+    expect(picked.notes[2]).toMatchObject({ boxModel });
+    expect(applyRoomBoardChange(picked, scope, sam, pickModel("box"), "later")).toEqual(
+      Result.succeed(picked),
+    );
+    const renamed = applyRoomBoardChange(picked, scope, null, put("box", { text: "Re" }), at);
+    expect(Result.getOrThrow(renamed).notes[2]).toMatchObject({ text: "Re", boxModel });
+    // The room thread's own box is no note: the board keeps the owner's pick for it.
+    const room = applyRoomBoardChange(board, scope, null, pickModel(ROOM_BOARD_ROOM_BOX), at);
+    expect(Result.getOrThrow(room).roomBoxModel).toEqual(boxModel);
   });
 
   it("keeps a comment thread's replies, signed and timed by the board, for the room to resolve", () => {
@@ -685,6 +715,92 @@ describe("applyRoomBoardChange", () => {
     expect(Result.isFailure(apply(board, { type: "edge.pin", edgeId: "gone", pinned: true }))).toBe(
       true,
     );
+  });
+});
+
+describe("running a task in a thread box", () => {
+  const scope: RoomBoardScope = { hasCard: () => false, hasPerson: () => true };
+  const sam = GuestId.make("guest:sam");
+  const ana = GuestId.make("guest:ana");
+  const at = "2026-11-15T10:00:00.000Z";
+  const board: RoomBoard = {
+    positions: {},
+    notes: [
+      { id: "t", text: "Fix login", x: 0, y: 0, kind: "task" },
+      { id: "done", text: "Ship", x: 0, y: 0, kind: "task", done: true },
+      { id: "anas", text: "Docs", x: 0, y: 0, kind: "task", assignee: { guestId: ana } },
+      { id: "n", text: "A note", x: 0, y: 0 },
+      { id: "box", text: "Sam's box", x: 0, y: 0, kind: "thread", guestId: sam },
+      { id: "owner-box", text: "Owner's box", x: 0, y: 0, kind: "thread" },
+    ],
+  };
+  const run = (noteId: string, boxId: string | null, author: GuestId | null = sam) =>
+    applyRoomBoardChange(board, scope, author, { type: "task.run", noteId, boxId }, at);
+
+  it("runs an open task in the author's own box, making it theirs, and only there", () => {
+    expect(Result.getOrThrow(run("t", "box")).notes[0]).toEqual({
+      id: "t",
+      text: "Fix login",
+      x: 0,
+      y: 0,
+      kind: "task",
+      assignee: { guestId: sam },
+      run: { boxId: "box", at },
+    });
+    expect(Result.getOrThrow(run("t", "owner-box", null)).notes[0]?.assignee).toEqual({});
+    const refused: ReadonlyArray<readonly [string, string, GuestId | null]> = [
+      ["t", "owner-box", sam],
+      ["t", "box", null],
+      ["t", "gone", sam],
+      ["done", "box", sam],
+      ["anas", "box", sam],
+      ["n", "box", sam],
+    ];
+    for (const [noteId, boxId, author] of refused) {
+      expect(Result.isFailure(run(noteId, boxId, author)), `${noteId} in ${boxId}`).toBe(true);
+    }
+  });
+
+  it("takes a run off, and leaves a task with none as it was", () => {
+    const running = Result.getOrThrow(run("t", "box"));
+    const off = Result.getOrThrow(
+      applyRoomBoardChange(running, scope, ana, { type: "task.run", noteId: "t", boxId: null }, at),
+    );
+    expect(off.notes[0]).toEqual({ ...running.notes[0], run: undefined });
+    expect(off.notes[0] && "run" in off.notes[0]).toBe(false);
+    expect(Result.getOrThrow(run("t", null))).toBe(board);
+  });
+
+  it("ticks off the tasks run in a box when its turn shows, answered by that box", () => {
+    const running = Result.getOrThrow(run("t", "box"));
+    const turn = { id: "run:1", reply: "Fixed the login form.", at: "2026-11-15T10:03:00.000Z" };
+    expect(roomBoardWithBoxRunDone(running, "box", turn).notes[0]).toEqual({
+      id: "t",
+      text: "Fix login",
+      x: 0,
+      y: 0,
+      kind: "task",
+      done: true,
+      assignee: { guestId: sam },
+      answer: { guestId: sam, excerpt: "Fixed the login form.", turnId: "run:1", boxId: "box" },
+    });
+    // Another box's turn, a turn from before the run, and a board with no run change nothing.
+    expect(roomBoardWithBoxRunDone(running, "owner-box", turn)).toBe(running);
+    expect(
+      roomBoardWithBoxRunDone(running, "box", { ...turn, at: "2026-11-15T09:00:00.000Z" }),
+    ).toBe(running);
+    expect(roomBoardWithBoxRunDone(board, "box", turn)).toBe(board);
+    // A task someone else took since only loses its run.
+    const taken: RoomBoard = {
+      ...running,
+      notes: running.notes.map((note) =>
+        note.id === "t" ? { ...note, assignee: { guestId: ana } } : note,
+      ),
+    };
+    const left = roomBoardWithBoxRunDone(taken, "box", turn).notes[0];
+    expect(left?.done).toBeUndefined();
+    expect(left?.run).toBeUndefined();
+    expect(left?.answer).toBeUndefined();
   });
 });
 

@@ -13,7 +13,9 @@ import {
   BOARD_ASK_NEW_BOX,
   type BoardAskSuggestion,
   type BoardAskTarget,
+  type BoardScreenRect,
   boardAgentWorkFresh,
+  boardPopoverAnchor,
 } from "./boardAsk.logic";
 
 /** How the ask shortcut reads on this device. */
@@ -105,7 +107,6 @@ export function BoardAskPopover({
   const send = (message: string) => {
     if (message.trim() !== "") onSend(target, message.trim());
   };
-  const targetLabel = targets.find((one) => one.id === target)?.label ?? "";
   const cardsPart = count === 0 ? "" : count === 1 ? "1 card" : `${count} cards`;
   const heading =
     artifactTitle === null
@@ -121,7 +122,7 @@ export function BoardAskPopover({
       }}
     >
       <PopoverPopup
-        anchor={anchor}
+        anchor={boardPopoverFit(anchor, bounds)}
         side="bottom"
         align="start"
         sideOffset={8}
@@ -171,26 +172,7 @@ export function BoardAskPopover({
           </div>
           <div className="flex min-w-0 items-center gap-1.5">
             <div className="min-w-0 flex-1">
-              <Select
-                value={target}
-                onValueChange={(value) => {
-                  if (value !== null) setTarget(value);
-                }}
-              >
-                <SelectTrigger size="xs" aria-label="Send to">
-                  <SelectValue>{targetLabel}</SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="start" alignItemWithTrigger={false}>
-                  {targets.map((option) => (
-                    <SelectItem key={option.id} value={option.id}>
-                      {option.label}
-                      {option.model === undefined ? null : (
-                        <span className="text-muted-foreground"> · {option.model}</span>
-                      )}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
+              <BoardAskTargetSelect targets={targets} value={target} onChange={setTarget} />
             </div>
             {/* The model the prompt runs on; a new box's pick is kept under the id it will take. */}
             <div className="flex max-w-36 min-w-0 shrink-0 items-center">
@@ -216,20 +198,63 @@ export function BoardAskPopover({
   );
 }
 
-interface ScreenRect {
-  readonly x: number;
-  readonly y: number;
-  readonly width: number;
-  readonly height: number;
+/** Which of this person's thread boxes a prompt goes to, as Ask and Run both choose it. */
+export function BoardAskTargetSelect({
+  targets,
+  value,
+  onChange,
+}: {
+  readonly targets: ReadonlyArray<BoardAskTarget>;
+  readonly value: string;
+  readonly onChange: (target: string) => void;
+}) {
+  return (
+    <Select
+      value={value}
+      onValueChange={(next) => {
+        if (next !== null) onChange(next);
+      }}
+    >
+      <SelectTrigger size="xs" aria-label="Send to">
+        <SelectValue>{targets.find((one) => one.id === value)?.label ?? ""}</SelectValue>
+      </SelectTrigger>
+      <SelectPopup align="start" alignItemWithTrigger={false}>
+        {targets.map((option) => (
+          <SelectItem key={option.id} value={option.id}>
+            {option.label}
+            {option.model === undefined ? null : (
+              <span className="text-muted-foreground"> · {option.model}</span>
+            )}
+          </SelectItem>
+        ))}
+      </SelectPopup>
+    </Select>
+  );
 }
+
+// About as tall as the ask or run popover drawn whole.
+const BOARD_POPOVER_ROOM = 240;
+
+/** A popover's anchor under the selection, moved up over it when neither side has room. */
+export const boardPopoverFit = (
+  anchor: { readonly getBoundingClientRect: () => DOMRect },
+  bounds: BoardScreenRect | undefined,
+) => ({
+  getBoundingClientRect: () => {
+    const rect = boardPopoverAnchor(anchor.getBoundingClientRect(), bounds, BOARD_POPOVER_ROOM);
+    return new DOMRect(rect.x, rect.y, rect.width, rect.height);
+  },
+});
 
 /**
  * Where on screen the ask may sit: inside the board, below its header, above its toolbar and zoom
  * controls and above an on-screen keyboard, measured again as the keyboard opens or the window
  * resizes. On a phone the popover is about as tall as that gap, so a looser fit would cover them.
  */
-function useBoardAskBounds(board: RefObject<HTMLElement | null>): ScreenRect | undefined {
-  const [bounds, setBounds] = useState<ScreenRect | undefined>(undefined);
+export function useBoardAskBounds(
+  board: RefObject<HTMLElement | null>,
+): BoardScreenRect | undefined {
+  const [bounds, setBounds] = useState<BoardScreenRect | undefined>(undefined);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- follows the board's chrome where the browser drew it and the visual viewport, which a keyboard shrinks without a render
   useLayoutEffect(() => {
     const viewport = window.visualViewport;

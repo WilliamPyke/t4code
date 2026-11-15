@@ -11,6 +11,7 @@ import {
   TrimmedNonEmptyString,
   TrimmedString,
 } from "./baseSchemas.ts";
+import { ModelSelection } from "./modelSelection.ts";
 
 /**
  * A guest share lets a few unauthenticated browsers watch a thread over T Connect and propose
@@ -276,8 +277,17 @@ export const RoomTaskAnswer = Schema.Struct({
   excerpt: Schema.String.check(Schema.isMaxLength(ROOM_TASK_ANSWER_MAX_LENGTH)),
   /** The turn that answered, as the machine that ran it named it. */
   turnId: ThreadGuestTurn.fields.id,
+  /** The thread box whose turn answered, for a task someone ran there. */
+  boxId: Schema.optional(RoomBoardNoteId),
 });
 export type RoomTaskAnswer = typeof RoomTaskAnswer.Type;
+
+/**
+ * The thread box someone ran a task in, and when: the box's next turn the board shows ticks it
+ * off. Only `task.run` sets it; that turn takes it away.
+ */
+export const RoomTaskRun = Schema.Struct({ boxId: RoomBoardNoteId, at: IsoDateTime });
+export type RoomTaskRun = typeof RoomTaskRun.Type;
 
 export const ROOM_BOARD_MIN_CARD_SIZE = 120;
 export const ROOM_BOARD_MAX_CARD_SIZE = 1_600;
@@ -326,6 +336,19 @@ export const RoomBoxState = Schema.Struct({
   turns: Schema.Array(RoomBoxTurn).check(Schema.isMaxLength(ROOM_BOX_TURN_LIMIT)),
 });
 export type RoomBoxState = typeof RoomBoxState.Type;
+
+/**
+ * The model someone picked for a thread box, on the machine that runs the box: the owner's for
+ * theirs, a guest's own for a guest's box. Its next prompt runs on it until a later run or pick.
+ */
+export const RoomBoxModel = Schema.Struct({
+  selection: ModelSelection,
+  /** Its display name, as the picker's machine names it, for everyone else. */
+  name: RoomBoxModelName,
+  /** When it was picked, as the server that holds the board took it. */
+  at: IsoDateTime,
+});
+export type RoomBoxModel = typeof RoomBoxModel.Type;
 
 const RoomArtifactVersionFields = {
   body: Schema.String.check(Schema.isMaxLength(ROOM_ARTIFACT_MAX_LENGTH)),
@@ -593,6 +616,8 @@ export const RoomBoardNote = Schema.Struct({
   pinnedTo: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
   /** A task someone's agent answered. No board change sets it; it stays when the task changes. */
   answer: Schema.optional(RoomTaskAnswer),
+  /** A task a thread box is running now, or ran without finishing. */
+  run: Schema.optional(RoomTaskRun),
   /** The start of the reply a comment is pinned to, as its author's client read it. */
   quote: Schema.optional(Schema.String.check(Schema.isMaxLength(ROOM_BOARD_QUOTE_MAX_LENGTH))),
   /** Absent until someone resizes the card. */
@@ -609,6 +634,8 @@ export const RoomBoardNote = Schema.Struct({
   artifact: Schema.optional(RoomArtifactContent),
   /** A thread box's recent turns. No board change sets it; it stays when the box changes. */
   thread: Schema.optional(RoomBoxState),
+  /** A thread box's model, once someone picked one. Only `box.model` sets it. */
+  boxModel: Schema.optional(RoomBoxModel),
   /** What a code window's box changed, as of its last turn. No board change sets it. */
   changes: Schema.optional(RoomCodeChanges),
   /** A pull request window's last read of its pull request. No board change sets it. */
@@ -814,6 +841,8 @@ export const RoomBoard = Schema.Struct({
   agentTurns: Schema.optional(
     Schema.Array(RoomBoardAgentTurn).check(Schema.isMaxLength(ROOM_BOARD_AGENT_TURNS_MAX)),
   ),
+  /** The room thread's own box's model, once the owner picked one. Only `box.model` sets it. */
+  roomBoxModel: Schema.optional(RoomBoxModel),
 });
 export type RoomBoard = typeof RoomBoard.Type;
 
@@ -910,6 +939,25 @@ export const RoomBoardChange = Schema.Union([
     type: Schema.Literal("agent-turn.undo"),
     turnId: RoomBoardAgentTurn.fields.id,
     undone: Schema.Boolean,
+  }),
+  /**
+   * Picks the model a thread box runs on. For the owner and whoever added the box;
+   * `ROOM_BOARD_ROOM_BOX` names the room thread's own box, which only the owner picks for.
+   */
+  Schema.Struct({
+    type: Schema.Literal("box.model"),
+    noteId: RoomBoardNote.fields.id,
+    modelSelection: RoomBoxModel.fields.selection,
+    name: RoomBoxModel.fields.name,
+  }),
+  /**
+   * Runs an open task in one of the author's own thread boxes, making it theirs, before the
+   * prompt goes; `null` takes the run off. Only the box's next turn ticks it off.
+   */
+  Schema.Struct({
+    type: Schema.Literal("task.run"),
+    noteId: RoomBoardNote.fields.id,
+    boxId: Schema.NullOr(RoomBoardNoteId),
   }),
 ]);
 export type RoomBoardChange = typeof RoomBoardChange.Type;

@@ -1,4 +1,4 @@
-import type { RoomBoxProgress } from "@t3tools/contracts";
+import type { OrchestrationV2RunStatus, RoomBoxProgress } from "@t3tools/contracts";
 
 import { formatBoardElapsed } from "./roomBoard.logic";
 
@@ -8,15 +8,53 @@ export type BoardAgentRun = Pick<
   "phase" | "startedAt" | "guestId" | "askedBy" | "model"
 >;
 
+/**
+ * How a box's last run ended: finished, stopped by someone, failed with an error, or `ended` when
+ * this client cannot read how, as for a run on a guest's own machine that brought no reply.
+ */
+export type BoardAgentOutcome = "done" | "stopped" | "failed" | "ended";
+
+/** How a box's last run ended as the machine that ran it recorded it, and when. */
+export interface BoardAgentEnd {
+  readonly outcome: Exclude<BoardAgentOutcome, "ended">;
+  readonly at: string;
+}
+
+/**
+ * The end a thread's last run came to, from its record on the machine that ran it: undefined
+ * while it runs or when it never ran. A rolled-back run is undone work, not an outcome.
+ */
+export function boardAgentEndOf(
+  run: {
+    readonly status: OrchestrationV2RunStatus;
+    readonly completedAt: string | null;
+  } | null,
+  stopRequested: boolean,
+): BoardAgentEnd | undefined {
+  if (run === null || run.completedAt === null) return undefined;
+  const at = run.completedAt;
+  switch (run.status) {
+    case "completed":
+      return { outcome: "done", at };
+    case "interrupted":
+    case "cancelled":
+      return { outcome: "stopped", at };
+    case "failed":
+      return { outcome: stopRequested ? "stopped" : "failed", at };
+    default:
+      return undefined;
+  }
+}
+
 /** Where a box is, as the Agents panel says it. */
 export type BoardAgentStatus =
   | { readonly kind: "needs-you"; readonly need: "request" | "approval" }
-  | { readonly kind: "working" | "queued" | "waiting" | "failed" | "done" | "idle" };
+  | { readonly kind: "working" | "queued" | "waiting" | "idle" | BoardAgentOutcome };
 
 /**
  * A box's state for this viewer. Something only they can answer comes first: their own agent's
  * approval, or, for the owner, a guest's prompt waiting to be sent. Then the run in flight, then
- * how its last run ended, as far as anyone can tell.
+ * how its last run ended, as far as this client can tell.
  */
 export function boardAgentStatus(input: {
   readonly run: BoardAgentRun | undefined;
@@ -24,8 +62,8 @@ export function boardAgentStatus(input: {
   readonly requests: number;
   /** The viewer is the one who sends or dismisses those. */
   readonly canResolve: boolean;
-  /** Its last run ended without a reply while this board was open. */
-  readonly failed: boolean;
+  /** How its last run ended, when that is known. */
+  readonly ended: BoardAgentOutcome | undefined;
   /** It has answered at least once. */
   readonly answered: boolean;
   readonly viewer: string | null;
@@ -38,11 +76,11 @@ export function boardAgentStatus(input: {
   if (run?.phase === "approval") return { kind: "waiting" };
   if (run !== undefined) return { kind: run.phase === "queued" ? "queued" : "working" };
   if (input.requests > 0) return { kind: "waiting" };
-  if (input.failed) return { kind: "failed" };
+  if (input.ended !== undefined) return { kind: input.ended };
   return { kind: input.answered ? "done" : "idle" };
 }
 
-/** A state in a few words: "Needs you", "Working · 1m 12s", "Failed". */
+/** A state in a few words: "Needs you", "Working · 1m 12s", "Stopped". */
 export function boardAgentStatusLabel(
   status: BoardAgentStatus,
   run: Pick<BoardAgentRun, "startedAt"> | undefined,
@@ -61,11 +99,30 @@ export function boardAgentStatusLabel(
       return "Waiting for approval";
     case "failed":
       return "Failed";
+    case "stopped":
+      return "Stopped";
+    case "ended":
+      return "Ended";
     case "done":
       return "Done";
     case "idle":
       return "Idle";
   }
+}
+
+/** The model a box last ran on or was last set to, whichever came later. */
+export function boardAgentModel(
+  candidates: ReadonlyArray<
+    { readonly model?: string | undefined; readonly at: string } | undefined
+  >,
+): string | undefined {
+  let latest: { readonly model: string; readonly at: number } | undefined;
+  for (const candidate of candidates) {
+    if (candidate?.model === undefined || candidate.model === "") continue;
+    const at = Date.parse(candidate.at) || 0;
+    if (latest === undefined || at > latest.at) latest = { model: candidate.model, at };
+  }
+  return latest?.model;
 }
 
 const statusRank = (status: BoardAgentStatus) =>
@@ -134,11 +191,24 @@ export function boardAgentRunStep(
     : { next: current, notice: null };
 }
 
-/** How a run ended: a new reply or new board work came after it began, or nothing did. */
-export const boardAgentRunOutcome = (
-  watched: Pick<BoardAgentWatched, "turnKey">,
+/**
+ * How a run this board watched ended, or null to wait a little longer for word of it. The record
+ * of the machine that ran it decides, when this client can read one (`end` not undefined) and it
+ * is of this run; otherwise a new reply or board work means it finished, and nothing means
+ * `ended`, once the wait is over.
+ */
+export function boardAgentRunOutcome(
+  watched: Pick<BoardAgentWatched, "turnKey" | "startedAt">,
+  end: BoardAgentEnd | null | undefined,
   turnKey: string,
-): "finished" | "failed" => (turnKey !== watched.turnKey ? "finished" : "failed");
+  waited: boolean,
+): BoardAgentOutcome | null {
+  if (end != null && Date.parse(end.at) >= Date.parse(watched.startedAt)) return end.outcome;
+  // A reply can reach the board before the record says the run stopped, so a record is awaited.
+  if (end !== undefined && !waited) return null;
+  if (turnKey !== watched.turnKey) return "done";
+  return waited ? "ended" : null;
+}
 
 /** Alt+G on the board (Option+G on a Mac, by the key's place) opens the Agents panel. */
 export const isBoardAgentsKey = (event: {

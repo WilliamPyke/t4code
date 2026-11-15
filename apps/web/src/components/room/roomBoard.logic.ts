@@ -450,6 +450,21 @@ export function panToShowAdded(view: BoardView, rect: BoardRect, area: BoardSize
 }
 
 /**
+ * The view at the same zoom that brings `rect` to the middle of the area, when `panToShow` would
+ * move to show it at all; a side too long for the area shows from its start, as there.
+ */
+export function panToCentre(view: BoardView, rect: BoardRect, area: BoardSize, margin = 24) {
+  if (panToShow(view, rect, area, margin) === view) return view;
+  const shift = (start: number, length: number, room: number) =>
+    Math.round(length > room - margin * 2 ? margin - start : (room - length) / 2 - start);
+  return {
+    ...view,
+    x: view.x + shift(view.x + rect.x * view.zoom, rect.width * view.zoom, area.width),
+    y: view.y + shift(view.y + rect.y * view.zoom, rect.height * view.zoom, area.height),
+  };
+}
+
+/**
  * The view that shows every rect in the surface, centred, at no more than full size. Cards too
  * spread out to fit even at `minZoom` show from their top: the top card at the top-left.
  */
@@ -1441,6 +1456,8 @@ export interface BoardPrompt {
   readonly artifactId: string | null;
   /** The comment thread the reply is posted in, when it was asked from one. */
   readonly commentId?: string | undefined;
+  /** The box whose model pick it runs on, when not its own: new boxes made together share one. */
+  readonly modelOf?: string | undefined;
 }
 
 /** A note added to a composer's draft as a paragraph of its own. */
@@ -2573,7 +2590,8 @@ export function boardPushedBelow(
       grew = true;
     }
   }
-  return { dy, refs: [...moved].map(({ ref }) => ref) };
+  // Each once, however often it was drawn, so nothing moves twice.
+  return { dy, refs: [...new Set([...moved].map(({ ref }) => ref))] };
 }
 
 /** Items in reading order (rows by their tops, then left to right), or as `order` reorders it. */

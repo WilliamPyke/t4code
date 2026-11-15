@@ -762,9 +762,19 @@ it.effect("shows a thread box's last turns, and keeps the owner's box threads ap
     );
     assert.deepEqual(yield* boxThreadsInShell, [ThreadId.make("thread:box")]);
 
+    // A task run in the box is ticked off by the box's next turn, which answers it.
+    yield* change({ type: "note.put", noteId: "task", text: "Fix", x: 0, y: 0, kind: "task" });
+    yield* change({ type: "task.run", noteId: "task", boxId: "box" });
     for (const id of ["run:1", "run:2", "run:2", "run:3", "run:4"]) yield* turn("box", id);
     // A box keeps its last few turns, each once; a note that is no box shows none.
     assert.deepEqual(yield* turnsOf("box"), ["run:2", "run:3", "run:4"]);
+    assert.deepInclude(
+      (yield* share).board?.notes.find((note) => note.id === "task"),
+      {
+        done: true,
+        answer: { excerpt: "Reply run:1", turnId: "run:1", boxId: "box" },
+      },
+    );
     yield* turn("note", "run:5");
     assert.isUndefined(yield* turnsOf("note"));
     // Renaming the box keeps its turns and its thread.

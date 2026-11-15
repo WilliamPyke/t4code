@@ -127,6 +127,7 @@ import {
   isBoardHtmlArtifact,
   boardCardsLine,
   boardHtmlTitle,
+  panToCentre,
   panToShow,
   panToShowAdded,
   parseBoardLink,
@@ -2071,6 +2072,24 @@ describe("panToShow", () => {
     expect(panToShow(view, { x: 0, y: 100, width: 2_000, height: 100 }, size).x).toBe(24);
   });
 
+  it("brings a card out of view to the middle at the same zoom, and leaves one in view alone", () => {
+    const view = { x: -100, y: 50, zoom: 1 };
+    expect(panToCentre(view, { x: 200, y: 100, width: 300, height: 200 }, size)).toBe(view);
+    // Above and to the left: its middle lands on the area's middle.
+    const zoomed = { x: 0, y: 0, zoom: 0.5 };
+    expect(panToCentre(zoomed, { x: -400, y: -600, width: 400, height: 200 }, size)).toEqual({
+      x: 500,
+      y: 550,
+      zoom: 0.5,
+    });
+    // Taller than the area: its top shows, its middle across.
+    expect(panToCentre(view, { x: 900, y: 100, width: 200, height: 1_000 }, size)).toEqual({
+      x: -600,
+      y: -76,
+      zoom: 1,
+    });
+  });
+
   it("leaves the view alone for a new card that shows whole, and shows the rest of one that does not", () => {
     const view = { x: 0, y: 0, zoom: 1 };
     // Placed in view, even a gap from the edge: nothing moves.
@@ -2575,8 +2594,12 @@ describe("selecting several cards", () => {
       { ref: "note:own", rect: { x: 200, y: 560, width: 200, height: 120 } },
       { ref: "note:frame", rect: { x: 150, y: 500, width: 400, height: 300 }, section: true },
     ];
-    const withFrame = boardPushedBelow(section, grown, touching);
-    expect(new Set(withFrame.refs)).toEqual(new Set(["note:own", "note:frame"]));
+    // A card drawn twice still moves once.
+    const withFrame = boardPushedBelow(section, grown, [
+      ...touching,
+      ...touching.slice(0, 1).map((item) => ({ ...item })),
+    ]);
+    expect(withFrame.refs.toSorted()).toEqual(["note:frame", "note:own"]);
     // Far enough that the frame, which started higher than its card, clears the grown section.
     expect(withFrame.dy).toBe(100 + size.h + 24 - 500);
     // Nothing in the way: nothing moves.

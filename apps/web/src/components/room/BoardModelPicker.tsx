@@ -3,6 +3,7 @@ import type {
   ModelSelection,
   ProjectId,
   ProviderInstanceId,
+  RoomBoxModel,
   ScopedThreadRef,
 } from "@t3tools/contracts";
 
@@ -19,6 +20,7 @@ import { EMPTY_SERVER_PROVIDERS } from "~/state/server";
 
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { useApplyThreadModelPick } from "../chat/useApplyThreadModelPick";
+import { boardBoxModelPick, boardModelName } from "./boardBoxModel.logic";
 
 /**
  * The model someone picked in a thread's composer and has not sent with yet, if any. A draft also
@@ -45,7 +47,7 @@ const pickedSelection = (instanceId: ProviderInstanceId, model: string): ModelSe
 
 /**
  * The composer's model picker, compact, for a prompt box on the board. It shows `selection` and
- * hands back the composer's selection for a model picked from it.
+ * hands back the composer's selection for a model picked from it, and that model's name.
  */
 export function BoardModelPicker({
   environmentId,
@@ -56,7 +58,7 @@ export function BoardModelPicker({
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId | null;
   readonly selection: ModelSelection;
-  readonly onChange: (selection: ModelSelection) => void;
+  readonly onChange: (selection: ModelSelection, name: string) => void;
 }) {
   const providers = useEnvironmentProviders().get(environmentId) ?? EMPTY_SERVER_PROVIDERS;
   const settings = useEnvironmentSettings(environmentId);
@@ -83,7 +85,9 @@ export function BoardModelPicker({
           providers,
           model,
         );
-        if (resolved !== null) onChange(pickedSelection(instanceId, resolved));
+        if (resolved === null) return;
+        const picked = pickedSelection(instanceId, resolved);
+        onChange(picked, boardModelName(picked, providers));
       }}
     />
   );
@@ -91,35 +95,50 @@ export function BoardModelPicker({
 
 /**
  * The picker bound to a thread's composer draft, as its composer is: picking here is picking
- * there, and the thread takes the pick as the composer would have it take it.
+ * there, and the thread takes the pick as the composer would have it take it. A box's pick on
+ * the board shows until the thread runs again.
  */
 export function ThreadBoardModelPicker({
   threadRef,
   projectId,
   fallback,
+  chosen,
+  onPicked,
 }: {
   readonly threadRef: ScopedThreadRef;
   readonly projectId: ProjectId | null;
   /** Shown until the thread's shell has loaded. */
   readonly fallback: ModelSelection | null;
+  /** The pick the board keeps for the box this thread is behind. */
+  readonly chosen?: RoomBoxModel | undefined;
+  /** Also keeps a pick on the board, for everyone and every device. */
+  readonly onPicked?: ((selection: ModelSelection, name: string) => void) | undefined;
 }) {
   const picked = useComposerDraftStore((store) =>
     composerDraftPick(store.getComposerDraft(threadRef)),
   );
   const shell = useQuietThreadShell(threadRef);
   const applyThreadModelPick = useApplyThreadModelPick();
-  const selection = picked ?? shell?.modelSelection ?? fallback;
+  const selection =
+    boardBoxModelPick({
+      picked,
+      chosen,
+      lastRunAt: shell === null ? undefined : (shell.latestRun?.requestedAt ?? null),
+    }) ??
+    shell?.modelSelection ??
+    fallback;
   if (selection === null) return null;
   return (
     <BoardModelPicker
       environmentId={threadRef.environmentId}
       projectId={projectId}
       selection={selection}
-      onChange={(next) => {
+      onChange={(next, name) => {
         const store = useComposerDraftStore.getState();
         store.setModelSelection(threadRef, next, { explicit: true, replaceOptions: true });
         store.setStickyModelSelection(next);
         void applyThreadModelPick(threadRef);
+        onPicked?.(next, name);
       }}
     />
   );

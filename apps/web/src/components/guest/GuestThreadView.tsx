@@ -86,6 +86,7 @@ import { deriveActiveWorkStartedAt, derivePhase, deriveThreadAgentWorking } from
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { useEnvironment, useEnvironmentProviders } from "~/state/environments";
 import { serverEnvironment } from "~/state/server";
+import { useQuietThreadShells } from "~/state/entities";
 import { environmentThreadDetails, threadEnvironment, useEnvironmentThread } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { ComposerControl, ComposerControlIcon } from "../chat/ComposerControl";
@@ -110,6 +111,13 @@ import type { TimelineRow } from "../chat/timelineRowContext";
 import { useTimelineFollow } from "../chat/useTimelineFollow";
 import { PersonDot } from "../room/BoardChrome";
 import { composerDraftPick } from "../room/BoardModelPicker";
+import { boardAgentEndOf } from "../room/boardAgents.logic";
+import {
+  type BoardLocalModelPick,
+  boardBoxModelPick,
+  boardLocalModelPick,
+  boardNewBoxModel,
+} from "../room/boardBoxModel.logic";
 import { BoardSplit } from "../room/BoardSplit";
 import { BoardThreadPicker } from "../room/BoardThreadPicker";
 import { RoomBoard, RoomCursors } from "../room/RoomBoard";
@@ -390,10 +398,20 @@ function GuestThreadSession({
   const readOwnBoxPatch = useAtomCommand(serverEnvironment.readSharedRoomBoxPatch, {
     reportFailure: false,
   });
+  const interruptOwnBox = useAtomCommand(threadEnvironment.interruptTurn, "stop your agent");
+  // Only a box this guest's own machine runs can be stopped from here.
+  const stopBox = (boxId: string) => {
+    const threadId = machine?.boxes[boxId];
+    if (machine == null || threadId === undefined) return undefined;
+    return () =>
+      void interruptOwnBox({ environmentId: machine.environmentId, input: { threadId } });
+  };
   // Where the box goes once the guest picks which of their threads it is.
   const [addingAt, setAddingAt] = useState<BoardPoint | null>(null);
-  // A box with no thread yet has no composer to keep its model pick, so the board keeps it.
-  const [boxPicks, setBoxPicks] = useState<Readonly<Record<string, ModelSelection>>>({});
+  // The board keeps each of this guest's boxes' pick; this one until the board shows it.
+  const [boxPicks, setBoxPicks] = useState<Readonly<Record<string, BoardLocalModelPick>>>({});
+  // The guest's own machine's threads, whose records say how their boxes' runs ended.
+  const ownShells = useQuietThreadShells();
   const [awaitingRowIds, setAwaitingRowIds] = useState(readAwaitingRowIds);
   const awaiting = nextAwaitingRowIds(awaitingRowIds, view, projection?.visibleTurnItems ?? []);
   if (awaiting !== awaitingRowIds) setAwaitingRowIds(awaiting);
@@ -474,21 +492,68 @@ function GuestThreadSession({
     }
     void opened.then(reportOpenFailure);
   };
+  const ownBoxNote = (boxId: string) =>
+    guestId === undefined
+      ? undefined
+      : view.board?.notes.find(
+          (note) => note.id === boxId && note.kind === "thread" && note.guestId === guestId,
+        );
+  // A box this guest adds starts on the model they last picked for one of theirs here.
+  const newBoxSelection = guestId === undefined ? undefined : boardNewBoxModel(view.board, guestId);
+  /**
+   * The model one of this guest's boxes runs on, on their machine: none leaves the box's own
+   * thread on its model, or a box without one on the joined thread's.
+   */
+  const ownBoxSelection = (own: OwnRoomMachine, boxId: string): ModelSelection | undefined => {
+    const chosen = ownBoxNote(boxId)?.boxModel;
+    const boxThreadId = own.boxes[boxId];
+    if (boxThreadId === undefined) {
+      return boardLocalModelPick(boxPicks[boxId], chosen) ?? chosen?.selection ?? newBoxSelection;
+    }
+    const ref = scopeThreadRef(own.environmentId, boxThreadId);
+    const run = ownShells.find(
+      (candidate) => candidate.environmentId === ref.environmentId && candidate.id === ref.threadId,
+    )?.latestRun;
+    return boardBoxModelPick({
+      picked: composerDraftPick(useComposerDraftStore.getState().getComposerDraft(ref)),
+      chosen,
+      lastRunAt: run === undefined ? undefined : (run?.requestedAt ?? null),
+    });
+  };
+  // This guest's pick for one of their boxes: theirs on the board, and here until it shows there.
+  const pickOwnBoxModel = (boxId: string, selection: ModelSelection, name: string) => {
+    const box = ownBoxNote(boxId);
+    setBoxPicks((current) => ({
+      ...current,
+      [boxId]: { selection, name, over: box?.boxModel?.at },
+    }));
+    if (box !== undefined) {
+      void postBoardChange(endpoint, {
+        type: "box.model",
+        noteId: boxId,
+        modelSelection: selection,
+        name,
+      });
+    }
+  };
+  // How a run of one of this guest's boxes ended, from their own machine's record.
+  const ownBoxRunEnd = (boxId: string) => {
+    const threadId = machine?.boxes[boxId];
+    if (machine == null || ownBoxNote(boxId) === undefined) return undefined;
+    if (threadId === undefined) return null;
+    const found = ownShells.find(
+      (candidate) => candidate.environmentId === machine.environmentId && candidate.id === threadId,
+    );
+    return found === undefined
+      ? undefined
+      : (boardAgentEndOf(found.latestRun, found.source.latestRunStopRequested === true) ?? null);
+  };
   /**
    * Runs a prompt to this guest's own thread box on their own agent, on their machine in this
    * room, with the model picked for the box. Resolves to whether it ran.
    */
   const promptBoxHere = async (own: OwnRoomMachine, boxId: string, prompt: BoardPrompt) => {
-    const boxThreadId = own.boxes[boxId];
-    // The pick a box's prompt runs with; none leaves its own thread's model, or the joined one's.
-    const selection =
-      boxThreadId === undefined
-        ? boxPicks[boxId]
-        : (composerDraftPick(
-            useComposerDraftStore
-              .getState()
-              .getComposerDraft(scopeThreadRef(own.environmentId, boxThreadId)),
-          ) ?? undefined);
+    const selection = ownBoxSelection(own, prompt.modelOf ?? boxId);
     const turn =
       selection === undefined
         ? { modelSelection: undefined, text: prompt.text.trim() }
@@ -513,6 +578,16 @@ function GuestThreadSession({
     });
     if (result._tag === "Success" && result.value.threadId !== null) {
       setBoxThread(own.environmentId, boxId, result.value.threadId);
+      // A box made by asking took its pick before it was on the board; the board keeps it now.
+      const local = boxPicks[boxId];
+      if (local !== undefined && local.over === undefined) {
+        void postBoardChange(endpoint, {
+          type: "box.model",
+          noteId: boxId,
+          modelSelection: local.selection,
+          name: local.name,
+        });
+      }
       return true;
     }
     if (result._tag === "Failure" && isAtomCommandInterrupted(result)) return false;
@@ -673,6 +748,7 @@ function GuestThreadSession({
             onChange={(change) => postBoardChange(endpoint, change)}
             onCursor={(presence) => postBoardCursor(endpoint, presence)}
             onPromptBox={promptBox}
+            stopBox={stopBox}
             askInComments={machine != null}
             readCodePatch={readCodePatch}
             onRefreshPullRequest={(noteId) => refreshRoomPullRequest(endpoint, noteId)}
@@ -686,13 +762,14 @@ function GuestThreadSession({
                 <OwnBoxModelPicker
                   machine={machine}
                   boxId={boxId}
-                  pick={boxPicks[boxId]}
-                  onPick={(selection) =>
-                    setBoxPicks((current) => ({ ...current, [boxId]: selection }))
-                  }
+                  pick={ownBoxSelection(machine, boxId)}
+                  chosen={ownBoxNote(boxId)?.boxModel}
+                  onPick={(selection, name) => pickOwnBoxModel(boxId, selection, name)}
                 />
               )
             }
+            boxRunEnd={ownBoxRunEnd}
+            roomModel={view.model.name}
             guestBoxPlaceholder={
               machine === undefined
                 ? "Ask an agent"

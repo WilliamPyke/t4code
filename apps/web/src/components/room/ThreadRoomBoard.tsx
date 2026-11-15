@@ -40,7 +40,7 @@ import {
 import { useEnvironmentProviders } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
-import { environmentThreadDetails } from "~/state/threads";
+import { environmentThreadDetails, threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { vcsEnvironment } from "~/state/vcs";
 
@@ -61,6 +61,14 @@ import { BOARD_TITLE_BAR_CLASS } from "./BoardChrome";
 import { BoardSharing } from "./BoardSharing";
 import { BoardThreadPicker } from "./BoardThreadPicker";
 import { BoardModelPicker, ThreadBoardModelPicker, composerDraftPick } from "./BoardModelPicker";
+import { boardAgentEndOf } from "./boardAgents.logic";
+import {
+  type BoardLocalModelPick,
+  boardBoxModelPick,
+  boardLocalModelPick,
+  boardModelName,
+  boardNewBoxModel,
+} from "./boardBoxModel.logic";
 import { BoardSplit } from "./BoardSplit";
 import { RoomBoard, RoomCursors } from "./RoomBoard";
 import { RoomReplyProvider, revealRoomReply } from "./RoomReplyComments";
@@ -267,27 +275,77 @@ export function ThreadRoomBoard({
   const roomPick = useComposerDraftStore((store) =>
     composerDraftPick(store.getComposerDraft(threadRef)),
   );
-  const roomSelection = roomPick ?? shell?.modelSelection ?? null;
-  // A box with no conversation yet has no composer to keep its pick, so the board keeps it.
-  const [boxPicks, setBoxPicks] = useState<Readonly<Record<string, ModelSelection>>>({});
+  // The board keeps the room box's pick too: another provider's waits for a turn to reach the thread.
+  const roomSelection =
+    boardBoxModelPick({
+      picked: roomPick,
+      chosen: room.board?.roomBoxModel,
+      lastRunAt: shell === null ? undefined : (shell.latestRun?.requestedAt ?? null),
+    }) ??
+    shell?.modelSelection ??
+    null;
+  // The board keeps each of the owner's boxes' pick; this one until the board shows it.
+  const [boxPicks, setBoxPicks] = useState<Readonly<Record<string, BoardLocalModelPick>>>({});
+  // Only the owner's own boxes: a guest's box pick names a model on the guest's machine.
+  const ownBox = (boxId: string) =>
+    room.board?.notes.find(
+      (note) => note.id === boxId && note.kind === "thread" && note.guestId === undefined,
+    );
+  const ownBoxModel = (boxId: string) =>
+    boxId === ROOM_BOARD_ROOM_BOX ? room.board?.roomBoxModel : ownBox(boxId)?.boxModel;
+  // A box the owner adds starts on the model they last picked for one of theirs here.
+  const newBoxSelection = boardNewBoxModel(room.board, null) ?? roomSelection;
   const boxThreadRef = (boxId: string) => {
     if (boxId === ROOM_BOARD_ROOM_BOX) return threadRef;
     const threadId = boardThreads[boxId];
     return threadId === undefined ? null : scopeThreadRef(threadRef.environmentId, threadId);
   };
+  const boxShell = (ref: ScopedThreadRef) =>
+    shells.find(
+      (candidate) => candidate.environmentId === ref.environmentId && candidate.id === ref.threadId,
+    );
   // The pick a box's prompt runs with; none leaves its own thread's model.
   const boxSelection = (boxId: string): ModelSelection | undefined => {
     const ref = boxThreadRef(boxId);
-    if (ref === null) return boxPicks[boxId] ?? roomSelection ?? undefined;
+    const box = ownBox(boxId);
+    const chosen = box?.boxModel;
+    if (ref === null) {
+      const local = boardLocalModelPick(boxPicks[boxId], chosen);
+      // A guest's box, whose request the owner sends: on the owner's pick for it, or the room's.
+      if (box === undefined && room.board?.notes.some((note) => note.id === boxId)) {
+        return local ?? roomSelection ?? undefined;
+      }
+      return local ?? chosen?.selection ?? newBoxSelection ?? undefined;
+    }
+    if (boxId === ROOM_BOARD_ROOM_BOX) return roomSelection ?? undefined;
     const picked = composerDraftPick(useComposerDraftStore.getState().getComposerDraft(ref));
-    return (
-      picked ?? (boxId === ROOM_BOARD_ROOM_BOX ? (shell?.modelSelection ?? undefined) : undefined)
-    );
+    const run = boxShell(ref)?.latestRun;
+    return boardBoxModelPick({
+      picked,
+      chosen,
+      lastRunAt: run === undefined ? undefined : (run?.requestedAt ?? null),
+    });
+  };
+  // The owner's pick for one of their boxes: theirs on the board, and here until it shows there.
+  const pickBoxModel = (boxId: string, selection: ModelSelection, name: string) => {
+    // The room thread's composer draft holds this device's pick until the board shows it.
+    if (boxId === ROOM_BOARD_ROOM_BOX) {
+      void onChange?.({ type: "box.model", noteId: boxId, modelSelection: selection, name });
+      return;
+    }
+    const box = ownBox(boxId);
+    setBoxPicks((current) => ({
+      ...current,
+      [boxId]: { selection, name, over: box?.boxModel?.at },
+    }));
+    if (box !== undefined) {
+      void onChange?.({ type: "box.model", noteId: boxId, modelSelection: selection, name });
+    }
   };
   const sendingRef = useRef(false);
   const promptBox = async (boxId: string, prompt: BoardPrompt) => {
     if (sendingRef.current) return false;
-    const selection = boxSelection(boxId);
+    const selection = boxSelection(prompt.modelOf ?? boxId);
     // As the composer sends it: the options picked, and an effort the model reads from the prompt.
     const turn =
       selection === undefined
@@ -307,7 +365,32 @@ export function ThreadRoomBoard({
       },
     });
     sendingRef.current = false;
+    // A box made by asking took its pick before it was on the board; the board keeps it now.
+    const local = boxPicks[boxId];
+    const guests = room.board?.notes.some(
+      (note) => note.id === boxId && note.guestId !== undefined,
+    );
+    if (result._tag === "Success" && local !== undefined && local.over === undefined && !guests) {
+      void onChange?.({
+        type: "box.model",
+        noteId: boxId,
+        modelSelection: local.selection,
+        name: local.name,
+      });
+    }
     return result._tag === "Success";
+  };
+  const interruptTurn = useAtomCommand(threadEnvironment.interruptTurn, "stop the agent");
+  // The owner's agent runs their own boxes and the guests' requests they sent, in the box's thread.
+  const stopBox = (boxId: string) => {
+    const ref = boxThreadRef(boxId);
+    return ref === null
+      ? undefined
+      : () =>
+          void interruptTurn({
+            environmentId: ref.environmentId,
+            input: { threadId: ref.threadId },
+          });
   };
   const requests = useGuestMessageResolver(threadRef);
   const resolveRequest = (message: ThreadGuestMessage, decision: "send" | "dismiss") =>
@@ -319,20 +402,40 @@ export function ThreadRoomBoard({
   );
   const renderBoxModel = (boxId: string) => {
     const ref = boxThreadRef(boxId);
+    const chosen = ownBoxModel(boxId);
     if (ref !== null) {
       return (
-        <ThreadBoardModelPicker threadRef={ref} projectId={projectId} fallback={roomSelection} />
+        <ThreadBoardModelPicker
+          threadRef={ref}
+          projectId={projectId}
+          fallback={chosen?.selection ?? roomSelection}
+          chosen={chosen}
+          onPicked={(selection, name) => pickBoxModel(boxId, selection, name)}
+        />
       );
     }
-    const selection = boxPicks[boxId] ?? roomSelection;
+    const selection = boxSelection(boxId) ?? null;
     return selection === null ? null : (
       <BoardModelPicker
         environmentId={threadRef.environmentId}
         projectId={projectId}
         selection={selection}
-        onChange={(next) => setBoxPicks((current) => ({ ...current, [boxId]: next }))}
+        onChange={(next, name) => pickBoxModel(boxId, next, name)}
       />
     );
+  };
+  // How each box's last run ended, from its thread's record here.
+  const boxRunEnd = (boxId: string) => {
+    // A guest's box runs on their machine too, whose record this client cannot read.
+    if (room.board?.notes.some((note) => note.id === boxId && note.guestId !== undefined)) {
+      return undefined;
+    }
+    const ref = boxThreadRef(boxId);
+    if (ref === null) return null;
+    const found = boxShell(ref);
+    return found === undefined
+      ? undefined
+      : (boardAgentEndOf(found.latestRun, found.source.latestRunStopRequested === true) ?? null);
   };
   const cwd = thread?.worktreePath ?? project?.workspaceRoot ?? null;
   const { data: gitStatus } = useEnvironmentQuery(
@@ -461,6 +564,11 @@ export function ThreadRoomBoard({
               onOpenPullRequest={canOpenPullRequest ? () => void openPullRequest() : undefined}
               openingPullRequest={openingPullRequest}
               onPromptBox={canPrompt ? promptBox : undefined}
+              stopBox={canPrompt ? stopBox : undefined}
+              boxRunEnd={boxRunEnd}
+              roomModel={
+                roomSelection === null ? undefined : boardModelName(roomSelection, providers)
+              }
               askInComments
               readCodePatch={readCodePatch}
               onRefreshPullRequest={canRefreshPullRequest ? onRefreshPullRequest : undefined}

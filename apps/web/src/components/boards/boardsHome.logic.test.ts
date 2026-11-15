@@ -218,7 +218,25 @@ describe("board templates", () => {
       expect(board.notes.length).toBeLessThanOrEqual(ROOM_BOARD_MAX_NOTES);
       expect(board.edges ?? []).toHaveLength(template.lines.length);
       expect(board.positions[ROOM_BOARD_THREAD_CARD]).toEqual(template.thread);
-      expect(boardTemplateShapes(template)).toHaveLength(template.items.length + 1);
+      // Its thread boxes start empty, with no model picked: the default applies when first used.
+      for (const box of board.notes.filter((note) => note.kind === "thread")) {
+        expect(box.boxModel).toBeUndefined();
+        expect(box.thread).toBeUndefined();
+      }
+      const shapes = boardTemplateShapes(template);
+      expect(shapes).toHaveLength(template.items.length + 1);
+      // Nothing overlaps, but a card wholly inside its section.
+      const meet = (a: (typeof shapes)[number], b: (typeof shapes)[number]) =>
+        a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+      const inside = (a: (typeof shapes)[number], b: (typeof shapes)[number]) =>
+        a.x >= b.x && a.y >= b.y && a.x + a.w <= b.x + b.w && a.y + a.h <= b.y + b.h;
+      for (const [index, shape] of shapes.entries()) {
+        for (const other of shapes.slice(index + 1)) {
+          if (!meet(shape, other)) continue;
+          expect([shape.kind, other.kind].filter((kind) => kind === "section")).toHaveLength(1);
+          expect(shape.kind === "section" ? inside(other, shape) : inside(shape, other)).toBe(true);
+        }
+      }
     },
   );
 

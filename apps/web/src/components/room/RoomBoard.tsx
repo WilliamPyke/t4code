@@ -55,6 +55,7 @@ import {
   MessagesSquareIcon,
   MinusIcon,
   MousePointer2Icon,
+  PlayIcon,
   PlusIcon,
   ScanIcon,
   SquareDashedIcon,
@@ -216,6 +217,7 @@ import {
   openingBoardView,
   followBoardView,
   panBoardBy,
+  panToCentre,
   panToShow,
   panToShowAdded,
   parseBoardLink,
@@ -280,6 +282,15 @@ import {
   boardAskSuggestions,
   boardAskTargets,
 } from "./boardAsk.logic";
+import { type BoardRunning, BoardRunPopover, TaskRunChip, newBoardRunning } from "./BoardRun";
+import {
+  BOARD_RUN_MAX_BOXES,
+  type BoardRunMode,
+  boardRunPrompt,
+  boardRunTargets,
+  boardRunTasks,
+  canRunBoardTask,
+} from "./boardRun.logic";
 import {
   BOARD_VOTE,
   boardByVotes,
@@ -326,8 +337,18 @@ import {
   PersonDot,
 } from "./BoardChrome";
 import { BoxBoardWork, BoxProgress, BoxRequests, BoxTurns } from "./RoomBoardThreadBox";
-import { type BoardAgentEntry, BoardAgents } from "./BoardAgents";
-import { boardAgentActivity, isBoardAgentsKey } from "./boardAgents.logic";
+import {
+  type BoardAgentEntry,
+  BoardAgents,
+  BoardAgentsMoreButton,
+  BoardAgentsNeedsBadge,
+} from "./BoardAgents";
+import {
+  type BoardAgentEnd,
+  boardAgentActivity,
+  boardAgentModel,
+  isBoardAgentsKey,
+} from "./boardAgents.logic";
 import {
   RoomLiveContext,
   boardLiveRect,
@@ -369,6 +390,27 @@ const NUDGES: Readonly<Record<string, readonly [number, number]>> = {
   ArrowUp: [0, -1],
   ArrowDown: [0, 1],
 };
+
+/** Ctrl or Cmd with Z undoes; with Shift, or Ctrl+Y, redoes. */
+const boardHistoryKey = (event: {
+  readonly key: string;
+  readonly ctrlKey: boolean;
+  readonly metaKey: boolean;
+  readonly altKey: boolean;
+  readonly shiftKey: boolean;
+}) => {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey) return null;
+  const key = event.key.toLowerCase();
+  if ((key === "z" && event.shiftKey) || (key === "y" && !event.metaKey)) return "redo";
+  return key === "z" ? "undo" : null;
+};
+
+const OWN_KEYS_OUTSIDE =
+  '[role="dialog"], [role="alertdialog"], [role="menu"], [role="menubar"], [role="listbox"], [role="combobox"], [role="grid"], [role="tree"], [role="application"], [role="textbox"]';
+
+/** A focused element outside the board whose keys the board may take: not a field or a widget. */
+const isBoardKeyOutside = (target: Element) =>
+  isBoardKey(target) && target.closest(OWN_KEYS_OUTSIDE) === null;
 // About what three clamped lines of a quote hold on a note of the default width.
 const QUOTE_CLAMP_LENGTH = 90;
 const BOARD_CODE_WINDOW_HINT =
@@ -715,6 +757,9 @@ export function RoomBoard({
   readCodePatch,
   onRefreshPullRequest,
   boxPullRequestUrl,
+  stopBox,
+  boxRunEnd,
+  roomModel,
 }: {
   readonly title: string;
   /** Null when the thread is not shared, so there is no room to arrange a board for. */
@@ -821,6 +866,15 @@ export function RoomBoard({
    * own box falls back to the one its branch has.
    */
   readonly boxPullRequestUrl?: ((boxId: string) => string | undefined) | undefined;
+  /** Stops the run of a box's agent, where this viewer may: absent for a box they may not. */
+  readonly stopBox?: ((boxId: string) => (() => void) | undefined) | undefined;
+  /**
+   * How a box's last run ended, from the machine that ran it, where this client reads that
+   * machine: null when none ended yet there. Undefined for a box whose machine it cannot read.
+   */
+  readonly boxRunEnd?: ((boxId: string) => BoardAgentEnd | null | undefined) | undefined;
+  /** The model the room thread's own agent runs on, as this client can name it. */
+  readonly roomModel?: string | undefined;
 }) {
   const board = room?.board ?? EMPTY_ROOM_BOARD;
   const running = useRoomRunning();
@@ -1346,6 +1400,26 @@ export function RoomBoard({
       unrecorded.current = false;
     }
   };
+  // Undo and redo reach the board while focus rests on a plain control outside it, such as the
+  // sidebar's toggle; fields, dialogs, menus and other widgets keep their keys.
+  const historyKeyOutside = useStableCallback((event: KeyboardEvent) => {
+    const surface = surfaceRef.current;
+    const target = event.target;
+    if (event.defaultPrevented || surface === null || surface.getClientRects().length === 0) {
+      return;
+    }
+    if (target instanceof Node && surface.contains(target)) return;
+    if (target instanceof Element && !isBoardKeyOutside(target)) return;
+    const direction = boardHistoryKey(event);
+    if (direction === null || !canEdit) return;
+    event.preventDefault();
+    travel(direction);
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keys pressed with focus outside the board reach only the window
+  useEffect(() => {
+    window.addEventListener("keydown", historyKeyOutside);
+    return () => window.removeEventListener("keydown", historyKeyOutside);
+  }, [historyKeyOutside]);
   // The room hears of a drag or a draft once, when it ends.
   const letGo = (target: BoardTarget, after?: string) => {
     const value = held.current.get(boardEditKey(target));
@@ -1747,20 +1821,34 @@ export function RoomBoard({
   const drawnItem = (ref: string) =>
     surfaceRef.current?.querySelector<HTMLElement>(`[data-board-item="${CSS.escape(ref)}"]`) ??
     null;
-  // Pans once, as little as it takes, and only when the rect is not already in view whole. A
-  // card just added moves the view only when most of it is out of sight.
+  // Pans once, and only when the rect is not already in view whole: a card just added as little
+  // as it takes, anything else shown to the middle of what the header and toolbar leave in sight.
   const reveal = (rect: BoardRect, added = false) => {
     const surface = boardAreaOf(surfaceRef.current);
     if (surface === null) return;
-    // What the bottom toolbar covers is out of view: a card shown is shown above it.
-    const area = {
+    if (added) {
+      // What the bottom toolbar covers is out of view: a card added is shown above it.
+      const area = {
+        width: surface.width,
+        height: Math.max(surface.height / 2, surface.height - BOARD_TOOLBAR_BAND),
+      };
+      const next = panToShowAdded(view, rect, area);
+      if (next === view) return;
+      setFollowing(null);
+      setView(next);
+      return;
+    }
+    const cover = chromeCoverOf(surfaceRef.current);
+    const height = surface.height - cover.top - cover.bottom;
+    const top = height < surface.height / 2 ? 0 : cover.top;
+    const shifted = { ...view, y: view.y - top };
+    const next = panToCentre(shifted, rect, {
       width: surface.width,
-      height: Math.max(surface.height / 2, surface.height - BOARD_TOOLBAR_BAND),
-    };
-    const next = added ? panToShowAdded(view, rect, area) : panToShow(view, rect, area);
-    if (next === view) return;
+      height: top === 0 ? surface.height : height,
+    });
+    if (next === shifted) return;
     setFollowing(null);
-    setView(next);
+    setView({ ...next, y: next.y + top });
   };
   // The card this person last added or selected alone, which a new card joins in its section.
   const lastCard = useRef<string | null>(null);
@@ -2262,12 +2350,14 @@ export function RoomBoard({
   const openAsk = () => {
     if (canAsk) setAsking(newBoardAsking(selected));
   };
-  // The artifact card's own way in: the ask opens on that artifact alone.
+  // The artifact card's own way in: on that artifact alone, or, when it is selected, as the
+  // selection's Ask with it first, since the first selected artifact is the one edited.
   const askAboutArtifact = (note: RoomBoardNote) => {
     const ref = noteRef(note.id);
-    setSelection(new Set([ref]));
+    const refs = selected.has(ref) ? [ref, ...[...selected].filter((one) => one !== ref)] : [ref];
+    setSelection(new Set(refs));
     lastCard.current = ref;
-    setAsking(newBoardAsking([ref]));
+    setAsking(newBoardAsking(refs));
   };
   // It closes at once; a failure opens it again on the same cards, with what was typed.
   const sendAsk = (ask: BoardAsking, target: string, text: string) => {
@@ -2372,6 +2462,183 @@ export function RoomBoard({
     rememberBoardAskTarget(askKey, boxId);
     revealItem(boxRef);
     return true;
+  };
+  // Running tasks with an agent: as with an ask, each task goes along a line into its box as a
+  // card, first marked as run there so everyone sees which box has it; that box's next turn on the
+  // board ticks it off. Only idle boxes are offered, so that next turn is the run's.
+  const live = use(RoomLiveContext);
+  const boxWaiting = (boxId: string) =>
+    boardBoxRequests(room?.messages ?? NO_GUEST_MESSAGES, boxId).length > 0;
+  // A task a box is on now: its box runs, or a request for that box waits on the owner.
+  const taskBusy = (task: RoomBoardNote) =>
+    task.run !== undefined &&
+    task.done !== true &&
+    (live.box(task.run.boxId) !== undefined || boxWaiting(task.run.boxId));
+  const runTargets = boardRunTargets(askTargets, (boxId) => live.box(boxId) !== undefined);
+  const runTasksOf = (notes: ReadonlyArray<RoomBoardNote>, busy = taskBusy) =>
+    runTargets.length === 0 ? { tasks: [], left: 0 } : boardRunTasks(notes, viewer, busy);
+  const selectionRun = runTasksOf(selectedNotes);
+  const [runningTasks, setRunningTasks] = useState<BoardRunning | null>(null);
+  const runAfterMenu = useRef(false);
+  // Once open, it keeps the tasks it was opened on while they can still run.
+  const runPlan = runTasksOf(
+    runningTasks === null
+      ? []
+      : shown.notes.filter((note) => runningTasks.refs.has(noteRef(note.id))),
+    () => false,
+  );
+  if (runningTasks !== null && runPlan.tasks.length === 0) setRunningTasks(null);
+  const threadCount = shown.notes.filter((note) => note.kind === "thread").length;
+  const boxesLeft =
+    cannotAddThread === null
+      ? Math.max(
+          0,
+          Math.min(ROOM_BOARD_MAX_THREADS - threadCount, ROOM_BOARD_MAX_NOTES - shown.notes.length),
+        )
+      : 0;
+  const openRun = (notes: ReadonlyArray<RoomBoardNote>) => {
+    const { tasks } = runTasksOf(notes);
+    if (tasks.length === 0) return false;
+    const refs = tasks.map((task) => noteRef(task.id));
+    setSelection(new Set(refs));
+    lastCard.current = refs[0] ?? null;
+    setAsking(null);
+    setRunningTasks(newBoardRunning(refs));
+    return true;
+  };
+  // A section's open tasks: what sits over it, as Tidy takes it.
+  const runSection = (section: RoomBoardNote) => {
+    const element = drawnItem(noteRef(section.id));
+    if (element === null) return;
+    const items = [
+      ...(surfaceRef.current?.querySelectorAll<HTMLElement>(
+        "[data-board-item]:not([data-board-pin]):not([data-board-section])",
+      ) ?? []),
+    ].map((item) => ({ ref: item.dataset.boardItem ?? "", rect: drawnRect(item) }));
+    const refs = new Set(boardItemsCentredIn(items, drawnRect(element), noteRef(section.id)));
+    if (!openRun(shown.notes.filter((note) => refs.has(noteRef(note.id))))) {
+      setNotice("This section has no open tasks you can run.");
+    }
+  };
+  type RunGroup = {
+    readonly tasks: ReadonlyArray<RoomBoardNote>;
+    readonly boxId: string;
+    readonly at: BoardPoint | null;
+  };
+  // One box's share of a run: its box if new, the lines in, the tasks marked, then the prompt.
+  // A prompt that does not go takes back all it added.
+  const runGroup = async (group: RunGroup, modelOf: string | undefined): Promise<boolean> => {
+    if (onPromptBox === undefined || onChange === undefined) return false;
+    const queue = group.at === null ? `ask:${group.boxId}` : noteRef(group.boxId);
+    const cards = group.tasks.flatMap((task) => boardPromptCard(task, people) ?? []);
+    const plan = boardAskLines(
+      edges,
+      cards.map((card) => card.ref),
+      boardBoxRef(group.boxId),
+      ROOM_BOARD_MAX_EDGES,
+    );
+    const lines = plan.add.map((line) => ({ id: randomUUID(), ...line }));
+    unrecorded.current = true;
+    try {
+      if (group.at !== null) {
+        send(
+          { kind: "note", id: group.boxId },
+          settleBoardValue({
+            id: group.boxId,
+            text: boardThreadBoxTitle(group.tasks.map((task) => task.text).join("; ")),
+            ...group.at,
+            kind: "thread",
+            ...(viewer === null ? {} : { guestId: viewer }),
+          }),
+          queue,
+        );
+      }
+      for (const line of lines) send({ kind: "edge", id: line.id }, line, queue);
+    } finally {
+      unrecorded.current = false;
+    }
+    const mark = (task: RoomBoardNote, boxId: string | null) =>
+      queueChange(queue, () => onChange({ type: "task.run", noteId: task.id, boxId }));
+    const marked = await Promise.all(group.tasks.map((task) => mark(task, group.boxId)));
+    // The task always goes in the prompt, with a line into the box or, on a full board, without.
+    const sent =
+      marked.every(Boolean) &&
+      (await onPromptBox(group.boxId, {
+        text: boardRunPrompt(group.tasks.length),
+        cards,
+        artifactId: null,
+        modelOf,
+      }).catch(() => false));
+    if (sent) return true;
+    for (const task of group.tasks) void mark(task, null);
+    unrecorded.current = true;
+    try {
+      for (const line of lines) send({ kind: "edge", id: line.id }, null, queue);
+      if (group.at !== null) send({ kind: "note", id: group.boxId }, null, queue);
+    } finally {
+      unrecorded.current = false;
+    }
+    return false;
+  };
+  // It closes at once; boxes run one after another, and what did not go opens it again.
+  const runTasks = async (run: BoardRunning, mode: BoardRunMode, target: string) => {
+    const tasks = runPlan.tasks;
+    setRunningTasks(null);
+    const size = boardNewNoteSize("thread");
+    const area = boardAreaOf(surfaceRef.current);
+    const within = area === null ? undefined : visibleBoardRect(view, area);
+    const taken = takenRects();
+    const spotBeside = (cards: ReadonlyArray<RoomBoardNote>): BoardPoint => {
+      const bounds = boardBounds(
+        cards.flatMap((task) => {
+          const element = drawnItem(noteRef(task.id));
+          return element === null ? [] : [drawnRect(element)];
+        }),
+      );
+      const at =
+        bounds === null
+          ? freeSpot("thread", size, false)
+          : besideBoardItem(bounds, size, taken, within);
+      taken.push({ ...at, width: size.w, height: size.h });
+      return at;
+    };
+    const groups: ReadonlyArray<RunGroup> =
+      mode === "each"
+        ? tasks.map((task, index) => ({
+            tasks: [task],
+            boxId: index === 0 ? run.newBoxId : randomUUID(),
+            at: spotBeside([task]),
+          }))
+        : [
+            target === BOARD_ASK_NEW_BOX
+              ? { tasks, boxId: run.newBoxId, at: spotBeside(tasks) }
+              : { tasks, boxId: target, at: null },
+          ];
+    const failed: Array<RunGroup> = [];
+    for (const group of groups) {
+      // New boxes all run on the model picked for the first.
+      if (!(await runGroup(group, group.at === null ? undefined : run.newBoxId))) {
+        failed.push(group);
+      }
+    }
+    if (mode === "one" && target !== BOARD_ASK_NEW_BOX) rememberBoardAskTarget(askKey, target);
+    if (failed.length === 0) {
+      const first = groups[0];
+      if (first !== undefined) revealItem(boardBoxRef(first.boxId));
+      return;
+    }
+    const refs = new Set(failed.flatMap((group) => group.tasks.map((task) => noteRef(task.id))));
+    setSelection(refs);
+    setRunningTasks({
+      ...run,
+      refs,
+      mode,
+      target,
+      failed:
+        groups.length === 1
+          ? "Could not run it. Nothing was added to the board."
+          : `Could not run ${failed.length} of ${groups.length}. Nothing was added for ${failed.length === 1 ? "it" : "them"}.`,
+    });
   };
   // Brings an item into view if it is not, and puts the caret in its prompt box.
   const focusItem = (ref: string) => {
@@ -2733,6 +3000,9 @@ export function RoomBoard({
           : undefined,
       actions: [
         ...(section && canEdit ? [{ label: "Tidy", run: () => tidySection(note) }] : []),
+        ...(section && runTargets.length > 0
+          ? [{ label: "Run this section's tasks", run: () => runSection(note) }]
+          : []),
         ...(reactTo === undefined
           ? []
           : section
@@ -2928,17 +3198,29 @@ export function RoomBoard({
           : { ...card, actions: card.actions.filter((action) => action.destructive !== true) },
       groups: [
         pick("add-note", "add-task", "add-section", "add-thread", "add-artifact"),
-        // The ask opens once the menu has closed, so the menu does not take its focus back.
-        ref !== null && canAsk
-          ? [
-              {
-                label: "Ask an agent…",
-                run: () => {
-                  askAfterMenu.current = true;
+        // The ask and the run open once the menu has closed, so it does not take their focus back.
+        [
+          ...(ref !== null && canAsk
+            ? [
+                {
+                  label: "Ask an agent…",
+                  run: () => {
+                    askAfterMenu.current = true;
+                  },
                 },
-              },
-            ]
-          : [],
+              ]
+            : []),
+          ...(ref !== null && selectionRun.tasks.length > 0
+            ? [
+                {
+                  label: "Run with an agent…",
+                  run: () => {
+                    runAfterMenu.current = true;
+                  },
+                },
+              ]
+            : []),
+        ],
         pick("vote", "paste", "duplicate", "copy", "copy-link"),
         pick("tidy", "sort-votes", "group", "select-all", "fit"),
         [
@@ -3178,16 +3460,25 @@ export function RoomBoard({
         );
   // Every thread box as the Agents panel lists it; their runs it reads from the live store.
   const agentEntries = threadBoxes.map((box): BoardAgentEntry => {
-    const turn = shown.notes.find((note) => note.id === box.id)?.thread?.turns.at(-1);
+    const note = shown.notes.find((candidate) => candidate.id === box.id);
+    const turn = note?.thread?.turns.at(-1);
     const work = shown.agentTurns?.findLast((candidate) => candidate.boxId === box.id);
     const workLine = work === undefined || work.undone === true ? "" : boardAgentTurnLine(work);
     const isRoom = box.id === ROOM_BOARD_ROOM_BOX;
+    const picked = note?.boxModel;
     return {
       id: box.id,
       name: box.title || "Untitled thread",
       whose: boardPersonName(people, box.guestId),
       color: boardCursorColor(guests, box.guestId),
-      model: turn?.model ?? work?.model,
+      model: isRoom
+        ? (roomModel ?? work?.model)
+        : boardAgentModel([
+            turn,
+            work,
+            picked === undefined ? undefined : { model: picked.name, at: picked.at },
+          ]),
+      end: boxRunEnd?.(box.id),
       work: workLine === "" ? undefined : workLine,
       requests: boardBoxRequests(room?.messages ?? NO_GUEST_MESSAGES, box.id),
       canResolve: onResolveRequest !== undefined,
@@ -3475,7 +3766,7 @@ export function RoomBoard({
                 <span className="contents @2xl/board:hidden">
                   <Menu>
                     <MenuTrigger
-                      render={<Button size="icon" variant="ghost" aria-label="More tools" />}
+                      render={<BoardAgentsMoreButton entries={agentEntries} viewer={viewer} />}
                     >
                       <EllipsisIcon />
                     </MenuTrigger>
@@ -3525,6 +3816,7 @@ export function RoomBoard({
                         <MenuItem onClick={() => setAgentsOpen(true)}>
                           <BotIcon />
                           Agents
+                          <BoardAgentsNeedsBadge entries={agentEntries} viewer={viewer} />
                         </MenuItem>
                       ) : null}
                     </MenuPopup>
@@ -3817,10 +4109,10 @@ export function RoomBoard({
             }
             if ((event.ctrlKey || event.metaKey) && !event.altKey && isBoardKey(event.target)) {
               const key = event.key.toLowerCase();
-              const redo = (key === "z" && event.shiftKey) || (key === "y" && !event.metaKey);
-              if (key === "z" || redo) {
+              const direction = boardHistoryKey(event);
+              if (direction !== null) {
                 event.preventDefault();
-                travel(redo ? "redo" : "undo");
+                travel(direction);
                 return;
               }
               if (key === "d" && !event.shiftKey && selected.size > 0) {
@@ -4331,6 +4623,35 @@ export function RoomBoard({
                     onOpenReply={onOpenReply}
                     worker={running.find((agent) => agent.taskId === note.id)}
                     onTake={takeOf(note)}
+                    onRun={
+                      canRunBoardTask(note, viewer) && runTargets.length > 0 && !taskBusy(note)
+                        ? () => void openRun([note])
+                        : undefined
+                    }
+                    taskRun={
+                      note.kind === "task" && note.run !== undefined ? (
+                        <TaskRunChip
+                          run={note.run}
+                          done={note.done === true}
+                          boxName={boxName(note.run.boxId)}
+                          color={boardCursorColor(
+                            guests,
+                            threadBoxes.find((box) => box.id === note.run?.boxId)?.guestId,
+                          )}
+                          waiting={boxWaiting(note.run.boxId)}
+                          onShowBox={() => note.run !== undefined && showBox(note.run.boxId)}
+                          onStop={stopBox?.(note.run.boxId)}
+                          onClear={
+                            canEdit && onChange !== undefined
+                              ? () =>
+                                  void queueChange(noteRef(note.id), () =>
+                                    onChange({ type: "task.run", noteId: note.id, boxId: null }),
+                                  )
+                              : undefined
+                          }
+                        />
+                      ) : null
+                    }
                     onUse={messageOf(note)}
                     onGive={giveOf(note)}
                     artifactAuthor={
@@ -4446,6 +4767,15 @@ export function RoomBoard({
               onClear={() => setSelection(NO_SELECTION)}
               actions={[
                 ...(canAsk ? [{ label: "Ask an agent", icon: <BotIcon />, run: openAsk }] : []),
+                ...(selectionRun.tasks.length > 0
+                  ? [
+                      {
+                        label: "Run with an agent",
+                        icon: <PlayIcon />,
+                        run: () => openRun(selectedNotes),
+                      },
+                    ]
+                  : []),
                 ...(canEdit && selected.size > 1
                   ? [{ label: "Tidy", icon: <LayoutGridIcon />, run: tidySelection }]
                   : []),
@@ -4505,8 +4835,11 @@ export function RoomBoard({
                 Share this thread with guests and each person who joins gets a card here.
               </span>
             </p>
-          ) : canEdit && shown.notes.length === 0 && (cards?.length ?? 0) === 0 ? (
-            // Above the toolbar, never on the room thread's own card, which a new board shows.
+          ) : canEdit &&
+            shown.notes.length === 0 &&
+            (cards?.length ?? 0) === 0 &&
+            messages.length === 0 ? (
+            // Above the toolbar, below the room thread's own card while it is new and short.
             <div className="pointer-events-none absolute inset-x-0 bottom-20 flex justify-center px-4">
               <div className="flex max-w-xs flex-col items-center gap-1 text-center">
                 <p className="text-sm font-semibold text-foreground">An empty board</p>
@@ -4533,6 +4866,11 @@ export function RoomBoard({
                 if (askAfterMenu.current) {
                   askAfterMenu.current = false;
                   return openAsk();
+                }
+                if (runAfterMenu.current) {
+                  runAfterMenu.current = false;
+                  openRun(selectedNotes);
+                  return;
                 }
                 const surface = surfaceRef.current;
                 if (surface !== null && !surface.contains(document.activeElement)) {
@@ -4578,6 +4916,30 @@ export function RoomBoard({
             board={surfaceRef}
             onSend={(target, text) => sendAsk(asking, target, text)}
             onClose={() => setAsking(null)}
+          />
+        )}
+        {runningTasks === null ? null : (
+          <BoardRunPopover
+            anchor={{ getBoundingClientRect: () => askAnchor(runningTasks.refs) }}
+            count={runPlan.tasks.length}
+            left={runPlan.left}
+            targets={runTargets}
+            initialTarget={
+              boardAskDefaultTarget(runTargets, {
+                selectedBoxes: runningTasks.target === null ? [] : [runningTasks.target],
+                lastUsed: lastBoardAskTarget(askKey),
+              }) ?? BOARD_ASK_NEW_BOX
+            }
+            initialMode={runningTasks.mode}
+            newBoxId={runningTasks.newBoxId}
+            boxesLeft={boxesLeft}
+            maxBoxes={BOARD_RUN_MAX_BOXES}
+            failed={runningTasks.failed}
+            renderModel={renderBoxModel}
+            finalFocus={surfaceRef}
+            board={surfaceRef}
+            onRun={(mode, target) => void runTasks(runningTasks, mode, target)}
+            onClose={() => setRunningTasks(null)}
           />
         )}
       </div>
@@ -4844,6 +5206,8 @@ function BoardNote({
   onOpenReply,
   worker,
   onTake,
+  onRun,
+  taskRun,
   onUse,
   onGive,
   artifactAuthor,
@@ -4903,6 +5267,10 @@ function BoardNote({
   /** The guest's agent working on this task now. */
   readonly worker: RoomAgentActivity | undefined;
   readonly onTake: (() => void) | undefined;
+  /** Opens Run with an agent on this task alone. Absent where the viewer cannot run it. */
+  readonly onRun?: (() => void) | undefined;
+  /** Which box runs this task and how that goes, while it has a run. */
+  readonly taskRun?: ReactNode;
   readonly onUse: (() => void) | undefined;
   /** Opens the note as a draft for this guest's own agent. */
   readonly onGive: (() => void) | undefined;
@@ -5247,7 +5615,10 @@ function BoardNote({
             }}
           />
         )}
-        {note.kind === "task" ? <TaskProgress note={note} people={people} worker={worker} /> : null}
+        {note.kind === "task" ? (
+          <TaskProgress note={note} people={people} worker={worker} boxName={boxName} />
+        ) : null}
+        {note.kind === "task" ? taskRun : null}
         {note.kind === "task" ? (
           <div className="flex flex-wrap items-center gap-1 px-2 pb-2">
             <AssigneeMenu
@@ -5261,6 +5632,11 @@ function BoardNote({
             {onTake === undefined ? null : (
               <Button size="micro" variant="outline" onPointerDown={stopPointer} onClick={onTake}>
                 Take it to my agent
+              </Button>
+            )}
+            {onRun === undefined ? null : (
+              <Button size="micro" variant="outline" onPointerDown={stopPointer} onClick={onRun}>
+                Run with an agent
               </Button>
             )}
           </div>
@@ -5407,10 +5783,12 @@ function TaskProgress({
   note,
   people,
   worker,
+  boxName,
 }: {
   readonly note: RoomBoardNote;
   readonly people: BoardPeople;
   readonly worker: RoomAgentActivity | undefined;
+  readonly boxName: (boxId: string) => string;
 }) {
   if (worker !== undefined) {
     return (
@@ -5420,15 +5798,28 @@ function TaskProgress({
     );
   }
   if (note.answer === undefined) return null;
+  const by = `Answered by ${
+    note.answer.boxId === undefined
+      ? boardAgentName(people, note.answer.guestId)
+      : boxName(note.answer.boxId)
+  }`;
+  // One line, so a finished task keeps its size and never grows over the card below it.
   return (
-    <div className="flex flex-col gap-0.5 px-3 pb-2">
-      <p className="text-2xs font-medium text-paint-ink-muted">
-        Answered by {boardAgentName(people, note.answer.guestId)}
-      </p>
-      <p className="line-clamp-4 border-s-2 border-current/25 ps-2 text-xs [overflow-wrap:anywhere]">
-        {note.answer.excerpt}
-      </p>
-    </div>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <p className="truncate px-3 pb-2 text-2xs font-medium text-paint-ink-muted">
+            {by}: <span className="font-normal">{note.answer.excerpt}</span>
+          </p>
+        }
+      />
+      <TooltipPopup side="bottom" className="max-w-80">
+        <p className="font-medium">{by}</p>
+        <p className="line-clamp-8 whitespace-pre-line [overflow-wrap:anywhere]">
+          {note.answer.excerpt}
+        </p>
+      </TooltipPopup>
+    </Tooltip>
   );
 }
 

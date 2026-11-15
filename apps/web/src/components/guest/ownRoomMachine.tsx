@@ -3,6 +3,7 @@ import {
   type EnvironmentId,
   GuestShareId,
   type ModelSelection,
+  type RoomBoxModel,
   type ThreadId,
 } from "@t3tools/contracts";
 import { useEffect, useState } from "react";
@@ -77,19 +78,23 @@ export function useOwnRoomMachine(share: { readonly host: string; readonly share
 
 /**
  * The model one of the guest's own boxes runs on, on their machine, and the way to change it:
- * the box thread's own once it has one, else the pick kept here, starting from the joined
+ * the box thread's own once it has one, else the pick for the box, starting from the joined
  * thread's model.
  */
 export function OwnBoxModelPicker({
   machine,
   boxId,
   pick,
+  chosen,
   onPick,
 }: {
   readonly machine: OwnRoomMachine;
   readonly boxId: string;
+  /** What the box runs on while it has no thread: its pick, or the guest's for new boxes. */
   readonly pick: ModelSelection | undefined;
-  readonly onPick: (selection: ModelSelection) => void;
+  /** The pick the board keeps for the box. */
+  readonly chosen: RoomBoxModel | undefined;
+  readonly onPick: (selection: ModelSelection, name: string) => void;
 }) {
   const joined = useThreadShell(scopeThreadRef(machine.environmentId, machine.threadId));
   const projectId = joined?.projectId ?? null;
@@ -100,7 +105,9 @@ export function OwnBoxModelPicker({
       <ThreadBoardModelPicker
         threadRef={scopeThreadRef(machine.environmentId, boxThreadId)}
         projectId={projectId}
-        fallback={fallback}
+        fallback={chosen?.selection ?? fallback}
+        chosen={chosen}
+        onPicked={onPick}
       />
     );
   }

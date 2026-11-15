@@ -51,6 +51,7 @@ import {
   roomBoardCardIdentity,
   roomBoardNoteOfRef,
   roomBoardWithAgentChange,
+  roomBoardWithBoxRunDone,
   roomBoardWithCardsSent,
   roomBoardWithEdges,
   roomBoardWithoutCards,
@@ -524,7 +525,12 @@ function boardWithBoxTurn(
     ...box,
     thread: { turns: [...turns, turn].slice(-ROOM_BOX_TURN_LIMIT) },
   };
-  return { ...board, notes: board.notes.map((note) => (note === box ? updated : note)) };
+  // A finished turn is what ticks off the tasks someone ran in the box.
+  return roomBoardWithBoxRunDone(
+    { ...board, notes: board.notes.map((note) => (note === box ? updated : note)) },
+    boxId,
+    turn,
+  );
 }
 
 /** The share with the lines a guest's message carried into its box marked sent, as it is sent. */
