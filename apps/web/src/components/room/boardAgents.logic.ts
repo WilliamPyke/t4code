@@ -1,6 +1,11 @@
-import type { OrchestrationV2RunStatus, RoomBoardNote, RoomBoxProgress } from "@t3tools/contracts";
+import type {
+  OrchestrationV2RunStatus,
+  RoomBoardAgentTurn,
+  RoomBoardNote,
+  RoomBoxProgress,
+} from "@t3tools/contracts";
 
-import { formatBoardElapsed } from "./roomBoard.logic";
+import { boardAgentTurnLine, formatBoardElapsed } from "./roomBoard.logic";
 
 /** What the Agents panel needs of a box's run in flight. Never its streaming text. */
 export type BoardAgentRun = Pick<
@@ -135,6 +140,20 @@ export function sortBoardAgents<
   return rows.toSorted(
     (a, b) => statusRank(a.status) - statusRank(b.status) || b.activity - a.activity,
   );
+}
+
+/**
+ * The board's agent turns for the Agents panel's recent changes, newest first, each with the line
+ * its box shows. Turns that left nothing to describe are left out.
+ */
+export function boardAgentRecentTurns(
+  turns: ReadonlyArray<RoomBoardAgentTurn>,
+): ReadonlyArray<{ readonly turn: RoomBoardAgentTurn; readonly line: string }> {
+  return turns
+    .toReversed()
+    .toSorted((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0))
+    .map((turn) => ({ turn, line: boardAgentTurnLine(turn) }))
+    .filter((recent) => recent.line !== "");
 }
 
 /** The open tasks a box runs from "Run with an agent": the one run first first, then by place. */

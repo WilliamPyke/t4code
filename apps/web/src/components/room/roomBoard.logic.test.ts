@@ -239,8 +239,23 @@ describe("selectionBarSpot", () => {
       selection: { x: 700, y: 20, width: 250, height: 660 },
       spot: { left: 392, top: 20 },
     },
-  ])("$name", ({ selection, cover, spot }) => {
-    expect(selectionBarSpot(selection, bar, board, cover)).toEqual(spot);
+    {
+      name: "docks beside a selected card that reaches the bottom middle",
+      selection: { x: 0, y: 0, width: 1000, height: 700 },
+      cards: [
+        { x: 340, y: 500, width: 200, height: 180 },
+        { x: 600, y: 0, width: 400, height: 300 },
+      ],
+      spot: { left: 548, top: 660 },
+    },
+    {
+      name: "docks in the middle when every spot covers a selected card",
+      selection: { x: 0, y: 0, width: 1000, height: 700 },
+      cards: [{ x: 0, y: 600, width: 1000, height: 100 }],
+      spot: { left: 350, top: 660 },
+    },
+  ])("$name", ({ selection, cover, cards, spot }) => {
+    expect(selectionBarSpot(selection, bar, board, cover, cards)).toEqual(spot);
   });
 });
 

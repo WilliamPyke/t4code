@@ -213,6 +213,12 @@ export function SelectionBar({
         top: reach('[data-board-chrome="top"]', "top"),
         bottom: reach('[data-board-chrome="bottom"]', "bottom"),
       },
+      rects.map((rect) => ({
+        x: rect.left - area.left,
+        y: rect.top - area.top,
+        width: rect.width,
+        height: rect.height,
+      })),
     );
     bar.style.left = `${spot.left}px`;
     bar.style.top = `${spot.top}px`;

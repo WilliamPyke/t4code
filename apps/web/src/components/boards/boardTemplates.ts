@@ -75,15 +75,15 @@ export const BOARD_TEMPLATES: ReadonlyArray<BoardTemplate> = [
     name: "Plan a feature",
     description:
       "Goal, ideas, tasks and open questions, and a spec the agent writes. The goal goes with every prompt.",
-    thread: { x: 80, y: 40 },
-    // The goal sits in a column beside the thread box and the spec under it, so their lines cross
-    // nothing else.
+    thread: { x: 500, y: 40 },
+    // The spec sits left of the thread box and the goal in a column to its right, so each line is
+    // short and crosses nothing else.
     items: [
       {
         key: "goal",
         kind: "section",
         text: "Goal",
-        x: 440,
+        x: 860,
         y: 40,
         w: 240,
         h: 536,
@@ -93,7 +93,7 @@ export const BOARD_TEMPLATES: ReadonlyArray<BoardTemplate> = [
         key: "ideas",
         kind: "section",
         text: "Ideas",
-        x: 720,
+        x: 1140,
         y: 40,
         w: 480,
         h: 248,
@@ -103,7 +103,7 @@ export const BOARD_TEMPLATES: ReadonlyArray<BoardTemplate> = [
         key: "questions",
         kind: "section",
         text: "Questions",
-        x: 1240,
+        x: 1660,
         y: 40,
         w: 480,
         h: 248,
@@ -113,7 +113,7 @@ export const BOARD_TEMPLATES: ReadonlyArray<BoardTemplate> = [
         key: "tasks",
         kind: "section",
         text: "Tasks",
-        x: 720,
+        x: 1140,
         y: 328,
         w: 1000,
         h: 248,
@@ -123,7 +123,7 @@ export const BOARD_TEMPLATES: ReadonlyArray<BoardTemplate> = [
         key: "goal-what",
         kind: "note",
         text: "What should it do, and for whom?",
-        x: 464,
+        x: 884,
         y: 96,
         color: "yellow",
       },
@@ -131,23 +131,30 @@ export const BOARD_TEMPLATES: ReadonlyArray<BoardTemplate> = [
         key: "goal-done",
         kind: "note",
         text: "How will we know it works?",
-        x: 464,
+        x: 884,
         y: 272,
         color: "yellow",
       },
-      { key: "idea", kind: "note", text: "An approach worth trying", x: 744, y: 96, color: "blue" },
+      {
+        key: "idea",
+        kind: "note",
+        text: "An approach worth trying",
+        x: 1164,
+        y: 96,
+        color: "blue",
+      },
       {
         key: "question",
         kind: "note",
         text: "What do we still need to find out?",
-        x: 1264,
+        x: 1684,
         y: 96,
         color: "pink",
       },
-      { key: "task-first", kind: "task", text: "First step", x: 744, y: 384 },
-      { key: "task-next", kind: "task", text: "Next step", x: 960, y: 384 },
-      // Lined up with the thread box's left edge, so its line runs out to the left, clear of Goal.
-      { key: "spec", kind: "artifact", text: "Spec", x: 80, y: 600 },
+      { key: "task-first", kind: "task", text: "First step", x: 1164, y: 384 },
+      { key: "task-next", kind: "task", text: "Next step", x: 1380, y: 384 },
+      // Level with the thread box and 40px from it, so its line runs straight across.
+      { key: "spec", kind: "artifact", text: "Spec", x: 80, y: 40 },
     ],
     lines: [
       { from: "goal-what", to: THREAD },

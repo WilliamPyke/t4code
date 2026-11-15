@@ -6,6 +6,7 @@ import {
   type BoardAgentStatus,
   boardAgentEndOf,
   boardAgentModel,
+  boardAgentRecentTurns,
   boardAgentRunOutcome,
   boardAgentRunTasks,
   boardAgentRunStep,
@@ -265,5 +266,27 @@ describe("boardAgentRunStep", () => {
     ["never ran", [null, false], undefined],
   ])("reads a %s run's end", (_, args, expected) => {
     expect(boardAgentEndOf(...args)).toEqual(expected);
+  });
+
+  it("lists recent agent turns newest first, leaving out ones that changed nothing", () => {
+    const line = { id: "edge", from: "a", to: "b" };
+    const turn = (id: string, at: string, edges: ReadonlyArray<typeof line>) => ({
+      id,
+      boxId: "box",
+      at: `2026-11-15T10:0${at}:00.000Z`,
+      cards: [],
+      edges,
+    });
+    const recent = boardAgentRecentTurns([
+      turn("first", "1", [line]),
+      turn("redone", "5", [line, line]),
+      turn("empty", "6", []),
+      turn("same-time", "1", [line]),
+    ]);
+    expect(recent.map(({ turn, line }) => [turn.id, line])).toEqual([
+      ["redone", "Drew 2 lines"],
+      ["same-time", "Drew 1 line"],
+      ["first", "Drew 1 line"],
+    ]);
   });
 });

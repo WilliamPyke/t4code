@@ -2711,14 +2711,16 @@ const SELECTION_BAR_GAP = 8;
 
 /**
  * Where the selection's bar goes, in board screen pixels: centred above the cards, else below,
- * else beside them (right, then left), else docked at the board's bottom middle; always between
- * the header and toolbar floating over the board (`cover`, how far each reaches in).
+ * else beside them (right, then left), else docked at the board's bottom, as near the middle as it
+ * goes without covering a selected card (`cards`), or in the middle when nowhere is clear; always
+ * between the header and toolbar floating over the board (`cover`, how far each reaches in).
  */
 export function selectionBarSpot(
   selection: BoardRect,
   bar: BoardSize,
   board: BoardSize,
   cover: { readonly top: number; readonly bottom: number } = { top: 0, bottom: 0 },
+  cards: ReadonlyArray<BoardRect> = [],
 ): { readonly left: number; readonly top: number } {
   const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max));
   const highest = cover.top + SELECTION_BAR_GAP;
@@ -2735,7 +2737,23 @@ export function selectionBarSpot(
   if (right <= rightmost) return { left: right, top: besideTop };
   const left = selection.x - SELECTION_BAR_GAP - bar.width;
   if (left >= leftmost) return { left, top: besideTop };
-  return { left: clamp((board.width - bar.width) / 2, leftmost, rightmost), top: lowest };
+  const middle = clamp((board.width - bar.width) / 2, leftmost, rightmost);
+  const blocked = cards
+    .filter((card) => card.y < lowest + bar.height && card.y + card.height > lowest)
+    .map((card) => ({
+      from: card.x - SELECTION_BAR_GAP - bar.width,
+      to: card.x + card.width + SELECTION_BAR_GAP,
+    }));
+  const clear = (at: number) =>
+    at >= leftmost && at <= rightmost && blocked.every(({ from, to }) => at <= from || at >= to);
+  const dock = [middle, ...blocked.flatMap(({ from, to }) => [from, to])]
+    .filter(clear)
+    .reduce<number | undefined>(
+      (best, at) =>
+        best === undefined || Math.abs(at - middle) < Math.abs(best - middle) ? at : best,
+      undefined,
+    );
+  return { left: dock ?? middle, top: lowest };
 }
 
 /** Every selected item moved by the same amount, in board pixels, so they land together. */

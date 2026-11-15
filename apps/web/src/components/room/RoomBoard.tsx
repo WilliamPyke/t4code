@@ -341,6 +341,7 @@ import {
 import { BoxBoardWork, BoxProgress, BoxRequests, BoxTurns } from "./RoomBoardThreadBox";
 import {
   type BoardAgentEntry,
+  type BoardAgentRecent,
   BoardAgents,
   BoardAgentsMoreButton,
   BoardAgentsNeedsBadge,
@@ -349,6 +350,7 @@ import {
   type BoardAgentEnd,
   boardAgentActivity,
   boardAgentModel,
+  boardAgentRecentTurns,
   boardAgentRunTasks,
   boardAltShortcutAllowed,
   isBoardAgentsKey,
@@ -1340,6 +1342,11 @@ export function RoomBoard({
       });
     }
   };
+  /** Undo or Redo for one agent turn, absent for whoever may not take it back. */
+  const agentTurnUndo = (turn: RoomBoardAgentTurn) =>
+    canEdit && onChange !== undefined && canUndoRoomAgentTurn(turn, viewer)
+      ? (undone: boolean) => undoAgentTurn(turn, undone)
+      : undefined;
   const travel = (direction: "undo" | "redo") => {
     if (!canEdit) return;
     const stack = direction === "undo" ? history.undo : history.redo;
@@ -3372,11 +3379,7 @@ export function RoomBoard({
           <BoxBoardWork
             turn={work}
             onShow={() => showCards(work.cards.map((card) => card.id))}
-            onUndo={
-              canEdit && onChange !== undefined && canUndoRoomAgentTurn(work, viewer)
-                ? (undone) => undoAgentTurn(work, undone)
-                : undefined
-            }
+            onUndo={agentTurnUndo(work)}
           />
         )}
         <BoxRequests
@@ -3509,6 +3512,22 @@ export function RoomBoard({
     };
   });
 
+  const agentRecent = boardAgentRecentTurns(shown.agentTurns ?? NO_AGENT_TURNS).map(
+    ({ turn, line }): BoardAgentRecent => {
+      const box = threadBoxes.find((candidate) => candidate.id === turn.boxId);
+      return {
+        id: turn.id,
+        name: box === undefined ? "Removed thread" : box.title || "Untitled thread",
+        color: boardCursorColor(guests, box?.guestId ?? turn.guestId),
+        line,
+        at: turn.at,
+        undone: turn.undone === true,
+        onShow: () => showCards(turn.cards.map((card) => card.id)),
+        onUndo: agentTurnUndo(turn),
+      };
+    },
+  );
+
   // Something is being dragged, resized or nudged: each such step renders the board again.
   // oxlint-disable-next-line react-hooks/refs -- held edits are what the drag has reached, and every step sets them in state too
   const moving = boardDragItems(held.current, gestureFrom.current).some(
@@ -3579,6 +3598,7 @@ export function RoomBoard({
                 onShowTask={(noteId) => showCards([noteId])}
                 isOnScreen={boxOnScreen}
                 hasThreadBoxes={threadBoxes.length > 1}
+                recent={agentRecent}
                 renderNeeds={(entry, need) =>
                   need === "approval" ? (
                     (renderBoxApproval?.(entry.id) ?? null)

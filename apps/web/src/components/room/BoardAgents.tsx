@@ -17,7 +17,8 @@ import {
 } from "react";
 
 import { useStableCallback } from "~/hooks/useStableCallback";
-import { isMacPlatform } from "~/lib/utils";
+import { cn, isMacPlatform } from "~/lib/utils";
+import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -264,6 +265,88 @@ const AGENT_NOTICES: Readonly<
   ended: { type: "info", title: "ended", description: "No reply came back to the board." },
 };
 
+/** One agent turn as the Agents panel's recent changes list it. The board builds these. */
+export interface BoardAgentRecent {
+  readonly id: string;
+  readonly name: string;
+  readonly color: string;
+  /** "Added 4 tasks and 1 section", as the box shows it. */
+  readonly line: string;
+  readonly at: string;
+  readonly undone: boolean;
+  readonly onShow: () => void;
+  /** Absent for whoever may not undo it. */
+  readonly onUndo: ((undone: boolean) => void) | undefined;
+}
+
+/** What the board's agents last changed, newest first, each with Show and, where allowed, Undo. */
+function RecentChanges({
+  recent,
+  onClose,
+}: {
+  readonly recent: ReadonlyArray<BoardAgentRecent>;
+  readonly onClose: () => void;
+}) {
+  const now = useBoardNow();
+  return (
+    <section
+      aria-label="Recent changes by agents"
+      className="flex flex-col gap-0.5 border-t pt-1.5"
+    >
+      <h3 className="px-1.5 text-2xs font-medium text-muted-foreground">Recent changes</h3>
+      <ol className="flex flex-col">
+        {recent.map((item) => (
+          <li
+            key={item.id}
+            className={cn(
+              "flex min-w-0 items-center gap-2 px-1.5 py-0.5 text-2xs",
+              item.undone ? "text-muted-foreground/70" : "text-muted-foreground",
+            )}
+          >
+            <PersonDot color={item.color} className={cn("size-2", item.undone && "opacity-50")} />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate">
+                <span className={item.undone ? undefined : "font-medium text-foreground"}>
+                  {item.name}
+                </span>
+                {formatRelativeTimeLabel(item.at, now) === ""
+                  ? null
+                  : ` · ${formatRelativeTimeLabel(item.at, now)}`}
+              </span>
+              <span className="truncate">
+                {item.undone
+                  ? `Undone: ${item.line.charAt(0).toLowerCase()}${item.line.slice(1)}`
+                  : item.line}
+              </span>
+            </span>
+            {item.undone ? null : (
+              <Button
+                size="micro-touch"
+                variant="ghost-muted"
+                onClick={() => {
+                  onClose();
+                  item.onShow();
+                }}
+              >
+                Show
+              </Button>
+            )}
+            {item.onUndo === undefined ? null : (
+              <Button
+                size="micro-touch"
+                variant="ghost-muted"
+                onClick={() => item.onUndo?.(!item.undone)}
+              >
+                {item.undone ? "Redo" : "Undo"}
+              </Button>
+            )}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 /** "Working · 1m 12s": only this ticks with the board's clock. */
 function WorkingFor({ run }: { readonly run: BoardAgentRun }) {
   const now = useBoardNow();
@@ -285,6 +368,7 @@ export function BoardAgents({
   isOnScreen,
   renderNeeds,
   hasThreadBoxes,
+  recent,
 }: {
   readonly entries: ReadonlyArray<BoardAgentEntry>;
   readonly viewer: string | null;
@@ -299,6 +383,8 @@ export function BoardAgents({
   readonly renderNeeds: (entry: BoardAgentEntry, need: "request" | "approval") => ReactNode;
   /** Whether anyone added a thread box, besides the board's own thread. */
   readonly hasThreadBoxes: boolean;
+  /** What the board's agents last changed, newest first. */
+  readonly recent: ReadonlyArray<BoardAgentRecent>;
 }) {
   const store = use(RoomLiveContext);
   const runOf = useAgentRuns(entries);
@@ -513,6 +599,9 @@ export function BoardAgents({
             <p className="px-1.5 pb-1 text-2xs text-muted-foreground">
               Add an agent with Thread in the toolbar, or select cards and choose Ask an agent.
             </p>
+          )}
+          {recent.length === 0 ? null : (
+            <RecentChanges recent={recent} onClose={() => onOpenChange(false)} />
           )}
         </div>
       </PopoverPopup>
