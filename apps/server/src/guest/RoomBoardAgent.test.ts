@@ -239,6 +239,29 @@ it.effect("lets a box's agent read its board and add cards beside its box, as it
     );
     // The room thread's own agent works on the same board, as the room thread's card.
     assert.strictEqual((yield* agent.read(roomThreadId)).you, "thread");
+
+    // Tasks are taller than notes; in a section it makes, they still clear each other and fit.
+    const tasks = yield* agent.add(boxThreadId, {
+      section: "Tasks",
+      cards: ["Buy the domain", "Draft the post", "Review pricing", "Ship it"].map((text) => ({
+        text,
+        task: true,
+      })),
+    });
+    assert.lengthOf(tasks.done, 4);
+    const board = boardOf(threads);
+    const sectionNote = board.find((note) => note.id === tasks.sections?.[0]?.id);
+    assert.isDefined(sectionNote);
+    const placed = board.filter((note) => tasks.done.includes(note.id));
+    for (const note of placed) {
+      for (const other of board) {
+        if (other !== note && other !== sectionNote) {
+          assert.isFalse(overlap(note, other), `${note.text} on ${other.text}`);
+        }
+      }
+      const [inner, outer] = [rect(note), rect(sectionNote)];
+      assert.isTrue(inner.y + inner.h <= outer.y + outer.h, `${note.text} below its section`);
+    }
   }).pipe(Effect.provide(layerWith(threads)));
 });
 

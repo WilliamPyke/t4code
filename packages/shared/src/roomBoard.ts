@@ -53,6 +53,11 @@ export const ROOM_COMMENT_THREAD_FULL = `A comment thread holds ${ROOM_BOARD_MAX
 
 export const EMPTY_ROOM_BOARD: RoomBoard = { positions: {}, notes: [] };
 
+/** How big a new note shows until its text grows it. */
+export const ROOM_BOARD_NOTE_SIZE: RoomBoardSize = { w: 192, h: 144 };
+/** A new task is taller than a note: its checkbox and actions sit around the text. */
+export const ROOM_BOARD_TASK_SIZE: RoomBoardSize = { w: 192, h: 184 };
+
 /** Starts the id of every reply an agent's run wrote. No reply a client sends may use it. */
 export const ROOM_AGENT_REPLY_ID_PREFIX = "agent:";
 

@@ -100,7 +100,6 @@ interface Rect {
 const GAP = 24;
 // Room for a section's title bar above the cards in it.
 const SECTION_HEADER = 56;
-const NOTE: RoomBoardSize = { w: 192, h: 144 };
 const SECTION: RoomBoardSize = { w: 640, h: 420 };
 const CARD: RoomBoardSize = { w: 320, h: 240 };
 const MAX_ROWS = 40;
@@ -583,14 +582,15 @@ const make = Effect.gen(function* () {
         refused.push({ card: card.text, reason: "A card needs some text." });
         continue;
       }
+      const size = roomBoardNoteSize(card.task === true ? { kind: "task" } : {});
       // The cards go next to the box when their section could not be made.
       const spot =
         section === undefined || Result.isFailure(section)
           ? Result.fromNullishOr(
-              spotNearBox(target, NOTE),
+              spotNearBox(target, size),
               () => "There is no free space near this thread's box.",
             )
-          : yield* spotInSection(target, section.success, NOTE);
+          : yield* spotInSection(target, section.success, size);
       if (Result.isFailure(spot)) {
         refused.push({ card: text, reason: spot.failure });
         continue;

@@ -39,6 +39,8 @@ import {
 import {
   canUndoRoomAgentTurn,
   isRoomCardOwnedBy,
+  ROOM_BOARD_NOTE_SIZE,
+  ROOM_BOARD_TASK_SIZE,
   roomBoardCardChangedAt,
   roomPullRequestLabel,
   roomWindowBoxId,
@@ -187,8 +189,8 @@ export function placeBoardCards(
   return placed;
 }
 
-const NOTE_WIDTH = 192;
-const NOTE_HEIGHT = 144;
+const NOTE_WIDTH = ROOM_BOARD_NOTE_SIZE.w;
+const NOTE_HEIGHT = ROOM_BOARD_NOTE_SIZE.h;
 // Guesses for heights the browser decides, used only where nothing on screen can be measured.
 const COMMENT_HEIGHT = 200;
 const THREAD_CARD_HEIGHT = 420;
@@ -201,7 +203,7 @@ export interface BoardRect extends BoardPoint {
 
 /** How big a new card of this kind is, for finding it a spot. */
 export const boardNewNoteSize = (kind: RoomBoardNote["kind"]): RoomBoardSize =>
-  boardNoteSize({ kind }) ?? { w: NOTE_WIDTH, h: NOTE_HEIGHT };
+  boardNoteSize({ kind }) ?? (kind === "task" ? ROOM_BOARD_TASK_SIZE : ROOM_BOARD_NOTE_SIZE);
 
 const PLACE_GAP = 16;
 const PLACE_REACH = 1_200;
@@ -667,7 +669,13 @@ function boardNoteRect(note: RoomBoardNote): BoardRect {
     x: note.x,
     y: note.y,
     width: size?.w ?? NOTE_WIDTH,
-    height: size?.h ?? (note.pinnedTo === undefined ? NOTE_HEIGHT : COMMENT_HEIGHT),
+    height:
+      size?.h ??
+      (note.pinnedTo !== undefined
+        ? COMMENT_HEIGHT
+        : note.kind === "task"
+          ? ROOM_BOARD_TASK_SIZE.h
+          : NOTE_HEIGHT),
   };
 }
 

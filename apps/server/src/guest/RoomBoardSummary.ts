@@ -9,6 +9,7 @@ import {
   type RoomBoardSummaryShape,
   type ThreadId,
 } from "@t3tools/contracts";
+import { ROOM_BOARD_NOTE_SIZE, ROOM_BOARD_TASK_SIZE } from "@t3tools/shared/roomBoard";
 
 /** The part of a thread its board's summary reads. */
 export interface SummarizedThread {
@@ -27,7 +28,7 @@ export interface SummarizedThread {
 // The sizes the board draws a card at until someone resizes it; a thumbnail needs only a guess.
 const CARD: RoomBoardSize = { w: 320, h: 240 };
 const ROOM_THREAD_CARD: RoomBoardSize = { w: 320, h: 420 };
-const NOTE: RoomBoardSize = { w: 192, h: 144 };
+const NOTE = ROOM_BOARD_NOTE_SIZE;
 const PIN: RoomBoardSize = { w: 32, h: 32 };
 const SECTION: RoomBoardSize = { w: 640, h: 420 };
 const NOTE_SIZES: Partial<Record<NonNullable<RoomBoardNote["kind"]>, RoomBoardSize>> = {
@@ -36,6 +37,7 @@ const NOTE_SIZES: Partial<Record<NonNullable<RoomBoardNote["kind"]>, RoomBoardSi
   code: { w: 560, h: 420 },
   "pull-request": { w: 360, h: 300 },
   comment: PIN,
+  task: ROOM_BOARD_TASK_SIZE,
 };
 // Where the board puts its own thread's card before anyone moves it.
 export const ROOM_THREAD_ORIGIN = { x: 80, y: 72 };

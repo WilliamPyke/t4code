@@ -295,53 +295,61 @@ function RecentChanges({
     >
       <h3 className="px-1.5 text-2xs font-medium text-muted-foreground">Recent changes</h3>
       <ol className="flex flex-col">
-        {recent.map((item) => (
-          <li
-            key={item.id}
-            className={cn(
-              "flex min-w-0 items-center gap-2 px-1.5 py-0.5 text-2xs",
-              item.undone ? "text-muted-foreground/70" : "text-muted-foreground",
-            )}
-          >
-            <PersonDot color={item.color} className={cn("size-2", item.undone && "opacity-50")} />
-            <span className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate">
-                <span className={item.undone ? undefined : "font-medium text-foreground"}>
-                  {item.name}
+        {recent.map((item) => {
+          const summary = item.undone
+            ? `Undone: ${item.line.charAt(0).toLowerCase()}${item.line.slice(1)}`
+            : item.line;
+          return (
+            <li
+              key={item.id}
+              className={cn(
+                "flex min-w-0 items-center gap-2 px-1.5 py-0.5 text-2xs",
+                item.undone ? "text-muted-foreground/70" : "text-muted-foreground",
+              )}
+            >
+              <PersonDot color={item.color} className={cn("size-2", item.undone && "opacity-50")} />
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate">
+                  <span className={item.undone ? undefined : "font-medium text-foreground"}>
+                    {item.name}
+                  </span>
+                  {formatRelativeTimeLabel(item.at, now) === ""
+                    ? null
+                    : ` · ${formatRelativeTimeLabel(item.at, now)}`}
                 </span>
-                {formatRelativeTimeLabel(item.at, now) === ""
-                  ? null
-                  : ` · ${formatRelativeTimeLabel(item.at, now)}`}
+                <Tooltip>
+                  <TooltipTrigger render={<span className="line-clamp-2 break-words" />}>
+                    {summary}
+                  </TooltipTrigger>
+                  <TooltipPopup side="left" className="max-w-72">
+                    {summary}
+                  </TooltipPopup>
+                </Tooltip>
               </span>
-              <span className="truncate">
-                {item.undone
-                  ? `Undone: ${item.line.charAt(0).toLowerCase()}${item.line.slice(1)}`
-                  : item.line}
-              </span>
-            </span>
-            {item.undone ? null : (
-              <Button
-                size="micro-touch"
-                variant="ghost-muted"
-                onClick={() => {
-                  onClose();
-                  item.onShow();
-                }}
-              >
-                Show
-              </Button>
-            )}
-            {item.onUndo === undefined ? null : (
-              <Button
-                size="micro-touch"
-                variant="ghost-muted"
-                onClick={() => item.onUndo?.(!item.undone)}
-              >
-                {item.undone ? "Redo" : "Undo"}
-              </Button>
-            )}
-          </li>
-        ))}
+              {item.undone ? null : (
+                <Button
+                  size="micro-touch"
+                  variant="ghost-muted"
+                  onClick={() => {
+                    onClose();
+                    item.onShow();
+                  }}
+                >
+                  Show
+                </Button>
+              )}
+              {item.onUndo === undefined ? null : (
+                <Button
+                  size="micro-touch"
+                  variant="ghost-muted"
+                  onClick={() => item.onUndo?.(!item.undone)}
+                >
+                  {item.undone ? "Redo" : "Undo"}
+                </Button>
+              )}
+            </li>
+          );
+        })}
       </ol>
     </section>
   );
