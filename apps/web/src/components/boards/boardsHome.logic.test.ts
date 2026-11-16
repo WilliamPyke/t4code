@@ -8,6 +8,7 @@ import {
   BOARD_TEMPLATES,
   boardTemplateChanges,
   boardTemplateShapes,
+  cloudBoardTemplateChanges,
 } from "./boardTemplates";
 import {
   type OwnBoardSource,
@@ -15,6 +16,7 @@ import {
   listHomeBoards,
   newBoardProject,
   newBoardProjectKey,
+  newBoardStart,
   teamBoardShapes,
 } from "./boardsHome.logic";
 import { boardCardBox, boardConnector } from "../room/roomBoard.logic";
@@ -191,6 +193,46 @@ describe("newBoardProject", () => {
       kind: "use",
       project: b,
     });
+  });
+});
+
+describe("newBoardStart", () => {
+  const a = { environmentId: "env-a", id: "project-1" };
+  const b = { environmentId: "env-b", id: "project-2" };
+  const start = (operable: ReadonlyArray<string>, cloud: boolean) =>
+    newBoardStart({
+      projects: [a, b],
+      boards: [],
+      lastUsed: null,
+      operable: new Set(operable),
+      cloud,
+    });
+
+  it("goes to the cloud only when no machine can take a board", () => {
+    expect(start([], true)).toEqual({ kind: "cloud" });
+    // Without a cloud host it fails on a machine as before, where the toast says why.
+    expect(start([], false)).toEqual({ kind: "ask" });
+    // A machine that can is used, and a disconnected one's projects are not offered.
+    expect(start(["env-b"], true)).toEqual({ kind: "use", project: b });
+    expect(start(["env-a", "env-b"], true)).toEqual({ kind: "ask" });
+    expect(start(["env-c"], true)).toEqual({ kind: "none" });
+  });
+});
+
+describe("cloud board templates", () => {
+  it("takes only templates with no agent in them, without the board's own thread box", () => {
+    const fits = BOARD_TEMPLATES.filter(
+      (template) => cloudBoardTemplateChanges(template, () => "id") !== null,
+    ).map((template) => template.id);
+    expect(fits).toContain(BLANK_BOARD_TEMPLATE.id);
+    expect(fits).toEqual(["blank", "retro"]);
+    for (const template of BOARD_TEMPLATES) {
+      const changes = cloudBoardTemplateChanges(template, () => "id") ?? [];
+      expect(changes.filter((change) => change.type === "card.move")).toEqual([]);
+      expect(
+        changes.filter((change) => change.type === "note.put" && change.kind === "thread"),
+      ).toEqual([]);
+    }
   });
 });
 

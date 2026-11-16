@@ -587,6 +587,7 @@ function ResizeHandle({
 }
 
 const THREAD_DROP = "thread";
+const CLOUD_NO_AGENTS = "Agents join when someone connects their computer. Coming soon.";
 const OWN_AGENT_DROP = "own-agent";
 
 /**
@@ -769,6 +770,7 @@ export function RoomBoard({
   stopBox,
   boxRunEnd,
   roomModel,
+  cloud = false,
 }: {
   readonly title: string;
   /** Null when the thread is not shared, so there is no room to arrange a board for. */
@@ -884,6 +886,11 @@ export function RoomBoard({
   readonly boxRunEnd?: ((boxId: string) => BoardAgentEnd | null | undefined) | undefined;
   /** The model the room thread's own agent runs on, as this client can name it. */
   readonly roomModel?: string | undefined;
+  /**
+   * The board is on the cloud host, on nobody's machine: it has no thread of its own and takes no
+   * thread boxes, code or pull request windows, which all need a machine.
+   */
+  readonly cloud?: boolean;
 }) {
   const board = room?.board ?? EMPTY_ROOM_BOARD;
   const running = useRoomRunning();
@@ -1148,20 +1155,22 @@ export function RoomBoard({
     viewer,
     ownerName,
   };
-  const guestCards = cards === undefined ? guests : [];
-  const agents = cards === undefined ? boardAgents(guests, room?.turns ?? [], running) : [];
+  // A cloud board has no owner to wait on and no agents yet, so nobody gets a card of their own.
+  const guestCards = cards === undefined && !cloud ? guests : [];
+  const agents =
+    cards === undefined && !cloud ? boardAgents(guests, room?.turns ?? [], running) : [];
   const canGive = onGiveNote !== undefined && agents.some(({ guest }) => guest.id === viewer);
   const cardIds = cards?.map((card) => card.id) ?? [
-    ROOM_BOARD_THREAD_CARD,
-    ...guests.map(guestCardId),
+    ...(cloud ? [] : [ROOM_BOARD_THREAD_CARD]),
+    ...guestCards.map(guestCardId),
     ...agents.map(({ guest }) => agentCardId(guest)),
   ];
   // Cards the board will add on its own grid: each guest's agent once it runs, and whoever joins
   // next with theirs. New cards keep clear of their slots.
   const upcomingCardIds =
-    cards === undefined
+    cards === undefined && !cloud
       ? [
-          ...guests
+          ...guestCards
             .filter((guest) => !agents.some((agent) => agent.guest.id === guest.id))
             .map(agentCardId),
           NEXT_GUEST_CARD,
@@ -1216,7 +1225,7 @@ export function RoomBoard({
       .filter((note) => !hiddenComment(note))
       .map((note) => [noteRef(note.id), boardNoteBox(note, view.zoom)] as const),
   ]);
-  const threadBoxes = cards === undefined ? boardThreadBoxes(shown, title) : [];
+  const threadBoxes = cards === undefined && !cloud ? boardThreadBoxes(shown, title) : [];
   // Where an agent is working: the cards its turn just added or changed, in its box's colour.
   const agentWork = useBoardAgentWork(room === null ? null : (shown.agentTurns ?? NO_AGENT_TURNS));
   const agentWorkOf = (noteId: string) => {
@@ -1802,7 +1811,11 @@ export function RoomBoard({
           : null;
   const cannotAddThread =
     cannotAdd ??
-    (threadsFull ? `The board holds ${ROOM_BOARD_MAX_THREADS} thread boxes at most` : null);
+    (cloud
+      ? CLOUD_NO_AGENTS
+      : threadsFull
+        ? `The board holds ${ROOM_BOARD_MAX_THREADS} thread boxes at most`
+        : null);
   const cannotAddArtifact =
     cannotAdd ??
     (artifactsFull ? `The board holds ${ROOM_BOARD_MAX_ARTIFACTS} artifacts at most` : null);
@@ -1819,6 +1832,8 @@ export function RoomBoard({
     (pullRequestsFull
       ? `The board holds ${ROOM_BOARD_MAX_PULL_REQUESTS} pull request windows at most`
       : null);
+  // Thread boxes, code and pull request windows all need a machine, which a cloud board has none of.
+  const machineTools = cards === undefined && !cloud;
   const drawnRects = () => drawnRectsIn(surfaceRef.current);
   const takenRects = () =>
     boardTakenRects(
@@ -2126,7 +2141,9 @@ export function RoomBoard({
     const url = boardUrlIn(text);
     // A pull request pasted on a room's board shows itself, live, instead of as a plain link.
     const pullRequest =
-      url === null || cards !== undefined || pullRequestsFull ? null : roomPullRequestOf(url);
+      url === null || cards !== undefined || cloud || pullRequestsFull
+        ? null
+        : roomPullRequestOf(url);
     if (pullRequest !== null) {
       addCard({ kind: "pull-request", url: pullRequest.url });
       return true;
@@ -2709,7 +2726,9 @@ export function RoomBoard({
     );
   });
   const attachAgentOf = (note: RoomBoardNote) => {
-    if (note.kind !== "artifact" || cards !== undefined || room === null) return undefined;
+    if (note.kind !== "artifact" || cards !== undefined || cloud || room === null) {
+      return undefined;
+    }
     const existing = boardOwnBoxFor(shown, viewer, note.id);
     if (existing !== null) {
       return { label: "Show my thread", run: () => focusItem(boardBoxRef(existing)) };
@@ -3598,6 +3617,7 @@ export function RoomBoard({
                 onShowTask={(noteId) => showCards([noteId])}
                 isOnScreen={boxOnScreen}
                 hasThreadBoxes={threadBoxes.length > 1}
+                cloud={cloud}
                 recent={agentRecent}
                 renderNeeds={(entry, need) =>
                   need === "approval" ? (
@@ -3673,7 +3693,7 @@ export function RoomBoard({
                   </WhyNot>
                 </span>
                 {cards !== undefined ? null : <BoardToolDivider />}
-                {cards !== undefined ? null : onAddThread === undefined ? (
+                {cards !== undefined || cloud ? null : onAddThread === undefined ? (
                   <WhyNot reason={cannotAddThread}>
                     <BoardTool
                       label="Thread"
@@ -3724,7 +3744,7 @@ export function RoomBoard({
                     </BoardTool>
                   </WhyNot>
                 ) : null}
-                {cards === undefined ? (
+                {machineTools ? (
                   <span className="contents @max-2xl/board:hidden">
                     <WhyNot reason={cannotAddCode}>
                       <BoardTool
@@ -3738,7 +3758,7 @@ export function RoomBoard({
                     </WhyNot>
                   </span>
                 ) : null}
-                {cards === undefined ? (
+                {machineTools ? (
                   <span className="contents @max-2xl/board:hidden">
                     <WhyNot reason={cannotAddPullRequest}>
                       <BoardTool
@@ -3818,7 +3838,7 @@ export function RoomBoard({
                         <LinkIcon />
                         Link
                       </MenuItem>
-                      {cards === undefined ? (
+                      {machineTools ? (
                         <MenuItem
                           disabled={cannotAddCode !== null}
                           onClick={() => addAndType(() => addCard({ kind: "code" }))}
@@ -3827,7 +3847,7 @@ export function RoomBoard({
                           Code window
                         </MenuItem>
                       ) : null}
-                      {cards === undefined ? (
+                      {machineTools ? (
                         <MenuItem
                           disabled={cannotAddPullRequest !== null}
                           onClick={startPullRequest}

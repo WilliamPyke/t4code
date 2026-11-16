@@ -16,7 +16,7 @@ import { ChevronDownIcon, MegaphoneIcon, PlusIcon, SearchIcon } from "lucide-rea
 import { useEffect, useState } from "react";
 
 import { isElectron } from "~/env";
-import { guestSharesAtom } from "~/guest/guestShares";
+import { guestSharesAtom, isCloudShare } from "~/guest/guestShares";
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { workspaceAreaProps } from "~/lib/workspaceFocus";
 import {
@@ -42,6 +42,7 @@ import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { BoardThumbnail } from "./BoardThumbnail";
 import { type HomeBoard, listHomeBoards, teamBoardShapes } from "./boardsHome.logic";
 import { openBoardTemplates, useStartNewBoard } from "./newBoard";
+import { JoinedBoardMenu } from "./removeJoinedBoard";
 
 const NO_THREAD_IDS: ReadonlyArray<ThreadId> = [];
 
@@ -59,7 +60,7 @@ export function BoardsHome() {
       ?.title;
   const sources = {
     threads,
-    joined,
+    joined: joined.map((share) => ({ ...share, cloud: isCloudShare(share) })),
     teams: teams ?? [],
     isOwnEnvironment: (environmentId: string) => !isGuestEnvironment(environmentId),
     projectName,
@@ -231,15 +232,22 @@ function BoardTile({
     board.kind === "own"
       ? projectName
       : board.kind === "joined"
-        ? board.owner === null
-          ? "Shared with you"
-          : `Shared by ${board.owner}`
+        ? board.cloud
+          ? "Cloud"
+          : board.owner === null
+            ? "Shared with you"
+            : `Shared by ${board.owner}`
         : "Team";
   const activity =
     board.activityAt === null ? null : formatRelativeTimeLabel(board.activityAt, nowMs) || null;
   const live = summary !== null && summary.shared && summary.online > 0;
   return (
-    <li data-board-tile data-board-kind={board.kind} data-board-live={live || undefined}>
+    <li
+      className="relative"
+      data-board-tile
+      data-board-kind={board.kind}
+      data-board-live={live || undefined}
+    >
       <Link
         {...tileLink(board)}
         className="flex h-full flex-col overflow-hidden rounded-board border border-board-hairline bg-card shadow-paint transition-shadow outline-none hover:shadow-board focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
@@ -301,6 +309,11 @@ function BoardTile({
           )}
         </div>
       </Link>
+      {board.kind === "joined" ? (
+        <div className="absolute end-2 top-2">
+          <JoinedBoardMenu board={board} />
+        </div>
+      ) : null}
     </li>
   );
 }

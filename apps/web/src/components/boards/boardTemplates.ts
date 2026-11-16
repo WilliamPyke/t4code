@@ -43,6 +43,8 @@ export interface BoardTemplate {
   readonly id: string;
   readonly name: string;
   readonly description: string;
+  /** What it says when made in the cloud, where the board has no thread box, when that differs. */
+  readonly cloudDescription?: string;
   /** Where the board's own thread box goes. */
   readonly thread: { readonly x: number; readonly y: number };
   readonly items: ReadonlyArray<BoardTemplateItem>;
@@ -63,6 +65,7 @@ export const BLANK_BOARD_TEMPLATE: BoardTemplate = {
   id: "blank",
   name: "Blank",
   description: "An empty board with its thread box.",
+  cloudDescription: "An empty board.",
   thread: { x: 80, y: 72 },
   items: [],
   lines: [],
@@ -486,4 +489,19 @@ export function boardTemplateShapes(template: BoardTemplate): ReadonlyArray<Room
       }
     }),
   ];
+}
+
+/**
+ * The changes that lay a template out on a cloud board, or null when it needs what one lacks: a
+ * cloud board has no thread box of its own and takes no thread boxes until an agent can join.
+ */
+export function cloudBoardTemplateChanges(
+  template: BoardTemplate,
+  newId: () => string,
+): ReadonlyArray<RoomBoardChange> | null {
+  const needsAgent =
+    template.items.some((item) => item.kind === "thread") ||
+    template.lines.some((line) => line.from === THREAD || line.to === THREAD);
+  if (needsAgent) return null;
+  return boardTemplateChanges(template, newId).filter((change) => change.type !== "card.move");
 }

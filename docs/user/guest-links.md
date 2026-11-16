@@ -410,6 +410,12 @@ is gone, the thread's own conversation opens instead.
 Someone who continued the thread on their own machine has the board in their own T Code: **Board**
 in the joined thread's header opens it, and their own boxes run on that machine.
 
+## Boards in the cloud
+
+A cloud board is kept by the board service instead of on your computer, so it opens and can be shared while every computer is off. **New board** makes one when no computer is connected. When one is, turn on **In the cloud** in the template or project choice.
+
+Everyone on a cloud board is equal: anyone can edit it, rename it and copy its invite link from the header. It has no agents yet, so thread boxes, Ask an agent, Run with an agent, code and pull request windows are only on boards kept on a computer. **Remove from my boards** takes a cloud board off this browser only; its invite link brings it back.
+
 ## Remove a guest
 
 On web, click the guest names in the thread header and choose **Remove** under the guest. They lose

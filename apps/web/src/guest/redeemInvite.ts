@@ -2,6 +2,7 @@ import { GUEST_ROUTE_PREFIX, GuestRedeemResult } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import { isCloudBoardsHost } from "./cloudBoardsHost";
 import { guestShareOrigin, type JoinedGuestShare } from "./guestShares";
 
 const decodeErrorBody = Schema.decodeUnknownOption(Schema.Struct({ message: Schema.String }));
@@ -50,6 +51,8 @@ export async function redeemInvite(input: {
       token: result.token,
       title: "Shared thread",
       joinedAt: new Date().toISOString(),
+      // Anyone on a cloud board can invite others with the link they came in on.
+      ...(isCloudBoardsHost(input.host) ? { credential: input.credential } : {}),
     };
   } catch {
     return "Could not reach the server.";

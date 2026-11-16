@@ -377,6 +377,7 @@ export function BoardAgents({
   renderNeeds,
   hasThreadBoxes,
   recent,
+  cloud = false,
 }: {
   readonly entries: ReadonlyArray<BoardAgentEntry>;
   readonly viewer: string | null;
@@ -393,6 +394,8 @@ export function BoardAgents({
   readonly hasThreadBoxes: boolean;
   /** What the board's agents last changed, newest first. */
   readonly recent: ReadonlyArray<BoardAgentRecent>;
+  /** The board is on the cloud host, which no agent can join yet. */
+  readonly cloud?: boolean;
 }) {
   const store = use(RoomLiveContext);
   const runOf = useAgentRuns(entries);
@@ -605,7 +608,9 @@ export function BoardAgents({
           </ol>
           {hasThreadBoxes ? null : (
             <p className="px-1.5 pb-1 text-2xs text-muted-foreground">
-              Add an agent with Thread in the toolbar, or select cards and choose Ask an agent.
+              {cloud
+                ? "Agents join when someone connects their computer. Coming soon."
+                : "Add an agent with Thread in the toolbar, or select cards and choose Ask an agent."}
             </p>
           )}
           {recent.length === 0 ? null : (

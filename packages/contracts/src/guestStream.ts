@@ -48,6 +48,11 @@ export const GuestShareView = Schema.Struct({
   turns: Schema.optional(Schema.Array(ThreadGuestTurn)),
   /** The room's board. Absent while nothing is arranged on it, and from an older server. */
   board: Schema.optional(RoomBoard),
+  /**
+   * The room lives on the cloud board host, on nobody's machine: it has no owner, and no thread
+   * or agent of its own. Absent for a room an owner's machine serves.
+   */
+  cloud: Schema.optional(Schema.Boolean),
   model: GuestThreadModel,
 });
 export type GuestShareView = typeof GuestShareView.Type;

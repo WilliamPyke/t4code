@@ -1745,3 +1745,35 @@ export const GUEST_ATTACHMENT_ROUTE = `${GUEST_ROUTE_PREFIX}/attachment`;
  * `?share=<share id>&path=<absolute path>`.
  */
 export const GUEST_MEDIA_ROUTE = `${GUEST_ROUTE_PREFIX}/media`;
+
+/** Where the cloud board host makes a board that lives on nobody's machine. */
+export const CLOUD_BOARD_ROUTE = "/api/boards";
+export const CLOUD_BOARD_TITLE_MAX_LENGTH = 80;
+
+export const CloudBoardCreateRequest = Schema.Struct({
+  /** The name the maker joins the board under. */
+  name: GuestRedeemRequest.fields.name,
+  title: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(CLOUD_BOARD_TITLE_MAX_LENGTH)),
+  ),
+});
+export type CloudBoardCreateRequest = typeof CloudBoardCreateRequest.Type;
+
+/**
+ * The maker's own session on the new board, as a redeem answers, and the credential a link to it
+ * carries so the maker can invite others.
+ */
+export const CloudBoardCreateResult = Schema.Struct({
+  token: TrimmedNonEmptyString,
+  shareId: GuestShareId,
+  threadId: ThreadId,
+  credential: TrimmedNonEmptyString,
+});
+export type CloudBoardCreateResult = typeof CloudBoardCreateResult.Type;
+
+/** Renames a cloud board: `?share=<share id>`, signed by anyone on it. */
+export const CLOUD_BOARD_TITLE_ROUTE = `${CLOUD_BOARD_ROUTE}/title`;
+export const CloudBoardTitleRequest = Schema.Struct({
+  title: TrimmedNonEmptyString.check(Schema.isMaxLength(CLOUD_BOARD_TITLE_MAX_LENGTH)),
+});
+export type CloudBoardTitleRequest = typeof CloudBoardTitleRequest.Type;

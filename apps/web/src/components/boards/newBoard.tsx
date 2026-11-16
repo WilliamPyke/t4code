@@ -1,18 +1,36 @@
 import { useAtomValue } from "@effect/atom-react";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import {
+  guestEnvironmentId,
+  isGuestEnvironment,
+  scopeThreadRef,
+} from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-import { DEFAULT_PROVIDER_INTERACTION_MODE, type ScopedThreadRef } from "@t3tools/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  DEFAULT_PROVIDER_INTERACTION_MODE,
+  GUEST_NAME_MAX_LENGTH,
+  type ScopedThreadRef,
+} from "@t3tools/contracts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { useNavigate } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/reactivity";
-import { useEffect, useEffectEvent, useState } from "react";
+import { CloudIcon } from "lucide-react";
+import { type FormEvent, useEffect, useEffectEvent, useState } from "react";
 
 import { isCommandPaletteOpen, openCommandPalette } from "~/commandPaletteBus";
+import {
+  createCloudBoard,
+  putOnCloudBoard,
+  readBoardName,
+  rememberBoardName,
+} from "~/guest/cloudBoards";
+import { cloudBoardsOrigin } from "~/guest/cloudBoardsHost";
+import { rememberGuestShare } from "~/guest/guestShares";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import { useScratchProject } from "~/hooks/useScratchProject";
 import { registerCommands } from "~/shortcuts/dispatcher";
@@ -27,6 +45,7 @@ import {
   usePrimaryEnvironmentId,
 } from "~/state/environments";
 import { serverEnvironment } from "~/state/server";
+import { useEnvironmentsWithScope } from "~/state/session";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useOrchestrationCommand } from "~/state/use-orchestration-command";
@@ -36,11 +55,14 @@ import { Button } from "../ui/button";
 import {
   Dialog,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogPanel,
   DialogPopup,
   DialogTitle,
 } from "../ui/dialog";
+import { Input } from "../ui/input";
+import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { BoardThumbnail } from "./BoardThumbnail";
 import { fitRoomBoardOnOpen, roomBoardViewKey } from "../room/roomBoardNavigation";
@@ -51,12 +73,13 @@ import {
   type BoardTemplate,
   boardTemplateChanges,
   boardTemplateShapes,
+  cloudBoardTemplateChanges,
 } from "./boardTemplates";
 import {
   UNTITLED_BOARD,
   listHomeBoards,
-  newBoardProject,
   newBoardProjectKey,
+  newBoardStart,
 } from "./boardsHome.logic";
 
 // Per device: the project the last new board went in, so the next one goes there without asking.
@@ -93,6 +116,27 @@ const templatesOpenAtom = Atom.make(false).pipe(
 /** Opens the choice of what a new board starts with. */
 export const openBoardTemplates = () => appAtomRegistry.set(templatesOpenAtom, true);
 const closeTemplates = () => appAtomRegistry.set(templatesOpenAtom, false);
+
+// The template a cloud board waits to be made with while the user says their name.
+const cloudNameAtom = Atom.make<BoardTemplate | null>(null).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("boards:cloud-board-name"),
+);
+const closeCloudName = () => appAtomRegistry.set(cloudNameAtom, null);
+
+/** Whether this build has a cloud board host to make boards on. */
+const hasCloudBoards = () => cloudBoardsOrigin() !== null;
+const fitsCloud = (template: BoardTemplate) =>
+  cloudBoardTemplateChanges(template, () => "") !== null;
+
+/** The machines this browser may make a board on now: connected, and allowed to. */
+function useOperableEnvironments() {
+  const { environments } = useEnvironments();
+  return useEnvironmentsWithScope(
+    environments.filter((entry) => !isGuestEnvironment(entry.environmentId)),
+    AuthOrchestrationOperateScope,
+  );
+}
 
 /** Where a board opens right after it is made: full size, no conversation beside it. */
 const newBoardLocation = (ref: ScopedThreadRef) => ({
@@ -195,6 +239,54 @@ function useCreateBoard() {
 }
 
 /**
+ * Makes a board on the cloud host, on nobody's machine, as the name this browser joins boards
+ * under, asking for it first when there is none. Opens it once made.
+ */
+function useCreateCloudBoard() {
+  const navigate = useNavigate();
+  return async (
+    template: BoardTemplate = BLANK_BOARD_TEMPLATE,
+    name: string | null = readBoardName(),
+  ): Promise<boolean> => {
+    const changes = cloudBoardTemplateChanges(template, randomUUID);
+    if (changes === null) {
+      toastManager.add({
+        type: "error",
+        title: "Could not start a board",
+        description: "This template needs an agent, which a cloud board does not have yet.",
+      });
+      return false;
+    }
+    if (name === null) {
+      appAtomRegistry.set(cloudNameAtom, template);
+      return false;
+    }
+    const created = await createCloudBoard({ name, title: UNTITLED_BOARD });
+    if (typeof created === "string") {
+      toastManager.add({ type: "error", title: "Could not start a board", description: created });
+      return false;
+    }
+    rememberGuestShare(created);
+    if (!(await putOnCloudBoard(created, changes))) {
+      toastManager.add({
+        type: "error",
+        title: "Some of the template is missing",
+        description: "The board was made, but not all of its cards could be added.",
+      });
+    }
+    const ref = scopeThreadRef(guestEnvironmentId(created.shareId), created.threadId);
+    const notes = changes.filter((change) => change.type === "note.put").length;
+    if (notes > 0) fitRoomBoardOnOpen(`guest:${created.shareId}`, notes);
+    nameBoardOnOpen(ref);
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: { environmentId: ref.environmentId, threadId: ref.threadId },
+    });
+    return true;
+  };
+}
+
+/**
  * Starts a new board with the fewest questions: straight into the project it would obviously go
  * in, a conversation-only project when there is none, and a project picker otherwise.
  */
@@ -204,12 +296,20 @@ export function useStartNewBoard() {
   const createBoard = useCreateBoard();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { scratchEnvironmentId, openScratchProject } = useScratchProject();
+  const operable = useOperableEnvironments();
+  const createCloudBoard = useCreateCloudBoard();
   return async (template: BoardTemplate = BLANK_BOARD_TEMPLATE) => {
-    const decision = newBoardProject({
+    const decision = newBoardStart({
       projects,
       boards: listHomeBoards({ threads, joined: [], teams: [], isOwnEnvironment: () => true }),
       lastUsed: readLastProject(),
+      operable,
+      cloud: hasCloudBoards(),
     });
+    if (decision.kind === "cloud") {
+      await createCloudBoard(template);
+      return;
+    }
     if (decision.kind === "use") {
       await createBoard(decision.project, template);
       return;
@@ -235,11 +335,13 @@ export function useStartNewBoard() {
 export function NewBoardDialogHost() {
   const pending = useAtomValue(pickerOpenAtom);
   const templatesOpen = useAtomValue(templatesOpenAtom);
+  const naming = useAtomValue(cloudNameAtom);
   return (
     <>
       <BoardShortcuts />
       {templatesOpen ? <NewBoardTemplatePicker /> : null}
       {pending === null ? null : <NewBoardProjectPicker template={pending} />}
+      {naming === null ? null : <CloudBoardNameDialog template={naming} />}
     </>
   );
 }
@@ -260,8 +362,8 @@ function BoardShortcuts() {
             if (!event.repeat) goToBoards();
           },
           "boards.new": (event) => {
-            // A browser that only joined guest links has nowhere to make a board.
-            if (readGuestOnly()) return false;
+            // A browser that only joined guest links has nowhere to make a board but the cloud.
+            if (readGuestOnly() && !hasCloudBoards()) return false;
             event.preventDefault();
             if (!event.repeat) newBoard();
           },
@@ -277,10 +379,13 @@ function NewBoardProjectPicker({ template }: { readonly template: BoardTemplate 
   const projects = useProjects();
   const threads = useThreadShells();
   const createBoard = useCreateBoard();
+  const createCloudBoard = useCreateCloudBoard();
+  const operable = useOperableEnvironments();
   const [pending, setPending] = useState(false);
-  // Most recently used first.
+  const cloud = hasCloudBoards() && fitsCloud(template);
+  // Most recently used first, of the machines that can take a board now.
   const choices = sortScopedProjectsForSidebar(
-    projects.filter((project) => project.archivedAt == null),
+    projects.filter((project) => project.archivedAt == null && operable.has(project.environmentId)),
     threads,
     "updated_at",
   );
@@ -317,6 +422,26 @@ function NewBoardProjectPicker({ template }: { readonly template: BoardTemplate 
                 </Button>
               </li>
             ))}
+            {cloud ? (
+              <li>
+                <Button
+                  variant="ghost"
+                  className="w-full justify-start"
+                  disabled={pending}
+                  data-new-board-cloud
+                  onClick={() => {
+                    closePicker();
+                    void createCloudBoard(template);
+                  }}
+                >
+                  <CloudIcon />
+                  <span className="min-w-0 truncate">In the cloud</span>
+                  <span className="min-w-0 truncate text-muted-foreground">
+                    Works when your computer is off
+                  </span>
+                </Button>
+              </li>
+            ) : null}
           </ul>
         </DialogPanel>
       </DialogPopup>
@@ -327,6 +452,12 @@ function NewBoardProjectPicker({ template }: { readonly template: BoardTemplate 
 /** What a new board starts with: blank, the first and focused choice, or a template. */
 function NewBoardTemplatePicker() {
   const startNewBoard = useStartNewBoard();
+  const createCloudBoard = useCreateCloudBoard();
+  const operable = useOperableEnvironments();
+  // With no machine to make it on, New board makes it in the cloud anyway.
+  const cloudOnly = hasCloudBoards() && operable.size === 0;
+  const [inCloud, setInCloud] = useState(false);
+  const cloud = cloudOnly || inCloud;
   return (
     <Dialog
       open
@@ -347,11 +478,12 @@ function NewBoardTemplatePicker() {
                   type="button"
                   // Blank is the default, so Enter makes the board New board always made.
                   autoFocus={index === 0}
-                  className="flex h-full w-full flex-col overflow-hidden rounded-board border border-board-hairline bg-card text-start shadow-paint outline-none transition-shadow hover:shadow-board focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                  disabled={cloud && !fitsCloud(template)}
+                  className="flex h-full w-full flex-col overflow-hidden rounded-board border border-board-hairline bg-card text-start shadow-paint outline-none transition-shadow hover:shadow-board focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset disabled:pointer-events-none disabled:opacity-50"
                   data-board-template={template.id}
                   onClick={() => {
                     closeTemplates();
-                    void startNewBoard(template);
+                    void (inCloud ? createCloudBoard(template) : startNewBoard(template));
                   }}
                 >
                   <span className="border-b border-board-hairline">
@@ -359,13 +491,88 @@ function NewBoardTemplatePicker() {
                   </span>
                   <span className="flex flex-col gap-0.5 p-2.5">
                     <span className="text-sm font-semibold">{template.name}</span>
-                    <span className="text-xs text-muted-foreground">{template.description}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {cloud && !fitsCloud(template)
+                        ? "Needs an agent, which a cloud board does not have yet."
+                        : cloud
+                          ? (template.cloudDescription ?? template.description)
+                          : template.description}
+                    </span>
                   </span>
                 </button>
               </li>
             ))}
           </ul>
         </DialogPanel>
+        {hasCloudBoards() && !cloudOnly ? (
+          <DialogFooter>
+            <label className="flex cursor-pointer items-center gap-2 text-sm">
+              <Switch
+                checked={inCloud}
+                aria-label="Make it in the cloud"
+                onCheckedChange={(checked) => setInCloud(Boolean(checked))}
+                data-new-board-in-cloud
+              />
+              <span className="font-medium">In the cloud</span>
+              <span className="text-muted-foreground">Works when your computer is off</span>
+            </label>
+          </DialogFooter>
+        ) : null}
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
+/** Asks the name a new cloud board's maker joins it under, once per browser. */
+function CloudBoardNameDialog({ template }: { readonly template: BoardTemplate }) {
+  const createCloudBoard = useCreateCloudBoard();
+  const [name, setName] = useState("");
+  const [pending, setPending] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const trimmed = name.trim();
+    if (trimmed === "" || pending) return;
+    rememberBoardName(trimmed);
+    setPending(true);
+    const made = await createCloudBoard(template, trimmed);
+    setPending(false);
+    if (made) closeCloudName();
+  };
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !pending) closeCloudName();
+      }}
+    >
+      <DialogPopup className="sm:max-w-sm" bottomStickOnMobile={false}>
+        <form className="flex min-h-0 flex-col" onSubmit={submit}>
+          <DialogHeader>
+            <DialogTitle>New board</DialogTitle>
+            <DialogDescription>
+              This board lives in the cloud, so it works when your computer is off. Everyone on it
+              sees your name.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel>
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              Your name
+              <Input
+                autoFocus
+                autoComplete="name"
+                maxLength={GUEST_NAME_MAX_LENGTH}
+                value={name}
+                onChange={(event) => setName(event.currentTarget.value)}
+                data-cloud-board-name
+              />
+            </label>
+          </DialogPanel>
+          <DialogFooter variant="bare">
+            <Button type="submit" disabled={pending || name.trim() === ""}>
+              Start board
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogPopup>
     </Dialog>
   );

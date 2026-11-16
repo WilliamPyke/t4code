@@ -60,6 +60,23 @@ export function inviteShareId(credential: string): string | null {
 }
 
 /**
+ * What opening a guest link does. A share this browser already joined opens with its stored
+ * session, so the same person does not join twice under a new name; with an invite in hand that
+ * session is checked first, and the invite joins again only if the host refuses it.
+ */
+export function guestEntryStep<Share extends { readonly shareId: string }>(
+  joined: ReadonlyArray<Share>,
+  entry: { readonly credential: string | null; readonly shareId: string | null },
+):
+  | { readonly step: "open" | "check"; readonly share: Share }
+  | { readonly step: "join" | "invalid" } {
+  const shareId = entry.credential === null ? entry.shareId : inviteShareId(entry.credential);
+  const share = shareId === null ? undefined : joined.find((one) => one.shareId === shareId);
+  if (share !== undefined) return { step: entry.credential === null ? "open" : "check", share };
+  return { step: shareId !== null && entry.credential !== null ? "join" : "invalid" };
+}
+
+/**
  * Why these files cannot go with one message, or null. The server checks the same limits; this
  * only says so before the upload.
  */

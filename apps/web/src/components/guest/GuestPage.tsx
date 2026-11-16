@@ -1,6 +1,9 @@
+import { useAtomValue } from "@effect/atom-react";
 import { guestEnvironmentId } from "@t3tools/client-runtime/environment";
+import { guestShareRequest } from "@t3tools/client-runtime/rpc";
 import {
   GUEST_HOST_PARAM,
+  GUEST_ROUTE_PREFIX,
   GUEST_NAME_MAX_LENGTH,
   GUEST_SHARE_PARAM,
   GUEST_SIGN_IN_PARAM,
@@ -12,17 +15,21 @@ import * as Schema from "effect/Schema";
 import { useEffect, useState, type FormEvent } from "react";
 
 import {
-  findGuestShare,
+  forgetGuestShare,
   guestLinkHost,
+  guestShareEndpointOf,
+  guestSharesAtom,
   type JoinedGuestShare,
   rememberGuestShare,
 } from "~/guest/guestShares";
+import { readBoardName, rememberBoardName } from "~/guest/cloudBoards";
+import { isCloudBoardsHost } from "~/guest/cloudBoardsHost";
 import { redeemInvite } from "~/guest/redeemInvite";
 import { BoardBackdrop } from "../room/BoardChrome";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { GuestNotice, noteGuestSignInFailure } from "./GuestThreadView";
-import { inviteShareId } from "./guestStream.logic";
+import { guestEntryStep, inviteShareId } from "./guestStream.logic";
 
 interface GuestEntry {
   /** Unspent invite from the URL hash, if this load came from a link. */
@@ -86,8 +93,12 @@ const INVALID = (
  * browser. A share this browser already joined opens straight away.
  */
 export function GuestPage() {
-  const [{ credential, host, shareId }] = useState(takeGuestEntry);
-  const [joined, setJoined] = useState(() => (shareId === null ? null : findGuestShare(shareId)));
+  const [entry] = useState(takeGuestEntry);
+  const { credential, host } = entry;
+  const shares = useAtomValue(guestSharesAtom);
+  const [joined, setJoined] = useState<JoinedGuestShare | null>(null);
+  const step = guestEntryStep(shares, entry);
+  const checking = joined === null && step.step === "check" ? step.share : null;
   // Pasting another guest link into this tab changes only the hash, which does not reload the
   // page; reload so the new invite is read instead of the one already captured.
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- hashchange listener reloads the page when another guest link is pasted into this tab
@@ -98,23 +109,55 @@ export function GuestPage() {
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- asks the share's host whether this browser's stored session still works before reusing it
+  useEffect(() => {
+    if (checking === null) return;
+    let stopped = false;
+    void guestShareRequest(guestShareEndpointOf(checking), GUEST_SESSION_ROUTE).then(
+      (response) => {
+        if (stopped) return;
+        // Only a refusal joins again; anything else opens the board, which says what is wrong.
+        if (SESSION_REFUSED.has(response.status)) forgetGuestShare(checking.shareId);
+        else setJoined(checking);
+      },
+      () => {
+        if (!stopped) setJoined(checking);
+      },
+    );
+    return () => {
+      stopped = true;
+    };
+  }, [checking]);
 
+  const open = joined ?? (step.step === "open" ? step.share : null);
   return (
     <BoardBackdrop className="flex h-dvh flex-col px-4 text-foreground">
-      {joined !== null ? (
+      {open !== null ? (
         <Navigate
           to="/$environmentId/$threadId"
-          params={{ environmentId: guestEnvironmentId(joined.shareId), threadId: joined.threadId }}
+          params={{ environmentId: guestEnvironmentId(open.shareId), threadId: open.threadId }}
           replace
         />
-      ) : host === null || shareId === null || credential === null ? (
+      ) : checking !== null ? (
+        <GuestNotice title="Opening the board..." />
+      ) : step.step === "invalid" || host === null || credential === null ? (
         INVALID
       ) : (
-        <NameForm credential={credential} host={host} onJoined={setJoined} />
+        <NameForm
+          credential={credential}
+          host={host}
+          onJoined={(share) => {
+            rememberGuestShare(share);
+            setJoined(share);
+          }}
+        />
       )}
     </BoardBackdrop>
   );
 }
+
+const GUEST_SESSION_ROUTE = `${GUEST_ROUTE_PREFIX}/session`;
+const SESSION_REFUSED = new Set([401, 403, 410]);
 
 function NameForm({
   credential,
@@ -125,7 +168,8 @@ function NameForm({
   readonly host: string;
   readonly onJoined: (share: JoinedGuestShare) => void;
 }) {
-  const [name, setName] = useState("");
+  const [name, setName] = useState(() => readBoardName() ?? "");
+  const cloud = isCloudBoardsHost(host);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submit = async (event: FormEvent) => {
@@ -139,7 +183,7 @@ function NameForm({
       setError(joined);
       return;
     }
-    rememberGuestShare(joined);
+    rememberBoardName(trimmed);
     onJoined(joined);
   };
   return (
@@ -150,7 +194,13 @@ function NameForm({
       <div className="flex flex-col gap-1">
         <h1 className="text-lg font-semibold tracking-tight">Join a shared board</h1>
         <p className="text-sm text-muted-foreground">
-          Shared with you from <span className="font-medium text-foreground">{host}</span>
+          {cloud ? (
+            "This board lives in the cloud. Everyone on it sees your name."
+          ) : (
+            <>
+              Shared with you from <span className="font-medium text-foreground">{host}</span>
+            </>
+          )}
         </p>
       </div>
       <label className="flex flex-col gap-1.5 text-sm font-medium" htmlFor="guest-name">
@@ -172,9 +222,11 @@ function NameForm({
       <Button type="submit" disabled={submitting || name.trim() === ""}>
         Join
       </Button>
-      <p className="text-xs text-muted-foreground">
-        The owner sees your name and approves each message before the agent gets it.
-      </p>
+      {cloud ? null : (
+        <p className="text-xs text-muted-foreground">
+          The owner sees your name and approves each message before the agent gets it.
+        </p>
+      )}
     </form>
   );
 }

@@ -74,8 +74,10 @@ import {
   guestRoomViewsAtom,
   guestShareEndpointOf,
   guestSharesAtom,
+  isCloudShare,
   type JoinedGuestShare,
 } from "~/guest/guestShares";
+import { renameCloudBoard } from "~/guest/cloudBoards";
 import { useIncrementalTimelineEntries } from "~/hooks/useIncrementalTimelineEntries";
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -146,6 +148,8 @@ import { Button } from "../ui/button";
 import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { BoardTitle } from "../boards/BoardTitle";
+import { CloudBoardSharing } from "./CloudBoardSharing";
 import { GuestHtmlRender } from "./GuestHtmlRender";
 import { openGuestFile, useGuestFiles } from "./guestFiles";
 import { linkEndsLabel } from "../chat/guestLinkTiming";
@@ -429,7 +433,11 @@ function GuestThreadSession({
               : "Connecting..."
         }
         {...(retrying
-          ? { detail: "The owner's computer has not answered yet. Trying again." }
+          ? {
+              detail: isCloudShare(share)
+                ? "The board service has not answered yet. Trying again."
+                : "The owner's computer has not answered yet. Trying again.",
+            }
           : Option.isSome(thread.error)
             ? { detail: thread.error.value }
             : {})}
@@ -709,12 +717,14 @@ function GuestThreadSession({
   );
   // The one guest of a link made before several could join cannot sign a note, so has no board.
   if (guestId === undefined) return conversation;
+  // On nobody's machine: no thread, agent, code or owner, so only what people do themselves.
+  const cloud = isCloudShare(share) || view.cloud === true;
   return (
     <RoomLiveContext value={live}>
       <GuestBoardLive shareId={share.shareId} running={running} live={live} />
       <BoardSplit
-        open={panelOpen}
-        panel={<div className="flex h-full min-h-0 flex-col">{conversation}</div>}
+        open={!cloud && panelOpen}
+        panel={cloud ? null : <div className="flex h-full min-h-0 flex-col">{conversation}</div>}
         board={
           <RoomBoard
             title={view.title}
@@ -729,8 +739,24 @@ function GuestThreadSession({
             )}
             agentWorking={deriveThreadAgentWorking(projection)}
             ownerCode={ownerCode}
-            onTakeTask={takeTask}
-            onGiveNote={giveNote}
+            onTakeTask={cloud ? undefined : takeTask}
+            onGiveNote={cloud ? undefined : giveNote}
+            cloud={cloud}
+            ownerAssignable={!cloud}
+            {...(cloud
+              ? {
+                  onBack: () => void navigate({ to: "/" }),
+                  backLabel: "Boards",
+                  titleEditor: (
+                    <BoardTitle
+                      threadRef={threadRef}
+                      title={view.title}
+                      rename={(title) => renameCloudBoard(share, title)}
+                    />
+                  ),
+                  sharing: <CloudBoardSharing share={share} online={online.length} />,
+                }
+              : {})}
             viewer={guestId}
             ownerName={view.ownerName}
             cursorLayer={
@@ -747,12 +773,14 @@ function GuestThreadSession({
             }}
             onChange={(change) => postBoardChange(endpoint, change)}
             onCursor={(presence) => postBoardCursor(endpoint, presence)}
-            onPromptBox={promptBox}
-            stopBox={stopBox}
-            askInComments={machine != null}
+            onPromptBox={cloud ? undefined : promptBox}
+            stopBox={cloud ? undefined : stopBox}
+            askInComments={!cloud && machine != null}
             readCodePatch={readCodePatch}
-            onRefreshPullRequest={(noteId) => refreshRoomPullRequest(endpoint, noteId)}
-            onAddThread={machine == null ? undefined : setAddingAt}
+            onRefreshPullRequest={
+              cloud ? undefined : (noteId) => refreshRoomPullRequest(endpoint, noteId)
+            }
+            onAddThread={cloud || machine == null ? undefined : setAddingAt}
             renderBoxModel={(boxId) =>
               machine == null ? (
                 <span className="truncate text-2xs text-muted-foreground">
@@ -799,16 +827,20 @@ function GuestThreadSession({
                 <BoxApproval threadRef={scopeThreadRef(machine.environmentId, threadId)} />
               );
             }}
-            onUseNote={(text) => {
-              // Only a draft in the message box: the guest sends it, and the owner still approves it.
-              flushSync(() => {
-                setDraft((current) =>
-                  appendNoteToDraft(current, text).slice(0, GUEST_MESSAGE_MAX_LENGTH),
-                );
-                setPanelOpen(true);
-              });
-              composerRef.current?.focus();
-            }}
+            onUseNote={
+              cloud
+                ? undefined
+                : (text) => {
+                    // Only a draft in the message box: the guest sends it, and the owner still approves it.
+                    flushSync(() => {
+                      setDraft((current) =>
+                        appendNoteToDraft(current, text).slice(0, GUEST_MESSAGE_MAX_LENGTH),
+                      );
+                      setPanelOpen(true);
+                    });
+                    composerRef.current?.focus();
+                  }
+            }
           />
         }
       />

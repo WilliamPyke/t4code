@@ -144,6 +144,12 @@
         "src/preload.mjs",
       ],
     },
+    "infra/boards": {
+      // Wrangler loads src/worker.ts as the Worker entry and reads its default and class exports.
+      "entry": ["src/worker.ts!"],
+      // Named in tsconfig.json's `types`, never imported.
+      "ignoreDependencies": ["@cloudflare/workers-types"],
+    },
     "infra/relay": {
       // Alchemy loads src/worker.ts as the Worker entry and reads its default export.
       "entry": ["alchemy.run.ts!", "src/persistence/schema.ts!", "src/worker.ts!"],

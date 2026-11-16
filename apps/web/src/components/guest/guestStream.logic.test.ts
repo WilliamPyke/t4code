@@ -13,6 +13,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { makeThreadProjectionFixture } from "../../test-fixtures";
 import {
+  guestEntryStep,
   guestFilesProblem,
   inviteShareId,
   nextAwaitingRowIds,
@@ -134,6 +135,31 @@ describe("inviteShareId", () => {
     expect(inviteShareId("no-signature")).toBeNull();
     expect(inviteShareId(".sig")).toBeNull();
     expect(inviteShareId("")).toBeNull();
+  });
+});
+
+describe("guestEntryStep", () => {
+  const joined = [{ shareId: "board-1" }, { shareId: "board-2" }];
+  it("reuses a share this browser joined, checking the session when an invite could replace it", () => {
+    expect(guestEntryStep(joined, { credential: "board-2.secret", shareId: "board-2" })).toEqual({
+      step: "check",
+      share: { shareId: "board-2" },
+    });
+    expect(guestEntryStep(joined, { credential: null, shareId: "board-1" })).toEqual({
+      step: "open",
+      share: { shareId: "board-1" },
+    });
+  });
+  it("joins with an invite only for a share not joined yet", () => {
+    expect(guestEntryStep(joined, { credential: "board-3.secret", shareId: "board-3" })).toEqual({
+      step: "join",
+    });
+    expect(guestEntryStep(joined, { credential: null, shareId: "board-3" })).toEqual({
+      step: "invalid",
+    });
+    expect(guestEntryStep(joined, { credential: "no-signature", shareId: null })).toEqual({
+      step: "invalid",
+    });
   });
 });
 

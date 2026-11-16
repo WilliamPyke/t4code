@@ -22,14 +22,17 @@ export const nameBoardOnOpen = (ref: ScopedThreadRef) => void boardsToName.add(b
 
 /**
  * A board's name in its header, renamed in place: click it, type, Enter or click away to keep it,
- * Escape to leave it as it was. The name is the title of the thread underneath.
+ * Escape to leave it as it was. The name is the title of the thread underneath, or `rename` sets it
+ * where there is no thread to rename (a cloud board), resolving to what went wrong or null.
  */
 export function BoardTitle({
   threadRef,
   title,
+  rename,
 }: {
   readonly threadRef: ScopedThreadRef;
   readonly title: string;
+  readonly rename?: (title: string) => Promise<string | null>;
 }) {
   // A new board's shell can arrive after it opens, so its draft starts from the name it was made with.
   const [draft, setDraft] = useState<string | null>(() =>
@@ -46,16 +49,22 @@ export function BoardTitle({
     close();
     const next = value.trim();
     if (next === "" || next === title) return;
-    void updateMetadata({
-      environmentId: threadRef.environmentId,
-      input: { threadId: threadRef.threadId, title: next },
-    }).then((result) => {
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+    const renamed =
+      rename?.(next) ??
+      updateMetadata({
+        environmentId: threadRef.environmentId,
+        input: { threadId: threadRef.threadId, title: next },
+      }).then((result) => {
+        if (result._tag === "Success" || isAtomCommandInterrupted(result)) return null;
         const error = squashAtomCommandFailure(result);
+        return error instanceof Error ? error.message : "An error occurred.";
+      });
+    void renamed.then((failure) => {
+      if (failure !== null) {
         toastManager.add({
           type: "error",
           title: "Could not rename the board",
-          description: error instanceof Error ? error.message : "An error occurred.",
+          description: failure,
         });
       }
     });

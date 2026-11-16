@@ -262,6 +262,7 @@ import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrom
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { TooltipProvider } from "./ui/tooltip";
 import { composerDraftHasUserContent, DraftId, useComposerDraftStore } from "../composerDraftStore";
+import { cloudBoardsOrigin } from "../guest/cloudBoardsHost";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 import {
   SidebarSearchResultRow,
@@ -3029,7 +3030,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         className="min-h-full"
         fixedHeader={
           <SidebarGroup className="z-[1]">
-            <BoardsSection canStart={!guestOnly} />
+            <BoardsSection canStart={!guestOnly || cloudBoardsOrigin() !== null} />
             <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">Threads</p>
             <SidebarThreadHeader
               hasProjects={projectGroups.length > 0}

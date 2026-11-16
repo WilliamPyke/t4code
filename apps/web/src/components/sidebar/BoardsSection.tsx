@@ -8,12 +8,13 @@ import { EnvironmentId, ROOM_BOARD_NOTE_COLORS, ThreadId } from "@t3tools/contra
 import { Link, useLocation, useParams } from "@tanstack/react-router";
 import { LayoutGridIcon, PlusIcon } from "lucide-react";
 
-import { guestSharesAtom } from "~/guest/guestShares";
+import { guestSharesAtom, isCloudShare } from "~/guest/guestShares";
 import { cn } from "~/lib/utils";
 import { useThreadShells } from "~/state/entities";
 
 import { listHomeBoards } from "../boards/boardsHome.logic";
 import { useStartNewBoard } from "../boards/newBoard";
+import { JoinedBoardMenu } from "../boards/removeJoinedBoard";
 import { roomBoardLocation } from "../room/roomBoardNavigation";
 import { paintSwatchClassName } from "../room/RoomNoteColor";
 import { Button } from "../ui/button";
@@ -47,7 +48,7 @@ export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
   });
   const recent = listHomeBoards({
     threads,
-    joined,
+    joined: joined.map((share) => ({ ...share, cloud: isCloudShare(share) })),
     teams: [],
     isOwnEnvironment: (environmentId) => !isGuestEnvironment(environmentId),
   }).slice(0, RECENT_BOARDS);
@@ -109,6 +110,11 @@ export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
                 />
                 <span className="min-w-0 truncate">{board.title}</span>
               </SidebarMenuButton>
+              {board.kind === "joined" ? (
+                <div className="absolute end-1 top-1/2 -translate-y-1/2 opacity-0 group-hover/menu-item:opacity-100 has-[[data-popup-open]]:opacity-100 focus-within:opacity-100">
+                  <JoinedBoardMenu board={board} size="icon-micro" variant="ghost-muted" />
+                </div>
+              ) : null}
             </SidebarMenuItem>
           ),
         )}

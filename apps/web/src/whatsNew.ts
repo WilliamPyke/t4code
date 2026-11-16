@@ -12,6 +12,17 @@ export interface WhatsNewEntry {
 /** Newest first. Shortcuts are written for Windows and Linux with the Mac key in brackets. */
 export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
   {
+    date: "2026-11-16",
+    title: "Boards in the cloud",
+    items: [
+      "A board can now live in the cloud instead of on your computer, so it opens and can be shared while every computer is off. New board makes one when no computer is connected; otherwise turn on In the cloud when you choose a template or a project.",
+      "Everyone on a cloud board can add notes, tasks, sections, lines, votes and comments, rename the board, and copy its invite link from the header. Blank and Retro start one; templates with agents need a board on a computer for now.",
+      "Cloud boards have no agents yet: thread boxes, Ask an agent and Run with an agent stay on boards kept on a computer.",
+      "Remove from my boards, in a joined board's menu on the home page or sidebar, takes it off this browser only. A cloud board's invite link brings it back.",
+      "New board on a computer that is not connected now says so, instead of “This connection cannot change threads or projects.”",
+    ],
+  },
+  {
     date: "2026-11-15",
     title: "Thread boxes keep their model, and templates with agents",
     items: [

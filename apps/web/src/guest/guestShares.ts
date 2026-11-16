@@ -16,7 +16,6 @@ import {
   type RoomViewport,
   ThreadId,
 } from "@t3tools/contracts";
-import { guestHostZoneOf, isGuestHostAllowed } from "@t3tools/shared/guestLinks";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -24,8 +23,14 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { Atom, AtomRegistry } from "effect/reactivity";
 
-import { configuredHostedAppUrl } from "../hostedPairing";
 import { appAtomRegistry } from "../rpc/atomRegistry";
+import {
+  acceptedGuestLinkHost,
+  cloudBoardsHost,
+  cloudBoardsOrigin,
+  guestHostZone,
+  guestShareOriginOf,
+} from "./cloudBoardsHost";
 
 /**
  * A thread someone shared that this browser joined. The token is the guest session for that one
@@ -45,6 +50,8 @@ const JoinedGuestShare = Schema.Struct({
   team: Schema.optional(
     Schema.Struct({ id: Schema.String, environmentId: Schema.String, credential: Schema.String }),
   ),
+  /** A cloud board's invite, kept so anyone on it can invite others. */
+  credential: Schema.optional(Schema.String),
 });
 export type JoinedGuestShare = typeof JoinedGuestShare.Type;
 
@@ -146,7 +153,11 @@ export const guestRoomViewsAtom = Atom.family((shareId: string) =>
 
 /** The origin a share's guest routes are on. Tunnels are https; this page's own host is itself. */
 export const guestShareOrigin = (host: string) =>
-  host === window.location.host ? window.location.origin : `https://${host}`;
+  guestShareOriginOf({ host, page: window.location, cloudOrigin: cloudBoardsOrigin() });
+
+/** Whether a joined share is a board on the cloud board host, on nobody's machine. */
+export const isCloudShare = (share: Pick<JoinedGuestShare, "host">) =>
+  share.host === cloudBoardsHost();
 
 export const guestShareEndpointOf = (share: JoinedGuestShare): GuestShareEndpoint => ({
   httpBaseUrl: guestShareOrigin(share.host),
@@ -155,21 +166,17 @@ export const guestShareEndpointOf = (share: JoinedGuestShare): GuestShareEndpoin
 });
 
 /**
- * The zone this deployment's tunnels live in. `VITE_GUEST_HOST_ZONE` names it; without it, it is
- * the hosted app's own host minus its first label.
- */
-const guestHostZone = (): string | null =>
-  import.meta.env.VITE_GUEST_HOST_ZONE?.trim() || guestHostZoneOf(configuredHostedAppUrl());
-
-/**
  * The owner's host a guest link names, or null when the link may not be followed. A link with
  * no `host` means this page's own host, which served the page. A `host` is whatever the link's
- * author wrote, so only this deployment's tunnels are accepted.
+ * author wrote, so only this deployment's tunnels and its cloud board host are accepted.
  */
-export function guestLinkHost(requested: string | null): string | null {
-  if (requested === null || requested === window.location.host) return window.location.host;
-  return isGuestHostAllowed(requested, guestHostZone()) ? requested : null;
-}
+export const guestLinkHost = (requested: string | null): string | null =>
+  acceptedGuestLinkHost({
+    requested,
+    pageHost: window.location.host,
+    zone: guestHostZone(),
+    cloudHost: cloudBoardsHost(),
+  });
 
 /** How the connection runtime reads the joined shares and reports what their streams say. */
 export const layerGuestShareAccess = Layer.succeed(
@@ -238,7 +245,7 @@ export const guestShareRegistrations: Stream.Stream<ReadonlyArray<GuestConnectio
           new GuestConnectionRegistration({
             target: new GuestConnectionTarget({
               environmentId: guestEnvironmentId(share.shareId),
-              label: share.host,
+              label: isCloudShare(share) ? "Cloud" : share.host,
               httpBaseUrl: guestShareOrigin(share.host),
               shareId: share.shareId,
               threadId: share.threadId,

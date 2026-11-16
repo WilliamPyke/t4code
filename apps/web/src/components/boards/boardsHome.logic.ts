@@ -28,6 +28,8 @@ export interface JoinedBoardSource {
   readonly title: string;
   readonly owner?: string | undefined;
   readonly joinedAt: string;
+  /** On the cloud board host, on nobody's machine. */
+  readonly cloud?: boolean;
 }
 
 export interface TeamBoardSource {
@@ -52,6 +54,7 @@ export type HomeBoard =
       readonly threadId: string;
       readonly title: string;
       readonly owner: string | null;
+      readonly cloud: boolean;
       readonly activityAt: string;
     }
   | {
@@ -109,6 +112,7 @@ export function listHomeBoards(input: {
     threadId: share.threadId,
     title: share.title.trim() || UNTITLED_BOARD,
     owner: share.owner ?? null,
+    cloud: share.cloud === true,
     activityAt: share.joinedAt,
   }));
   const dated = [...own, ...joined].toSorted((left, right) =>
@@ -256,3 +260,29 @@ export function newBoardProject<TProject extends NewBoardProjectSource>(input: {
 
 export const newBoardProjectKey = (project: Pick<NewBoardProjectSource, "environmentId" | "id">) =>
   `${project.environmentId}:${project.id}`;
+
+/**
+ * Where New board makes a board: in the cloud when this browser has no machine it may make one
+ * on and a cloud host exists, else in a project as {@link newBoardProject} picks one, among the
+ * projects of machines it may make one on when it has any.
+ */
+export function newBoardStart<TProject extends NewBoardProjectSource>(input: {
+  readonly projects: ReadonlyArray<TProject>;
+  readonly boards: ReadonlyArray<HomeBoard>;
+  readonly lastUsed: string | null;
+  /** The machines this browser may make a board on now. */
+  readonly operable: ReadonlySet<string>;
+  readonly cloud: boolean;
+}):
+  | { readonly kind: "cloud" }
+  | { readonly kind: "none" }
+  | { readonly kind: "ask" }
+  | { readonly kind: "use"; readonly project: TProject } {
+  if (input.operable.size === 0) {
+    return input.cloud ? { kind: "cloud" } : newBoardProject(input);
+  }
+  return newBoardProject({
+    ...input,
+    projects: input.projects.filter((project) => input.operable.has(project.environmentId)),
+  });
+}
