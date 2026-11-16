@@ -582,6 +582,23 @@ it.effect("fills an artifact card with the owner's turn, and nothing else on the
     // A turn whose version is the one kept, answered again, does not write it back.
     yield* fill("artifact", "run:2", shareId, alex);
     assert.deepEqual((yield* read).notes.get("artifact")?.artifact, bySam);
+    // A guest writes it by hand: their version, and the agent's is kept to go back to.
+    yield* orchestrator.dispatch({
+      type: "thread.guest-board.change",
+      commandId: CommandId.make(`board:${commands++}`),
+      threadId,
+      shareId,
+      author: sam,
+      change: { type: "artifact.write", noteId: "artifact", body: "# Written by Sam" },
+    });
+    const handWritten = (yield* read).notes.get("artifact")?.artifact;
+    assert.deepEqual(
+      [handWritten?.body, handWritten?.guestId, handWritten?.byHand, handWritten?.previous?.body],
+      ["# Written by Sam", sam, true, "# run:sam"],
+    );
+    yield* restore(sam);
+    assert.deepInclude((yield* read).notes.get("artifact")?.artifact, { body: "# run:sam" });
+    yield* restore(sam);
     // The room keeps the guest's turn at its own length, without the artifact.
     const turns = (yield* read).thread.guestShare?.turns ?? [];
     assert.notInclude(JSON.stringify(turns), "noteId");

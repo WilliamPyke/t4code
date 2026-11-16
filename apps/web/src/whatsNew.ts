@@ -13,9 +13,20 @@ export interface WhatsNewEntry {
 export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
   {
     date: "2026-11-16",
+    title: "Cloud boards by default, and your agent comes along",
+    items: [
+      "New board now makes a board in the cloud, which works with every computer off. To keep one on your computer, turn on On this computer when you choose a template. New board remembers where you last chose.",
+      "When you make a cloud board and this browser has one computer connected, your agent comes along by itself: Thread and Ask an agent work at once, without Continue on my machine.",
+      "The here now list in a cloud board's header has Leave board for everyone. The person who made the board can Remove someone and Delete board, which deletes it for everyone.",
+      "Remove from my boards on a cloud board now leaves it, so your place on it is freed.",
+      "Write an artifact yourself: choose Edit on it, or Write it yourself while it is empty, and type Markdown or paste a page. It saves when you click away or press Ctrl+Enter (Cmd+Enter), and Restore previous brings the old version back.",
+    ],
+  },
+  {
+    date: "2026-11-16",
     title: "Boards in the cloud",
     items: [
-      "A board can now live in the cloud instead of on your computer, so it opens and can be shared while every computer is off. New board makes one when no computer is connected; otherwise turn on In the cloud when you choose a template or a project.",
+      "A board can now live in the cloud instead of on your computer, so it opens and can be shared while every computer is off.",
       "Everyone on a cloud board can add notes, tasks, sections, lines, votes and comments, rename the board, and copy its invite link from the header. Blank, Retro, Research with agents and Build with agents start one; templates that use the board's own thread need a board on a computer.",
       "Bring your own agent to a cloud board: choose Thread, Ask an agent or Attach my agent, then Continue on my machine. Your thread boxes run on your computer, and everyone sees their replies and the cards they add.",
       "On a cloud board, Ask an agent, Run with an agent, Take it to my agent, model picks and Stop work on your own thread boxes, as on any board. A box whose person is not on the board says Offline, on the box and in Agents.",

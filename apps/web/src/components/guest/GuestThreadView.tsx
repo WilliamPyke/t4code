@@ -355,8 +355,8 @@ export function GuestThreadRoute({ threadRef }: { readonly threadRef: ScopedThre
     <SidebarInset className="flex h-svh min-h-0 flex-col overflow-hidden overscroll-y-none md:h-dvh">
       {share === null || share.threadId !== threadRef.threadId ? (
         <GuestNotice
-          title="This link has ended or is not valid"
-          detail="Ask the owner for a new link."
+          title="This board has ended, or the link is not valid"
+          detail="Ask whoever shared it with you for a new link."
         />
       ) : (
         <GuestThreadSession key={share.shareId} share={share} threadRef={threadRef} />
@@ -801,8 +801,10 @@ function GuestThreadSession({
                   sharing: (
                     <CloudBoardSharing
                       share={share}
+                      title={view.title}
                       guests={view.guests}
                       viewer={guestId}
+                      maker={view.maker}
                       online={online}
                     />
                   ),

@@ -2,11 +2,13 @@ import { guestEnvironmentId } from "@t3tools/client-runtime/environment";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { EllipsisIcon, LogOutIcon } from "lucide-react";
 
-import { forgetGuestShare } from "~/guest/guestShares";
+import { removeFromCloudBoard } from "~/guest/cloudBoards";
+import { findGuestShare, forgetGuestShare } from "~/guest/guestShares";
 import { ensureLocalApi } from "~/localApi";
 
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import { toastManager } from "../ui/toast";
 
 interface JoinedBoardRef {
   readonly shareId: string;
@@ -15,28 +17,44 @@ interface JoinedBoardRef {
 }
 
 /**
- * Takes a joined board off this browser's boards. Nobody else loses it; the board stays on its
- * host. When it is the open board, home takes its place.
+ * Forgets a joined board on this browser and, when it is the open board, goes home, saying so
+ * when `toast` is given.
  */
-function useRemoveJoinedBoard() {
+export function useForgetJoinedBoard() {
   const navigate = useNavigate();
   const openEnvironmentId = useParams({
     strict: false,
     select: (params) => params.environmentId ?? null,
   });
+  return (shareId: string, toast?: string) => {
+    forgetGuestShare(shareId);
+    if (openEnvironmentId === guestEnvironmentId(shareId)) void navigate({ to: "/" });
+    if (toast !== undefined) toastManager.add({ type: "success", title: toast });
+  };
+}
+
+/**
+ * Takes a joined board off this browser's boards. A cloud board is left too, freeing the seat,
+ * when its host can be reached; it is forgotten here either way. Nobody else loses it.
+ */
+function useRemoveJoinedBoard() {
+  const forget = useForgetJoinedBoard();
   return async (board: JoinedBoardRef) => {
     const confirmed = await ensureLocalApi().dialogs.confirm(
       [
         `Remove "${board.title}" from your boards?`,
         board.cloud
-          ? "It goes from this browser only. Everyone else on it keeps it, and the invite link brings it back."
+          ? "You leave the board. Everyone else on it keeps it, and the invite link brings you back."
           : "It goes from this browser only. Everyone else on it keeps it. To come back, you need a new link from the owner.",
       ].join("\n"),
       { variant: "destructive" },
     );
     if (!confirmed) return;
-    forgetGuestShare(board.shareId);
-    if (openEnvironmentId === guestEnvironmentId(board.shareId)) void navigate({ to: "/" });
+    const share = findGuestShare(board.shareId);
+    if (board.cloud && share?.guestId !== undefined) {
+      await removeFromCloudBoard(share, share.guestId);
+    }
+    forget(board.shareId);
   };
 }
 

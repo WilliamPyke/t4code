@@ -625,6 +625,33 @@ describe("applyRoomBoardChange", () => {
     for (const noteId of ["empty", "note", "gone"]) {
       expect(applied(board, restore(noteId))).toBe(board);
     }
+    // A person writes it by hand: their version, with the one it replaced kept for a restore.
+    const write = (noteId: string, body: string): RoomBoardChange => ({
+      type: "artifact.write",
+      noteId,
+      body,
+    });
+    const handWritten = applied(board, write("a", "  # Mine​  "));
+    const { previous: _replaced, ...secondShown } = second;
+    expect(handWritten.notes[0]?.artifact).toStrictEqual({
+      body: "# Mine",
+      guestId: sam,
+      byHand: true,
+      turnId: `edit:${at}`,
+      updatedAt: at,
+      previous: secondShown,
+    });
+    expect(handWritten.notes[0]?.changed).toEqual({ at, guestId: sam });
+    expect(applied(handWritten, restore("a")).notes[0]?.artifact?.body).toBe("# Two");
+    expect(applied(board, write("empty", "Hello")).notes[1]?.artifact?.previous).toBeUndefined();
+    expect(applied(handWritten, write("a", "# Mine"))).toBe(handWritten);
+    expect(apply(board, write("a", " ​ "))).toStrictEqual(Result.fail("Write something first."));
+    expect(apply(board, write("note", "Hi"))).toStrictEqual(
+      Result.fail("This artifact is not on the board."),
+    );
+    expect(
+      roomBoardCardIdentity(handWritten.notes[0]!, (id) => (id === sam ? "Sam" : undefined)),
+    ).toMatchObject({ author: "guest", name: "Sam" });
     // The owner, whoever added the card, and whoever asked for or wrote either version.
     const eve = GuestId.make("guest:eve");
     const ada = GuestId.make("guest:ada");

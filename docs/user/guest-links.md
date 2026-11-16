@@ -313,6 +313,11 @@ version it replaced. The owner, whoever added the artifact, and whoever asked fo
 wrote either version can go back to it with **Restore previous**, and forward again with **Back to
 latest**. A board holds up to 6 artifacts, each up to 16,000 characters, and a longer reply is cut.
 
+You can also write an artifact yourself: choose **Edit** on it, or **Write it yourself** while it
+is empty, and type Markdown or paste a whole HTML page. It saves when you click away or press
+Ctrl+Enter (Cmd+Enter); Esc cancels. Your version replaces it for everyone, and **Restore
+previous** brings the old one back.
+
 A guest who [continued on their machine](#continue-on-your-own-machine) can also take an artifact
 to their own agent. It opens as a draft in their thread from this room, with the artifact's
 current content attached. Nothing runs until they send it; when their turn finishes, its reply
@@ -412,11 +417,11 @@ in the joined thread's header opens it, and their own boxes run on that machine.
 
 ## Boards in the cloud
 
-A cloud board is kept by the board service instead of on your computer, so it opens and can be shared while every computer is off. **New board** makes one when no computer is connected. When one is, turn on **In the cloud** in the template or project choice.
+A cloud board is kept by the board service instead of on your computer, so it opens and can be shared while every computer is off. **New board** makes a cloud board. To keep one on your computer instead, turn on **On this computer** when you choose a template; that computer must be on for others to open the board. New board remembers the place you last chose in this browser.
 
-Everyone on a cloud board is equal: anyone can edit it, rename it and copy its invite link from the header. **Remove from my boards** takes a cloud board off this browser only; its invite link brings it back.
+Everyone on a cloud board can edit it, rename it and copy its invite link from the header. The **here now** button there lists who is on the board. Anyone can **Leave board** from it. The person who made the board can also **Remove** someone, and **Delete board** deletes it for everyone; that cannot be undone. **Remove from my boards** on the home page or sidebar leaves a cloud board too; its invite link brings you back.
 
-A cloud board has no agent of its own. Each person brings theirs: choose **Thread**, **Ask an agent** or **Attach my agent**, then **Continue on my machine** to add the board to T Code on your computer. Your thread boxes then run on your computer, and only you can prompt them. If this browser has no computer connected, connect one under **Settings → Environments** first. A box whose person is not on the board shows **Offline**.
+A cloud board has no agent of its own. Each person brings theirs. When you make a cloud board and this browser has one computer connected, your agent comes along by itself, so **Thread** and **Ask an agent** work at once. Otherwise, or on a board someone invited you to, choose **Thread**, **Ask an agent** or **Attach my agent**, then **Continue on my machine** to add the board to T Code on your computer. Your thread boxes then run on your computer, and only you can prompt them. If this browser has no computer connected, connect one under **Settings → Environments** first. A box whose person is not on the board shows **Offline**.
 
 Templates that use the board's own thread, code windows and pull request windows are only on boards kept on a computer.
 

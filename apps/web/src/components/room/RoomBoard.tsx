@@ -1311,6 +1311,13 @@ export function RoomBoard({
           queueChange(noteRef(note.id), () =>
             onChange({ type: "artifact.restore", noteId: note.id }),
           );
+  const writeOf = (note: RoomBoardNote) =>
+    onChange === undefined || !canEdit || note.kind !== "artifact"
+      ? undefined
+      : (body: string) =>
+          queueChange(noteRef(note.id), () =>
+            onChange({ type: "artifact.write", noteId: note.id, body }),
+          );
   // `after` names the queue a change waits in: a line to a new card goes once the card is there.
   const send = (target: BoardTarget, value: BoardValue, after?: string) => {
     if (onChange === undefined) return;
@@ -4757,9 +4764,7 @@ export function RoomBoard({
                     boxName={boxName}
                     onRestore={restoreOf(note)}
                     onAttachAgent={attachAgentOf(note)}
-                    handWritten={
-                      !holds.agents && note.kind === "artifact" && note.artifact === undefined
-                    }
+                    onWrite={writeOf(note)}
                     onAsk={
                       note.kind === "artifact" && askTargets.length > 0
                         ? () => askAboutArtifact(note)
@@ -5303,7 +5308,7 @@ function BoardNote({
   boxName,
   onRestore,
   onAttachAgent,
-  handWritten = false,
+  onWrite,
   onAsk,
   onPickColor,
   onReact,
@@ -5375,8 +5380,8 @@ function BoardNote({
     | undefined;
   /** Opens Ask an agent on this artifact alone. Absent where the viewer cannot ask. */
   readonly onAsk?: (() => void) | undefined;
-  /** An artifact no agent can fill, on a cloud board: its text is what it shows, by hand. */
-  readonly handWritten?: boolean;
+  /** Saves an artifact's text a person wrote by hand. Absent where they may not. */
+  readonly onWrite?: ((body: string) => Promise<boolean>) | undefined;
   /** Colours a plain note. Absent where notes are not coloured. */
   readonly onPickColor: ((note: RoomBoardNote, color: RoomBoardNoteColor) => void) | undefined;
   /** Toggles the viewer's own reaction. Absent where they cannot react. */
@@ -5401,8 +5406,7 @@ function BoardNote({
   // A pull request window names its pull request, links to it and shows its own title.
   const parsed = note.url === undefined || pullRequest ? null : parseBoardLink(note.url);
   const titled = artifact || thread || code || pullRequest;
-  // Its text is a title in one line, unless it is all a hand-written artifact shows.
-  const titleLine = titled && !handWritten;
+  const titleLine = titled;
   const mine = isRoomCardOwnedBy(note, people.viewer);
   const canChange = canEdit && (!thread || mine);
   const canDelete = canEdit && mine;
@@ -5637,9 +5641,7 @@ function BoardNote({
                 : note.kind === "link"
                   ? "Caption"
                   : artifact
-                    ? handWritten
-                      ? "Artifact"
-                      : "Artifact title"
+                    ? "Artifact title"
                     : code
                       ? "Code window title"
                       : pullRequest
@@ -5658,9 +5660,7 @@ function BoardNote({
                 : note.kind === "link"
                   ? "Add a caption"
                   : artifact
-                    ? handWritten
-                      ? "Write or paste what it shows"
-                      : "Name this artifact"
+                    ? "Name this artifact"
                     : code
                       ? "Name this code window"
                       : pullRequest
@@ -5678,7 +5678,6 @@ function BoardNote({
               titleLine
                 ? "shrink-0 pt-2.5 pb-2 font-semibold"
                 : size !== undefined && "min-h-0 flex-1",
-              handWritten && "pt-2.5",
               !canChange && "cursor-default",
               paper && "cursor-default focus:cursor-text",
             )}
@@ -5780,7 +5779,7 @@ function BoardNote({
             )}
           </div>
         ) : null}
-        {artifact && !handWritten ? (
+        {artifact ? (
           <RoomArtifactLive
             noteId={note.id}
             artifact={note.artifact}
@@ -5788,6 +5787,7 @@ function BoardNote({
             writingFallback={artifactWriting}
             boxName={boxName}
             onRestore={onRestore}
+            onWrite={onWrite}
             people={people}
           />
         ) : null}

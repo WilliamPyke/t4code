@@ -369,6 +369,8 @@ const RoomArtifactVersionFields = {
   boxId: Schema.optional(RoomBoardNoteId),
   /** The model's display name. */
   model: Schema.optional(RoomBoxModelName),
+  /** A person wrote this version by hand (`artifact.write`): `guestId` is theirs, not an agent's. */
+  byHand: Schema.optional(Schema.Literal(true)),
 };
 
 /** The version of an artifact that the current one replaced, kept so anyone can go back to it. */
@@ -907,6 +909,15 @@ export const RoomBoardChange = Schema.Union([
    * first. An artifact with no earlier version stays as it is.
    */
   Schema.Struct({ type: Schema.Literal("artifact.restore"), noteId: RoomBoardNote.fields.id }),
+  /**
+   * Writes an artifact's body by hand, as its author's version: the one it replaces is kept for
+   * `artifact.restore`, as when an agent fills it. Markdown, or a whole HTML page.
+   */
+  Schema.Struct({
+    type: Schema.Literal("artifact.write"),
+    noteId: RoomBoardNote.fields.id,
+    body: Schema.String.check(Schema.isMaxLength(ROOM_ARTIFACT_MAX_LENGTH)),
+  }),
   /** Adds a reply to a comment thread. A reply id it already has changes nothing. */
   Schema.Struct({
     type: Schema.Literal("comment.reply"),
@@ -1779,3 +1790,12 @@ export const CloudBoardTitleRequest = Schema.Struct({
   title: TrimmedNonEmptyString.check(Schema.isMaxLength(CLOUD_BOARD_TITLE_MAX_LENGTH)),
 });
 export type CloudBoardTitleRequest = typeof CloudBoardTitleRequest.Type;
+
+/**
+ * Takes someone off a cloud board: `?share=<share id>`, signed by the board's maker for anyone
+ * but themselves, or by anyone for themselves (leaving). Their cards go as on a machine's room.
+ * `DELETE` on `CLOUD_BOARD_ROUTE` with `?share=` deletes the whole board, for its maker only.
+ */
+export const CLOUD_BOARD_PEOPLE_REMOVE_ROUTE = `${CLOUD_BOARD_ROUTE}/people/remove`;
+export const CloudBoardRemovePersonRequest = Schema.Struct({ guestId: GuestId });
+export type CloudBoardRemovePersonRequest = typeof CloudBoardRemovePersonRequest.Type;

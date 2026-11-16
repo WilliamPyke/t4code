@@ -6,8 +6,10 @@ import {
   type RoomBoxModel,
   type ThreadId,
 } from "@t3tools/contracts";
+import { Atom } from "effect/reactivity";
 import { useEffect, useState } from "react";
 
+import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useProjects, useThreadShell } from "~/state/entities";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -20,6 +22,15 @@ export interface OwnRoomMachine {
   readonly threadId: ThreadId;
   readonly boxes: Readonly<Record<string, ThreadId>>;
 }
+
+// Bumped when one of this person's machines joins a room from this page, so the room asks again.
+const roomMachineJoinsAtom = Atom.family((_shareId: string) =>
+  Atom.make(0).pipe(Atom.keepAlive, Atom.withLabel("guest:room-machine-joins")),
+);
+
+/** Tells an open room that one of this person's machines just joined it. */
+export const announceRoomMachineJoined = (shareId: string) =>
+  appAtomRegistry.update(roomMachineJoinsAtom(shareId), (count) => count + 1);
 
 /**
  * Which of the guest's own machines joined this room, if one did. `undefined` while they are
@@ -66,9 +77,14 @@ export function useOwnRoomMachine(share: { readonly host: string; readonly share
       if (!found && document.visibilityState === "visible") void ask();
     };
     document.addEventListener("visibilitychange", again);
+    // Or right away, when one of their machines joined it from this page.
+    const stopListening = appAtomRegistry.subscribe(roomMachineJoinsAtom(share.shareId), () => {
+      if (!found) void ask();
+    });
     return () => {
       current = false;
       document.removeEventListener("visibilitychange", again);
+      stopListening();
     };
   }, [environmentKey, findSharedRoom, share.host, share.shareId]);
   return {

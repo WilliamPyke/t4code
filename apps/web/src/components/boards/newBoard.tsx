@@ -11,7 +11,9 @@ import {
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   AuthOrchestrationOperateScope,
+  CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  type EnvironmentId,
   GUEST_NAME_MAX_LENGTH,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
@@ -24,19 +26,21 @@ import { type FormEvent, useEffect, useEffectEvent, useState } from "react";
 
 import { isCommandPaletteOpen, openCommandPalette } from "~/commandPaletteBus";
 import {
+  cloudBoardHandoff,
   createCloudBoard,
   putOnCloudBoard,
   readBoardName,
   rememberBoardName,
 } from "~/guest/cloudBoards";
 import { cloudBoardsOrigin } from "~/guest/cloudBoardsHost";
-import { rememberGuestShare } from "~/guest/guestShares";
+import { type JoinedGuestShare, rememberGuestShare } from "~/guest/guestShares";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import { useScratchProject } from "~/hooks/useScratchProject";
 import { registerCommands } from "~/shortcuts/dispatcher";
 import { newThreadId, randomUUID } from "~/lib/utils";
 import { resolveProjectDefaultProviderModelSelection } from "~/providerInstances";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { projectEnvironment } from "~/state/projects";
 import { readProjects, useProjects, useThreadShells } from "~/state/entities";
 import {
   readGuestOnly,
@@ -53,6 +57,7 @@ import { waitForAtomValue } from "~/state/waitForAtomValue";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useOrchestrationCommand } from "~/state/use-orchestration-command";
 
+import { announceRoomMachineJoined } from "../guest/ownRoomMachine";
 import { sortScopedProjectsForSidebar } from "../Sidebar.logic";
 import { Button } from "../ui/button";
 import {
@@ -79,10 +84,12 @@ import {
   cloudBoardTemplateChanges,
 } from "./boardTemplates";
 import {
+  type NewBoardPlace,
   UNTITLED_BOARD,
   listHomeBoards,
   newBoardProjectKey,
   newBoardStart,
+  newCloudBoardAgent,
 } from "./boardsHome.logic";
 
 // Per device: the project the last new board went in, so the next one goes there without asking.
@@ -102,6 +109,26 @@ const rememberLastProject = (project: EnvironmentProject) => {
     setLocalStorageItem(LAST_PROJECT_KEY, newBoardProjectKey(project), LastProject);
   } catch {
     // Storage that is full or blocked only loses the default.
+  }
+};
+
+// Per browser: where the person last chose to make a board. The cloud until they pick otherwise.
+const PLACE_KEY = "t3code:new-board-place:v1";
+const Place = Schema.Literals(["cloud", "machine"]);
+
+const readPlace = (): NewBoardPlace => {
+  try {
+    return getLocalStorageItem(PLACE_KEY, Place) ?? "cloud";
+  } catch {
+    return "cloud";
+  }
+};
+
+const rememberPlace = (place: NewBoardPlace) => {
+  try {
+    setLocalStorageItem(PLACE_KEY, place, Place);
+  } catch {
+    // Storage that is full or blocked only loses the choice.
   }
 };
 
@@ -186,24 +213,11 @@ const newBoardLocation = (ref: ScopedThreadRef) => ({
   search: {},
 });
 
-/**
- * Makes a board in a project: a thread underneath, with the user's own defaults, whose board is
- * kept from the start so it is listed even before anything is on it. Opens it once made.
- */
-function useCreateBoard() {
-  const navigate = useNavigate();
+/** The user's own defaults for a new thread in a project, or null with no provider set up. */
+function useNewThreadDefaults() {
   const { environments } = useEnvironments();
   const providersByEnvironment = useEnvironmentProviders();
-  const createThread = useOrchestrationCommand(threadEnvironment.create, {
-    reportFailure: false,
-  });
-  const changeBoard = useAtomCommand(serverEnvironment.changeGuestBoard, {
-    reportFailure: false,
-  });
-  return async (
-    project: EnvironmentProject,
-    template: BoardTemplate = BLANK_BOARD_TEMPLATE,
-  ): Promise<boolean> => {
+  return (project: EnvironmentProject) => {
     const settings = environments.find((entry) => entry.environmentId === project.environmentId)
       ?.serverConfig?.settings;
     const projectSettings =
@@ -217,7 +231,31 @@ function useCreateBoard() {
             settings,
             project.id,
           ));
-    if (projectSettings === null || modelSelection === null) {
+    return projectSettings === null || modelSelection === null
+      ? null
+      : { modelSelection, runtimeMode: projectSettings.settings.defaultRuntimeMode };
+  };
+}
+
+/**
+ * Makes a board in a project: a thread underneath, with the user's own defaults, whose board is
+ * kept from the start so it is listed even before anything is on it. Opens it once made.
+ */
+function useCreateBoard() {
+  const navigate = useNavigate();
+  const threadDefaults = useNewThreadDefaults();
+  const createThread = useOrchestrationCommand(threadEnvironment.create, {
+    reportFailure: false,
+  });
+  const changeBoard = useAtomCommand(serverEnvironment.changeGuestBoard, {
+    reportFailure: false,
+  });
+  return async (
+    project: EnvironmentProject,
+    template: BoardTemplate = BLANK_BOARD_TEMPLATE,
+  ): Promise<boolean> => {
+    const defaults = threadDefaults(project);
+    if (defaults === null) {
       toastManager.add({
         type: "error",
         title: "Could not start a board",
@@ -232,8 +270,7 @@ function useCreateBoard() {
         threadId,
         projectId: project.id,
         title: UNTITLED_BOARD,
-        modelSelection,
-        runtimeMode: projectSettings.settings.defaultRuntimeMode,
+        ...defaults,
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         branch: null,
         worktreePath: null,
@@ -280,11 +317,59 @@ function useCreateBoard() {
 }
 
 /**
+ * Brings this person's agent to a cloud board they just made, in the background, as the join
+ * page would: their only machine that may, in the project a machine board would have gone in, or
+ * none. When it cannot, the board's Bring your agent asks them as before.
+ */
+function useBringAgentToNewBoard() {
+  const projects = useProjects();
+  const threads = useThreadShells();
+  const threadDefaults = useNewThreadDefaults();
+  const openScratch = useAtomCommand(projectEnvironment.openScratch, { reportFailure: false });
+  const joinSharedThread = useAtomCommand(serverEnvironment.joinSharedThread, {
+    reportFailure: false,
+  });
+  return async (share: JoinedGuestShare) => {
+    const agent = newCloudBoardAgent({
+      projects: projects.filter((project) => project.archivedAt == null),
+      boards: listHomeBoards({ threads, joined: [], teams: [], isOwnEnvironment: () => true }),
+      lastUsed: readLastProject(),
+      operable: appAtomRegistry.get(newBoardMachinesAtom).operable,
+    });
+    if (agent === null) return;
+    const environmentId = agent.environmentId as EnvironmentId;
+    let project = agent.project;
+    if (project === null) {
+      const scratch = await openScratch({ environmentId, input: {} });
+      if (scratch._tag === "Failure") return;
+      project = scratch.value;
+    }
+    const defaults = threadDefaults(project);
+    const token = defaults === null ? null : await cloudBoardHandoff(share);
+    if (defaults === null || token === null) return;
+    const joined = await joinSharedThread({
+      environmentId,
+      input: {
+        commandId: CommandId.make(randomUUID()),
+        source: { host: share.host, token },
+        projectId: project.id,
+        ...defaults,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        checkout: false,
+      },
+    });
+    if (joined._tag === "Success") announceRoomMachineJoined(share.shareId);
+  };
+}
+
+/**
  * Makes a board on the cloud host, on nobody's machine, as the name this browser joins boards
- * under, asking for it first when there is none. Opens it once made.
+ * under, asking for it first when there is none. Opens it once made, while its maker's agent
+ * comes along.
  */
 function useCreateCloudBoard() {
   const navigate = useNavigate();
+  const bringAgent = useBringAgentToNewBoard();
   return async (
     template: BoardTemplate = BLANK_BOARD_TEMPLATE,
     name: string | null = readBoardName(),
@@ -323,6 +408,7 @@ function useCreateCloudBoard() {
       to: "/$environmentId/$threadId",
       params: { environmentId: ref.environmentId, threadId: ref.threadId },
     });
+    void bringAgent(created);
     return true;
   };
 }
@@ -339,7 +425,10 @@ export function useStartNewBoard() {
   const { scratchEnvironmentId, openScratchProject } = useScratchProject();
   const createCloudBoard = useCreateCloudBoard();
   const machines = useAtomValue(newBoardMachinesAtom);
-  return async (template: BoardTemplate = BLANK_BOARD_TEMPLATE) => {
+  return async (
+    template: BoardTemplate = BLANK_BOARD_TEMPLATE,
+    place: NewBoardPlace = readPlace(),
+  ) => {
     if (appAtomRegistry.get(newBoardWaitingAtom)) return;
     const decide = (now: typeof machines, waited: boolean) =>
       newBoardStart({
@@ -349,7 +438,8 @@ export function useStartNewBoard() {
         lastUsed: readLastProject(),
         ...now,
         waited,
-        cloud: hasCloudBoards(),
+        cloud: hasCloudBoards() && fitsCloud(template),
+        place,
       });
     let decision = decide(machines, false);
     if (decision.kind === "wait") {
@@ -486,6 +576,7 @@ function NewBoardProjectPicker({ template }: { readonly template: BoardTemplate 
                   data-new-board-cloud
                   onClick={() => {
                     closePicker();
+                    rememberPlace("cloud");
                     void createCloudBoard(template);
                   }}
                 >
@@ -507,13 +598,12 @@ function NewBoardProjectPicker({ template }: { readonly template: BoardTemplate 
 /** What a new board starts with: blank, the first and focused choice, or a template. */
 function NewBoardTemplatePicker() {
   const startNewBoard = useStartNewBoard();
-  const createCloudBoard = useCreateCloudBoard();
   const machines = useAtomValue(newBoardMachinesAtom);
   // With no machine to make it on, New board makes it in the cloud anyway.
   const cloudOnly =
     hasCloudBoards() && machines.operable.size === 0 && machines.connecting.size === 0;
-  const [inCloud, setInCloud] = useState(false);
-  const cloud = cloudOnly || inCloud;
+  const [onComputer, setOnComputer] = useState(() => readPlace() === "machine");
+  const cloud = hasCloudBoards() && (cloudOnly || !onComputer);
   return (
     <Dialog
       open
@@ -539,7 +629,9 @@ function NewBoardTemplatePicker() {
                   data-board-template={template.id}
                   onClick={() => {
                     closeTemplates();
-                    void (inCloud ? createCloudBoard(template) : startNewBoard(template));
+                    const place = cloud ? "cloud" : "machine";
+                    if (hasCloudBoards() && !cloudOnly) rememberPlace(place);
+                    void startNewBoard(template, place);
                   }}
                 >
                   <span className="border-b border-board-hairline">
@@ -564,13 +656,15 @@ function NewBoardTemplatePicker() {
           <DialogFooter>
             <label className="flex cursor-pointer items-center gap-2 text-sm">
               <Switch
-                checked={inCloud}
-                aria-label="Make it in the cloud"
-                onCheckedChange={(checked) => setInCloud(Boolean(checked))}
-                data-new-board-in-cloud
+                checked={onComputer}
+                aria-label="Make it on this computer"
+                onCheckedChange={(checked) => setOnComputer(Boolean(checked))}
+                data-new-board-on-computer
               />
-              <span className="font-medium">In the cloud</span>
-              <span className="text-muted-foreground">Works when your computer is off</span>
+              <span className="font-medium">On this computer</span>
+              <span className="text-muted-foreground">
+                It must be on for others to open the board
+              </span>
             </label>
           </DialogFooter>
         ) : null}

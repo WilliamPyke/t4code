@@ -9,16 +9,22 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
+import { machineGuestOf } from "./machines.ts";
 import {
   CLOUD_BOARD_MAX_GUESTS,
   EMPTY_LIVE,
+  IDLE_BOARD_MS,
+  UNTOUCHED_BOARD_MS,
+  boardAlarmAt,
   changeBoard,
+  checkDelete,
   createRoom,
   cursorsEventFor,
   guestBySession,
   joinRoom,
   moveCursor,
   openingEvents,
+  removePerson,
   renameRoom,
   sseFrame,
   viewFor,
@@ -151,6 +157,56 @@ describe("cloud room", () => {
     const [view, thread] = events;
     expect(view?.type === "view" && view.view.board?.notes[0]?.id).toBe("note-1");
     expect(thread?.type === "thread" && thread.item.kind).toBe("snapshot");
+  });
+
+  it("lets only the maker delete the board or remove others, and anyone leave", () => {
+    const grace = GuestId.make("guest-two");
+    const room = Result.getOrThrow(join(newRoom(), "guest-two"));
+    const withCards = Result.getOrThrow(changeBoard(room, grace, notePut("by-grace"), NOW));
+    const everyone = {
+      ...withCards,
+      machines: [{ guestId: grace, hash: "h", kind: "room" as const }],
+    };
+    expect(viewFor(everyone, everyone.guests[1]!).maker).toBe(maker);
+    expect(checkDelete(everyone, maker)).toBeNull();
+    expect(checkDelete(everyone, grace)).toMatchObject({ status: 403, reason: "not_maker" });
+    const { maker: _before, ...madeBefore } = everyone;
+    expect(checkDelete(madeBefore, maker)).not.toBeNull();
+    // Nobody but the maker removes anyone, and nobody removes the maker.
+    for (const [by, whom] of [
+      [grace, maker],
+      [GuestId.make("stranger"), grace],
+    ] as const) {
+      const refused = removePerson(everyone, by, whom, NOW);
+      expect(Result.isFailure(refused) && refused.failure.reason).toBe("not_maker");
+    }
+    // The maker removes Grace: her cards, her machine's token and her session go.
+    const removed = Result.getOrThrow(removePerson(everyone, maker, grace, NOW));
+    expect(removed.guests.map((guest) => guest.id)).toEqual([maker]);
+    expect(removed.board?.notes).toEqual([]);
+    expect(removed.machines).toEqual([]);
+    expect(guestBySession(removed, "guest-two-session")).toBeUndefined();
+    expect(machineGuestOf(removed, "h", "room", 0)).toBeUndefined();
+    expect(removePerson(removed, maker, grace, NOW)).toStrictEqual(Result.succeed(removed));
+    // Grace leaves on her own; the maker leaving leaves the board, with no maker.
+    expect(Result.getOrThrow(removePerson(everyone, grace, grace, NOW)).guests).toHaveLength(1);
+    const left = Result.getOrThrow(removePerson(everyone, maker, maker, NOW));
+    expect([left.maker, left.guests.map((guest) => guest.id)]).toEqual([undefined, [grace]]);
+    expect(viewFor(left, left.guests[0]!)).not.toHaveProperty("maker");
+  });
+
+  it("deletes a board a day after it was made if nobody changed it, else after 90 idle days", () => {
+    const made = Date.parse(NOW);
+    const day = 24 * 60 * 60_000;
+    const untouched = newRoom();
+    expect(boardAlarmAt(untouched, made + 5, null)).toBe(made + UNTOUCHED_BOARD_MS);
+    expect(boardAlarmAt(untouched, made + 5, made + UNTOUCHED_BOARD_MS)).toBeNull();
+    const used = renameRoom(untouched, "Plan", "2026-11-16T11:00:00.000Z");
+    // Once changed, the untouched deadline moves to 90 idle days, and on at most once a day.
+    const first = boardAlarmAt(used, made, made + UNTOUCHED_BOARD_MS);
+    expect(first).toBe(made + IDLE_BOARD_MS + day);
+    expect(boardAlarmAt(used, made + day - 1, first)).toBeNull();
+    expect(boardAlarmAt(used, made + day, first)).toBe(made + day + IDLE_BOARD_MS + day);
   });
 
   it("shows each guest everyone else's pointer, until they leave", () => {

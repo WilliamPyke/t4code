@@ -12,7 +12,6 @@ import {
   roomBoardAgentCard,
   roomBoardCardRef,
   roomBoardGuestCard,
-  roomBoardNoteRef,
   unsharedRoomId,
   type RoomBoard,
   type GuestId,
@@ -53,6 +52,7 @@ import {
   roomBoardWithBoxTurn,
   roomBoardWithCommentAnswer,
   roomBoardWithTaskAnswered,
+  roomBoardWithoutGuest,
   roomBoxOn,
 } from "@t3tools/shared/guestRoom";
 import * as DateTime from "effect/DateTime";
@@ -237,49 +237,6 @@ export const roomScope = (room: ThreadRoom): RoomBoardScope => ({
   hasCard: (cardId) => isRoomCard(room, cardId),
   hasPerson: (guestId) => room.guests?.some((guest) => guest.id === guestId) === true,
 });
-
-/**
- * The board without a removed guest's notes, replies, cards and the arrows that touched them.
- * Tasks they were given are left with no one, and lose their agent's answers.
- */
-function boardWithoutGuest(board: RoomBoard, guestId: GuestId): RoomBoard {
-  const withoutCards = roomBoardWithoutCards(board, [
-    roomBoardGuestCard(guestId),
-    roomBoardAgentCard(guestId),
-  ]);
-  const gone = new Set([
-    roomBoardCardRef(roomBoardGuestCard(guestId)),
-    roomBoardCardRef(roomBoardAgentCard(guestId)),
-    ...board.notes.flatMap((note) => (note.guestId === guestId ? [roomBoardNoteRef(note.id)] : [])),
-  ]);
-  return roomBoardWithEdges(
-    {
-      ...withoutCards,
-      notes: board.notes.flatMap((note) => {
-        if (note.guestId === guestId) return [];
-        const theirs = [...(note.replies ?? []), ...(note.reactions ?? [])].some(
-          (entry) => entry.guestId === guestId,
-        );
-        if (!theirs && note.assignee?.guestId !== guestId && note.answer?.guestId !== guestId) {
-          return [note];
-        }
-        const { assignee, answer, replies, reactions, ...rest } = note;
-        const kept = replies?.filter((reply) => reply.guestId !== guestId) ?? [];
-        const keptReactions = reactions?.filter((reaction) => reaction.guestId !== guestId) ?? [];
-        return [
-          {
-            ...rest,
-            ...(assignee === undefined || assignee.guestId === guestId ? {} : { assignee }),
-            ...(answer === undefined || answer.guestId === guestId ? {} : { answer }),
-            ...(kept.length === 0 ? {} : { replies: kept }),
-            ...(keptReactions.length === 0 ? {} : { reactions: keptReactions }),
-          },
-        ];
-      }),
-    },
-    (edge) => !gone.has(edge.from) && !gone.has(edge.to),
-  );
-}
 
 const artifactOn = (share: Pick<ThreadRoom, "board">, noteId: string | undefined) =>
   noteId === undefined
@@ -660,7 +617,7 @@ export function decideGuestShareCommand(input: {
           : { turns: share.turns.filter((turn) => turn.guestId !== command.guestId) }),
         ...(share.board === undefined
           ? {}
-          : { board: boardWithoutGuest(share.board, command.guestId) }),
+          : { board: roomBoardWithoutGuest(share.board, command.guestId) }),
       });
     }
     // The owner's thread behind a thread box: it stays when the box goes, unlinked.

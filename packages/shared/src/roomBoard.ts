@@ -632,6 +632,28 @@ export function applyRoomBoardChange(
         withNote(board, note, { ...note, artifact: { ...previous, previous: shown } }),
       );
     }
+    case "artifact.write": {
+      const note = board.notes.find((candidate) => candidate.id === change.noteId);
+      if (note?.kind !== "artifact") return Result.fail("This artifact is not on the board.");
+      // Characters nobody can see have no place in text the whole room reads.
+      const body = sanitizeLinkedPrompt(change.body).text.trim();
+      if (body === "") return Result.fail("Write something first.");
+      if (note.artifact?.body === body) return Result.succeed(board);
+      const person = author === null ? {} : { guestId: author };
+      return Result.succeed(
+        withNote(board, note, {
+          ...note,
+          artifact: roomArtifactAfterFill(note.artifact, {
+            body,
+            ...person,
+            byHand: true,
+            turnId: `edit:${at}`,
+            updatedAt: at,
+          }),
+          changed: { at, ...person },
+        }),
+      );
+    }
     case "comment.reply": {
       const note = board.notes.find((candidate) => candidate.id === change.noteId);
       if (note?.kind !== "comment") return Result.fail("This comment thread is not on the board.");
@@ -1082,7 +1104,7 @@ export function roomBoardCardIdentity(
                     ? `Note from ${by}`
                     : `Comment from ${by} on a reply`;
   const writer = note.kind === "artifact" && note.artifact !== undefined ? note.artifact : note;
-  const agent = writer !== note;
+  const agent = writer !== note && note.artifact?.byHand !== true;
   const writerName = nameOf(writer.guestId);
   return {
     label: label.slice(0, 200),

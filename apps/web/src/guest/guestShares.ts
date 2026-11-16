@@ -52,6 +52,8 @@ const JoinedGuestShare = Schema.Struct({
   ),
   /** A cloud board's invite, kept so anyone on it can invite others. */
   credential: Schema.optional(Schema.String),
+  /** Who this browser is on the board, once its stream said, so it can leave from anywhere. */
+  guestId: Schema.optional(Schema.String),
 });
 export type JoinedGuestShare = typeof JoinedGuestShare.Type;
 
@@ -194,12 +196,18 @@ export const layerGuestShareAccess = Layer.succeed(
       return Effect.sync(() => {
         appAtomRegistry.update(guestRoomAtom(shareId), (room) => ({ ...room, view }));
         const share = findGuestShare(shareId);
-        if (share !== null && (share.title !== view.title || share.owner !== view.ownerName)) {
+        if (
+          share !== null &&
+          (share.title !== view.title ||
+            share.owner !== view.ownerName ||
+            (view.guestId !== undefined && share.guestId !== view.guestId))
+        ) {
           const { owner: _, ...rest } = share;
           rememberGuestShare({
             ...rest,
             title: view.title,
             ...(view.ownerName === undefined ? {} : { owner: view.ownerName }),
+            ...(view.guestId === undefined ? {} : { guestId: view.guestId }),
           });
         }
       });

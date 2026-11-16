@@ -18,6 +18,7 @@ import {
   forgetGuestShare,
   guestLinkHost,
   guestShareEndpointOf,
+  guestShareOrigin,
   guestSharesAtom,
   type JoinedGuestShare,
   rememberGuestShare,
@@ -84,7 +85,10 @@ function takeGuestEntry(): GuestEntry {
 }
 
 const INVALID = (
-  <GuestNotice title="This link has ended or is not valid" detail="Ask the owner for a new link." />
+  <GuestNotice
+    title="This board has ended, or the link is not valid"
+    detail="Ask whoever shared it with you for a new link."
+  />
 );
 
 /**
@@ -172,6 +176,27 @@ function NameForm({
   const cloud = isCloudBoardsHost(host);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [ended, setEnded] = useState(false);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- asks the host whether the invite still opens anything before asking for a name
+  useEffect(() => {
+    let stopped = false;
+    void fetch(`${guestShareOrigin(host)}${GUEST_ROUTE_PREFIX}/invite`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ credential }),
+      credentials: "omit",
+    }).then(
+      // Only a plain refusal counts: an older host has no such route.
+      (response) => {
+        if (!stopped && SESSION_REFUSED.has(response.status)) setEnded(true);
+      },
+      () => {},
+    );
+    return () => {
+      stopped = true;
+    };
+  }, [credential, host]);
+  if (ended) return INVALID;
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const trimmed = name.trim();

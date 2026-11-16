@@ -1,8 +1,10 @@
 // @effect-diagnostics globalDate:off globalTimers:off cryptoRandomUUID:off - The Worker and its objects are plain Cloudflare handlers, outside the Effect runtime.
 import {
+  CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
   CLOUD_BOARD_ROUTE,
   CLOUD_BOARD_TITLE_ROUTE,
   CloudBoardCreateRequest,
+  CloudBoardRemovePersonRequest,
   CloudBoardTitleRequest,
   GUEST_BOARD_CURSOR_ROUTE,
   GUEST_BOARD_ROUTE,
@@ -36,6 +38,7 @@ import * as Schema from "effect/Schema";
 import {
   EMPTY_AGENTS,
   agentsEvent,
+  agentsWithoutPerson,
   allowRequest,
   artifactFor,
   boardFor,
@@ -53,7 +56,9 @@ import {
   EMPTY_LIVE,
   FAR_EXPIRY,
   ROOM_MAX_CHUNKS,
+  boardAlarmAt,
   changeBoard,
+  checkDelete,
   checkInvite,
   createRoom,
   cursorsEventFor,
@@ -62,6 +67,7 @@ import {
   moveCursor,
   onlineOf,
   openingEvents,
+  removePerson,
   renameRoom,
   roomChunks,
   roomFailure,
@@ -107,6 +113,9 @@ const noContent = () => new Response(null, { status: 204, headers: NO_STORE });
 
 const decodeCreate = Schema.decodeUnknownOption(Schema.fromJsonString(CloudBoardCreateRequest));
 const decodeTitle = Schema.decodeUnknownOption(Schema.fromJsonString(CloudBoardTitleRequest));
+const decodeRemove = Schema.decodeUnknownOption(
+  Schema.fromJsonString(CloudBoardRemovePersonRequest),
+);
 const decodeInvite = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ credential: Schema.String })),
 );
@@ -148,7 +157,9 @@ const boardOf = (env: Env, shareId: string) => env.BOARDS.get(env.BOARDS.idFromN
 
 /** Sends the request on to the board's object, with the body already read under its cap. */
 async function forward(env: Env, shareId: string, request: Request, url: URL, maxBytes: number) {
-  if (request.method === "GET") return boardOf(env, shareId).fetch(request);
+  if (request.method === "GET" || request.method === "DELETE") {
+    return boardOf(env, shareId).fetch(request);
+  }
   const body = await readBody(request, maxBytes);
   if (typeof body !== "string") return failureResponse(body);
   return boardOf(env, shareId).fetch(url.toString(), {
@@ -159,6 +170,8 @@ async function forward(env: Env, shareId: string, request: Request, url: URL, ma
 }
 
 const SESSION_ROUTES: Readonly<Record<string, { method: string; maxBytes: number }>> = {
+  [CLOUD_BOARD_ROUTE]: { method: "DELETE", maxBytes: 0 },
+  [CLOUD_BOARD_PEOPLE_REMOVE_ROUTE]: { method: "POST", maxBytes: JSON_MAX_BODY_BYTES },
   [CLOUD_BOARD_TITLE_ROUTE]: { method: "POST", maxBytes: JSON_MAX_BODY_BYTES },
   [SESSION_ROUTE]: { method: "GET", maxBytes: 0 },
   [STREAM_ROUTE]: { method: "GET", maxBytes: 0 },
@@ -246,7 +259,7 @@ export default {
             origin === null
               ? {}
               : {
-                  "access-control-allow-methods": "GET, POST, OPTIONS",
+                  "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
                   "access-control-allow-headers": "authorization, content-type",
                   "access-control-max-age": "600",
                 },
@@ -292,10 +305,15 @@ export class BoardRoom extends DurableObject<Env> {
   private readonly recent = new Map<string, ReadonlyArray<number>>();
   private readonly streams = new Set<OpenStream>();
   private heartbeat: ReturnType<typeof setInterval> | null = null;
+  /** When the board is set to be deleted, epoch ms. */
+  private alarmAt: number | null = null;
+  /** Deleted while this object lived: nothing may keep it again. */
+  private deleted = false;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     void ctx.blockConcurrencyWhile(async () => {
+      this.alarmAt = await ctx.storage.getAlarm();
       const count = await ctx.storage.get<number>(CHUNK_COUNT_KEY);
       if (count === undefined) {
         this.room = (await ctx.storage.get<CloudRoom>(ROOM_KEY)) ?? null;
@@ -308,10 +326,42 @@ export class BoardRoom extends DurableObject<Env> {
   }
 
   override async fetch(request: Request): Promise<Response> {
+    const response = await this.handle(request);
+    await this.keepAlarm();
+    return response;
+  }
+
+  /** Moves the board's deletion on now it was used, at most once a day. */
+  private async keepAlarm() {
+    if (this.room === null) return;
+    const at = boardAlarmAt(this.room, Date.now(), this.alarmAt);
+    if (at === null) return;
+    this.alarmAt = at;
+    await this.ctx.storage.setAlarm(at);
+  }
+
+  override async alarm(): Promise<void> {
+    this.alarmAt = null;
+    await this.end();
+  }
+
+  /** Deletes the board: everyone with it open is told it ended, and nothing of it is kept. */
+  private async end(): Promise<void> {
+    this.deleted = true;
+    this.room = null;
+    for (const stream of this.streams) this.drop(stream, true);
+    this.live = EMPTY_LIVE;
+    this.agents = EMPTY_AGENTS;
+    await this.ctx.storage.deleteAlarm();
+    await this.ctx.storage.deleteAll();
+  }
+
+  private async handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === CLOUD_BOARD_ROUTE && request.method === "POST") {
+      return this.create(url.searchParams.get(GUEST_SHARE_PARAM) ?? "", await request.text());
+    }
     switch (url.pathname) {
-      case CLOUD_BOARD_ROUTE:
-        return this.create(url.searchParams.get(GUEST_SHARE_PARAM) ?? "", await request.text());
       case INVITE_ROUTE: {
         const body = decodeInvite(await request.text());
         if (Option.isNone(body)) return failureResponse(roomFailure("bad_request"));
@@ -326,8 +376,30 @@ export class BoardRoom extends DurableObject<Env> {
     }
     const guest = guestBySession(this.room, await hashSecret(bearerOf(request)));
     const room = this.room;
-    if (guest === undefined || room === null) return failureResponse(roomFailure("invalid"));
+    // The board was deleted, or this person was taken off it.
+    if (guest === undefined || room === null) return failureResponse(roomFailure("ended"));
     switch (url.pathname) {
+      case CLOUD_BOARD_ROUTE: {
+        const refused = checkDelete(room, guest.id);
+        if (refused !== null) return failureResponse(refused);
+        await this.end();
+        return noContent();
+      }
+      case CLOUD_BOARD_PEOPLE_REMOVE_ROUTE: {
+        const body = decodeRemove(await request.text());
+        if (Option.isNone(body)) return failureResponse(roomFailure("bad_request"));
+        const current = this.room ?? room;
+        const next = removePerson(current, guest.id, body.value.guestId, nowIso());
+        if (Result.isFailure(next)) return failureResponse(next.failure);
+        if (next.success === current) return noContent();
+        const removed = body.value.guestId;
+        for (const stream of this.streams) {
+          if (stream.guestId === removed) this.drop(stream, true);
+        }
+        this.setAgents(agentsWithoutPerson(this.agents, removed), Date.now());
+        await this.save(next.success);
+        return noContent();
+      }
       case SESSION_ROUTE:
         return noContent();
       case STREAM_ROUTE:
@@ -438,7 +510,11 @@ export class BoardRoom extends DurableObject<Env> {
     const now = Date.now();
     const hash = await hashSecret(bearerOf(request));
     const room = this.room;
-    if (room === null) return failureResponse(roomFailure("invalid"));
+    if (room === null) {
+      return failureResponse(
+        roomFailure(url.pathname === GUEST_EXPORT_ROUTE ? "invalid" : "ended"),
+      );
+    }
     if (url.pathname === GUEST_EXPORT_ROUTE) {
       const roomToken = makeSecret(room.shareId);
       const session = makeSecret(room.shareId);
@@ -459,7 +535,8 @@ export class BoardRoom extends DurableObject<Env> {
       return Response.json(exported.success.export, { headers: NO_STORE });
     }
     const guest = machineGuestOf(room, hash, "room", now);
-    if (guest === undefined) return failureResponse(roomFailure("invalid"));
+    // As a machine's room answers a removed guest's machine, so it stops posting for good.
+    if (guest === undefined) return failureResponse(roomFailure("ended"));
     const allow = (kind: string, limit: number) =>
       allowRequest(this.recent, `${kind}:${guest.id}`, limit, now);
     const tooFast = () => failureResponse(roomFailure("too_fast"));
@@ -540,7 +617,8 @@ export class BoardRoom extends DurableObject<Env> {
 
   /** Keeps the room, then shows it to everyone with the board open. */
   private async save(room: CloudRoom): Promise<void> {
-    if (room === this.room) return;
+    // A request that read the board before it was deleted keeps nothing of it.
+    if (room === this.room || this.deleted) return;
     const chunks = roomChunks(room);
     // Every limit of a room keeps it far below this; see the worst case in the tests.
     if (chunks.length > ROOM_MAX_CHUNKS) throw new Error("A board grew past what it can keep.");
@@ -630,9 +708,15 @@ export class BoardRoom extends DurableObject<Env> {
     });
   }
 
-  private drop(stream: OpenStream) {
+  /** Forgets a stream; `ended` tells its page the board ended for them first. */
+  private drop(stream: OpenStream, ended = false) {
     if (!this.streams.delete(stream)) return;
-    stream.writer.abort().catch(() => undefined);
+    if (ended) {
+      stream.writer
+        .write(encoder.encode(sseFrame({ type: "ended" })))
+        .then(() => stream.writer.close())
+        .catch(() => undefined);
+    } else stream.writer.abort().catch(() => undefined);
     if (this.streams.size === 0 && this.heartbeat !== null) {
       clearInterval(this.heartbeat);
       this.heartbeat = null;

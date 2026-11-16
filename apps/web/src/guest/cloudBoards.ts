@@ -1,11 +1,14 @@
 import { guestShareRequest } from "@t3tools/client-runtime/rpc";
 import {
+  CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
   CLOUD_BOARD_ROUTE,
   CLOUD_BOARD_TITLE_MAX_LENGTH,
   CLOUD_BOARD_TITLE_ROUTE,
   CloudBoardCreateResult,
   GUEST_BOARD_ROUTE,
+  GUEST_HANDOFF_ROUTE,
   GUEST_NAME_MAX_LENGTH,
+  GuestHandoff,
   type RoomBoardChange,
 } from "@t3tools/contracts";
 import { buildGuestLink } from "@t3tools/shared/guestLinks";
@@ -19,6 +22,7 @@ import { cloudBoardsHost, cloudBoardsOrigin } from "./cloudBoardsHost";
 import { type JoinedGuestShare, guestShareEndpointOf, isCloudShare } from "./guestShares";
 
 const decodeCreated = Schema.decodeUnknownOption(CloudBoardCreateResult);
+const decodeHandoff = Schema.decodeUnknownOption(GuestHandoff);
 
 // Per browser: the name this person joins boards under, so a new cloud board asks only once.
 const BOARD_NAME_KEY = "t3code:board-name:v1";
@@ -96,6 +100,64 @@ export async function renameCloudBoard(
     return response.ok ? null : "The board service did not take the new name. Try again.";
   } catch {
     return "Could not reach the board service.";
+  }
+}
+
+/** Deletes a cloud board for everyone on it; only its maker may. Resolves to null, or why not. */
+export async function deleteCloudBoard(share: JoinedGuestShare): Promise<string | null> {
+  try {
+    const response = await guestShareRequest(guestShareEndpointOf(share), CLOUD_BOARD_ROUTE, {
+      init: { method: "DELETE" },
+    });
+    if (response.ok) return null;
+    return response.status === 403
+      ? "Only the person who made this board can delete it."
+      : "The board service did not delete the board. Try again.";
+  } catch {
+    return "Could not reach the board service.";
+  }
+}
+
+/**
+ * Takes someone off a cloud board: the maker removing a person, or anyone themselves, which is
+ * leaving. Resolves to null, or to what went wrong.
+ */
+export async function removeFromCloudBoard(
+  share: JoinedGuestShare,
+  guestId: string,
+): Promise<string | null> {
+  try {
+    const response = await guestShareRequest(
+      guestShareEndpointOf(share),
+      CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
+      {
+        init: {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ guestId }),
+        },
+      },
+    );
+    // Already gone counts as done.
+    if (response.ok || response.status === 410) return null;
+    return response.status === 403
+      ? "Only the person who made this board can remove people."
+      : "The board service did not take that. Try again.";
+  } catch {
+    return "Could not reach the board service.";
+  }
+}
+
+/** A short-lived token this person's own machine joins a cloud board with, or null. */
+export async function cloudBoardHandoff(share: JoinedGuestShare): Promise<string | null> {
+  try {
+    const response = await guestShareRequest(guestShareEndpointOf(share), GUEST_HANDOFF_ROUTE, {
+      init: { method: "POST" },
+    });
+    if (!response.ok) return null;
+    return Option.getOrNull(decodeHandoff(await response.json().catch(() => null)))?.token ?? null;
+  } catch {
+    return null;
   }
 }
 

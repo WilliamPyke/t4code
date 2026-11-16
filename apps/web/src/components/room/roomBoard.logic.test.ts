@@ -1877,6 +1877,10 @@ describe("boardArtifactAuthor", () => {
     expect(boardArtifactAuthor({ askedBy: sam }, asSam)).toBe("Owner's agent, asked by you");
     expect(boardArtifactAuthor({ guestId: sam }, owner)).toBe("Sam's agent");
     expect(boardArtifactAuthor({ guestId: sam, askedBy: sam }, asSam)).toBe("Your agent");
+    // A version a person wrote by hand names them, not an agent.
+    expect(boardArtifactAuthor({ guestId: sam, byHand: true }, owner)).toBe("Written by Sam");
+    expect(boardArtifactAuthor({ guestId: sam, byHand: true }, asSam)).toBe("Written by you");
+    expect(boardArtifactAuthor({ byHand: true }, asSam)).toBe("Written by Owner");
   });
 
   it("names whose agent answers in a comment thread, and on what, while it replies and after", () => {

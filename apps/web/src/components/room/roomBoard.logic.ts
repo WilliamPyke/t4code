@@ -2307,9 +2307,13 @@ const sentenceStart = (text: string) => text.charAt(0).toUpperCase() + text.slic
  * owner sent a guest's message.
  */
 export function boardArtifactAuthor(
-  artifact: Pick<RoomArtifactContent, "guestId" | "askedBy">,
+  artifact: Pick<RoomArtifactContent, "guestId" | "askedBy" | "byHand">,
   people: BoardPeople,
 ): string {
+  if (artifact.byHand === true) {
+    const person = boardPersonName(people, artifact.guestId);
+    return `Written by ${person === "You" ? "you" : person}`;
+  }
   const agent = boardAgentName(people, artifact.guestId);
   const { askedBy } = artifact;
   if (askedBy === undefined || askedBy === artifact.guestId) return sentenceStart(agent);

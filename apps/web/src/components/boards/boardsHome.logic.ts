@@ -261,11 +261,13 @@ export function newBoardProject<TProject extends NewBoardProjectSource>(input: {
 export const newBoardProjectKey = (project: Pick<NewBoardProjectSource, "environmentId" | "id">) =>
   `${project.environmentId}:${project.id}`;
 
+/** Where a new board lives: on the cloud host, or on one of this person's machines. */
+export type NewBoardPlace = "cloud" | "machine";
+
 /**
- * Where New board makes a board: in the cloud when this browser has no machine it may make one
- * on and a cloud host exists, else in a project as {@link newBoardProject} picks one, among the
- * projects of machines it may make one on when it has any. A machine still connecting may yet
- * take it, so with none ready that is a wait, until the caller has waited (`waited`).
+ * Where New board makes a board: the cloud when it can take it, unless the person chose their
+ * computer. There, a project as {@link newBoardProject} picks among machines that may take it,
+ * else the cloud after all; a machine still connecting is waited for once (`waited`).
  */
 export function newBoardStart<TProject extends NewBoardProjectSource>(input: {
   readonly projects: ReadonlyArray<TProject>;
@@ -276,13 +278,16 @@ export function newBoardStart<TProject extends NewBoardProjectSource>(input: {
   /** The machines this browser keeps whose session has not loaded yet and has not failed. */
   readonly connecting: ReadonlySet<string>;
   readonly waited: boolean;
+  /** Whether a cloud host exists and can take this board's template. */
   readonly cloud: boolean;
+  readonly place: NewBoardPlace;
 }):
   | { readonly kind: "wait" }
   | { readonly kind: "cloud" }
   | { readonly kind: "none" }
   | { readonly kind: "ask" }
   | { readonly kind: "use"; readonly project: TProject } {
+  if (input.cloud && input.place === "cloud") return { kind: "cloud" };
   if (input.operable.size === 0) {
     if (input.connecting.size > 0 && !input.waited) return { kind: "wait" };
     return input.cloud ? { kind: "cloud" } : newBoardProject(input);
@@ -291,4 +296,24 @@ export function newBoardStart<TProject extends NewBoardProjectSource>(input: {
     ...input,
     projects: input.projects.filter((project) => input.operable.has(project.environmentId)),
   });
+}
+
+/**
+ * Whose agent comes along to a cloud board this person just made, and in which project: their
+ * only machine that may take it, in the project a machine board would have gone in, or none.
+ * With no such machine, or several, they choose later. Someone else's invite never brings one.
+ */
+export function newCloudBoardAgent<TProject extends NewBoardProjectSource>(input: {
+  readonly projects: ReadonlyArray<TProject>;
+  readonly boards: ReadonlyArray<HomeBoard>;
+  readonly lastUsed: string | null;
+  readonly operable: ReadonlySet<string>;
+}): { readonly environmentId: string; readonly project: TProject | null } | null {
+  if (input.operable.size !== 1) return null;
+  const [environmentId] = input.operable;
+  const picked = newBoardProject({
+    ...input,
+    projects: input.projects.filter((project) => project.environmentId === environmentId),
+  });
+  return { environmentId: environmentId!, project: picked.kind === "use" ? picked.project : null };
 }

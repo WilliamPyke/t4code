@@ -333,6 +333,12 @@ export function withActivity(
   };
 }
 
+/** The live room once someone is off the board: their agent's runs go. */
+export const agentsWithoutPerson = (live: AgentsLive, guestId: GuestId): AgentsLive => ({
+  agents: new Map([...live.agents].filter(([id]) => id !== guestId)),
+  boxes: new Map([...live.boxes].filter(([, box]) => box.progress.guestId !== guestId)),
+});
+
 /** A posted turn ends the run it was. */
 export const withTurnPosted = (live: AgentsLive, guestId: GuestId, runId: string) =>
   withoutRun(live, guestId, runId);

@@ -16,12 +16,14 @@ import {
   cloudBoardTemplateChanges,
 } from "./boardTemplates";
 import {
+  type NewBoardPlace,
   type OwnBoardSource,
   boardThumbnail,
   listHomeBoards,
   newBoardProject,
   newBoardProjectKey,
   newBoardStart,
+  newCloudBoardAgent,
   teamBoardShapes,
 } from "./boardsHome.logic";
 import { boardCardBox, boardConnector } from "../room/roomBoard.logic";
@@ -209,6 +211,7 @@ describe("newBoardStart", () => {
     cloud: boolean,
     connecting: ReadonlyArray<string> = [],
     waited = false,
+    place: NewBoardPlace = "machine",
   ) =>
     newBoardStart({
       projects: [a, b],
@@ -218,9 +221,17 @@ describe("newBoardStart", () => {
       connecting: new Set(connecting),
       waited,
       cloud,
+      place,
     });
 
-  it("goes to the cloud only when no machine can take a board", () => {
+  it("goes to the cloud unless the person last chose their computer", () => {
+    // No question and no wait for machines: the cloud is the default place.
+    expect(start(["env-a", "env-b"], true, ["env-c"], false, "cloud")).toEqual({ kind: "cloud" });
+    // A template the cloud cannot take, or no cloud host, goes on a machine.
+    expect(start(["env-b"], false, [], false, "cloud")).toEqual({ kind: "use", project: b });
+  });
+
+  it("on their computer, goes to the cloud only when no machine can take a board", () => {
     expect(start([], true)).toEqual({ kind: "cloud" });
     // Without a cloud host it fails on a machine as before, where the toast says why.
     expect(start([], false)).toEqual({ kind: "ask" });
@@ -237,6 +248,32 @@ describe("newBoardStart", () => {
     expect(start([], true, ["env-a"], true)).toEqual({ kind: "cloud" });
     // One ready machine is enough; the other is not waited for.
     expect(start(["env-b"], true, ["env-a"])).toEqual({ kind: "use", project: b });
+  });
+});
+
+describe("newCloudBoardAgent", () => {
+  const a1 = { environmentId: "env-a", id: "project-1" };
+  const a2 = { environmentId: "env-a", id: "project-2" };
+  const b = { environmentId: "env-b", id: "project-3" };
+  const agent = (operable: ReadonlyArray<string>, lastUsed: string | null = null) =>
+    newCloudBoardAgent({
+      projects: [a1, a2, b],
+      boards: [],
+      lastUsed,
+      operable: new Set(operable),
+    });
+
+  it("brings the only machine that may, in the project a machine board would use", () => {
+    expect(agent(["env-a"], "env-a:project-2")).toEqual({ environmentId: "env-a", project: a2 });
+    // The project last used is on another machine, or there is no telling: no project.
+    expect(agent(["env-a"], "env-b:project-3")).toEqual({ environmentId: "env-a", project: null });
+    expect(agent(["env-b"])).toEqual({ environmentId: "env-b", project: b });
+    expect(agent(["env-c"])).toEqual({ environmentId: "env-c", project: null });
+  });
+
+  it("leaves the choice to the person with no machine or several", () => {
+    expect(agent([])).toBeNull();
+    expect(agent(["env-a", "env-b"])).toBeNull();
   });
 });
 

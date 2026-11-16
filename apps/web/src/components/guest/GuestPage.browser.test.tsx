@@ -15,7 +15,7 @@ function visit(path: string): Disposable {
   };
 }
 
-const INVALID = "This link has ended or is not valid";
+const INVALID = "This board has ended, or the link is not valid";
 
 describe("GuestPage", () => {
   it("follows no link to a host outside this deployment's tunnels", async () => {
@@ -37,8 +37,15 @@ describe("GuestPage", () => {
         Response.json({ token: "guest-token", shareId: "share-1", threadId: "thread-1" }),
       );
     await using screen = await render(<GuestPage />);
-    // Opening the link redeems nothing, and takes the credential out of the address.
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // Opening the link only asks whether the invite still opens a share, and takes the
+    // credential out of the address.
+    await vi.waitFor(() =>
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://sam.t3.codes/api/guest/invite",
+        expect.objectContaining({ body: JSON.stringify({ credential: "share-1.signature" }) }),
+      ),
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(window.location.hash).toBe("");
     await userEvent.type(screen.getByLabelText("Your name"), "Sam");
     await userEvent.click(screen.getByRole("button", { name: "Join" }));
@@ -50,9 +57,9 @@ describe("GuestPage", () => {
       threadId: "thread-1",
       token: "guest-token",
     });
-    // The join is the first request; the app then connects to the share it now knows.
+    // The join is the next request; the app then connects to the share it now knows.
     expect(fetchSpy).toHaveBeenNthCalledWith(
-      1,
+      2,
       "https://sam.t3.codes/api/guest/redeem",
       expect.objectContaining({
         method: "POST",
@@ -61,6 +68,16 @@ describe("GuestPage", () => {
         body: JSON.stringify({ credential: "share-1.signature", name: "Sam", returnToken: true }),
       }),
     );
+  });
+
+  it("says a deleted board's invite has ended before asking for a name", async () => {
+    using _page = visit("/guest?host=sam.t3.codes#share-3.signature");
+    using _fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 410 }));
+    await using screen = await render(<GuestPage />);
+    await expect.element(screen.getByText(INVALID)).toBeVisible();
+    expect(readGuestShares()).toEqual([]);
   });
 
   it("tells a guest when the owner's server cannot hand this page a token", async () => {

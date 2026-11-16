@@ -58,6 +58,12 @@ export const GuestShareView = Schema.Struct({
    * the room routes), as on a room an owner's machine serves. Absent from an older cloud host.
    */
   machines: Schema.optional(Schema.Literal(true)),
+  /**
+   * With `cloud`: the person who made the board, the same for everyone; compare with `guestId`.
+   * Only they can delete it or remove others. Absent on a board made before it was kept, or once
+   * its maker left.
+   */
+  maker: Schema.optional(GuestId),
   model: GuestThreadModel,
 });
 export type GuestShareView = typeof GuestShareView.Type;

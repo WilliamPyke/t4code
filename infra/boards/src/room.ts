@@ -15,7 +15,7 @@ import {
   type ThreadGuestTurn,
   type ThreadId,
 } from "@t3tools/contracts";
-import { roomBoardAfterChange } from "@t3tools/shared/guestRoom";
+import { roomBoardAfterChange, roomWithoutGuest } from "@t3tools/shared/guestRoom";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
 import { EMPTY_ROOM_BOARD, ROOM_BOARD_FULL, type RoomBoardScope } from "@t3tools/shared/roomBoard";
 import * as Result from "effect/Result";
@@ -39,6 +39,8 @@ export interface CloudRoom {
   readonly turns?: ReadonlyArray<ThreadGuestTurn>;
   /** Handoff and room tokens of people's machines. */
   readonly machines?: ReadonlyArray<CloudMachineToken>;
+  /** Who made the board. Absent on boards made before it was kept, and once the maker left. */
+  readonly maker?: GuestId;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -63,6 +65,10 @@ const FAILURES = {
   exists: { status: 409, message: "This board already exists." },
   board_full: { status: 409, message: ROOM_BOARD_FULL },
   rejected: { status: 409, message: "The board did not take this change." },
+  // As a machine answers for a room that ended, so a client forgets the board and a machine
+  // joined to it stops posting.
+  ended: { status: 410, message: "This board was deleted, or you are no longer on it." },
+  not_maker: { status: 403, message: "Only the person who made this board can do this." },
   too_fast: { status: 429, message: "Too many requests at once. Try again in a minute." },
   too_large: { status: 400, message: "This request is too large." },
   bad_request: { status: 400, message: "The request was not valid." },
@@ -133,6 +139,7 @@ export function createRoom(input: {
     title: input.title ?? DEFAULT_BOARD_TITLE,
     inviteHash: input.inviteHash,
     guests: [{ ...input.maker, joinedAt: input.now }],
+    maker: input.maker.id,
     createdAt: input.now,
     updatedAt: input.now,
   };
@@ -206,6 +213,62 @@ export function changeBoard(
   );
 }
 
+/** Only the board's maker deletes it. */
+export const checkDelete = (room: CloudRoom, by: GuestId): RoomFailure | null =>
+  room.maker !== undefined && room.maker === by ? null : roomFailure("not_maker");
+
+/**
+ * Takes `guestId` off the board, by the same rule as an owner removing a guest from a machine's
+ * room: their cards, replies, reactions, turns and machines' tokens go with them. The maker
+ * removes anyone else; anyone removes themselves (leaving), the maker too, which leaves the board
+ * with no maker. Someone already gone leaves the room as it was.
+ */
+export function removePerson(
+  room: CloudRoom,
+  by: GuestId,
+  guestId: GuestId,
+  now: string,
+): Result.Result<CloudRoom, RoomFailure> {
+  if (by !== guestId && (room.maker === undefined || room.maker !== by)) {
+    return Result.fail(roomFailure("not_maker"));
+  }
+  if (!room.guests.some((guest) => guest.id === guestId)) return Result.succeed(room);
+  const { maker, machines, ...rest } = roomWithoutGuest(room, guestId);
+  const kept = machines?.filter((token) => token.guestId !== guestId);
+  return Result.succeed({
+    ...rest,
+    ...(maker === undefined || maker === guestId ? {} : { maker }),
+    ...(kept === undefined ? {} : { machines: kept }),
+    updatedAt: now,
+  });
+}
+
+const DAY_MS = 24 * 60 * 60_000;
+/** A board nobody opened or changed for this long is deleted. */
+export const IDLE_BOARD_MS = 90 * DAY_MS;
+/** A board nobody changed since it was made (one person, nothing on it) goes after this. */
+export const UNTOUCHED_BOARD_MS = DAY_MS;
+// The deletion moves on at most once a day, so it comes between 90 and 91 days after the last use.
+const ALARM_STEP_MS = DAY_MS;
+
+/**
+ * When the board should be deleted, given the alarm already set (`scheduled`, epoch ms), or null
+ * when that alarm still stands. A board never changed since it was made goes a day after it was
+ * made; any other goes once nobody used it for `IDLE_BOARD_MS`.
+ */
+export function boardAlarmAt(
+  room: Pick<CloudRoom, "createdAt" | "updatedAt">,
+  now: number,
+  scheduled: number | null,
+): number | null {
+  if (room.updatedAt === room.createdAt) {
+    const at = Date.parse(room.createdAt) + UNTOUCHED_BOARD_MS;
+    return scheduled === at ? null : at;
+  }
+  const at = now + IDLE_BOARD_MS + ALARM_STEP_MS;
+  return scheduled !== null && at - scheduled < ALARM_STEP_MS ? null : at;
+}
+
 const CLOUD_MODEL = { driver: null, name: "Cloud board" } as const;
 
 export function viewFor(room: CloudRoom, guest: CloudGuest): GuestShareView {
@@ -223,6 +286,7 @@ export function viewFor(room: CloudRoom, guest: CloudGuest): GuestShareView {
     ...(room.board === undefined ? {} : { board: room.board }),
     cloud: true,
     machines: true,
+    ...(room.maker === undefined ? {} : { maker: room.maker }),
     model: CLOUD_MODEL,
   };
 }
@@ -290,7 +354,8 @@ export type CloudStreamEvent =
   | { readonly type: "thread"; readonly item: ReturnType<typeof emptyThreadSnapshot> }
   | { readonly type: "presence"; readonly online: ReadonlyArray<GuestId> }
   | RoomCursorsEvent
-  | RoomAgentsEvent;
+  | RoomAgentsEvent
+  | { readonly type: "ended" };
 
 export const sseFrame = (event: CloudStreamEvent) => `data: ${JSON.stringify(event)}\n\n`;
 
