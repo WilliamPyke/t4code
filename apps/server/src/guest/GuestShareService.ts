@@ -29,14 +29,10 @@ import {
   type GuestSubmitRequest,
   type GuestTurnRequest,
   type GuestAgentActivityRequest,
-  GUEST_AGENT_PROMPT_MAX_LENGTH,
   isBranchSynced,
   providerAllowsDirectGuestSend,
   repositoryGroupingKeyOf,
   type RoomAgentsEvent,
-  ROOM_BOX_PROGRESS_DETAIL_MAX_LENGTH,
-  ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH,
-  ROOM_BOX_PROMPT_MAX_LENGTH,
   type RoomBoxProgress,
   type RoomArtifactRead,
   type RoomBoardAgentChangeRequest,
@@ -72,14 +68,10 @@ import {
   TurnItemId,
 } from "@t3tools/contracts";
 import { chatMarkdownImageSources } from "@t3tools/shared/markdownPipeline";
+import { guestActivityFromRequest, guestTurnFromRequest } from "@t3tools/shared/guestRoom";
 import { buildGuestLink, buildShortGuestLink } from "@t3tools/shared/guestLinks";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
-import {
-  roomArtifactBody,
-  roomBoardNoteOfRef,
-  roomCommentAnswer,
-  roomWindowBoxId,
-} from "@t3tools/shared/roomBoard";
+import { roomBoardNoteOfRef, roomWindowBoxId } from "@t3tools/shared/roomBoard";
 import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 import * as NodeOS from "node:os";
 
@@ -113,7 +105,6 @@ import * as CommandOutputHub from "../orchestration-v2/CommandOutputHub.ts";
 import {
   GUEST_FAILURE,
   hasGuest,
-  roomBoxOn,
   roomCardLabels,
   threadRoomOf,
 } from "../orchestration-v2/GuestShareDecider.ts";
@@ -140,7 +131,7 @@ import * as RoomBoxes from "./RoomBoxes.ts";
 import * as RoomCodeDiffs from "./RoomCodeDiffs.ts";
 import * as RoomPullRequests from "./RoomPullRequests.ts";
 import { summarizeRoomBoard } from "./RoomBoardSummary.ts";
-import { clip, roomUpdatesOf } from "./roomUpdates.ts";
+import { roomUpdatesOf } from "@t3tools/shared/roomUpdates";
 import {
   classifyGuestUploads,
   GUEST_UPLOAD_HEADER_BYTES,
@@ -1782,10 +1773,6 @@ const make = Effect.gen(function* () {
   const allowCursorMove = rateLimit(CURSOR_RATE_LIMIT, CURSOR_RATE_WINDOW_MS);
   const allowCodePatch = rateLimit(CODE_PATCH_RATE_LIMIT);
 
-  /** Text another machine sent, as one line the whole room can read, cut to `max`. */
-  const oneLine = (text: string, max: number) =>
-    clip(sanitizeLinkedPrompt(text).text.replace(/\s+/g, " ").trim(), max);
-
   const postTurn = Effect.fn("GuestShareService.postTurn")(function* (
     token: string,
     request: GuestTurnRequest,
@@ -1793,72 +1780,18 @@ const make = Effect.gen(function* () {
     const { thread, share, guestId } = yield* authorize(token, "room");
     if (guestId === undefined) return yield* new GuestShareAccessError({ reason: "ended" });
     // Characters nobody can see have no place in text the whole room reads.
-    const prompt = sanitizeLinkedPrompt(request.prompt).text.trim();
-    const reply = sanitizeLinkedPrompt(request.reply).text.trim();
-    if (reply === "") return yield* new GuestShareAccessError({ reason: "empty" });
+    const turn = guestTurnFromRequest(share, guestId, request);
+    if (turn === null) return yield* new GuestShareAccessError({ reason: "empty" });
     if (!allowTurnPost(`${share.id}:${guestId}`, DateTime.toEpochMillis(yield* DateTime.now))) {
       return yield* new GuestShareAccessError({ reason: "too_fast" });
     }
-    const {
-      artifact: posted,
-      boxId: askedBox,
-      cards: sentCards,
-      cardRefs: sentRefs,
-      model: sentModel,
-      comment: postedComment,
-      ...turn
-    } = request;
-    // Only the guest's own box shows it; anything else is one of the room's turns as before.
-    const box = roomBoxOn(share, askedBox);
-    const boxId = box !== undefined && box.guestId === guestId ? box.id : undefined;
-    const cards = (sentCards ?? []).flatMap((label) => {
-      const text = oneLine(label, 200);
-      return text === "" ? [] : [text];
-    });
-    const model = oneLine(sentModel ?? "", 120);
-    // What fills the card is taken from the body again, as from any reply, so a guest's machine
-    // can put no more in it than an agent's reply would.
-    const filled =
-      posted === undefined ? undefined : roomArtifactBody(sanitizeLinkedPrompt(posted.body).text);
-    const artifact =
-      posted === undefined || filled === undefined || filled.body === ""
-        ? undefined
-        : {
-            noteId: posted.noteId,
-            body: filled.body,
-            ...(posted.truncated === true || filled.truncated ? { truncated: true } : {}),
-          };
-    // Like an artifact's, the answer is taken from the text again, and only from the guest's own
-    // box, as their agent's; the board takes it only in a comment thread.
-    const answer =
-      postedComment === undefined || boxId === undefined
-        ? ""
-        : roomCommentAnswer(postedComment.text);
-    const comment =
-      postedComment === undefined || answer === ""
-        ? undefined
-        : { noteId: postedComment.noteId, text: answer };
     yield* dispatchGuestCommand({
       type: "thread.guest-turn.post",
       commandId: yield* commandId("turn"),
       threadId: thread.id,
       shareId: share.id,
       guestId,
-      turn: {
-        ...turn,
-        prompt,
-        reply,
-        ...(artifact === undefined ? {} : { artifact }),
-        ...(boxId === undefined
-          ? {}
-          : {
-              boxId,
-              ...(cards.length === 0 ? {} : { cards }),
-              ...(sentRefs === undefined || sentRefs.length === 0 ? {} : { cardRefs: sentRefs }),
-              ...(model === "" ? {} : { model }),
-              ...(comment === undefined ? {} : { comment }),
-            }),
-      },
+      turn,
     });
     yield* clearAgent(share.id, guestId, request.id);
     yield* analytics.record("feature.used", { feature: "guest_share.turn" });
@@ -1871,61 +1804,27 @@ const make = Effect.gen(function* () {
   ) {
     const { share, guestId } = yield* authorize(token, "room");
     if (guestId === undefined) return yield* new GuestShareAccessError({ reason: "ended" });
-    // The card shows the agent working only on a task that is the guest's to take.
-    const task = share.board?.notes.find((note) => note.id === request.taskId);
-    const taskId =
-      task?.kind === "task" && (task.assignee === undefined || task.assignee.guestId === guestId)
-        ? task.id
-        : undefined;
-    const artifactId = share.board?.notes.find(
-      (note) => note.id === request.artifactId && note.kind === "artifact",
-    )?.id;
-    const commentId = share.board?.notes.find(
-      (note) => note.id === request.commentId && note.kind === "comment",
-    )?.id;
     if (!allowActivity(`${share.id}:${guestId}`, DateTime.toEpochMillis(yield* DateTime.now))) {
       return yield* new GuestShareAccessError({ reason: "too_fast" });
     }
-    if (request.state === "idle") {
+    const activity = guestActivityFromRequest(share, guestId, request);
+    if (activity.type === "idle") {
       yield* clearAgent(share.id, guestId, request.id);
       return share.expiresAt;
     }
-    const prompt = oneLine(request.prompt ?? "", GUEST_AGENT_PROMPT_MAX_LENGTH);
-    // A run in the guest's own thread box shows on the box, with what its agent is doing.
-    const box = roomBoxOn(share, request.boxId);
-    if (box !== undefined && box.guestId === guestId) {
-      const phase = request.phase ?? "thinking";
-      const detail = oneLine(request.detail ?? "", ROOM_BOX_PROGRESS_DETAIL_MAX_LENGTH);
-      const preview = oneLine(request.preview ?? "", ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH).slice(
-        -ROOM_BOX_PROGRESS_PREVIEW_MAX_LENGTH,
-      );
-      // Taken from the draft again, as a finished turn's is, so it holds no more than a reply would.
-      const draft =
-        artifactId === undefined || request.draft === undefined
-          ? ""
-          : roomArtifactBody(sanitizeLinkedPrompt(request.draft).text).body;
-      const model = oneLine(request.model ?? "", 120);
-      const boxPrompt = oneLine(request.prompt ?? "", ROOM_BOX_PROMPT_MAX_LENGTH);
+    if (activity.type === "box") {
       const key = guestBoxRunKey(guestId, request.id);
       yield* changeRoom(share.id, (room, now) => ({
         ...room,
         boxes: new Map(room.boxes).set(key, {
-          boxId: box.id,
-          guestId,
-          ...(artifactId === undefined ? {} : { artifactId }),
-          ...(commentId === undefined ? {} : { commentId }),
-          phase,
-          ...(phase === "tool" && detail !== "" ? { detail } : {}),
-          ...(phase === "writing" && preview !== "" ? { preview } : {}),
-          ...(draft === "" ? {} : { draft }),
+          ...activity.progress,
           startedAt: room.boxes.get(key)?.startedAt ?? DateTime.formatIso(DateTime.makeUnsafe(now)),
-          ...(model === "" ? {} : { model }),
-          ...(boxPrompt === "" ? {} : { prompt: boxPrompt }),
           until: now + AGENT_ACTIVITY_TTL_MS,
         }),
       }));
       return share.expiresAt;
     }
+    const { prompt, taskId, artifactId, code } = activity.activity;
     yield* changeRoom(share.id, (room, now) => ({
       ...room,
       agents: new Map(room.agents).set(guestId, {
@@ -1933,7 +1832,7 @@ const make = Effect.gen(function* () {
         prompt,
         ...(taskId === undefined ? {} : { taskId }),
         ...(artifactId === undefined ? {} : { artifactId }),
-        ...(request.code === undefined ? {} : { code: request.code }),
+        ...(code === undefined ? {} : { code }),
         until: now + AGENT_ACTIVITY_TTL_MS,
       }),
     }));

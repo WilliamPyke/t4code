@@ -37,6 +37,7 @@ import {
   roomCardsContextRecord,
   roomCommentContextRecord,
 } from "@t3tools/shared/composerContextReferences";
+import { roomBoxOn } from "@t3tools/shared/guestRoom";
 import {
   roomArtifactBody,
   roomArtifactRequestOf,
@@ -63,7 +64,6 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import {
   guestMessageForAgent,
   roomBoxContextRecord,
-  roomBoxOn,
   roomPersonName,
   threadRoomOf,
   type ThreadRoom,
@@ -74,7 +74,7 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { guestThreadModel } from "./guestView.ts";
-import { clip } from "./roomUpdates.ts";
+import { clip } from "@t3tools/shared/roomUpdates";
 
 const SETTLED_RUN = new Set(["completed", "interrupted", "failed", "cancelled", "rolled_back"]);
 const WAITING_RUN = new Set(["preparing", "queued", "starting"]);

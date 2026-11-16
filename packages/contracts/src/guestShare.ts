@@ -1516,6 +1516,8 @@ export const SharedThreadExport = Schema.Struct({
   checkout: Schema.NullOr(SharedThreadCheckout),
   /** Absent from an older server, and for the one guest of a link made before several could join. */
   room: Schema.optional(SharedThreadRoom),
+  /** A cloud board: joining brings the person's agent to the board, with no conversation. */
+  board: Schema.optional(Schema.Boolean),
 });
 export type SharedThreadExport = typeof SharedThreadExport.Type;
 

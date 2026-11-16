@@ -149,6 +149,7 @@ import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { BoardTitle } from "../boards/BoardTitle";
+import { BringAgentDialog } from "./BringAgentDialog";
 import { CloudBoardSharing } from "./CloudBoardSharing";
 import { GuestHtmlRender } from "./GuestHtmlRender";
 import { openGuestFile, useGuestFiles } from "./guestFiles";
@@ -412,6 +413,8 @@ function GuestThreadSession({
   };
   // Where the box goes once the guest picks which of their threads it is.
   const [addingAt, setAddingAt] = useState<BoardPoint | null>(null);
+  // Says how to bring their agent to a cloud board, which has none of its own.
+  const [bringingAgent, setBringingAgent] = useState(false);
   // The board keeps each of this guest's boxes' pick; this one until the board shows it.
   const [boxPicks, setBoxPicks] = useState<Readonly<Record<string, BoardLocalModelPick>>>({});
   // The guest's own machine's threads, whose records say how their boxes' runs ended.
@@ -422,6 +425,34 @@ function GuestThreadSession({
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- persists the awaiting row ids to sessionStorage so a reload keeps them
   useEffect(() => writeAwaitingRowIds(awaitingRowIds), [awaitingRowIds]);
 
+  // This guest's unnamed boxes whose thread on their machine has a title now, as the board names them.
+  const boxTitles = (view?.board?.notes ?? []).flatMap((note) => {
+    const threadId = machine?.boxes[note.id];
+    if (machine == null || threadId === undefined || note.text.trim() !== "") return [];
+    if (note.kind !== "thread" || note.guestId === undefined || note.guestId !== view?.guestId) {
+      return [];
+    }
+    const title = ownShells
+      .find((shell) => shell.environmentId === machine.environmentId && shell.id === threadId)
+      ?.title.trim();
+    return title === undefined || title === "" ? [] : [{ note, text: boardThreadBoxTitle(title) }];
+  });
+  const titledBoxes = useRef(new Set<string>());
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- tells the board host the title the box's thread got on this guest's machine, once per box
+  useEffect(() => {
+    for (const { note, text } of boxTitles) {
+      if (titledBoxes.current.has(note.id)) continue;
+      titledBoxes.current.add(note.id);
+      void postBoardChange(endpoint, {
+        type: "note.put",
+        noteId: note.id,
+        text,
+        x: note.x,
+        y: note.y,
+        kind: "thread",
+      });
+    }
+  });
   if (view === null || projection === null) {
     return (
       <GuestNotice
@@ -653,6 +684,11 @@ function GuestThreadSession({
     });
     return false;
   };
+  // On nobody's machine: no thread, owner or code of its own. Agents come from people's own
+  // machines, where the host lets them.
+  const cloud = isCloudShare(share) || view.cloud === true;
+  const roomCloud = cloud ? { agents: view.machines === true } : undefined;
+  const agents = roomCloud?.agents !== false;
   // A prompt from this guest's own thread box. Their own agent runs it when a machine of theirs
   // joined this room. Otherwise it is a request that waits for the owner like any message, with
   // the cards written into it, so the owner reads exactly what would reach their agent.
@@ -668,6 +704,11 @@ function GuestThreadSession({
         return false;
       }
       return promptBoxHere(machine, boxId, prompt);
+    }
+    // A cloud board has no owner to send a request to: only their own agent can run it.
+    if (cloud) {
+      setBringingAgent(true);
+      return false;
     }
     const text = guestBoardPromptText(
       prompt.text,
@@ -717,8 +758,6 @@ function GuestThreadSession({
   );
   // The one guest of a link made before several could join cannot sign a note, so has no board.
   if (guestId === undefined) return conversation;
-  // On nobody's machine: no thread, agent, code or owner, so only what people do themselves.
-  const cloud = isCloudShare(share) || view.cloud === true;
   return (
     <RoomLiveContext value={live}>
       <GuestBoardLive shareId={share.shareId} running={running} live={live} />
@@ -739,9 +778,14 @@ function GuestThreadSession({
             )}
             agentWorking={deriveThreadAgentWorking(projection)}
             ownerCode={ownerCode}
-            onTakeTask={cloud ? undefined : takeTask}
-            onGiveNote={cloud ? undefined : giveNote}
-            cloud={cloud}
+            onTakeTask={agents ? takeTask : undefined}
+            onGiveNote={agents ? giveNote : undefined}
+            cloud={roomCloud}
+            bringAgent={
+              roomCloud?.agents === true && machine == null
+                ? () => setBringingAgent(true)
+                : undefined
+            }
             ownerAssignable={!cloud}
             {...(cloud
               ? {
@@ -754,7 +798,14 @@ function GuestThreadSession({
                       rename={(title) => renameCloudBoard(share, title)}
                     />
                   ),
-                  sharing: <CloudBoardSharing share={share} online={online.length} />,
+                  sharing: (
+                    <CloudBoardSharing
+                      share={share}
+                      guests={view.guests}
+                      viewer={guestId}
+                      online={online}
+                    />
+                  ),
                 }
               : {})}
             viewer={guestId}
@@ -773,18 +824,18 @@ function GuestThreadSession({
             }}
             onChange={(change) => postBoardChange(endpoint, change)}
             onCursor={(presence) => postBoardCursor(endpoint, presence)}
-            onPromptBox={cloud ? undefined : promptBox}
-            stopBox={cloud ? undefined : stopBox}
-            askInComments={!cloud && machine != null}
+            onPromptBox={agents ? promptBox : undefined}
+            stopBox={agents ? stopBox : undefined}
+            askInComments={agents && machine != null}
             readCodePatch={readCodePatch}
             onRefreshPullRequest={
               cloud ? undefined : (noteId) => refreshRoomPullRequest(endpoint, noteId)
             }
-            onAddThread={cloud || machine == null ? undefined : setAddingAt}
+            onAddThread={!agents || machine == null ? undefined : setAddingAt}
             renderBoxModel={(boxId) =>
               machine == null ? (
                 <span className="truncate text-2xs text-muted-foreground">
-                  {machine === null ? "Goes to the owner" : ""}
+                  {machine === null ? (cloud ? "Your agent is not here" : "Goes to the owner") : ""}
                 </span>
               ) : (
                 <OwnBoxModelPicker
@@ -801,7 +852,7 @@ function GuestThreadSession({
             guestBoxPlaceholder={
               machine === undefined
                 ? "Ask an agent"
-                : machine === null
+                : machine === null && !cloud
                   ? "Ask the owner's agent"
                   : "Ask your agent"
             }
@@ -843,6 +894,11 @@ function GuestThreadSession({
             }
           />
         }
+      />
+      <BringAgentDialog
+        open={bringingAgent}
+        onOpenChange={setBringingAgent}
+        onContinue={() => openOnMyMachine(endpoint, share.host, { board: true })}
       />
       {machine == null || addingAt === null ? null : (
         <BoardThreadPicker
@@ -1271,7 +1327,7 @@ function GuestGitHubSignIn({
 async function openOnMyMachine(
   endpoint: GuestShareEndpoint,
   host: string,
-  card: Pick<Parameters<typeof buildJoinLink>[0], "task" | "artifact"> = {},
+  card: Pick<Parameters<typeof buildJoinLink>[0], "task" | "artifact" | "board"> = {},
 ): Promise<string | null> {
   const tab = window.open("", "_blank");
   const handoff = await postGuestAction(

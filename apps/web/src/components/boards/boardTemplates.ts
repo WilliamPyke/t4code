@@ -470,10 +470,13 @@ export function boardTemplateChanges(
   ];
 }
 
-/** A template drawn as a board's thumbnail draws it. */
-export function boardTemplateShapes(template: BoardTemplate): ReadonlyArray<RoomBoardSummaryShape> {
+/** A template drawn as a board's thumbnail draws it; a cloud board has no thread box of its own. */
+export function boardTemplateShapes(
+  template: BoardTemplate,
+  cloud = false,
+): ReadonlyArray<RoomBoardSummaryShape> {
   return [
-    { kind: "thread", ...template.thread, ...THREAD_SIZE },
+    ...(cloud ? [] : [{ kind: "thread" as const, ...template.thread, ...THREAD_SIZE }]),
     ...template.items.map((item): RoomBoardSummaryShape => {
       switch (item.kind) {
         case "section":
@@ -492,16 +495,14 @@ export function boardTemplateShapes(template: BoardTemplate): ReadonlyArray<Room
 }
 
 /**
- * The changes that lay a template out on a cloud board, or null when it needs what one lacks: a
- * cloud board has no thread box of its own and takes no thread boxes until an agent can join.
+ * The changes that lay a template out on a cloud board, or null when it needs the board's own
+ * thread box, which a cloud board does not have. Its thread boxes are its maker's, run by the
+ * agent they bring from their own machine.
  */
 export function cloudBoardTemplateChanges(
   template: BoardTemplate,
   newId: () => string,
 ): ReadonlyArray<RoomBoardChange> | null {
-  const needsAgent =
-    template.items.some((item) => item.kind === "thread") ||
-    template.lines.some((line) => line.from === THREAD || line.to === THREAD);
-  if (needsAgent) return null;
+  if (template.lines.some((line) => line.from === THREAD || line.to === THREAD)) return null;
   return boardTemplateChanges(template, newId).filter((change) => change.type !== "card.move");
 }

@@ -39,6 +39,8 @@ export const SharedThreadPreview = Schema.Struct({
   checkout: Schema.NullOr(SharedThreadCheckout),
   /** The joined thread will show its turns to the room it came from. */
   live: Schema.optional(Schema.Boolean),
+  /** A cloud board rather than a thread: joining brings the person's agent to it. */
+  board: Schema.optional(Schema.Boolean),
 });
 export type SharedThreadPreview = typeof SharedThreadPreview.Type;
 

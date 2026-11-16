@@ -208,6 +208,8 @@ import {
   boardValueOf,
   boardViewportOf,
   canPromptBoardBox,
+  type RoomBoardCloud,
+  roomBoardHolds,
   clampBoardSize,
   cursorSender,
   dropBoardEdit,
@@ -587,7 +589,7 @@ function ResizeHandle({
 }
 
 const THREAD_DROP = "thread";
-const CLOUD_NO_AGENTS = "Agents join when someone connects their computer. Coming soon.";
+const CLOUD_NO_AGENTS = "Agents cannot join this board.";
 const OWN_AGENT_DROP = "own-agent";
 
 /**
@@ -770,7 +772,8 @@ export function RoomBoard({
   stopBox,
   boxRunEnd,
   roomModel,
-  cloud = false,
+  cloud,
+  bringAgent,
 }: {
   readonly title: string;
   /** Null when the thread is not shared, so there is no room to arrange a board for. */
@@ -886,11 +889,13 @@ export function RoomBoard({
   readonly boxRunEnd?: ((boxId: string) => BoardAgentEnd | null | undefined) | undefined;
   /** The model the room thread's own agent runs on, as this client can name it. */
   readonly roomModel?: string | undefined;
+  /** The board is on the cloud host, on nobody's machine. */
+  readonly cloud?: RoomBoardCloud | undefined;
   /**
-   * The board is on the cloud host, on nobody's machine: it has no thread of its own and takes no
-   * thread boxes, code or pull request windows, which all need a machine.
+   * The viewer has no agent on this board yet: Thread, Ask an agent, Run with an agent and
+   * Attach my agent open this instead, which says how to bring one.
    */
-  readonly cloud?: boolean;
+  readonly bringAgent?: (() => void) | undefined;
 }) {
   const board = room?.board ?? EMPTY_ROOM_BOARD;
   const running = useRoomRunning();
@@ -1155,25 +1160,26 @@ export function RoomBoard({
     viewer,
     ownerName,
   };
-  // A cloud board has no owner to wait on and no agents yet, so nobody gets a card of their own.
-  const guestCards = cards === undefined && !cloud ? guests : [];
+  const holds = roomBoardHolds(cloud);
+  // A cloud board has no owner to wait on, so nobody gets a card of their own there.
+  const guestCards = cards === undefined && holds.room ? guests : [];
   const agents =
-    cards === undefined && !cloud ? boardAgents(guests, room?.turns ?? [], running) : [];
+    cards === undefined && holds.agents ? boardAgents(guests, room?.turns ?? [], running) : [];
   const canGive = onGiveNote !== undefined && agents.some(({ guest }) => guest.id === viewer);
   const cardIds = cards?.map((card) => card.id) ?? [
-    ...(cloud ? [] : [ROOM_BOARD_THREAD_CARD]),
+    ...(holds.room ? [ROOM_BOARD_THREAD_CARD] : []),
     ...guestCards.map(guestCardId),
     ...agents.map(({ guest }) => agentCardId(guest)),
   ];
   // Cards the board will add on its own grid: each guest's agent once it runs, and whoever joins
   // next with theirs. New cards keep clear of their slots.
   const upcomingCardIds =
-    cards === undefined && !cloud
+    cards === undefined && holds.agents
       ? [
           ...guestCards
             .filter((guest) => !agents.some((agent) => agent.guest.id === guest.id))
             .map(agentCardId),
-          NEXT_GUEST_CARD,
+          ...(holds.room ? [NEXT_GUEST_CARD] : []),
           NEXT_AGENT_CARD,
         ]
       : [];
@@ -1225,7 +1231,8 @@ export function RoomBoard({
       .filter((note) => !hiddenComment(note))
       .map((note) => [noteRef(note.id), boardNoteBox(note, view.zoom)] as const),
   ]);
-  const threadBoxes = cards === undefined && !cloud ? boardThreadBoxes(shown, title) : [];
+  const threadBoxes =
+    cards === undefined && holds.agents ? boardThreadBoxes(shown, title, holds.room) : [];
   // Where an agent is working: the cards its turn just added or changed, in its box's colour.
   const agentWork = useBoardAgentWork(room === null ? null : (shown.agentTurns ?? NO_AGENT_TURNS));
   const agentWorkOf = (noteId: string) => {
@@ -1280,6 +1287,15 @@ export function RoomBoard({
       );
     }
   };
+  // On a cloud board a box runs only on its person's machine: theirs is away while they are not on
+  // the board, and the viewer's own until they bring their agent.
+  const boxOffline = (box: Pick<BoardThreadBox, "guestId">) =>
+    cloud !== undefined &&
+    box.guestId !== undefined &&
+    (box.guestId === viewer
+      ? bringAgent !== undefined
+      : !online.some((id) => id === box.guestId) &&
+        !running.some((agent) => agent.guestId === box.guestId));
   const boxName = (boxId: string) =>
     boardBoxName(
       threadBoxes.find((box) => box.id === boxId) ?? { id: boxId, guestId: undefined, title: "" },
@@ -1811,7 +1827,7 @@ export function RoomBoard({
           : null;
   const cannotAddThread =
     cannotAdd ??
-    (cloud
+    (!holds.agents
       ? CLOUD_NO_AGENTS
       : threadsFull
         ? `The board holds ${ROOM_BOARD_MAX_THREADS} thread boxes at most`
@@ -1832,8 +1848,7 @@ export function RoomBoard({
     (pullRequestsFull
       ? `The board holds ${ROOM_BOARD_MAX_PULL_REQUESTS} pull request windows at most`
       : null);
-  // Thread boxes, code and pull request windows all need a machine, which a cloud board has none of.
-  const machineTools = cards === undefined && !cloud;
+  const machineTools = cards === undefined && holds.windows;
   const drawnRects = () => drawnRectsIn(surfaceRef.current);
   const takenRects = () =>
     boardTakenRects(
@@ -2141,7 +2156,7 @@ export function RoomBoard({
     const url = boardUrlIn(text);
     // A pull request pasted on a room's board shows itself, live, instead of as a plain link.
     const pullRequest =
-      url === null || cards !== undefined || cloud || pullRequestsFull
+      url === null || cards !== undefined || !holds.windows || pullRequestsFull
         ? null
         : roomPullRequestOf(url);
     if (pullRequest !== null) {
@@ -2384,12 +2399,15 @@ export function RoomBoard({
   const canAsk = (askCards.cards.length > 0 || askCards.artifact !== null) && askTargets.length > 0;
   // An ask whose cards went, or that this person may no longer send, closes and stays closed.
   if (asking !== null && !canAsk) setAsking(null);
+  // With no agent of this person's here, Ask brings one first, with or without a selection.
   const openAsk = () => {
-    if (canAsk) setAsking(newBoardAsking(selected));
+    if (bringAgent !== undefined) bringAgent();
+    else if (canAsk) setAsking(newBoardAsking(selected));
   };
   // The artifact card's own way in: on that artifact alone, or, when it is selected, as the
   // selection's Ask with it first, since the first selected artifact is the one edited.
   const askAboutArtifact = (note: RoomBoardNote) => {
+    if (bringAgent !== undefined) return bringAgent();
     const ref = noteRef(note.id);
     const refs = selected.has(ref) ? [ref, ...[...selected].filter((one) => one !== ref)] : [ref];
     setSelection(new Set(refs));
@@ -2529,6 +2547,10 @@ export function RoomBoard({
   const openRun = (notes: ReadonlyArray<RoomBoardNote>) => {
     const { tasks } = runTasksOf(notes);
     if (tasks.length === 0) return false;
+    if (bringAgent !== undefined) {
+      bringAgent();
+      return true;
+    }
     const refs = tasks.map((task) => noteRef(task.id));
     setSelection(new Set(refs));
     lastCard.current = refs[0] ?? null;
@@ -2726,7 +2748,7 @@ export function RoomBoard({
     );
   });
   const attachAgentOf = (note: RoomBoardNote) => {
-    if (note.kind !== "artifact" || cards !== undefined || cloud || room === null) {
+    if (note.kind !== "artifact" || cards !== undefined || !holds.agents || room === null) {
       return undefined;
     }
     const existing = boardOwnBoxFor(shown, viewer, note.id);
@@ -2739,8 +2761,10 @@ export function RoomBoard({
       hint:
         viewer === null
           ? "Adds a thread box beside this artifact. What you prompt it runs on your agent, and its replies rewrite the artifact for everyone."
-          : "Adds a thread box of yours beside this artifact. What you prompt it runs on your own agent, on your machine, or asks the owner's agent when yours is not connected. Its replies rewrite the artifact for everyone.",
-      run: () => addBeside(noteRef(note.id), "thread", "to"),
+          : holds.room
+            ? "Adds a thread box of yours beside this artifact. What you prompt it runs on your own agent, on your machine, or asks the owner's agent when yours is not connected. Its replies rewrite the artifact for everyone."
+            : "Adds a thread box of yours beside this artifact. What you prompt it runs on your own agent, on your machine. Its replies rewrite the artifact for everyone.",
+      run: bringAgent ?? (() => addBeside(noteRef(note.id), "thread", "to")),
     };
   };
   const codeWindowOf = (note: RoomBoardNote) => {
@@ -3161,7 +3185,7 @@ export function RoomBoard({
       },
       "add-thread": {
         label: "Add thread box",
-        run: addThenType(() => addCard({ kind: "thread" }, near("thread"))),
+        run: bringAgent ?? addThenType(() => addCard({ kind: "thread" }, near("thread"))),
       },
       "add-artifact": {
         label: "Add artifact",
@@ -3470,7 +3494,7 @@ export function RoomBoard({
     );
     return { body, prompt };
   };
-  const roomBox = threadBoxes[0];
+  const roomBox = threadBoxes.find((box) => box.id === ROOM_BOARD_ROOM_BOX);
   const roomParts =
     roomBox === undefined
       ? null
@@ -3520,6 +3544,7 @@ export function RoomBoard({
       answered: (isRoom ? messages.length > 0 : turn !== undefined) || work !== undefined,
       activity: boardAgentActivity([turn?.at, work?.at]),
       turnKey: `${isRoom ? (messages.at(-1)?.id ?? "") : (turn?.id ?? "")}|${work?.id ?? ""}|${work?.at ?? ""}`,
+      offline: boxOffline(box),
       fallback:
         !isRoom || hasProgress
           ? undefined
@@ -3616,8 +3641,9 @@ export function RoomBoard({
                 onShow={showBox}
                 onShowTask={(noteId) => showCards([noteId])}
                 isOnScreen={boxOnScreen}
-                hasThreadBoxes={threadBoxes.length > 1}
-                cloud={cloud}
+                hasThreadBoxes={threadBoxes.some((box) => box.id !== ROOM_BOARD_ROOM_BOX)}
+                cloud={!holds.agents}
+                bringAgent={bringAgent}
                 recent={agentRecent}
                 renderNeeds={(entry, need) =>
                   need === "approval" ? (
@@ -3693,13 +3719,13 @@ export function RoomBoard({
                   </WhyNot>
                 </span>
                 {cards !== undefined ? null : <BoardToolDivider />}
-                {cards !== undefined || cloud ? null : onAddThread === undefined ? (
+                {cards !== undefined || !holds.agents ? null : onAddThread === undefined ? (
                   <WhyNot reason={cannotAddThread}>
                     <BoardTool
                       label="Thread"
                       hint="Thread box: an agent the room can prompt"
                       disabled={cannotAddThread !== null}
-                      onClick={() => addAndType(() => addCard({ kind: "thread" }))}
+                      onClick={bringAgent ?? (() => addAndType(() => addCard({ kind: "thread" })))}
                     >
                       <BotIcon />
                     </BoardTool>
@@ -4206,7 +4232,11 @@ export function RoomBoard({
               voteOn(selectedNotes);
               return;
             }
-            if (isBoardAskKey(event) && altShortcutHere(event.target) && canAsk) {
+            if (
+              isBoardAskKey(event) &&
+              altShortcutHere(event.target) &&
+              (canAsk || bringAgent !== undefined)
+            ) {
               event.preventDefault();
               openAsk();
               return;
@@ -4727,6 +4757,9 @@ export function RoomBoard({
                     boxName={boxName}
                     onRestore={restoreOf(note)}
                     onAttachAgent={attachAgentOf(note)}
+                    handWritten={
+                      !holds.agents && note.kind === "artifact" && note.artifact === undefined
+                    }
                     onAsk={
                       note.kind === "artifact" && askTargets.length > 0
                         ? () => askAboutArtifact(note)
@@ -4742,7 +4775,7 @@ export function RoomBoard({
                       box === undefined
                         ? undefined
                         : {
-                            label: boardBoxAgentLabel(note, people, note.thread?.turns.at(-1)),
+                            label: `${boardBoxAgentLabel(note, people, note.thread?.turns.at(-1))}${boxOffline(note) ? " · Offline" : ""}`,
                             body: box.body,
                             footer: box.prompt,
                           }
@@ -5270,6 +5303,7 @@ function BoardNote({
   boxName,
   onRestore,
   onAttachAgent,
+  handWritten = false,
   onAsk,
   onPickColor,
   onReact,
@@ -5341,6 +5375,8 @@ function BoardNote({
     | undefined;
   /** Opens Ask an agent on this artifact alone. Absent where the viewer cannot ask. */
   readonly onAsk?: (() => void) | undefined;
+  /** An artifact no agent can fill, on a cloud board: its text is what it shows, by hand. */
+  readonly handWritten?: boolean;
   /** Colours a plain note. Absent where notes are not coloured. */
   readonly onPickColor: ((note: RoomBoardNote, color: RoomBoardNoteColor) => void) | undefined;
   /** Toggles the viewer's own reaction. Absent where they cannot react. */
@@ -5365,6 +5401,8 @@ function BoardNote({
   // A pull request window names its pull request, links to it and shows its own title.
   const parsed = note.url === undefined || pullRequest ? null : parseBoardLink(note.url);
   const titled = artifact || thread || code || pullRequest;
+  // Its text is a title in one line, unless it is all a hand-written artifact shows.
+  const titleLine = titled && !handWritten;
   const mine = isRoomCardOwnedBy(note, people.viewer);
   const canChange = canEdit && (!thread || mine);
   const canDelete = canEdit && mine;
@@ -5599,7 +5637,9 @@ function BoardNote({
                 : note.kind === "link"
                   ? "Caption"
                   : artifact
-                    ? "Artifact title"
+                    ? handWritten
+                      ? "Artifact"
+                      : "Artifact title"
                     : code
                       ? "Code window title"
                       : pullRequest
@@ -5611,14 +5651,16 @@ function BoardNote({
             value={text}
             readOnly={!canChange}
             maxLength={ROOM_BOARD_NOTE_MAX_LENGTH}
-            rows={titled ? 1 : note.kind === "link" ? 2 : note.kind === "task" ? 3 : 4}
+            rows={titleLine ? 1 : note.kind === "link" ? 2 : note.kind === "task" ? 3 : 4}
             placeholder={
               note.kind === "task"
                 ? "Write a task"
                 : note.kind === "link"
                   ? "Add a caption"
                   : artifact
-                    ? "Name this artifact"
+                    ? handWritten
+                      ? "Write or paste what it shows"
+                      : "Name this artifact"
                     : code
                       ? "Name this code window"
                       : pullRequest
@@ -5633,9 +5675,10 @@ function BoardNote({
               "resize-none bg-transparent px-3 pb-3 text-sm leading-snug outline-none placeholder:text-placeholder",
               paper && "pt-1 pb-1 placeholder:text-paint-ink-muted",
               note.kind === "task" && note.done === true && "text-paint-ink-muted line-through",
-              titled
+              titleLine
                 ? "shrink-0 pt-2.5 pb-2 font-semibold"
                 : size !== undefined && "min-h-0 flex-1",
+              handWritten && "pt-2.5",
               !canChange && "cursor-default",
               paper && "cursor-default focus:cursor-text",
             )}
@@ -5649,10 +5692,10 @@ function BoardNote({
               // A title goes back to what is stored on Escape; a note's text is kept, and saved.
               if (event.key === "Escape") {
                 event.stopPropagation();
-                if (titled) onRevert(target);
+                if (titleLine) onRevert(target);
                 leaveText(event.currentTarget);
               }
-              if (titled && event.key === "Enter") {
+              if (titleLine && event.key === "Enter") {
                 event.preventDefault();
                 leaveText(event.currentTarget);
               }
@@ -5737,7 +5780,7 @@ function BoardNote({
             )}
           </div>
         ) : null}
-        {artifact ? (
+        {artifact && !handWritten ? (
           <RoomArtifactLive
             noteId={note.id}
             artifact={note.artifact}

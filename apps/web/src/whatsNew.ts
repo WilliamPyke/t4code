@@ -16,8 +16,10 @@ export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
     title: "Boards in the cloud",
     items: [
       "A board can now live in the cloud instead of on your computer, so it opens and can be shared while every computer is off. New board makes one when no computer is connected; otherwise turn on In the cloud when you choose a template or a project.",
-      "Everyone on a cloud board can add notes, tasks, sections, lines, votes and comments, rename the board, and copy its invite link from the header. Blank and Retro start one; templates with agents need a board on a computer for now.",
-      "Cloud boards have no agents yet: thread boxes, Ask an agent and Run with an agent stay on boards kept on a computer.",
+      "Everyone on a cloud board can add notes, tasks, sections, lines, votes and comments, rename the board, and copy its invite link from the header. Blank, Retro, Research with agents and Build with agents start one; templates that use the board's own thread need a board on a computer.",
+      "Bring your own agent to a cloud board: choose Thread, Ask an agent or Attach my agent, then Continue on my machine. Your thread boxes run on your computer, and everyone sees their replies and the cards they add.",
+      "On a cloud board, Ask an agent, Run with an agent, Take it to my agent, model picks and Stop work on your own thread boxes, as on any board. A box whose person is not on the board says Offline, on the box and in Agents.",
+      "A cloud board has no thread, owner, code windows or pull request windows of its own.",
       "Remove from my boards, in a joined board's menu on the home page or sidebar, takes it off this browser only. A cloud board's invite link brings it back.",
       "New board on a computer that is not connected now says so, instead of “This connection cannot change threads or projects.”",
     ],

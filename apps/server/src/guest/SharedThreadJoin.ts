@@ -91,6 +91,7 @@ const make = Effect.gen(function* () {
       truncated: shared.truncated,
       checkout: shared.checkout,
       ...(shared.room === undefined ? {} : { live: true }),
+      ...(shared.board === true ? { board: true } : {}),
     };
   });
 

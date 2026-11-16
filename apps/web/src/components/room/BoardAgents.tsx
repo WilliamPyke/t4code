@@ -80,6 +80,8 @@ export interface BoardAgentEntry {
   readonly turnKey: string;
   /** For a server that reports no box runs: what the room thread's agent is doing. */
   readonly fallback?: "working" | "approval" | undefined;
+  /** No machine of its person's can run it now. */
+  readonly offline?: boolean | undefined;
 }
 
 // What of a run the panel shows: never its streaming text, so a token renders nothing here.
@@ -210,6 +212,7 @@ const STATUS_TONES: Readonly<Record<BoardAgentStatus["kind"], BoardChipTone>> = 
   ended: "neutral",
   done: "neutral",
   idle: "neutral",
+  offline: "neutral",
 };
 
 function StatusChip({
@@ -220,7 +223,10 @@ function StatusChip({
   readonly run: BoardAgentRun | undefined;
 }) {
   const chip = (
-    <BoardChip tone={STATUS_TONES[status.kind]} dashed={status.kind === "idle"}>
+    <BoardChip
+      tone={STATUS_TONES[status.kind]}
+      dashed={status.kind === "idle" || status.kind === "offline"}
+    >
       {status.kind === "working" && run !== undefined && run.startedAt !== "" ? (
         <WorkingFor run={run} />
       ) : (
@@ -228,12 +234,14 @@ function StatusChip({
       )}
     </BoardChip>
   );
-  if (status.kind !== "ended") return chip;
+  if (status.kind !== "ended" && status.kind !== "offline") return chip;
   return (
     <Tooltip>
       <TooltipTrigger render={<span />}>{chip}</TooltipTrigger>
       <TooltipPopup side="top">
-        It ran on another machine and no reply came back, so this board cannot tell how it ended.
+        {status.kind === "offline"
+          ? "Whoever this agent belongs to is not on the board now, so it cannot run."
+          : "It ran on another machine and no reply came back, so this board cannot tell how it ended."}
       </TooltipPopup>
     </Tooltip>
   );
@@ -378,6 +386,7 @@ export function BoardAgents({
   hasThreadBoxes,
   recent,
   cloud = false,
+  bringAgent,
 }: {
   readonly entries: ReadonlyArray<BoardAgentEntry>;
   readonly viewer: string | null;
@@ -394,8 +403,10 @@ export function BoardAgents({
   readonly hasThreadBoxes: boolean;
   /** What the board's agents last changed, newest first. */
   readonly recent: ReadonlyArray<BoardAgentRecent>;
-  /** The board is on the cloud host, which no agent can join yet. */
+  /** The board is on a cloud host that no agent can join. */
   readonly cloud?: boolean;
+  /** On a cloud board this person has brought no agent to yet: how they bring one. */
+  readonly bringAgent?: (() => void) | undefined;
 }) {
   const store = use(RoomLiveContext);
   const runOf = useAgentRuns(entries);
@@ -414,6 +425,7 @@ export function BoardAgents({
           canResolve: entry.canResolve,
           ended: ended.get(entry.id) ?? entry.end?.outcome,
           answered: entry.answered,
+          offline: entry.offline,
           viewer,
         }),
       };
@@ -606,10 +618,26 @@ export function BoardAgents({
               </li>
             ))}
           </ol>
-          {hasThreadBoxes ? null : (
+          {hasThreadBoxes ? null : bringAgent !== undefined ? (
+            <div className="flex items-center gap-2 px-1.5 pb-1">
+              <p className="min-w-0 flex-1 text-2xs text-muted-foreground">
+                Agents here come from people's own computers. Bring yours to add one.
+              </p>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => {
+                  onOpenChange(false);
+                  bringAgent();
+                }}
+              >
+                Bring your agent
+              </Button>
+            </div>
+          ) : (
             <p className="px-1.5 pb-1 text-2xs text-muted-foreground">
               {cloud
-                ? "Agents join when someone connects their computer. Coming soon."
+                ? "Agents cannot join this board."
                 : "Add an agent with Thread in the toolbar, or select cards and choose Ask an agent."}
             </p>
           )}

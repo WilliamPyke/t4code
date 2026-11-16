@@ -78,13 +78,13 @@ describe("cloud room", () => {
   });
 
   it.each([
-    ["a thread box", notePut("box", { kind: "thread" } as Partial<RoomBoardChange>)],
-    ["an artifact", notePut("doc", { kind: "artifact" } as Partial<RoomBoardChange>)],
+    ["a code window", notePut("code", { kind: "code" } as Partial<RoomBoardChange>)],
+    [
+      "a pull request window",
+      notePut("pr", { kind: "pull-request", url: "https://github.com/a/b/pull/1" } as never),
+    ],
     ["a task for the owner", notePut("task", { kind: "task", assignee: {} } as never)],
-    ["a model pick", { type: "box.model", noteId: "box", modelSelection: {}, name: "m" } as never],
-    ["a task run", { type: "task.run", noteId: "task", boxId: "box" } as RoomBoardChange],
-    ["an undo", { type: "agent-turn.undo", turnId: "turn", undone: true } as never],
-  ])("refuses %s, which needs a machine", (_label, change) => {
+  ])("refuses %s, which needs an owner", (_label, change) => {
     const refused = changeBoard(newRoom(), maker, change, NOW);
     expect(Result.isFailure(refused) && refused.failure).toMatchObject({
       status: 409,

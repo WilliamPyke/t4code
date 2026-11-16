@@ -6,12 +6,23 @@ import {
   CloudBoardTitleRequest,
   GUEST_BOARD_CURSOR_ROUTE,
   GUEST_BOARD_ROUTE,
+  GUEST_EXPORT_ROUTE,
+  GUEST_HANDOFF_ROUTE,
+  GUEST_ROOM_ACTIVITY_ROUTE,
+  GUEST_ROOM_ARTIFACT_ROUTE,
+  GUEST_ROOM_BOARD_ROUTE,
+  GUEST_ROOM_EXPIRES_HEADER,
+  GUEST_ROOM_TURN_ROUTE,
+  GUEST_ROOM_UPDATES_ROUTE,
   GUEST_ROUTE_PREFIX,
   GUEST_SHARE_PARAM,
+  GuestAgentActivityRequest,
   GuestCursorRequest,
   GuestId,
   GuestRedeemRequest,
   GuestShareId,
+  GuestTurnRequest,
+  RoomBoardAgentChangeRequest,
   RoomBoardChange,
   ThreadId,
   type CloudBoardCreateResult,
@@ -23,7 +34,25 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import {
+  EMPTY_AGENTS,
+  agentsEvent,
+  allowRequest,
+  artifactFor,
+  boardFor,
+  changeBoardAsAgent,
+  exportFor,
+  machineGuestOf,
+  postTurn,
+  updatesFor,
+  withActivity,
+  withHandoff,
+  withTurnPosted,
+  type AgentsLive,
+} from "./machines.ts";
+import {
   EMPTY_LIVE,
+  FAR_EXPIRY,
+  ROOM_MAX_CHUNKS,
   changeBoard,
   checkInvite,
   createRoom,
@@ -34,7 +63,9 @@ import {
   onlineOf,
   openingEvents,
   renameRoom,
+  roomChunks,
   roomFailure,
+  roomOfChunks,
   sseFrame,
   viewFor,
   withoutPerson,
@@ -82,6 +113,11 @@ const decodeInvite = Schema.decodeUnknownOption(
 const decodeRedeem = Schema.decodeUnknownOption(Schema.fromJsonString(GuestRedeemRequest));
 const decodeChange = Schema.decodeUnknownOption(Schema.fromJsonString(RoomBoardChange));
 const decodeCursor = Schema.decodeUnknownOption(Schema.fromJsonString(GuestCursorRequest));
+const decodeTurn = Schema.decodeUnknownOption(Schema.fromJsonString(GuestTurnRequest));
+const decodeActivity = Schema.decodeUnknownOption(Schema.fromJsonString(GuestAgentActivityRequest));
+const decodeAgentChange = Schema.decodeUnknownOption(
+  Schema.fromJsonString(RoomBoardAgentChangeRequest),
+);
 
 const bearerOf = (request: Request) =>
   /^Bearer (.+)$/.exec(request.headers.get("authorization") ?? "")?.[1] ?? "";
@@ -128,6 +164,19 @@ const SESSION_ROUTES: Readonly<Record<string, { method: string; maxBytes: number
   [STREAM_ROUTE]: { method: "GET", maxBytes: 0 },
   [GUEST_BOARD_ROUTE]: { method: "POST", maxBytes: JSON_MAX_BODY_BYTES },
   [GUEST_BOARD_CURSOR_ROUTE]: { method: "POST", maxBytes: CURSOR_MAX_BODY_BYTES },
+  [GUEST_HANDOFF_ROUTE]: { method: "POST", maxBytes: JSON_MAX_BODY_BYTES },
+};
+
+// Called by a person's own T Code with a bearer handoff or room token, which names the board.
+// The same caps as a machine's guest routes.
+const MACHINE_ROUTES: Readonly<Record<string, number>> = {
+  [`GET ${GUEST_EXPORT_ROUTE}`]: 0,
+  [`POST ${GUEST_ROOM_TURN_ROUTE}`]: 256 * 1024,
+  [`POST ${GUEST_ROOM_ACTIVITY_ROUTE}`]: JSON_MAX_BODY_BYTES,
+  [`GET ${GUEST_ROOM_UPDATES_ROUTE}`]: 0,
+  [`GET ${GUEST_ROOM_ARTIFACT_ROUTE}`]: 0,
+  [`GET ${GUEST_ROOM_BOARD_ROUTE}`]: 0,
+  [`POST ${GUEST_ROOM_BOARD_ROUTE}`]: 192 * 1024,
 };
 
 async function route(request: Request, env: Env): Promise<Response> {
@@ -150,6 +199,12 @@ async function route(request: Request, env: Env): Promise<Response> {
     const shareId = shareOfSecret(credential.value.credential);
     if (shareId === null) return failureResponse(roomFailure("invalid"));
     return boardOf(env, shareId).fetch(url.toString(), { method: "POST", body });
+  }
+  const machineRoute = MACHINE_ROUTES[`${request.method} ${path}`];
+  if (machineRoute !== undefined) {
+    const shareId = shareOfSecret(bearerOf(request));
+    if (shareId === null) return failureResponse(roomFailure("invalid"));
+    return forward(env, shareId, request, url, machineRoute);
   }
   const sessionRoute = SESSION_ROUTES[path];
   if (sessionRoute !== undefined && sessionRoute.method === request.method) {
@@ -210,7 +265,21 @@ interface OpenStream {
   pingTaken: boolean;
 }
 
+// The room as it was kept before it was kept in pieces.
 const ROOM_KEY = "room";
+const CHUNK_COUNT_KEY = "room:chunks";
+const chunkKey = (index: number) => `room:${index}`;
+// Per person, per minute, as a machine's room allows.
+const TURN_RATE_LIMIT = 6;
+const UPDATES_RATE_LIMIT = 20;
+const BOARD_AGENT_RATE_LIMIT = 30;
+const ACTIVITY_RATE_LIMIT = 90;
+const BOARD_CHANGE_RATE_LIMIT = 120;
+const roomPosted = () =>
+  new Response(null, {
+    status: 204,
+    headers: { ...NO_STORE, [GUEST_ROOM_EXPIRES_HEADER]: FAR_EXPIRY },
+  });
 const encoder = new TextEncoder();
 const nowIso = () => new Date().toISOString();
 
@@ -218,13 +287,23 @@ const nowIso = () => new Date().toISOString();
 export class BoardRoom extends DurableObject<Env> {
   private room: CloudRoom | null = null;
   private live: RoomLive = EMPTY_LIVE;
+  private agents: AgentsLive = EMPTY_AGENTS;
+  private agentsShown = "";
+  private readonly recent = new Map<string, ReadonlyArray<number>>();
   private readonly streams = new Set<OpenStream>();
   private heartbeat: ReturnType<typeof setInterval> | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     void ctx.blockConcurrencyWhile(async () => {
-      this.room = (await ctx.storage.get<CloudRoom>(ROOM_KEY)) ?? null;
+      const count = await ctx.storage.get<number>(CHUNK_COUNT_KEY);
+      if (count === undefined) {
+        this.room = (await ctx.storage.get<CloudRoom>(ROOM_KEY)) ?? null;
+        return;
+      }
+      const keys = Array.from({ length: count }, (_, index) => chunkKey(index));
+      const chunks = await ctx.storage.get<string>(keys);
+      this.room = roomOfChunks(keys.map((key) => chunks.get(key) ?? ""));
     });
   }
 
@@ -242,6 +321,9 @@ export class BoardRoom extends DurableObject<Env> {
       case REDEEM_ROUTE:
         return this.redeem(await request.text());
     }
+    if (MACHINE_ROUTES[`${request.method} ${url.pathname}`] !== undefined) {
+      return this.machine(request, url);
+    }
     const guest = guestBySession(this.room, await hashSecret(bearerOf(request)));
     const room = this.room;
     if (guest === undefined || room === null) return failureResponse(roomFailure("invalid"));
@@ -256,9 +338,18 @@ export class BoardRoom extends DurableObject<Env> {
         await this.save(renameRoom(this.room ?? room, body.value.title, nowIso()));
         return noContent();
       }
+      case GUEST_HANDOFF_ROUTE: {
+        const token = makeSecret(room.shareId);
+        const hash = await hashSecret(token);
+        await this.save(withHandoff(this.room ?? room, guest.id, hash, Date.now()));
+        return Response.json({ token }, { headers: NO_STORE });
+      }
       case GUEST_BOARD_ROUTE: {
         const change = decodeChange(await request.text());
         if (Option.isNone(change)) return failureResponse(roomFailure("bad_request"));
+        if (!allowRequest(this.recent, `board:${guest.id}`, BOARD_CHANGE_RATE_LIMIT, Date.now())) {
+          return failureResponse(roomFailure("too_fast"));
+        }
         const next = changeBoard(this.room ?? room, guest.id, change.value, nowIso());
         if (Result.isFailure(next)) return failureResponse(next.failure);
         await this.save(next.success);
@@ -342,11 +433,127 @@ export class BoardRoom extends DurableObject<Env> {
     return Response.json(result, { headers: NO_STORE });
   }
 
+  /** The routes a person's own T Code calls, with the token the export or a handoff gave it. */
+  private async machine(request: Request, url: URL): Promise<Response> {
+    const now = Date.now();
+    const hash = await hashSecret(bearerOf(request));
+    const room = this.room;
+    if (room === null) return failureResponse(roomFailure("invalid"));
+    if (url.pathname === GUEST_EXPORT_ROUTE) {
+      const roomToken = makeSecret(room.shareId);
+      const session = makeSecret(room.shareId);
+      const [roomHash, sessionHash] = await Promise.all([
+        hashSecret(roomToken),
+        hashSecret(session),
+      ]);
+      const exported = exportFor(this.room ?? room, {
+        handoffHash: hash,
+        roomToken,
+        roomHash,
+        session,
+        sessionHash,
+        now,
+      });
+      if (Result.isFailure(exported)) return failureResponse(exported.failure);
+      await this.save(exported.success.room);
+      return Response.json(exported.success.export, { headers: NO_STORE });
+    }
+    const guest = machineGuestOf(room, hash, "room", now);
+    if (guest === undefined) return failureResponse(roomFailure("invalid"));
+    const allow = (kind: string, limit: number) =>
+      allowRequest(this.recent, `${kind}:${guest.id}`, limit, now);
+    const tooFast = () => failureResponse(roomFailure("too_fast"));
+    const body = request.method === "POST" ? await request.text() : "";
+    switch (`${request.method} ${url.pathname}`) {
+      case `POST ${GUEST_ROOM_TURN_ROUTE}`: {
+        const turn = decodeTurn(body);
+        if (Option.isNone(turn)) return failureResponse(roomFailure("bad_request"));
+        if (!allow("turn", TURN_RATE_LIMIT)) return tooFast();
+        const next = postTurn(this.room ?? room, guest.id, turn.value, nowIso());
+        if (Result.isFailure(next)) return failureResponse(next.failure);
+        await this.save(next.success);
+        this.setAgents(withTurnPosted(this.agents, guest.id, turn.value.id), now);
+        return roomPosted();
+      }
+      case `POST ${GUEST_ROOM_ACTIVITY_ROUTE}`: {
+        const activity = decodeActivity(body);
+        if (Option.isNone(activity)) return failureResponse(roomFailure("bad_request"));
+        if (!allow("activity", ACTIVITY_RATE_LIMIT)) return tooFast();
+        this.setAgents(withActivity(this.agents, room, guest.id, activity.value, now), now);
+        return roomPosted();
+      }
+      case `GET ${GUEST_ROOM_UPDATES_ROUTE}`: {
+        const after = url.searchParams.get("after");
+        if (after !== null && Number.isNaN(Date.parse(after))) {
+          return failureResponse(roomFailure("bad_request"));
+        }
+        if (!allow("read", UPDATES_RATE_LIMIT)) return tooFast();
+        const cursor = after === null ? null : new Date(after).toISOString();
+        return Response.json(updatesFor(room, guest.id, cursor), { headers: NO_STORE });
+      }
+      case `GET ${GUEST_ROOM_ARTIFACT_ROUTE}`: {
+        const noteId = url.searchParams.get("note");
+        if (!noteId) return failureResponse(roomFailure("bad_request"));
+        if (!allow("read", UPDATES_RATE_LIMIT)) return tooFast();
+        const artifact = artifactFor(room, noteId);
+        return Result.isFailure(artifact)
+          ? failureResponse(artifact.failure)
+          : Response.json(artifact.success, { headers: NO_STORE });
+      }
+      case `GET ${GUEST_ROOM_BOARD_ROUTE}`: {
+        const boxId = url.searchParams.get("box");
+        if (!boxId) return failureResponse(roomFailure("bad_request"));
+        if (!allow("agent", BOARD_AGENT_RATE_LIMIT)) return tooFast();
+        const view = boardFor(room, guest.id, boxId);
+        return Result.isFailure(view)
+          ? failureResponse(view.failure)
+          : Response.json(view.success, { headers: NO_STORE });
+      }
+      case `POST ${GUEST_ROOM_BOARD_ROUTE}`: {
+        const change = decodeAgentChange(body);
+        if (Option.isNone(change)) return failureResponse(roomFailure("bad_request"));
+        if (!allow("agent", BOARD_AGENT_RATE_LIMIT)) return tooFast();
+        const changed = changeBoardAsAgent(
+          this.room ?? room,
+          guest.id,
+          change.value,
+          nowIso(),
+          () => crypto.randomUUID(),
+        );
+        if (Result.isFailure(changed)) return failureResponse(changed.failure);
+        await this.save(changed.success.room);
+        return Response.json(changed.success.result, { headers: NO_STORE });
+      }
+    }
+    return failureResponse(roomFailure("unavailable"));
+  }
+
+  /** Keeps what people's agents are doing, and shows everyone when that changed. */
+  private setAgents(agents: AgentsLive, now: number) {
+    this.agents = agents;
+    const event = agentsEvent(agents, now);
+    const shown = JSON.stringify(event);
+    if (shown === this.agentsShown) return;
+    this.agentsShown = shown;
+    this.broadcast(event);
+  }
+
   /** Keeps the room, then shows it to everyone with the board open. */
   private async save(room: CloudRoom): Promise<void> {
     if (room === this.room) return;
+    const chunks = roomChunks(room);
+    // Every limit of a room keeps it far below this; see the worst case in the tests.
+    if (chunks.length > ROOM_MAX_CHUNKS) throw new Error("A board grew past what it can keep.");
+    const before = (await this.ctx.storage.get<number>(CHUNK_COUNT_KEY)) ?? 0;
     this.room = room;
-    await this.ctx.storage.put(ROOM_KEY, room);
+    await this.ctx.storage.put({
+      [CHUNK_COUNT_KEY]: chunks.length,
+      ...Object.fromEntries(chunks.map((chunk, index) => [chunkKey(index), chunk])),
+    });
+    const stale = Array.from({ length: Math.max(0, before - chunks.length) }, (_, index) =>
+      chunkKey(chunks.length + index),
+    );
+    await this.ctx.storage.delete(before === 0 ? [...stale, ROOM_KEY] : stale);
     for (const stream of this.streams) {
       const guest = room.guests.find((candidate) => candidate.id === stream.guestId);
       if (guest !== undefined)
@@ -373,6 +580,7 @@ export class BoardRoom extends DurableObject<Env> {
   }
 
   private ping() {
+    this.setAgents(this.agents, Date.now());
     for (const stream of this.streams) {
       // A page that went does not always cancel its stream; it only stops reading.
       if (!stream.pingTaken) {
@@ -406,6 +614,10 @@ export class BoardRoom extends DurableObject<Env> {
     const cursors = cursorsEventFor(this.live, guest.id, now);
     if (cursors.cursors.length > 0 || (cursors.views?.length ?? 0) > 0) {
       this.send(stream, sseFrame(cursors));
+    }
+    const agents = agentsEvent(this.agents, now);
+    if (agents.running.length > 0 || (agents.boxes?.length ?? 0) > 0) {
+      this.send(stream, sseFrame(agents));
     }
     if (!wasOnline) this.broadcast({ type: "presence", online }, stream);
     this.heartbeat ??= setInterval(() => this.ping(), HEARTBEAT_MS);

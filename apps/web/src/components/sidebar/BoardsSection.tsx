@@ -13,11 +13,12 @@ import { cn } from "~/lib/utils";
 import { useThreadShells } from "~/state/entities";
 
 import { listHomeBoards } from "../boards/boardsHome.logic";
-import { useStartNewBoard } from "../boards/newBoard";
+import { useNewBoardWaiting, useStartNewBoard } from "../boards/newBoard";
 import { JoinedBoardMenu } from "../boards/removeJoinedBoard";
 import { roomBoardLocation } from "../room/roomBoardNavigation";
 import { paintSwatchClassName } from "../room/RoomNoteColor";
 import { Button } from "../ui/button";
+import { Spinner } from "../ui/spinner";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 
 // Kept short: the section sits above the thread list, which keeps the rest of the height.
@@ -38,6 +39,7 @@ export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
   const threads = useThreadShells();
   const joined = useAtomValue(guestSharesAtom);
   const startNewBoard = useStartNewBoard();
+  const waiting = useNewBoardWaiting();
   const atHome = useLocation({ select: (location) => location.pathname === "/" });
   const openBoard = useParams({
     strict: false,
@@ -61,9 +63,11 @@ export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
             size="icon-xs"
             variant="ghost-muted"
             aria-label="New board"
+            disabled={waiting}
+            aria-busy={waiting || undefined}
             onClick={() => void startNewBoard()}
           >
-            <PlusIcon />
+            {waiting ? <Spinner aria-hidden /> : <PlusIcon />}
           </Button>
         ) : null}
       </div>

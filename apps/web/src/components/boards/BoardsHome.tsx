@@ -38,10 +38,11 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 import { Group, GroupSeparator } from "../ui/group";
 import { Input } from "../ui/input";
 import { SidebarInset } from "../ui/sidebar";
+import { Spinner } from "../ui/spinner";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { BoardThumbnail } from "./BoardThumbnail";
 import { type HomeBoard, listHomeBoards, teamBoardShapes } from "./boardsHome.logic";
-import { openBoardTemplates, useStartNewBoard } from "./newBoard";
+import { openBoardTemplates, useNewBoardWaiting, useStartNewBoard } from "./newBoard";
 import { JoinedBoardMenu } from "./removeJoinedBoard";
 
 const NO_THREAD_IDS: ReadonlyArray<ThreadId> = [];
@@ -54,6 +55,8 @@ export function BoardsHome() {
   const { teams } = useTeams();
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const startNewBoard = useStartNewBoard();
+  const waiting = useNewBoardWaiting();
+  const newBoardIcon = waiting ? <Spinner aria-hidden /> : <PlusIcon />;
   const [query, setQuery] = useState("");
   const projectName = (environmentId: string, projectId: string) =>
     projects.find((project) => project.environmentId === environmentId && project.id === projectId)
@@ -125,8 +128,13 @@ export function BoardsHome() {
             </label>
           ) : null}
           <Group aria-label="New board">
-            <Button onClick={() => void startNewBoard()} data-new-board>
-              <PlusIcon />
+            <Button
+              disabled={waiting}
+              aria-busy={waiting || undefined}
+              onClick={() => void startNewBoard()}
+              data-new-board
+            >
+              {newBoardIcon}
               New board
             </Button>
             <GroupSeparator />
@@ -153,8 +161,12 @@ export function BoardsHome() {
                       what they make, side by side. Share it when you want others in.
                     </EmptyDescription>
                     <div className="mt-5 flex justify-center gap-2">
-                      <Button onClick={() => void startNewBoard()}>
-                        <PlusIcon />
+                      <Button
+                        disabled={waiting}
+                        aria-busy={waiting || undefined}
+                        onClick={() => void startNewBoard()}
+                      >
+                        {newBoardIcon}
                         New board
                       </Button>
                       <Button variant="outline" onClick={openBoardTemplates}>
@@ -177,6 +189,8 @@ export function BoardsHome() {
               <li>
                 <button
                   type="button"
+                  disabled={waiting}
+                  aria-busy={waiting || undefined}
                   className="group/new flex h-full min-h-48 w-full flex-col items-center justify-center gap-2.5 rounded-board border border-dashed border-foreground/20 text-sm font-medium text-foreground outline-none transition-colors hover:border-foreground/35 hover:bg-card focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                   onClick={() => void startNewBoard()}
                 >
@@ -184,7 +198,7 @@ export function BoardsHome() {
                     aria-hidden
                     className="grid size-8 place-items-center rounded-lg border border-board-hairline bg-card text-muted-foreground shadow-paint group-hover/new:text-foreground"
                   >
-                    <PlusIcon className="size-4" />
+                    {waiting ? <Spinner aria-hidden size="md" /> : <PlusIcon className="size-4" />}
                   </span>
                   New board
                 </button>

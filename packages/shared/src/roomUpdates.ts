@@ -34,7 +34,7 @@ export function roomUpdatesOf(input: {
   readonly runs: ReadonlyArray<Pick<OrchestrationV2Run, "id" | "status" | "completedAt">>;
   /** Turns older than `items` exist. */
   readonly hasMoreHistory: boolean;
-  readonly share: ThreadGuestShare;
+  readonly share: Pick<ThreadGuestShare, "turns" | "guests" | "guestName">;
   readonly guestId: GuestId;
   readonly after: string | null;
 }): RoomUpdates {
@@ -82,12 +82,12 @@ export function roomUpdatesOf(input: {
   });
   const fresh = [...spoken, ...turns]
     .filter((update) => update.text.trim() !== "" && Date.parse(update.at) > after)
-    .toSorted((left, right) => Date.parse(left.at) - Date.parse(right.at));
+    .sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
 
   const kept: Array<RoomUpdate> = [];
   let chars = 0;
   let cut = false;
-  for (const update of fresh.toReversed()) {
+  for (const update of [...fresh].reverse()) {
     const text = clip(update.text.trim(), ROOM_UPDATE_MAX_LENGTH);
     if (kept.length >= ROOM_UPDATES_MAX_MESSAGES || chars + text.length > ROOM_UPDATES_MAX_CHARS) {
       break;
@@ -98,7 +98,7 @@ export function roomUpdatesOf(input: {
   }
   const oldestHeld = Math.min(...input.items.map((item) => DateTime.toEpochMillis(item.updatedAt)));
   return {
-    updates: kept.toReversed(),
+    updates: [...kept].reverse(),
     truncated: cut || kept.length < fresh.length || (input.hasMoreHistory && oldestHeld > after),
     cursor: kept[0]?.at ?? input.after,
   };

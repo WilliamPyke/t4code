@@ -264,7 +264,8 @@ export const newBoardProjectKey = (project: Pick<NewBoardProjectSource, "environ
 /**
  * Where New board makes a board: in the cloud when this browser has no machine it may make one
  * on and a cloud host exists, else in a project as {@link newBoardProject} picks one, among the
- * projects of machines it may make one on when it has any.
+ * projects of machines it may make one on when it has any. A machine still connecting may yet
+ * take it, so with none ready that is a wait, until the caller has waited (`waited`).
  */
 export function newBoardStart<TProject extends NewBoardProjectSource>(input: {
   readonly projects: ReadonlyArray<TProject>;
@@ -272,13 +273,18 @@ export function newBoardStart<TProject extends NewBoardProjectSource>(input: {
   readonly lastUsed: string | null;
   /** The machines this browser may make a board on now. */
   readonly operable: ReadonlySet<string>;
+  /** The machines this browser keeps whose session has not loaded yet and has not failed. */
+  readonly connecting: ReadonlySet<string>;
+  readonly waited: boolean;
   readonly cloud: boolean;
 }):
+  | { readonly kind: "wait" }
   | { readonly kind: "cloud" }
   | { readonly kind: "none" }
   | { readonly kind: "ask" }
   | { readonly kind: "use"; readonly project: TProject } {
   if (input.operable.size === 0) {
+    if (input.connecting.size > 0 && !input.waited) return { kind: "wait" };
     return input.cloud ? { kind: "cloud" } : newBoardProject(input);
   }
   return newBoardProject({

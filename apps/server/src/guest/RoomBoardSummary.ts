@@ -4,12 +4,17 @@ import {
   ROOM_BOARD_THREAD_CARD,
   type RoomBoard,
   type RoomBoardNote,
-  type RoomBoardSize,
   type RoomBoardSummary,
   type RoomBoardSummaryShape,
   type ThreadId,
 } from "@t3tools/contracts";
-import { ROOM_BOARD_NOTE_SIZE, ROOM_BOARD_TASK_SIZE } from "@t3tools/shared/roomBoard";
+import {
+  ROOM_BOARD_CARD_SIZE,
+  ROOM_THREAD_CARD_SIZE,
+  ROOM_THREAD_ORIGIN,
+  roomBoardNoteSize,
+  roomThreadCardSize,
+} from "@t3tools/shared/roomBoardAgent";
 
 /** The part of a thread its board's summary reads. */
 export interface SummarizedThread {
@@ -24,38 +29,6 @@ export interface SummarizedThread {
     | undefined;
   readonly roomBoard?: { readonly board?: RoomBoard | undefined } | null | undefined;
 }
-
-// The sizes the board draws a card at until someone resizes it; a thumbnail needs only a guess.
-const CARD: RoomBoardSize = { w: 320, h: 240 };
-const ROOM_THREAD_CARD: RoomBoardSize = { w: 320, h: 420 };
-const NOTE = ROOM_BOARD_NOTE_SIZE;
-const PIN: RoomBoardSize = { w: 32, h: 32 };
-const SECTION: RoomBoardSize = { w: 640, h: 420 };
-const NOTE_SIZES: Partial<Record<NonNullable<RoomBoardNote["kind"]>, RoomBoardSize>> = {
-  artifact: { w: 380, h: 400 },
-  thread: { w: 340, h: 460 },
-  code: { w: 560, h: 420 },
-  "pull-request": { w: 360, h: 300 },
-  comment: PIN,
-  task: ROOM_BOARD_TASK_SIZE,
-};
-// Where the board puts its own thread's card before anyone moves it.
-export const ROOM_THREAD_ORIGIN = { x: 80, y: 72 };
-
-/** A card's size as the board draws it, or about, until someone resizes it. */
-export const roomBoardNoteSize = (
-  note: Pick<RoomBoardNote, "kind" | "size" | "section">,
-): RoomBoardSize =>
-  note.size ??
-  (note.section === true
-    ? SECTION
-    : note.kind === undefined
-      ? NOTE
-      : (NOTE_SIZES[note.kind] ?? NOTE));
-
-/** The room thread's own card's size, as the board draws it until someone resizes it. */
-export const roomThreadCardSize = (board: RoomBoard | undefined): RoomBoardSize =>
-  board?.sizes?.[ROOM_BOARD_THREAD_CARD] ?? ROOM_THREAD_CARD;
 
 function noteShape(note: RoomBoardNote): RoomBoardSummaryShape {
   const size = roomBoardNoteSize(note);
@@ -83,7 +56,9 @@ export function summarizeRoomBoard(
   const notes = (board?.notes ?? []).filter((note) => note.pinnedTo === undefined);
   const positions = board?.positions ?? {};
   const cardShapes: Array<RoomBoardSummaryShape> = Object.entries(positions).map(([id, at]) => {
-    const size = board?.sizes?.[id] ?? (id === ROOM_BOARD_THREAD_CARD ? ROOM_THREAD_CARD : CARD);
+    const size =
+      board?.sizes?.[id] ??
+      (id === ROOM_BOARD_THREAD_CARD ? ROOM_THREAD_CARD_SIZE : ROOM_BOARD_CARD_SIZE);
     return {
       x: at.x,
       y: at.y,

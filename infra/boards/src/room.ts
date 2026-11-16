@@ -8,23 +8,24 @@ import {
   type GuestShareView,
   type RoomBoard,
   type RoomBoardChange,
+  type RoomAgentsEvent,
   type RoomBoardDrag,
   type RoomCursorsEvent,
   type ThreadGuest,
+  type ThreadGuestTurn,
   type ThreadId,
 } from "@t3tools/contracts";
+import { roomBoardAfterChange } from "@t3tools/shared/guestRoom";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
-import {
-  EMPTY_ROOM_BOARD,
-  ROOM_BOARD_FULL,
-  applyRoomBoardChange,
-  type RoomBoardScope,
-} from "@t3tools/shared/roomBoard";
+import { EMPTY_ROOM_BOARD, ROOM_BOARD_FULL, type RoomBoardScope } from "@t3tools/shared/roomBoard";
 import * as Result from "effect/Result";
+
+import type { CloudMachineToken } from "./machines.ts";
 
 /**
  * A board on the cloud board host: it lives on nobody's machine, so it has no owner, no thread and
- * no agent. Everyone on it is a guest. Secrets are kept only as SHA-256 hashes.
+ * no agent of its own. Everyone on it is a guest, and each can bring their own machine's agent.
+ * Secrets are kept only as SHA-256 hashes.
  */
 export interface CloudRoom {
   readonly shareId: GuestShareId;
@@ -34,6 +35,10 @@ export interface CloudRoom {
   readonly guests: ReadonlyArray<CloudGuest>;
   /** Absent until someone changes the board. */
   readonly board?: RoomBoard;
+  /** Turns people's machines ran outside a box of theirs, newest last. */
+  readonly turns?: ReadonlyArray<ThreadGuestTurn>;
+  /** Handoff and room tokens of people's machines. */
+  readonly machines?: ReadonlyArray<CloudMachineToken>;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -43,11 +48,13 @@ export interface CloudGuest {
   readonly name: string;
   readonly joinedAt: string;
   readonly sessionHash: string;
+  /** Sessions the export gave this person's machines, so the app there shows the board too. */
+  readonly machineSessions?: ReadonlyArray<string>;
 }
 
 export const DEFAULT_BOARD_TITLE = "Untitled board";
 // Cloud boards do not end; the view still needs a time.
-const FAR_EXPIRY = "9999-12-31T23:59:59.999Z";
+export const FAR_EXPIRY = "9999-12-31T23:59:59.999Z";
 
 const FAILURES = {
   invalid: { status: 403, message: "This board link is not valid." },
@@ -60,6 +67,12 @@ const FAILURES = {
   too_large: { status: 400, message: "This request is too large." },
   bad_request: { status: 400, message: "The request was not valid." },
   unavailable: { status: 404, message: "Cloud boards do not have this yet." },
+  empty: { status: 400, message: "Write something first." },
+  artifact_gone: { status: 404, message: "This artifact is no longer on the board." },
+  not_on_board: {
+    status: 404,
+    message: "This thread is not on a board. Only one of its thread boxes can use it.",
+  },
 } as const;
 
 export type RoomFailureReason = keyof typeof FAILURES;
@@ -77,36 +90,25 @@ export const roomFailure = (reason: RoomFailureReason, message?: string): RoomFa
   message: message ?? FAILURES[reason].message,
 });
 
-const NEEDS_A_MACHINE =
-  "A cloud board cannot do this yet: it needs someone's T Code with an agent attached.";
+const NEEDS_AN_OWNER =
+  "A cloud board cannot do this: it has no owner whose machine would serve it.";
 
 /**
- * Changes that need an agent, a thread or the room's owner, none of which a cloud board has:
- * thread boxes and what runs in them, artifacts and code and pull request windows (which an
- * agent or the owner's server fills), comments pinned to a thread's messages, and tasks for the
- * owner.
+ * Changes that need the room's owner, whom a cloud board does not have: code and pull request
+ * windows (the owner's server fills them), comments pinned to the room thread's messages, and
+ * tasks for the owner. People's own thread boxes, artifacts and what their agents do with them
+ * follow the same rules as on a room an owner's machine serves.
  */
-export function needsAMachine(change: RoomBoardChange): boolean {
-  switch (change.type) {
-    case "box.model":
-    case "task.run":
-    case "agent-turn.undo":
-    case "artifact.restore":
-      return true;
-    case "note.put":
-      return (
-        change.kind === "thread" ||
-        change.kind === "artifact" ||
-        change.kind === "code" ||
-        change.kind === "pull-request" ||
-        change.pinnedTo !== undefined ||
-        (change.assignee !== undefined &&
-          change.assignee !== null &&
-          change.assignee.guestId === undefined)
-      );
-    default:
-      return false;
-  }
+export function needsAnOwner(change: RoomBoardChange): boolean {
+  return (
+    change.type === "note.put" &&
+    (change.kind === "code" ||
+      change.kind === "pull-request" ||
+      change.pinnedTo !== undefined ||
+      (change.assignee !== undefined &&
+        change.assignee !== null &&
+        change.assignee.guestId === undefined))
+  );
 }
 
 const freeGuestName = (guests: ReadonlyArray<CloudGuest>, wanted: string) => {
@@ -160,12 +162,15 @@ export function joinRoom(
 }
 
 export const guestBySession = (room: CloudRoom | null, sessionHash: string) =>
-  room?.guests.find((guest) => guest.sessionHash === sessionHash);
+  room?.guests.find(
+    (guest) =>
+      guest.sessionHash === sessionHash || guest.machineSessions?.includes(sessionHash) === true,
+  );
 
 export const renameRoom = (room: CloudRoom, title: string, now: string): CloudRoom =>
   room.title === title ? room : { ...room, title, updatedAt: now };
 
-const roomScope = (room: CloudRoom): RoomBoardScope => ({
+export const roomScope = (room: CloudRoom): RoomBoardScope => ({
   hasCard: (cardId) =>
     room.guests.some(
       (guest) => cardId === roomBoardGuestCard(guest.id) || cardId === roomBoardAgentCard(guest.id),
@@ -180,14 +185,13 @@ export function changeBoard(
   change: RoomBoardChange,
   now: string,
 ): Result.Result<CloudRoom, RoomFailure> {
-  if (needsAMachine(change)) return Result.fail(roomFailure("rejected", NEEDS_A_MACHINE));
+  if (needsAnOwner(change)) return Result.fail(roomFailure("rejected", NEEDS_AN_OWNER));
   const cleaned =
     change.type === "note.put" || change.type === "comment.reply"
       ? // Characters nobody can see have no place in text the whole room reads.
         { ...change, text: sanitizeLinkedPrompt(change.text).text }
       : change;
-  const before = room.board ?? EMPTY_ROOM_BOARD;
-  const applied = applyRoomBoardChange(before, roomScope(room), author, cleaned, now);
+  const applied = roomBoardAfterChange(room, roomScope(room), author, cleaned, undefined, now);
   if (Result.isFailure(applied)) {
     return Result.fail(
       applied.failure === ROOM_BOARD_FULL
@@ -196,7 +200,9 @@ export function changeBoard(
     );
   }
   return Result.succeed(
-    applied.success === before ? room : { ...room, board: applied.success, updatedAt: now },
+    applied.success === (room.board ?? EMPTY_ROOM_BOARD)
+      ? room
+      : { ...room, board: applied.success, updatedAt: now },
   );
 }
 
@@ -213,9 +219,10 @@ export function viewFor(room: CloudRoom, guest: CloudGuest): GuestShareView {
     signIn: false,
     expiresAt: FAR_EXPIRY,
     messages: [],
-    turns: [],
+    turns: room.turns ?? [],
     ...(room.board === undefined ? {} : { board: room.board }),
     cloud: true,
+    machines: true,
     model: CLOUD_MODEL,
   };
 }
@@ -282,7 +289,8 @@ export type CloudStreamEvent =
   | { readonly type: "view"; readonly view: GuestShareView }
   | { readonly type: "thread"; readonly item: ReturnType<typeof emptyThreadSnapshot> }
   | { readonly type: "presence"; readonly online: ReadonlyArray<GuestId> }
-  | RoomCursorsEvent;
+  | RoomCursorsEvent
+  | RoomAgentsEvent;
 
 export const sseFrame = (event: CloudStreamEvent) => `data: ${JSON.stringify(event)}\n\n`;
 
@@ -387,3 +395,24 @@ export function cursorsEventFor(live: RoomLive, reader: GuestId, now: number): R
     views: others(live.views).map(([guestId, { x, y, zoom }]) => ({ guestId, x, y, zoom })),
   };
 }
+
+/**
+ * Durable Object storage keeps at most 128 KiB in one value, and a board with its artifacts full
+ * holds more, so the room is kept as JSON in pieces. 32,000 UTF-16 units stay under that however
+ * the characters are encoded.
+ */
+export const ROOM_CHUNK_CHARS = 32_000;
+/** As many keys as one storage write takes, the count among them. */
+export const ROOM_MAX_CHUNKS = 127;
+
+export function roomChunks(room: CloudRoom): ReadonlyArray<string> {
+  const json = JSON.stringify(room);
+  const chunks: Array<string> = [];
+  for (let at = 0; at < json.length; at += ROOM_CHUNK_CHARS) {
+    chunks.push(json.slice(at, at + ROOM_CHUNK_CHARS));
+  }
+  return chunks;
+}
+
+export const roomOfChunks = (chunks: ReadonlyArray<string>): CloudRoom =>
+  JSON.parse(chunks.join("")) as CloudRoom;

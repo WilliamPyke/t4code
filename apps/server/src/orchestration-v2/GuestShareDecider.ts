@@ -4,26 +4,17 @@ import {
   GUEST_PENDING_MESSAGE_LIMIT,
   GUEST_RESOLVED_MESSAGE_LIMIT,
   GUEST_SHARE_MAX_GUESTS,
-  GUEST_TURN_LIMIT,
-  ROOM_BOARD_MAX_REPLIES,
   TEAM_SHARE_MAX_GUESTS,
   ROOM_BOARD_ROOM_BOX,
   ROOM_BOARD_THREAD_CARD,
   ROOM_BOX_CONTEXT_KIND,
-  ROOM_BOX_PROMPT_MAX_LENGTH,
-  ROOM_BOX_TURN_LIMIT,
   guestMessageAuthorName,
   roomBoardAgentCard,
   roomBoardCardRef,
   roomBoardGuestCard,
   roomBoardNoteRef,
-  roomTaskAnswerExcerpt,
   unsharedRoomId,
-  type RoomArtifactContent,
-  type RoomCodeChanges,
   type RoomBoard,
-  type RoomBoardNote,
-  type RoomBoardReply,
   type GuestId,
   type GuestMessageAttribution,
   type GuestMessageId,
@@ -44,22 +35,26 @@ import {
 } from "@t3tools/shared/composerContextReferences";
 import {
   EMPTY_ROOM_BOARD,
-  ROOM_AGENT_REPLY_ID_PREFIX,
   ROOM_BOARD_FULL,
   applyRoomBoardChange,
-  roomArtifactAfterFill,
   roomBoardCardIdentity,
   roomBoardNoteOfRef,
-  roomBoardWithAgentChange,
-  roomBoardWithBoxRunDone,
   roomBoardWithCardsSent,
   roomBoardWithEdges,
   roomBoardWithoutCards,
-  roomBoxCodeWindows,
-  roomBoxExcerpt,
-  roomBoxReply,
   type RoomBoardScope,
 } from "@t3tools/shared/roomBoard";
+import {
+  ROOM_BOX_NOT_YOURS,
+  roomAfterGuestTurn,
+  roomBoardAfterChange,
+  roomBoardWithArtifactFilled,
+  roomBoardWithBoxChanges,
+  roomBoardWithBoxTurn,
+  roomBoardWithCommentAnswer,
+  roomBoardWithTaskAnswered,
+  roomBoxOn,
+} from "@t3tools/shared/guestRoom";
 import * as DateTime from "effect/DateTime";
 import * as Result from "effect/Result";
 
@@ -106,7 +101,7 @@ export const GUEST_FAILURE = {
   memberJoined: "This member already joined.",
   artifactGone: "This artifact is no longer on the board.",
   boxGone: "This thread box is no longer on the board.",
-  boxNotYours: "This thread box is someone else's. Only your own takes your messages.",
+  boxNotYours: ROOM_BOX_NOT_YOURS,
   threadOnBoard: "This thread is already on the board.",
 } as const;
 
@@ -286,124 +281,6 @@ function boardWithoutGuest(board: RoomBoard, guestId: GuestId): RoomBoard {
   );
 }
 
-/**
- * The board with a task marked done and answered by this person's agent: a guest's, or the
- * owner's when `guestId` is undefined. Only a task that is no one's or already this person's
- * takes it; any other id, or the same turn again, leaves the board as it was.
- */
-function boardWithTaskAnswered(
-  board: RoomBoard,
-  taskId: string,
-  guestId: GuestId | undefined,
-  turn: { readonly id: string; readonly reply: string },
-): RoomBoard {
-  const task = board.notes.find((note) => note.id === taskId);
-  if (
-    task?.kind !== "task" ||
-    (task.assignee !== undefined && task.assignee.guestId !== guestId) ||
-    (task.answer?.turnId === turn.id && task.answer.guestId === guestId)
-  ) {
-    return board;
-  }
-  const person = guestId === undefined ? {} : { guestId };
-  const answered: RoomBoardNote = {
-    ...task,
-    done: true,
-    assignee: person,
-    answer: { ...person, excerpt: roomTaskAnswerExcerpt(turn.reply), turnId: turn.id },
-  };
-  return { ...board, notes: board.notes.map((note) => (note === task ? answered : note)) };
-}
-
-/**
- * The board with an artifact card showing what an agent replied, and the version it replaced
- * kept. Only an artifact card takes it; any other id, or the same turn again, leaves the board
- * as it was. The last turn to finish wins.
- */
-function boardWithArtifactFilled(
-  board: RoomBoard,
-  noteId: string,
-  content: Omit<RoomArtifactContent, "previous">,
-): RoomBoard {
-  const note = board.notes.find((candidate) => candidate.id === noteId);
-  const sameTurn = (version: Pick<RoomArtifactContent, "turnId" | "guestId"> | undefined) =>
-    version?.turnId === content.turnId && version.guestId === content.guestId;
-  // A turn that already wrote it, even one someone restored away since, writes nothing again.
-  if (note?.kind !== "artifact" || sameTurn(note.artifact) || sameTurn(note.artifact?.previous)) {
-    return board;
-  }
-  const filled: RoomBoardNote = {
-    ...note,
-    artifact: roomArtifactAfterFill(note.artifact, content),
-  };
-  return { ...board, notes: board.notes.map((other) => (other === note ? filled : other)) };
-}
-
-/**
- * The board with an agent's answer appended to the comment thread it was asked from, as a reply
- * of whose agent it was. Only a comment thread with room for it takes it; any other id, or the
- * same run again, leaves the board as it was, so a thread deleted meanwhile takes nothing.
- */
-function boardWithCommentAnswer(
-  board: RoomBoard,
-  noteId: string,
-  answer: {
-    readonly guestId: GuestId | undefined;
-    readonly text: string;
-    readonly at: string;
-    readonly agent: NonNullable<RoomBoardReply["agent"]>;
-  },
-): RoomBoard {
-  const note = board.notes.find((candidate) => candidate.id === noteId);
-  const replies = note?.replies ?? [];
-  const id = `${ROOM_AGENT_REPLY_ID_PREFIX}${answer.agent.turnId}`.slice(0, 64);
-  if (
-    note?.kind !== "comment" ||
-    answer.text.trim() === "" ||
-    replies.length >= ROOM_BOARD_MAX_REPLIES ||
-    replies.some(
-      (reply) =>
-        reply.id === id ||
-        (reply.agent?.turnId === answer.agent.turnId && reply.guestId === answer.guestId),
-    )
-  ) {
-    return board;
-  }
-  const reply: RoomBoardReply = {
-    id,
-    text: answer.text,
-    ...(answer.guestId === undefined ? {} : { guestId: answer.guestId }),
-    at: answer.at,
-    agent: answer.agent,
-  };
-  const answered: RoomBoardNote = { ...note, replies: [...replies, reply] };
-  return { ...board, notes: board.notes.map((other) => (other === note ? answered : other)) };
-}
-
-/**
- * The board with what a thread box's thread changed shown in every code window the box has a line
- * to. A window that already shows this turn of this person's, or a box with no window, leaves the
- * board as it was.
- */
-function boardWithBoxChanges(
-  board: RoomBoard,
-  boxId: string,
-  changes: Omit<RoomCodeChanges, "boxId">,
-): RoomBoard {
-  const windows = new Set(roomBoxCodeWindows(board, boxId));
-  const shows = (note: RoomBoardNote) =>
-    note.changes?.boxId === boxId &&
-    note.changes.turnId === changes.turnId &&
-    note.changes.guestId === changes.guestId;
-  if (![...windows].some((note) => !shows(note))) return board;
-  return {
-    ...board,
-    notes: board.notes.map((note) =>
-      windows.has(note) && !shows(note) ? { ...note, changes: { ...changes, boxId } } : note,
-    ),
-  };
-}
-
 const artifactOn = (share: Pick<ThreadRoom, "board">, noteId: string | undefined) =>
   noteId === undefined
     ? undefined
@@ -495,12 +372,6 @@ export const roomCardLabels = (
       : [roomBoardCardIdentity(note, roomPersonName(share, ownerName)).label];
   });
 
-/** The thread box with this id on the share's board, if it is still there. */
-export const roomBoxOn = (share: Pick<ThreadRoom, "board">, boxId: string | undefined) =>
-  boxId === undefined
-    ? undefined
-    : share.board?.notes.find((note) => note.id === boxId && note.kind === "thread");
-
 /** The box threads of the boxes this board still has. */
 const liveBoardThreads = (board: RoomBoard, threads: ThreadRoom["boardThreads"]) =>
   threads === undefined
@@ -508,30 +379,6 @@ const liveBoardThreads = (board: RoomBoard, threads: ThreadRoom["boardThreads"])
     : Object.fromEntries(
         Object.entries(threads).filter(([boxId]) => roomBoxOn({ board }, boxId) !== undefined),
       );
-
-/**
- * The board with a turn shown on a thread box, keeping the last few. A box that is gone, or the
- * same turn again, leaves the board as it was.
- */
-function boardWithBoxTurn(
-  board: RoomBoard,
-  boxId: string,
-  turn: NonNullable<RoomBoardNote["thread"]>["turns"][number],
-): RoomBoard {
-  const box = board.notes.find((note) => note.id === boxId && note.kind === "thread");
-  const turns = box?.thread?.turns ?? [];
-  if (box === undefined || turns.some((shown) => shown.id === turn.id)) return board;
-  const updated: RoomBoardNote = {
-    ...box,
-    thread: { turns: [...turns, turn].slice(-ROOM_BOX_TURN_LIMIT) },
-  };
-  // A finished turn is what ticks off the tasks someone ran in the box.
-  return roomBoardWithBoxRunDone(
-    { ...board, notes: board.notes.map((note) => (note === box ? updated : note)) },
-    boxId,
-    turn,
-  );
-}
 
 /** The share with the lines a guest's message carried into its box marked sent, as it is sent. */
 const withMessageCardsSent = (
@@ -846,10 +693,13 @@ export function decideGuestShareCommand(input: {
             DateTime.formatIso(now),
           ),
           (added) =>
-            withBoard(turn === undefined ? added : boardWithBoxTurn(added, command.boxId, turn), {
-              ...threads,
-              [command.boxId]: boxThreadId,
-            }),
+            withBoard(
+              turn === undefined ? added : roomBoardWithBoxTurn(added, command.boxId, turn),
+              {
+                ...threads,
+                [command.boxId]: boxThreadId,
+              },
+            ),
         );
       }
       // A guest's box runs here too while its requests come through the owner.
@@ -863,7 +713,7 @@ export function decideGuestShareCommand(input: {
     case "thread.room-box.turn":
       return Result.succeed(
         withRoomBoard(thread, command.shareId, (board) =>
-          boardWithBoxTurn(board, command.boxId, command.turn),
+          roomBoardWithBoxTurn(board, command.boxId, command.turn),
         ),
       );
     // Only the owner's own boxes: a guest's box shows what their machine posts with their turn.
@@ -872,7 +722,7 @@ export function decideGuestShareCommand(input: {
         withRoomBoard(thread, command.shareId, (board) =>
           roomBoxOn({ board }, command.boxId)?.guestId !== undefined
             ? board
-            : boardWithBoxChanges(board, command.boxId, {
+            : roomBoardWithBoxChanges(board, command.boxId, {
                 ...command.changes,
                 turnId: command.turnId,
                 updatedAt: DateTime.formatIso(now),
@@ -948,44 +798,18 @@ export function decideGuestShareCommand(input: {
       }
       const { room, withBoard } = named;
       const before = room.board ?? EMPTY_ROOM_BOARD;
-      const agent = command.agent;
-      // A guest's change is their own box's agent's only when they asked it, in a turn of that box.
-      if (
-        agent !== undefined &&
-        command.author !== null &&
-        (roomBoxOn(room, agent.boxId)?.guestId !== command.author ||
-          agent.askedBy !== command.author ||
-          before.agentTurns?.some(
-            (turn) => turn.id === agent.turnId && turn.guestId !== command.author,
-          ) === true)
-      ) {
-        return Result.fail(GUEST_FAILURE.boxNotYours);
-      }
       // A removed thread box forgets its thread, which stays the owner's.
       return Result.map(
-        applyRoomBoardChange(
-          before,
+        roomBoardAfterChange(
+          room,
           roomScope(room),
           command.author,
           command.change,
+          command.agent,
           DateTime.formatIso(now),
         ),
-        (changed) => {
-          const board =
-            agent === undefined
-              ? changed
-              : roomBoardWithAgentChange(
-                  before,
-                  changed,
-                  command.change,
-                  agent,
-                  DateTime.formatIso(now),
-                  command.author,
-                );
-          return board === before
-            ? thread
-            : withBoard(board, liveBoardThreads(board, room.boardThreads));
-        },
+        (board) =>
+          board === before ? thread : withBoard(board, liveBoardThreads(board, room.boardThreads)),
       );
     }
     // Only the share changes: a guest's own turn starts nothing here and reaches no agent.
@@ -998,124 +822,26 @@ export function decideGuestShareCommand(input: {
       ) {
         return Result.fail(GUEST_FAILURE.inactive);
       }
-      const turns = share.turns ?? [];
-      if (turns.some((turn) => turn.guestId === command.guestId && turn.id === command.turn.id)) {
-        return Result.succeed(thread);
-      }
-      const {
-        truncated,
-        taskId,
-        artifact,
-        boxId,
-        cards,
-        cardRefs,
-        model,
-        comment,
-        changes,
-        ...turn
-      } = command.turn;
-      // Only the guest's own thread box shows their turn; any other box is ignored.
-      const namedBox = roomBoxOn(share, boxId);
-      const box = namedBox?.guestId === command.guestId ? namedBox : undefined;
-      // Their machine posts the turn again once its checkpoint is taken, with what it changed.
-      const changed =
-        box === undefined || changes === undefined || share.board === undefined
-          ? share.board
-          : boardWithBoxChanges(share.board, box.id, {
-              ...changes,
-              guestId: command.guestId,
-              turnId: turn.id,
-              updatedAt: DateTime.formatIso(now),
-            });
-      const about =
-        box === undefined
-          ? {}
-          : {
-              prompt: roomBoxExcerpt(turn.prompt, ROOM_BOX_PROMPT_MAX_LENGTH),
-              ...(cards === undefined || cards.length === 0 ? {} : { cards }),
-              ...(model === undefined ? {} : { model }),
-            };
-      const answered =
-        taskId === undefined || changed === undefined
-          ? changed
-          : boardWithTaskAnswered(changed, taskId, command.guestId, turn);
-      // The guest's own agent wrote it, on their machine; the owner's agent never sees the post.
-      const filled =
-        artifact === undefined || answered === undefined
-          ? answered
-          : boardWithArtifactFilled(answered, artifact.noteId, {
-              body: artifact.body,
-              ...(artifact.truncated === true ? { truncated: true } : {}),
-              guestId: command.guestId,
-              turnId: turn.id,
-              updatedAt: DateTime.formatIso(now),
-              ...about,
-              ...(box === undefined ? {} : { boxId: box.id }),
-            });
-      // A box's turn is the box's conversation, so it stays out of the room's own turns.
-      if (box !== undefined && filled !== undefined) {
-        // Only the guest's own box answers a comment thread, as their agent.
-        const commented =
-          comment === undefined
-            ? filled
-            : boardWithCommentAnswer(filled, comment.noteId, {
-                guestId: command.guestId,
-                text: comment.text,
-                at: DateTime.formatIso(now),
-                agent: {
-                  turnId: turn.id,
-                  boxId: box.id,
-                  ...(model === undefined ? {} : { model }),
-                },
-              });
-        const shown = boardWithBoxTurn(commented, box.id, {
-          id: turn.id,
-          ...about,
-          prompt: roomBoxExcerpt(turn.prompt, ROOM_BOX_PROMPT_MAX_LENGTH),
-          reply: roomBoxReply(turn.reply),
-          at: DateTime.formatIso(now),
-          guestId: command.guestId,
-        });
-        // Only as the box first shows the turn: a post again with its changes marks nothing anew.
-        const board =
-          shown === commented || cardRefs === undefined
-            ? shown
-            : roomBoardWithCardsSent(
-                shown,
-                box.id,
-                artifact?.noteId,
-                cardRefs,
-                DateTime.formatIso(now),
-              );
-        return board === share.board ? Result.succeed(thread) : withShare({ ...share, board });
-      }
-      const board = filled;
-      return withShare({
-        ...share,
-        turns: [
-          ...turns,
-          {
-            ...turn,
-            guestId: command.guestId,
-            postedAt: DateTime.formatIso(now),
-            ...(truncated === true ? { truncated } : {}),
-          },
-        ].slice(-GUEST_TURN_LIMIT),
-        ...(board === undefined ? {} : { board }),
-      });
+      const next = roomAfterGuestTurn(
+        share,
+        command.guestId,
+        command.turn,
+        DateTime.formatIso(now),
+      );
+      return next === share ? Result.succeed(thread) : withShare(next);
     }
     // The owner's turn already ran; this only shows on the board which task it answered.
     case "thread.room-task.answer":
       return Result.succeed(
         withRoomBoard(thread, command.shareId, (board) =>
-          boardWithTaskAnswered(board, command.taskId, undefined, command.turn),
+          roomBoardWithTaskAnswered(board, command.taskId, undefined, command.turn),
         ),
       );
     // Like a task's answer: the owner's turn already ran, and the room only sees what it wrote.
     case "thread.room-artifact.fill":
       return Result.succeed(
         withRoomBoard(thread, command.shareId, (board) =>
-          boardWithArtifactFilled(board, command.noteId, {
+          roomBoardWithArtifactFilled(board, command.noteId, {
             body: command.body,
             ...(command.truncated === true ? { truncated: true } : {}),
             ...(command.askedBy === undefined ? {} : { askedBy: command.askedBy }),
@@ -1134,7 +860,7 @@ export function decideGuestShareCommand(input: {
     case "thread.room-comment.answer":
       return Result.succeed(
         withRoomBoard(thread, command.shareId, (board) =>
-          boardWithCommentAnswer(board, command.noteId, {
+          roomBoardWithCommentAnswer(board, command.noteId, {
             guestId: undefined,
             text: command.text,
             at: DateTime.formatIso(now),

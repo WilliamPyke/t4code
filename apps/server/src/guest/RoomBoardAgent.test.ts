@@ -30,7 +30,7 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as RoomBoardAgent from "./RoomBoardAgent.ts";
-import { roomBoardNoteSize } from "./RoomBoardSummary.ts";
+import { roomBoardNoteSize } from "@t3tools/shared/roomBoardAgent";
 import * as RoomBoxes from "./RoomBoxes.ts";
 import * as SharedRoomLink from "./SharedRoomLink.ts";
 

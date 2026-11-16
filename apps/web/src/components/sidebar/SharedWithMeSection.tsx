@@ -3,7 +3,7 @@ import { guestEnvironmentId } from "@t3tools/client-runtime/environment";
 import { Link, useParams } from "@tanstack/react-router";
 import { UsersIcon } from "lucide-react";
 
-import { guestSharesAtom, type JoinedGuestShare } from "~/guest/guestShares";
+import { guestSharesAtom, isCloudShare, type JoinedGuestShare } from "~/guest/guestShares";
 import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 
 /** The joined shares under the host that shared them, hosts and threads in the order joined. */
@@ -26,13 +26,12 @@ function groupSharesByHost(shares: ReadonlyArray<JoinedGuestShare>): ReadonlyArr
 }
 
 /**
- * The threads other people shared with this browser, those from one host kept together under the
- * name its owner chose to show. A tunnel's host name means nothing to a guest, so a host whose
- * owner chose none has no label. They are not this client's threads: each opens the guest's view
- * of it, and none has a menu of its own. Nothing renders while there are none.
+ * Threads others shared with this browser, grouped by host under the name its owner chose to show
+ * (a tunnel's host name means nothing to a guest). Each opens the guest's view, with no menu.
+ * Cloud boards are on nobody's machine, so Boards lists them as the person's own instead.
  */
 export function SharedWithMeSection() {
-  const shares = useAtomValue(guestSharesAtom);
+  const shares = useAtomValue(guestSharesAtom).filter((share) => !isCloudShare(share));
   const activeEnvironmentId = useParams({
     strict: false,
     select: (params) => params.environmentId ?? null,

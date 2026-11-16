@@ -2,11 +2,7 @@ import {
   CommandId,
   type GuestId,
   type GuestShareId,
-  ROOM_BOARD_MAX_CARD_SIZE,
-  ROOM_BOARD_NOTE_MAX_LENGTH,
   ROOM_BOARD_ROOM_BOX,
-  ROOM_BOARD_THREAD_CARD,
-  type RoomBoard,
   type RoomBoardAgentAddInput,
   type RoomBoardAgentChangeRequest,
   type RoomBoardAgentMark,
@@ -14,15 +10,19 @@ import {
   type RoomBoardAgentUpdateInput,
   type RoomBoardAgentView,
   type RoomBoardChange,
-  type RoomBoardNote,
-  type RoomBoardSize,
   type SharedThreadJoinError,
   type ThreadId,
-  roomBoardCardRef,
-  roomBoardNoteRef,
 } from "@t3tools/contracts";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
+import { roomBoxOn } from "@t3tools/shared/guestRoom";
 import { EMPTY_ROOM_BOARD, applyRoomBoardChange } from "@t3tools/shared/roomBoard";
+import {
+  roomBoardAgentAdd,
+  roomBoardAgentUpdate,
+  roomBoardAgentView,
+  type RoomBoardAgentOps,
+  type RoomBoardAgentTarget,
+} from "@t3tools/shared/roomBoardAgent";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
@@ -32,7 +32,6 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import {
-  roomBoxOn,
   roomPersonName,
   roomScope,
   threadRoomOf,
@@ -41,7 +40,6 @@ import {
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { ROOM_THREAD_ORIGIN, roomBoardNoteSize, roomThreadCardSize } from "./RoomBoardSummary.ts";
 import * as RoomBoxes from "./RoomBoxes.ts";
 import * as SharedRoomLink from "./SharedRoomLink.ts";
 
@@ -79,134 +77,13 @@ export interface RoomGuestBox {
 type Caller = ThreadId | RoomGuestBox;
 
 /** The board a thread's agent works on, kept up to date with what it changed in this call. */
-interface Target {
+interface Target extends RoomBoardAgentTarget {
   readonly roomThreadId: ThreadId;
-  readonly roomTitle: string;
   readonly room: ThreadRoom;
-  readonly boxId: string;
   /** Whose changes they are: null for the owner, or the guest whose machine runs the agent. */
   readonly author: GuestId | null;
   readonly agent: RoomBoardAgentMark;
-  board: RoomBoard;
 }
-
-interface Rect {
-  readonly x: number;
-  readonly y: number;
-  readonly w: number;
-  readonly h: number;
-}
-
-const GAP = 24;
-// Room for a section's title bar above the cards in it.
-const SECTION_HEADER = 56;
-const SECTION: RoomBoardSize = { w: 640, h: 420 };
-const CARD: RoomBoardSize = { w: 320, h: 240 };
-const MAX_ROWS = 40;
-
-const overlaps = (a: Rect, b: Rect) =>
-  a.x < b.x + b.w + GAP && b.x < a.x + a.w + GAP && a.y < b.y + b.h + GAP && b.y < a.y + a.h + GAP;
-
-const noteRect = (note: RoomBoardNote): Rect => ({
-  x: note.x,
-  y: note.y,
-  ...roomBoardNoteSize(note),
-});
-
-const isCard = (note: RoomBoardNote) => note.pinnedTo === undefined;
-const sectionsOf = (board: RoomBoard) => board.notes.filter((note) => note.section === true);
-
-/** Where the room thread's own card is, as the board draws it. */
-const roomCardRect = (board: RoomBoard): Rect => ({
-  ...(board.positions[ROOM_BOARD_THREAD_CARD] ?? ROOM_THREAD_ORIGIN),
-  ...roomThreadCardSize(board),
-});
-
-/** Everything a new card must not cover: cards, people's cards, and sections unless `inside`. */
-function obstacles(board: RoomBoard, withSections: boolean): Array<Rect> {
-  const people = Object.entries(board.positions).flatMap(([cardId, at]) =>
-    cardId === ROOM_BOARD_THREAD_CARD ? [] : [{ ...at, ...(board.sizes?.[cardId] ?? CARD) }],
-  );
-  return [
-    roomCardRect(board),
-    ...people,
-    ...board.notes
-      .filter((note) => isCard(note) && (withSections || note.section !== true))
-      .map(noteRect),
-  ];
-}
-
-/** The first free place in a grid from `origin`, row by row. */
-function freeSpot(
-  size: RoomBoardSize,
-  origin: { readonly x: number; readonly y: number },
-  columns: number,
-  taken: ReadonlyArray<Rect>,
-): Rect | undefined {
-  for (let row = 0; row < MAX_ROWS; row++) {
-    for (let column = 0; column < columns; column++) {
-      const spot = {
-        x: Math.round(origin.x + column * (size.w + GAP)),
-        y: Math.round(origin.y + row * (size.h + GAP)),
-        ...size,
-      };
-      if (!taken.some((rect) => overlaps(spot, rect))) return spot;
-    }
-  }
-  return undefined;
-}
-
-/** The box this agent runs in, as the board draws it. */
-const boxRect = (target: Target): Rect => {
-  const box = roomBoxOn({ board: target.board }, target.boxId);
-  return box === undefined ? roomCardRect(target.board) : noteRect(box);
-};
-
-/** The smallest section a card sits in, by its centre. */
-function sectionOf(board: RoomBoard, note: RoomBoardNote): RoomBoardNote | undefined {
-  if (note.section === true) return undefined;
-  const rect = noteRect(note);
-  const cx = rect.x + rect.w / 2;
-  const cy = rect.y + rect.h / 2;
-  return sectionsOf(board)
-    .filter((section) => {
-      const area = noteRect(section);
-      return cx >= area.x && cx <= area.x + area.w && cy >= area.y && cy <= area.y + area.h;
-    })
-    .toSorted((left, right) => {
-      const a = noteRect(left);
-      const b = noteRect(right);
-      return a.w * a.h - b.w * b.h;
-    })[0];
-}
-
-const findSection = (board: RoomBoard, name: string) => {
-  const title = name.trim().toLowerCase();
-  const sections = sectionsOf(board);
-  return (
-    sections.find((section) => section.id === name.trim()) ??
-    sections.find((section) => section.text.trim().toLowerCase() === title)
-  );
-};
-
-/** A card's ref on lines, from what an agent calls it. */
-const refOf = (id: string) =>
-  id === ROOM_BOARD_ROOM_BOX
-    ? roomBoardCardRef(ROOM_BOARD_THREAD_CARD)
-    : id.startsWith("note:") || id.startsWith("card:")
-      ? id
-      : roomBoardNoteRef(id);
-
-/** What an agent calls a card on a line. */
-const idOfRef = (ref: string) =>
-  ref === roomBoardCardRef(ROOM_BOARD_THREAD_CARD)
-    ? ROOM_BOARD_ROOM_BOX
-    : ref.startsWith("note:")
-      ? ref.slice("note:".length)
-      : ref;
-
-const cleanText = (text: string) =>
-  sanitizeLinkedPrompt(text).text.trim().slice(0, ROOM_BOARD_NOTE_MAX_LENGTH);
 
 /**
  * The board a thread's agent works on: the one its own thread or thread box is on. It reads it, and
@@ -289,6 +166,7 @@ const make = Effect.gen(function* () {
         boxId: ROOM_BOARD_ROOM_BOX,
         author: null,
         agent: agent(ROOM_BOARD_ROOM_BOX, room),
+        hasRoomCard: true,
         board: room.board ?? EMPTY_ROOM_BOARD,
       } satisfies Target;
     }
@@ -312,6 +190,7 @@ const make = Effect.gen(function* () {
       boxId: box.boxId,
       author: null,
       agent: agent(box.boxId, room),
+      hasRoomCard: true,
       board: room.board ?? EMPTY_ROOM_BOARD,
     } satisfies Target;
   });
@@ -338,6 +217,7 @@ const make = Effect.gen(function* () {
         ...(box.turnId === undefined ? {} : { turnId: box.turnId }),
         askedBy: box.guestId,
       },
+      hasRoomCard: true,
       board: room.board ?? EMPTY_ROOM_BOARD,
     } satisfies Target;
   });
@@ -439,75 +319,9 @@ const make = Effect.gen(function* () {
     return refused;
   });
 
-  /** A free place for a new card next to the agent's box. */
-  const spotNearBox = (target: Target, size: RoomBoardSize) => {
-    const box = boxRect(target);
-    return freeSpot(
-      size,
-      { x: box.x + box.w + GAP * 2, y: box.y },
-      4,
-      obstacles(target.board, true),
-    );
-  };
-
-  /** A free place in a section, which grows to take it when it is full. */
-  const spotInSection = Effect.fn("RoomBoardAgent.spotInSection")(function* (
-    target: Target,
-    sectionId: string,
-    size: RoomBoardSize,
-  ) {
-    const section = target.board.notes.find((note) => note.id === sectionId);
-    if (section === undefined) return Result.fail("This section is no longer on the board.");
-    const area = noteRect(section);
-    const columns = Math.max(1, Math.floor((area.w - GAP) / (size.w + GAP)));
-    const spot = freeSpot(
-      size,
-      { x: area.x + GAP, y: area.y + SECTION_HEADER },
-      columns,
-      obstacles(target.board, false),
-    );
-    const bottom = spot === undefined ? Infinity : spot.y + spot.h + GAP - area.y;
-    if (spot === undefined || bottom > ROOM_BOARD_MAX_CARD_SIZE) {
-      return Result.fail(`Section "${section.text}" is full. Put the rest in a new section.`);
-    }
-    if (bottom > area.h) {
-      const refused = yield* apply(target, {
-        type: "note.put",
-        noteId: section.id,
-        text: section.text,
-        x: section.x,
-        y: section.y,
-        size: { w: area.w, h: Math.ceil(bottom) },
-      });
-      if (refused !== undefined) return Result.fail(refused);
-    }
-    return Result.succeed(spot);
-  });
-
-  /** The section a name gives, made next to the agent's box when no section has it. */
-  const sectionFor = Effect.fn("RoomBoardAgent.sectionFor")(function* (
-    target: Target,
-    name: string,
-    made: Array<{ readonly id: string; readonly title: string }>,
-  ) {
-    const found = findSection(target.board, name);
-    if (found !== undefined) return Result.succeed(found.id);
-    const title = cleanText(name);
-    if (title === "") return Result.fail("A section needs a title.");
-    const spot = spotNearBox(target, SECTION);
-    if (spot === undefined) return Result.fail("There is no free space near this thread's box.");
-    const id = yield* uuid;
-    const refused = yield* apply(target, {
-      type: "note.put",
-      noteId: id,
-      text: title,
-      x: spot.x,
-      y: spot.y,
-      section: true,
-    });
-    if (refused !== undefined) return Result.fail(refused);
-    made.push({ id, title });
-    return Result.succeed(id);
+  const opsOf = (target: Target): RoomBoardAgentOps<never, never> => ({
+    apply: (change) => apply(target, change),
+    uuid,
   });
 
   const read = Effect.fn("RoomBoardAgent.read")(function* (caller: Caller) {
@@ -518,47 +332,7 @@ const make = Effect.gen(function* () {
       Effect.map((settings) => settings.guestOwnerName),
       Effect.orElseSucceed(() => ""),
     );
-    const nameOf = roomPersonName(target.room, ownerName);
-    const person = (guestId: RoomBoardNote["guestId"]) =>
-      nameOf(guestId) ?? (guestId === undefined ? "the owner" : "a guest");
-    const by = (note: RoomBoardNote) =>
-      note.agent === undefined
-        ? person(note.guestId)
-        : note.agent.boxId === target.boxId
-          ? "you"
-          : `${person(note.guestId)}'s agent`;
-    const board = target.board;
-    const cards = board.notes.filter(isCard);
-    const shown = new Set([
-      roomBoardCardRef(ROOM_BOARD_THREAD_CARD),
-      ...cards.map((note) => roomBoardNoteRef(note.id)),
-    ]);
-    const view: RoomBoardAgentView = {
-      you: target.boxId,
-      cards: [
-        {
-          id: ROOM_BOARD_ROOM_BOX,
-          kind: "thread",
-          text: target.roomTitle.slice(0, ROOM_BOARD_NOTE_MAX_LENGTH),
-          by: person(undefined),
-        },
-        ...cards.map((note) => {
-          const section = sectionOf(board, note);
-          return {
-            id: note.id,
-            kind: note.section === true ? "section" : (note.kind ?? "note"),
-            text: note.text,
-            by: by(note),
-            ...(note.kind === "task" ? { done: note.done === true } : {}),
-            ...(section === undefined ? {} : { section: section.id }),
-          };
-        }),
-      ],
-      lines: (board.edges ?? [])
-        .filter((edge) => shown.has(edge.from) && shown.has(edge.to))
-        .map((edge) => ({ from: idOfRef(edge.from), to: idOfRef(edge.to) })),
-    };
-    return view;
+    return roomBoardAgentView(target, roomPersonName(target.room, ownerName));
   });
 
   const add = Effect.fn("RoomBoardAgent.add")(function* (
@@ -568,46 +342,7 @@ const make = Effect.gen(function* () {
     const away = typeof by === "string" ? yield* changeElsewhere(by, { add: input }) : null;
     if (away !== null) return away;
     const target = yield* targetOf(by);
-    const done: Array<string> = [];
-    const refused: Array<{ readonly card: string; readonly reason: string }> = [];
-    const made: Array<{ readonly id: string; readonly title: string }> = [];
-    const section =
-      input.section === undefined ? undefined : yield* sectionFor(target, input.section, made);
-    if (section !== undefined && Result.isFailure(section)) {
-      refused.push({ card: input.section ?? "", reason: section.failure });
-    }
-    for (const card of input.cards) {
-      const text = cleanText(card.text);
-      if (text === "") {
-        refused.push({ card: card.text, reason: "A card needs some text." });
-        continue;
-      }
-      const size = roomBoardNoteSize(card.task === true ? { kind: "task" } : {});
-      // The cards go next to the box when their section could not be made.
-      const spot =
-        section === undefined || Result.isFailure(section)
-          ? Result.fromNullishOr(
-              spotNearBox(target, size),
-              () => "There is no free space near this thread's box.",
-            )
-          : yield* spotInSection(target, section.success, size);
-      if (Result.isFailure(spot)) {
-        refused.push({ card: text, reason: spot.failure });
-        continue;
-      }
-      const id = yield* uuid;
-      const reason = yield* apply(target, {
-        type: "note.put",
-        noteId: id,
-        text,
-        x: spot.success.x,
-        y: spot.success.y,
-        ...(card.task === true ? { kind: "task" as const } : {}),
-      });
-      if (reason === undefined) done.push(id);
-      else refused.push({ card: text, reason });
-    }
-    return { done, ...(made.length === 0 ? {} : { sections: made }), refused };
+    return yield* roomBoardAgentAdd(target, opsOf(target), input);
   });
 
   const update = Effect.fn("RoomBoardAgent.update")(function* (
@@ -617,85 +352,7 @@ const make = Effect.gen(function* () {
     const away = typeof by === "string" ? yield* changeElsewhere(by, { update: input }) : null;
     if (away !== null) return away;
     const target = yield* targetOf(by);
-    const done: Array<string> = [];
-    const refused: Array<{ readonly card: string; readonly reason: string }> = [];
-    const made: Array<{ readonly id: string; readonly title: string }> = [];
-    for (const change of input.changes) {
-      const refuse = (reason: string) => refused.push({ card: change.id, reason });
-      const note = target.board.notes.find((candidate) => candidate.id === change.id);
-      const room = change.id === ROOM_BOARD_ROOM_BOX;
-      if ((note === undefined || !isCard(note)) && !room) {
-        refuse("No card with this id is on the board. Read the board for the ids.");
-        continue;
-      }
-      const edits =
-        change.text !== undefined || change.done !== undefined || change.section !== undefined;
-      if (edits) {
-        if (note === undefined) {
-          refuse("The room thread's card can only have lines drawn from it.");
-          continue;
-        }
-        const editable = note.section !== true && (note.kind === undefined || note.kind === "task");
-        if (change.text !== undefined && !editable) {
-          refuse("Only a note's or a task's text can be changed.");
-          continue;
-        }
-        if (change.done !== undefined && note.kind !== "task") {
-          refuse("Only a task can be ticked.");
-          continue;
-        }
-        if (change.section !== undefined && (note.section === true || note.kind === "comment")) {
-          refuse("Only a card can go in a section.");
-          continue;
-        }
-        const text = change.text === undefined ? note.text : cleanText(change.text);
-        if (text === "") {
-          refuse("A card needs some text.");
-          continue;
-        }
-        let at = { x: note.x, y: note.y };
-        if (change.section !== undefined) {
-          const section = yield* sectionFor(target, change.section, made);
-          if (Result.isFailure(section)) {
-            refuse(section.failure);
-            continue;
-          }
-          if (sectionOf(target.board, note)?.id !== section.success) {
-            const spot = yield* spotInSection(target, section.success, roomBoardNoteSize(note));
-            if (Result.isFailure(spot)) {
-              refuse(spot.failure);
-              continue;
-            }
-            at = { x: spot.success.x, y: spot.success.y };
-          }
-        }
-        const reason = yield* apply(target, {
-          type: "note.put",
-          noteId: note.id,
-          text,
-          ...at,
-          ...(change.done === undefined ? {} : { done: change.done }),
-        });
-        if (reason !== undefined) {
-          refuse(reason);
-          continue;
-        }
-      }
-      if (change.lineTo !== undefined) {
-        const reason = yield* apply(target, {
-          type: "edge.put",
-          edgeId: yield* uuid,
-          from: refOf(change.id),
-          to: refOf(change.lineTo),
-        });
-        if (reason !== undefined) {
-          refuse(reason);
-          continue;
-        }
-      }
-      done.push(change.id);
-    }
-    return { done, ...(made.length === 0 ? {} : { sections: made }), refused };
+    return yield* roomBoardAgentUpdate(target, opsOf(target), input);
   });
 
   return RoomBoardAgent.of({ read, add, update });

@@ -414,7 +414,11 @@ in the joined thread's header opens it, and their own boxes run on that machine.
 
 A cloud board is kept by the board service instead of on your computer, so it opens and can be shared while every computer is off. **New board** makes one when no computer is connected. When one is, turn on **In the cloud** in the template or project choice.
 
-Everyone on a cloud board is equal: anyone can edit it, rename it and copy its invite link from the header. It has no agents yet, so thread boxes, Ask an agent, Run with an agent, code and pull request windows are only on boards kept on a computer. **Remove from my boards** takes a cloud board off this browser only; its invite link brings it back.
+Everyone on a cloud board is equal: anyone can edit it, rename it and copy its invite link from the header. **Remove from my boards** takes a cloud board off this browser only; its invite link brings it back.
+
+A cloud board has no agent of its own. Each person brings theirs: choose **Thread**, **Ask an agent** or **Attach my agent**, then **Continue on my machine** to add the board to T Code on your computer. Your thread boxes then run on your computer, and only you can prompt them. If this browser has no computer connected, connect one under **Settings → Environments** first. A box whose person is not on the board shows **Offline**.
+
+Templates that use the board's own thread, code windows and pull request windows are only on boards kept on a computer.
 
 ## Remove a guest
 

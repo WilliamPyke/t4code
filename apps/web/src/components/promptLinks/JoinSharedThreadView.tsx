@@ -1,4 +1,8 @@
-import { guestEnvironmentId, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import {
+  guestEnvironmentId,
+  isGuestEnvironment,
+  scopeThreadRef,
+} from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -38,6 +42,7 @@ import { takeRoomArtifactToDraft } from "../chat/roomTaskDraft";
 import { BoardBackdrop } from "../room/BoardChrome";
 import { sortScopedProjectsForSidebar } from "../Sidebar.logic";
 import { Button } from "../ui/button";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { placeLinkedPrompt } from "./linkedPrompt";
@@ -192,7 +197,10 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
       setState({ status: "failed", message: "Connect to one of your machines first." });
       return;
     }
-    setState({ status: "working", title: "Asking for the thread..." });
+    setState({
+      status: "working",
+      title: link.board === true ? "Asking for the board..." : "Asking for the thread...",
+    });
     const result = await previewSharedThread({ environmentId, input: source });
     if (result._tag === "Success") setState({ status: "ready", preview: result.value });
     else if (isAtomCommandInterrupted(result)) setState({ status: "confirm" });
@@ -303,6 +311,15 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
             Continue
           </Button>
         </JoinPage>
+      ) : link.board === true ? (
+        <JoinPage
+          title="Bring your agent to this board?"
+          description={`T Code will ask ${link.host} for the board. Your agent joins it from this computer, on your own provider sign-in.`}
+        >
+          <Button size="sm" onClick={() => void loadPreview()}>
+            Continue
+          </Button>
+        </JoinPage>
       ) : task === undefined ? (
         <JoinPage
           title="Bring this shared thread to your machine?"
@@ -325,9 +342,36 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
     case "working":
       return <JoinPage title={state.title} />;
     case "failed":
-      return <JoinPage title="Could not join the thread" description={state.message} />;
+      return (
+        <JoinPage
+          title={link.board === true ? "Could not join the board" : "Could not join the thread"}
+          description={state.message}
+        />
+      );
     case "ready": {
       const { preview } = state;
+      if (preview.board === true && task === undefined && artifact === undefined) {
+        return (
+          <JoinBoardPage
+            title={preview.title}
+            projects={sortScopedProjectsForSidebar(
+              projects.filter(
+                (candidate) =>
+                  candidate.isScratch !== true &&
+                  candidate.archivedAt == null &&
+                  !isGuestEnvironment(candidate.environmentId),
+              ),
+              threads,
+              "updated_at",
+            )}
+            onJoin={(project) => {
+              if (project === null) return void joinConversationOnly();
+              setState({ status: "working", title: "Joining..." });
+              void join(project, false);
+            }}
+          />
+        );
+      }
       const checkout = preview.checkout;
       // Most recently used first, so the user lands where they last worked on this repository.
       const project =
@@ -383,6 +427,59 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
       );
     }
   }
+}
+
+const NO_PROJECT = "none";
+const projectValue = (project: EnvironmentProject) => `${project.environmentId}:${project.id}`;
+
+/** A cloud board: the person's agent joins it from here, in a project they pick or none. */
+function JoinBoardPage({
+  title,
+  projects,
+  onJoin,
+}: {
+  readonly title: string;
+  readonly projects: ReadonlyArray<EnvironmentProject>;
+  readonly onJoin: (project: EnvironmentProject | null) => void;
+}) {
+  const [value, setValue] = useState(() =>
+    projects[0] === undefined ? NO_PROJECT : projectValue(projects[0]),
+  );
+  const items = [
+    ...projects.map((project) => ({ value: projectValue(project), label: project.title })),
+    { value: NO_PROJECT, label: "No project" },
+  ];
+  return (
+    <JoinPage
+      title={`Bring your agent to "${title}"?`}
+      description="Your agent joins the board from this computer and runs here, on your own provider sign-in. Everyone on the board sees what it does. Pick the project it works in."
+    >
+      <Select
+        value={value}
+        onValueChange={(next) => {
+          if (next) setValue(next);
+        }}
+        items={items}
+      >
+        <SelectTrigger aria-label="Project your agent works in">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectPopup>
+          {items.map((item) => (
+            <SelectItem key={item.value} value={item.value}>
+              {item.label}
+            </SelectItem>
+          ))}
+        </SelectPopup>
+      </Select>
+      <Button
+        size="sm"
+        onClick={() => onJoin(projects.find((project) => projectValue(project) === value) ?? null)}
+      >
+        Join board
+      </Button>
+    </JoinPage>
+  );
 }
 
 function JoinPage({

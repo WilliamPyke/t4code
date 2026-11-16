@@ -1,4 +1,9 @@
-import { ROOM_BOARD_MAX_NOTES, ROOM_BOARD_THREAD_CARD, type RoomBoard } from "@t3tools/contracts";
+import {
+  ROOM_BOARD_MAX_NOTES,
+  ROOM_BOARD_THREAD_CARD,
+  type RoomBoard,
+  roomBoardCardRef,
+} from "@t3tools/contracts";
 import { EMPTY_ROOM_BOARD, applyRoomBoardChange } from "@t3tools/shared/roomBoard";
 import * as Result from "effect/Result";
 import { describe, expect, it } from "vite-plus/test";
@@ -199,12 +204,19 @@ describe("newBoardProject", () => {
 describe("newBoardStart", () => {
   const a = { environmentId: "env-a", id: "project-1" };
   const b = { environmentId: "env-b", id: "project-2" };
-  const start = (operable: ReadonlyArray<string>, cloud: boolean) =>
+  const start = (
+    operable: ReadonlyArray<string>,
+    cloud: boolean,
+    connecting: ReadonlyArray<string> = [],
+    waited = false,
+  ) =>
     newBoardStart({
       projects: [a, b],
       boards: [],
       lastUsed: null,
       operable: new Set(operable),
+      connecting: new Set(connecting),
+      waited,
       cloud,
     });
 
@@ -217,20 +229,34 @@ describe("newBoardStart", () => {
     expect(start(["env-a", "env-b"], true)).toEqual({ kind: "ask" });
     expect(start(["env-c"], true)).toEqual({ kind: "none" });
   });
+
+  it("waits for a machine still connecting before choosing the cloud", () => {
+    expect(start([], true, ["env-a"])).toEqual({ kind: "wait" });
+    expect(start([], false, ["env-a"])).toEqual({ kind: "wait" });
+    // Still not ready after the wait: the cloud, as with no machine at all.
+    expect(start([], true, ["env-a"], true)).toEqual({ kind: "cloud" });
+    // One ready machine is enough; the other is not waited for.
+    expect(start(["env-b"], true, ["env-a"])).toEqual({ kind: "use", project: b });
+  });
 });
 
 describe("cloud board templates", () => {
-  it("takes only templates with no agent in them, without the board's own thread box", () => {
+  it("takes the templates that do not need the board's own thread box, and leaves it out", () => {
     const fits = BOARD_TEMPLATES.filter(
       (template) => cloudBoardTemplateChanges(template, () => "id") !== null,
     ).map((template) => template.id);
     expect(fits).toContain(BLANK_BOARD_TEMPLATE.id);
-    expect(fits).toEqual(["blank", "retro"]);
+    // Their own thread boxes run on the agent their maker brings to the board.
+    expect(fits).toEqual(["blank", "research-agents", "build-agents", "retro"]);
     for (const template of BOARD_TEMPLATES) {
       const changes = cloudBoardTemplateChanges(template, () => "id") ?? [];
       expect(changes.filter((change) => change.type === "card.move")).toEqual([]);
       expect(
-        changes.filter((change) => change.type === "note.put" && change.kind === "thread"),
+        changes.filter(
+          (change) =>
+            change.type === "edge.put" &&
+            [change.from, change.to].includes(roomBoardCardRef(ROOM_BOARD_THREAD_CARD)),
+        ),
       ).toEqual([]);
     }
   });

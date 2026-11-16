@@ -2125,13 +2125,34 @@ export interface BoardThreadBox {
 export function boardThreadBoxes(
   board: RoomBoard,
   roomTitle: string,
+  roomThread = true,
 ): ReadonlyArray<BoardThreadBox> {
   return [
-    { id: ROOM_BOARD_ROOM_BOX, guestId: undefined, title: roomTitle },
+    ...(roomThread ? [{ id: ROOM_BOARD_ROOM_BOX, guestId: undefined, title: roomTitle }] : []),
     ...board.notes
       .filter((note) => note.kind === "thread")
       .map((note) => ({ id: note.id, guestId: note.guestId, title: note.text.trim() })),
   ];
+}
+
+/**
+ * A board the cloud host keeps, on nobody's machine: it has no thread, owner, code or pull
+ * requests of its own. `agents`: people can bring their own machine's agent to it.
+ */
+export interface RoomBoardCloud {
+  readonly agents: boolean;
+}
+
+/** What a room's board can hold, from where it is kept. */
+export function roomBoardHolds(cloud: RoomBoardCloud | undefined) {
+  return {
+    /** The room's own thread card and box, its people's cards, and tasks for its owner. */
+    room: cloud === undefined,
+    /** Thread boxes and the cards of agents that ran. */
+    agents: cloud === undefined || cloud.agents,
+    /** Code and pull request windows, which the owner's machine reads. */
+    windows: cloud === undefined,
+  };
 }
 
 /** Whether this person may prompt a box: only the person it belongs to. */

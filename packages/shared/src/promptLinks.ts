@@ -208,6 +208,8 @@ export interface JoinLink {
   readonly token: string;
   readonly task?: JoinLinkTask;
   readonly artifact?: JoinLinkArtifact;
+  /** Names a cloud board, so the page speaks of one before asking its host anything. */
+  readonly board?: true;
 }
 
 export function parseJoinLink(search: string): PromptLinkResult<JoinLink> {
@@ -219,7 +221,12 @@ export function parseJoinLink(search: string): PromptLinkResult<JoinLink> {
   }
   const taskId = optionalParam(params, "task");
   const artifactId = optionalParam(params, "artifact");
-  if (taskId === null && artifactId === null) return { ok: true, value: { host, token } };
+  if (taskId === null && artifactId === null) {
+    return {
+      ok: true,
+      value: params.get("board") === "1" ? { host, token, board: true } : { host, token },
+    };
+  }
   const shareId = optionalParam(params, "share");
   const prompt = readPrompt(params);
   if (!prompt.ok) return prompt;
@@ -255,10 +262,12 @@ export function buildJoinLink(input: {
     readonly artifactId: string;
     readonly text: string;
   };
+  readonly board?: boolean;
 }): string {
   const url = new URL("/join", input.origin ?? DEFAULT_HOSTED_APP_URL);
   url.searchParams.set("host", input.host);
   url.searchParams.set("token", input.token);
+  if (input.board === true) url.searchParams.set("board", "1");
   if (input.task) {
     url.searchParams.set("share", input.task.shareId);
     url.searchParams.set("task", input.task.taskId);

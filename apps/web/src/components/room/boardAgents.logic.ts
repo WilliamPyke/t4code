@@ -54,7 +54,9 @@ export function boardAgentEndOf(
 /** Where a box is, as the Agents panel says it. */
 export type BoardAgentStatus =
   | { readonly kind: "needs-you"; readonly need: "request" | "approval" }
-  | { readonly kind: "working" | "queued" | "waiting" | "idle" | BoardAgentOutcome };
+  | {
+      readonly kind: "working" | "queued" | "waiting" | "idle" | "offline" | BoardAgentOutcome;
+    };
 
 /**
  * A box's state for this viewer. Something only they can answer comes first: their own agent's
@@ -71,6 +73,8 @@ export function boardAgentStatus(input: {
   readonly ended: BoardAgentOutcome | undefined;
   /** It has answered at least once. */
   readonly answered: boolean;
+  /** No machine of its person's can run it now. */
+  readonly offline?: boolean | undefined;
   readonly viewer: string | null;
 }): BoardAgentStatus {
   const { run, viewer } = input;
@@ -81,6 +85,7 @@ export function boardAgentStatus(input: {
   if (run?.phase === "approval") return { kind: "waiting" };
   if (run !== undefined) return { kind: run.phase === "queued" ? "queued" : "working" };
   if (input.requests > 0) return { kind: "waiting" };
+  if (input.offline === true) return { kind: "offline" };
   if (input.ended !== undefined) return { kind: input.ended };
   return { kind: input.answered ? "done" : "idle" };
 }
@@ -112,6 +117,8 @@ export function boardAgentStatusLabel(
       return "Done";
     case "idle":
       return "Idle";
+    case "offline":
+      return "Offline";
   }
 }
 

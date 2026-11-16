@@ -37,16 +37,19 @@ import { registerCommands } from "~/shortcuts/dispatcher";
 import { newThreadId, randomUUID } from "~/lib/utils";
 import { resolveProjectDefaultProviderModelSelection } from "~/providerInstances";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
-import { useProjects, useThreadShells } from "~/state/entities";
+import { readProjects, useProjects, useThreadShells } from "~/state/entities";
 import {
   readGuestOnly,
   useEnvironmentProviders,
   useEnvironments,
   usePrimaryEnvironmentId,
 } from "~/state/environments";
+import { environmentPresentations } from "~/state/presentation";
 import { serverEnvironment } from "~/state/server";
-import { useEnvironmentsWithScope } from "~/state/session";
+import { environmentSession, sessionHasScope } from "~/state/session";
+import { environmentShell } from "~/state/shell";
 import { threadEnvironment } from "~/state/threads";
+import { waitForAtomValue } from "~/state/waitForAtomValue";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useOrchestrationCommand } from "~/state/use-orchestration-command";
 
@@ -129,14 +132,52 @@ const hasCloudBoards = () => cloudBoardsOrigin() !== null;
 const fitsCloud = (template: BoardTemplate) =>
   cloudBoardTemplateChanges(template, () => "") !== null;
 
-/** The machines this browser may make a board on now: connected, and allowed to. */
-function useOperableEnvironments() {
-  const { environments } = useEnvironments();
-  return useEnvironmentsWithScope(
-    environments.filter((entry) => !isGuestEnvironment(entry.environmentId)),
-    AuthOrchestrationOperateScope,
-  );
-}
+// A machine in any other phase is unreachable for now, so New board does not wait for it.
+const STILL_CONNECTING = new Set(["available", "connecting", "connected"]);
+
+/**
+ * The machines this browser keeps: those it may make a board on now (allowed to, projects
+ * loaded), and those that may yet, whose session is still loading.
+ */
+const newBoardMachinesAtom = Atom.make((get) => {
+  const operable = new Set<string>();
+  const connecting = new Set<string>();
+  for (const [environmentId, presentation] of get(environmentPresentations.presentationsAtom)) {
+    if (isGuestEnvironment(environmentId)) continue;
+    const session = get(environmentSession.sessionStateAtom(environmentId));
+    const granted = sessionHasScope(session, AuthOrchestrationOperateScope);
+    if (granted && get(environmentShell.hasSnapshotAtom(environmentId))) {
+      operable.add(environmentId);
+    } else if (
+      (granted || session._tag === "Initial") &&
+      STILL_CONNECTING.has(presentation.connection.phase)
+    ) {
+      connecting.add(environmentId);
+    }
+  }
+  return { operable, connecting };
+}).pipe(Atom.withLabel("boards:new-board-machines"));
+
+const useOperableEnvironments = () => useAtomValue(newBoardMachinesAtom).operable;
+
+// Long enough for a saved machine's session to load after the page does.
+const MACHINE_WAIT_MS = 6_000;
+
+const newBoardWaitingAtom = Atom.make(false).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("boards:new-board-waiting"),
+);
+/** Whether New board is waiting for a machine still connecting before choosing where to go. */
+export const useNewBoardWaiting = () => useAtomValue(newBoardWaitingAtom);
+
+/** Waits until a machine can take a board or none is still connecting; never past the limit. */
+const waitForMachines = () =>
+  waitForAtomValue({
+    registry: appAtomRegistry,
+    atom: newBoardMachinesAtom,
+    predicate: (machines) => machines.operable.size > 0 || machines.connecting.size === 0,
+    timeoutMs: MACHINE_WAIT_MS,
+  });
 
 /** Where a board opens right after it is made: full size, no conversation beside it. */
 const newBoardLocation = (ref: ScopedThreadRef) => ({
@@ -253,7 +294,7 @@ function useCreateCloudBoard() {
       toastManager.add({
         type: "error",
         title: "Could not start a board",
-        description: "This template needs an agent, which a cloud board does not have yet.",
+        description: "This template needs a board on your computer.",
       });
       return false;
     }
@@ -296,16 +337,30 @@ export function useStartNewBoard() {
   const createBoard = useCreateBoard();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { scratchEnvironmentId, openScratchProject } = useScratchProject();
-  const operable = useOperableEnvironments();
   const createCloudBoard = useCreateCloudBoard();
+  const machines = useAtomValue(newBoardMachinesAtom);
   return async (template: BoardTemplate = BLANK_BOARD_TEMPLATE) => {
-    const decision = newBoardStart({
-      projects,
-      boards: listHomeBoards({ threads, joined: [], teams: [], isOwnEnvironment: () => true }),
-      lastUsed: readLastProject(),
-      operable,
-      cloud: hasCloudBoards(),
-    });
+    if (appAtomRegistry.get(newBoardWaitingAtom)) return;
+    const decide = (now: typeof machines, waited: boolean) =>
+      newBoardStart({
+        // After the wait, read again: the machine that finished connecting brought its projects.
+        projects: waited ? readProjects() : projects,
+        boards: listHomeBoards({ threads, joined: [], teams: [], isOwnEnvironment: () => true }),
+        lastUsed: readLastProject(),
+        ...now,
+        waited,
+        cloud: hasCloudBoards(),
+      });
+    let decision = decide(machines, false);
+    if (decision.kind === "wait") {
+      appAtomRegistry.set(newBoardWaitingAtom, true);
+      try {
+        await waitForMachines();
+        decision = decide(appAtomRegistry.get(newBoardMachinesAtom), true);
+      } finally {
+        appAtomRegistry.set(newBoardWaitingAtom, false);
+      }
+    }
     if (decision.kind === "cloud") {
       await createCloudBoard(template);
       return;
@@ -453,9 +508,10 @@ function NewBoardProjectPicker({ template }: { readonly template: BoardTemplate 
 function NewBoardTemplatePicker() {
   const startNewBoard = useStartNewBoard();
   const createCloudBoard = useCreateCloudBoard();
-  const operable = useOperableEnvironments();
+  const machines = useAtomValue(newBoardMachinesAtom);
   // With no machine to make it on, New board makes it in the cloud anyway.
-  const cloudOnly = hasCloudBoards() && operable.size === 0;
+  const cloudOnly =
+    hasCloudBoards() && machines.operable.size === 0 && machines.connecting.size === 0;
   const [inCloud, setInCloud] = useState(false);
   const cloud = cloudOnly || inCloud;
   return (
@@ -487,13 +543,13 @@ function NewBoardTemplatePicker() {
                   }}
                 >
                   <span className="border-b border-board-hairline">
-                    <BoardThumbnail shapes={boardTemplateShapes(template)} />
+                    <BoardThumbnail shapes={boardTemplateShapes(template, cloud)} />
                   </span>
                   <span className="flex flex-col gap-0.5 p-2.5">
                     <span className="text-sm font-semibold">{template.name}</span>
                     <span className="text-xs text-muted-foreground">
                       {cloud && !fitsCloud(template)
-                        ? "Needs an agent, which a cloud board does not have yet."
+                        ? "Needs a board on your computer."
                         : cloud
                           ? (template.cloudDescription ?? template.description)
                           : template.description}

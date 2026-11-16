@@ -215,6 +215,18 @@
       "types": "./src/roomBoard.ts",
       "import": "./src/roomBoard.ts"
     },
+    "./guestRoom": {
+      "types": "./src/guestRoom.ts",
+      "import": "./src/guestRoom.ts"
+    },
+    "./roomUpdates": {
+      "types": "./src/roomUpdates.ts",
+      "import": "./src/roomUpdates.ts"
+    },
+    "./roomBoardAgent": {
+      "types": "./src/roomBoardAgent.ts",
+      "import": "./src/roomBoardAgent.ts"
+    },
     "./oauthScope": {
       "types": "./src/oauthScope.ts",
       "import": "./src/oauthScope.ts"

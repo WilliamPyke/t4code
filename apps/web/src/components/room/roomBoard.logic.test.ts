@@ -140,6 +140,7 @@ import {
   putBoardEdit,
   resizeBoardFromLeft,
   resolveBoard,
+  roomBoardHolds,
   roomCodeStatus,
   roomFetchCommand,
   screenToBoard,
@@ -1988,6 +1989,18 @@ describe("thread boxes", () => {
       { id: "b2", label: "Your agent · Untitled thread" },
     ]);
     expect(boardCommentAskBoxes(boxes, eve)).toEqual([]);
+    // A cloud board has no thread of its own, so its boxes are only people's.
+    expect(boardThreadBoxes(shared, "Launch", false).map((each) => each.id)).toEqual(["b1", "b2"]);
+  });
+
+  it("holds agents on a cloud board only when its host lets people bring theirs", () => {
+    expect(roomBoardHolds(undefined)).toEqual({ room: true, agents: true, windows: true });
+    expect(roomBoardHolds({ agents: true })).toEqual({ room: false, agents: true, windows: false });
+    expect(roomBoardHolds({ agents: false })).toEqual({
+      room: false,
+      agents: false,
+      windows: false,
+    });
   });
 
   it("says whose agent runs a box, a guest's by who ran its last turn", () => {

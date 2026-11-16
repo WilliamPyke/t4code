@@ -79,6 +79,16 @@ describe("boardAgentStatus", () => {
       { kind: "done" },
     ],
     ["a box never prompted", { ...idle, run: undefined, viewer: null }, { kind: "idle" }],
+    [
+      "a box whose person's machine is away, after it ended",
+      { ...idle, ended: "done", answered: true, offline: true, run: undefined, viewer: null },
+      { kind: "offline" },
+    ],
+    [
+      "a box whose machine is away still shows the run it reports",
+      { ...idle, offline: true, run: run({ guestId: sam }), viewer: null },
+      { kind: "working" },
+    ],
   ])("%s", (_, input, expected) => {
     expect(boardAgentStatus(input)).toEqual(expected);
   });

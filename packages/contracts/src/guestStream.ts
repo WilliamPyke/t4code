@@ -53,6 +53,11 @@ export const GuestShareView = Schema.Struct({
    * or agent of its own. Absent for a room an owner's machine serves.
    */
   cloud: Schema.optional(Schema.Boolean),
+  /**
+   * With `cloud`: people can bring their own machine's agent to the board (handoff, export and
+   * the room routes), as on a room an owner's machine serves. Absent from an older cloud host.
+   */
+  machines: Schema.optional(Schema.Literal(true)),
   model: GuestThreadModel,
 });
 export type GuestShareView = typeof GuestShareView.Type;

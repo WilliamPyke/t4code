@@ -134,6 +134,11 @@ describe("link round trips", () => {
       value: { host: "sam.t3.test", token: "payload.signature" },
     });
     expect(parseJoinLink("?host=sam.t3.test").ok).toBe(false);
+    const board = buildJoinLink({ host: "sam.t3.test", token: "payload.signature", board: true });
+    expect(parseJoinLink(new URL(board).search)).toEqual({
+      ok: true,
+      value: { host: "sam.t3.test", token: "payload.signature", board: true },
+    });
 
     // A task taken to the user's own agent comes along as a draft, without hidden characters.
     const task = buildJoinLink({

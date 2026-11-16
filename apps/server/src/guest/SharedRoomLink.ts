@@ -93,7 +93,7 @@ import { forkParked } from "../serverActivation.ts";
 import { threadRoomOf } from "../orchestration-v2/GuestShareDecider.ts";
 import * as RoomBoxes from "./RoomBoxes.ts";
 import * as RoomCodeDiffs from "./RoomCodeDiffs.ts";
-import { clip } from "./roomUpdates.ts";
+import { clip } from "@t3tools/shared/roomUpdates";
 
 const REQUEST_TIMEOUT = Duration.seconds(20);
 // A turn still running is told again this often, well inside the room's 10 minute expiry.
@@ -139,6 +139,12 @@ const sanitizeUpdate = (update: RoomUpdate): ReadonlyArray<RoomUpdate> => {
   return text === "" ? [] : [{ ...rest, text, ...(name === "" ? {} : { name }) }];
 };
 
+/** `T3CODE_CLOUD_BOARDS_URL`, the cloud board host as the web app's `VITE_CLOUD_BOARDS_URL` names it. */
+const configuredCloudBoardsUrl = (): URL | null => {
+  const configured = process.env.T3CODE_CLOUD_BOARDS_URL?.trim() ?? "";
+  return configured !== "" && URL.canParse(configured) ? new URL(configured) : null;
+};
+
 /**
  * Where a link's host serves a guest route, or null. The host comes from a link someone sent, so
  * only a public-looking name is called: no port, path, address, or local name, which would
@@ -146,6 +152,9 @@ const sanitizeUpdate = (update: RoomUpdate): ReadonlyArray<RoomUpdate> => {
  */
 export function sharedThreadRouteUrl(host: string, route: string): string | null {
   const name = host.toLowerCase();
+  // A cloud board host this server's operator named, such as a local one for testing.
+  const cloud = configuredCloudBoardsUrl();
+  if (cloud !== null && cloud.host === name) return `${cloud.origin}${route}`;
   if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(name) || /^[0-9.]+$/.test(name)) return null;
   if (name.endsWith(".local") || name.endsWith(".localhost") || name.endsWith(".internal")) {
     return null;

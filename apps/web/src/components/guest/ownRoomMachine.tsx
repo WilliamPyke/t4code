@@ -40,7 +40,8 @@ export function useOwnRoomMachine(share: { readonly host: string; readonly share
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- asks the guest's own servers which of them joined this room
   useEffect(() => {
     let current = true;
-    void (async () => {
+    let found = false;
+    const ask = async () => {
       for (const environmentId of environmentKey === "" ? [] : environmentKey.split("\n")) {
         const result = await findSharedRoom({
           environmentId: environmentId as EnvironmentId,
@@ -48,6 +49,7 @@ export function useOwnRoomMachine(share: { readonly host: string; readonly share
         });
         if (!current) return;
         if (result._tag === "Success" && result.value.threadId !== null) {
+          found = true;
           setMachine({
             environmentId: environmentId as EnvironmentId,
             threadId: result.value.threadId,
@@ -57,9 +59,16 @@ export function useOwnRoomMachine(share: { readonly host: string; readonly share
         }
       }
       setMachine(null);
-    })();
+    };
+    void ask();
+    // Until one is found: the guest may join this room on their machine in another tab.
+    const again = () => {
+      if (!found && document.visibilityState === "visible") void ask();
+    };
+    document.addEventListener("visibilitychange", again);
     return () => {
       current = false;
+      document.removeEventListener("visibilitychange", again);
     };
   }, [environmentKey, findSharedRoom, share.host, share.shareId]);
   return {
