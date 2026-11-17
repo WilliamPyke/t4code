@@ -2,6 +2,7 @@ import { ClerkProvider } from "@clerk/react";
 import type { ReactNode } from "react";
 
 import { ManagedRelayAuthProvider } from "../../cloud/managedAuth";
+import { BoardAccountBridge } from "./BoardAccountBridge";
 import { clerkAppearance } from "./clerkAppearance";
 
 /** Lazy-load Clerk so cloudless local mode never downloads it. */
@@ -15,6 +16,7 @@ export default function BrowserManagedAuthShell({
   return (
     <ClerkProvider appearance={clerkAppearance} publishableKey={publishableKey}>
       <ManagedRelayAuthProvider>{children}</ManagedRelayAuthProvider>
+      <BoardAccountBridge />
     </ClerkProvider>
   );
 }

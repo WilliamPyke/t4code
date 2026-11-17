@@ -1,7 +1,10 @@
 import {
+  GuestId,
+  GuestShareId,
   ROOM_BOARD_MAX_NOTES,
   ROOM_BOARD_THREAD_CARD,
   type RoomBoard,
+  ThreadId,
   roomBoardCardRef,
 } from "@t3tools/contracts";
 import { EMPTY_ROOM_BOARD, applyRoomBoardChange } from "@t3tools/shared/roomBoard";
@@ -19,6 +22,7 @@ import {
   type NewBoardPlace,
   type OwnBoardSource,
   boardThumbnail,
+  joinedBoardSources,
   listHomeBoards,
   newBoardProject,
   newBoardProjectKey,
@@ -27,6 +31,8 @@ import {
   teamBoardShapes,
 } from "./boardsHome.logic";
 import { boardCardBox, boardConnector } from "../room/roomBoard.logic";
+
+const NOW_ISO = "2026-11-17T00:00:00.000Z";
 
 const thread = (id: string, extra: Partial<OwnBoardSource> = {}): OwnBoardSource => ({
   environmentId: "env-a",
@@ -112,6 +118,41 @@ describe("listHomeBoards", () => {
       query: "ada",
     });
     expect(byOwner.map((board) => board.title)).toEqual(["Sprint"]);
+  });
+
+  it("adds the signed-in account's boards this browser has no session on, marking those shared", () => {
+    const local = [
+      { shareId: "here", threadId: "t-here", title: "Here", joinedAt: NOW_ISO, cloud: true },
+      { shareId: "machine", threadId: "t-m", title: "Machine", joinedAt: NOW_ISO },
+    ];
+    const account = (shareId: string, maker: boolean) => ({
+      shareId: GuestShareId.make(shareId),
+      threadId: ThreadId.make(`t-${shareId}`),
+      title: shareId,
+      guestId: GuestId.make("g"),
+      maker,
+      addedAt: NOW_ISO,
+    });
+    // Signed out: exactly this browser's boards.
+    expect(joinedBoardSources({ local, listed: null })).toBe(local);
+    const boards = listHomeBoards({
+      threads: [],
+      joined: joinedBoardSources({
+        local,
+        listed: [account("here", false), account("elsewhere", true)],
+      }),
+      teams: [],
+      isOwnEnvironment: () => true,
+    });
+    expect(
+      boards.map((board) =>
+        board.kind === "joined" ? [board.shareId, board.shared, board.remote] : null,
+      ),
+    ).toEqual([
+      ["here", true, false],
+      ["machine", false, false],
+      ["elsewhere", false, true],
+    ]);
   });
 });
 

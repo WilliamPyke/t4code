@@ -132,7 +132,6 @@ import {
   panToCentre,
   panToShow,
   panToShowAdded,
-  parseBoardLink,
   pinnedCommentSpot,
   placeBoardCards,
   placeBoardItem,
@@ -958,27 +957,7 @@ describe("followBoardView", () => {
   });
 });
 
-describe("parseBoardLink", () => {
-  it("reads GitHub pull requests, issues and files short, and other links by host and path", () => {
-    const shown = (url: string) => {
-      const link = parseBoardLink(url);
-      return link === null ? null : [link.title, link.detail];
-    };
-    expect(shown("https://github.com/acme/app/pull/123/files")).toEqual([
-      "acme/app #123",
-      "Pull request",
-    ]);
-    expect(shown("https://github.com/acme/app/issues/9")).toEqual(["acme/app #9", "Issue"]);
-    expect(shown("https://github.com/acme/app/blob/main/src/a%20b.ts")).toEqual([
-      "src/a b.ts",
-      "acme/app · main",
-    ]);
-    expect(shown("https://github.com/acme/app")).toEqual(["acme/app", "github.com"]);
-    expect(shown("https://www.example.com/docs/setup?x=1")).toEqual(["example.com", "/docs/setup"]);
-    expect(shown("javascript:alert(1)")).toBeNull();
-    expect(shown("ftp://example.com/file")).toBeNull();
-  });
-
+describe("boardUrlIn", () => {
   it("takes pasted text as a link only when it is one http or https URL", () => {
     expect(boardUrlIn("  https://example.com/a  ")).toBe("https://example.com/a");
     expect(boardUrlIn("see https://example.com/a")).toBeNull();
@@ -1460,6 +1439,11 @@ describe("boardPromptContext", () => {
         [
           note("task", { text: "Fix login", kind: "task", done: true, guestId: sam }),
           note("link", { text: "Spec", kind: "link", url: "https://example.com/spec" }),
+          note("figma", {
+            text: "",
+            kind: "link",
+            url: "https://www.figma.com/design/BAZsTPbh6W1r66Bdo/Checkout-flow",
+          }),
           note("old", { text: "Why?", pinnedTo: "m1", guestId: sam }),
           note("new", { text: "Agreed", pinnedTo: "m2", quote: "Use a 15 minute TTL" }),
           note("page", { text: "Mockup", kind: "artifact", artifact }),
@@ -1474,7 +1458,7 @@ describe("boardPromptContext", () => {
           note("other", { text: "", kind: "artifact" }),
         ],
         [
-          ...["task", "link", "old", "new", "page", "code", "pr"].map((id) =>
+          ...["task", "link", "figma", "old", "new", "page", "code", "pr"].map((id) =>
             arrow(`note:${id}`, "card:thread"),
           ),
           arrow("card:thread", "note:task"),
@@ -1487,7 +1471,12 @@ describe("boardPromptContext", () => {
     );
     expect(context.cards.map(({ label, text }) => [label, text])).toEqual([
       ["Task from You", "Fix login\nStatus: done"],
-      ["Link from Owner", "https://example.com/spec\nSpec"],
+      ["Link from Owner", "Spec\nhttps://example.com/spec"],
+      // An embed goes as its source, title and address, for the agent to open with its own tools.
+      [
+        "Figma link from Owner",
+        "Checkout flow\nhttps://www.figma.com/design/BAZsTPbh6W1r66Bdo/Checkout-flow",
+      ],
       ["Comment from You on a reply", 'On the reply: "The token TTL is 900s."\nWhy?'],
       ["Comment from Owner on a reply", 'On the reply: "Use a 15 minute TTL"\nAgreed'],
       ['Artifact "Mockup"', "Mockup\n\n<!doctype html><p>Hi</p>"],
@@ -1513,6 +1502,7 @@ describe("boardPromptContext", () => {
     expect(context.cards.map(({ sharedLabel, excerpt }) => [sharedLabel, excerpt])).toEqual([
       ["Task from Sam", "Fix login"],
       ["Link from the owner", "Spec"],
+      ["Figma link from the owner", "Checkout flow"],
       ["Comment from Sam on a reply", "Why?"],
       ["Comment from the owner on a reply", "Agreed"],
       ['Artifact "Mockup"', ""],
@@ -1857,6 +1847,13 @@ describe("boardCardsLine", () => {
   it("counts the same card label of another kind without making up a plural", () => {
     expect(boardCardsLine(['Artifact "Plan"', 'Artifact "Plan"'], { guests, viewer: null })).toBe(
       'Artifact "Plan" (2)',
+    );
+  });
+
+  it("counts links by their source", () => {
+    const links = ["Figma link from Sam", "Figma link from Sam", "Google Sheets link from Sam"];
+    expect(boardCardsLine(links, { guests, viewer: sam })).toBe(
+      "2 Figma links from You, Google Sheets link from You",
     );
   });
 });

@@ -1,0 +1,371 @@
+---
+import BoardScene from "../components/BoardScene.astro";
+import Icon from "../components/Icon.astro";
+import Layout from "../layouts/Layout.astro";
+import { APP_URL } from "../lib/site";
+---
+
+<Layout>
+  <section class="hero">
+    <div class="wrap">
+      <span class="eyebrow"><span class="eyebrow__tag">Beta</span>Free while in beta</span>
+      <h1>Your team and your AI agents, on <em>one live board.</em></h1>
+      <p class="hero__lede">
+        Tinkjam is where designers, PMs and engineers work side by side with their agents. Pin
+        notes, draw lines, and watch pages and prototypes change as the agents work.
+      </p>
+      <div class="hero__ctas">
+        <a class="btn btn--primary" href={APP_URL}>Start a board</a>
+        <a class="btn btn--ghost" href={APP_URL}>Sign in</a>
+      </div>
+      <div class="hero__board">
+        <BoardScene />
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="what" aria-labelledby="what-title">
+    <div class="wrap">
+      <div class="section__head">
+        <p class="kicker">What it is</p>
+        <h2 id="what-title">A shared board where everyone can see the agents work.</h2>
+        <p class="section__lede">
+          No more pasting chat screenshots into a thread. The notes, the agents and the things
+          they make all live in one place your whole team can follow.
+        </p>
+      </div>
+
+      <div class="features">
+        <article class="feature">
+          <div class="feature__art fa-agents" aria-hidden="true">
+            <div class="fa-agent">
+              <span class="agent-glyph"><Icon name="spark" /></span>
+              <span>Claude<small>Maya's agent</small></span>
+            </div>
+            <div class="fa-agent fa-agent--b">
+              <span class="agent-glyph agent-glyph--codex"><Icon name="spark" /></span>
+              <span>Codex<small>Sam's agent</small></span>
+            </div>
+            <div class="fa-agent fa-agent--c fa-agent--yours">
+              <span class="agent-glyph" style="background:var(--maya)"><Icon name="spark" /></span>
+              <span>Yours<small>Any agent you use</small></span>
+            </div>
+          </div>
+          <h3>Everyone brings their own agent</h3>
+          <p>
+            Connect Claude, Codex or another agent you already use. Each one becomes a box on the
+            board, and the whole team can watch it think, write and change things.
+          </p>
+        </article>
+
+        <article class="feature">
+          <div class="feature__art fa-context" aria-hidden="true">
+            <div class="fa-sticky">Use the friendlier tone from the brief.</div>
+            <svg class="fa-wire" viewBox="0 0 64 40"><path d="M4 12C34 12 30 28 60 28"></path></svg>
+            <div class="fa-box">
+              Claude
+              <span class="chip"><Icon name="pin" />1 note</span>
+            </div>
+          </div>
+          <h3>Notes become context</h3>
+          <p>
+            Pin a sticky note to an agent or an artifact. Draw a line, and the note becomes part
+            of what the agent reads.
+          </p>
+        </article>
+
+        <article class="feature">
+          <div class="feature__art fa-artifact" aria-hidden="true">
+            <div class="fa-page">
+              <b>Pricing page</b>
+              <i style="width:90%"></i>
+              <i class="add" style="width:76%"></i>
+              <i class="add" style="width:58%"></i>
+              <i style="width:66%"></i>
+            </div>
+            <span class="pill pill--live"><span class="pill__dot"></span>Live</span>
+          </div>
+          <h3>Artifacts change while you watch</h3>
+          <p>
+            Pages, docs and prototypes land on the board and update live as agents edit them.
+            Anyone can point their agent at anyone's artifact.
+          </p>
+        </article>
+
+        <article class="feature">
+          <div class="feature__art fa-send" aria-hidden="true">
+            <div class="draft">
+              <div class="draft__label"><Icon name="pin" />Draft from Priya</div>
+              <div class="draft__foot">
+                <span>Waiting for you</span>
+                <span class="mini-btn">Edit</span>
+                <span class="mini-btn mini-btn--send">Send</span>
+              </div>
+            </div>
+          </div>
+          <h3>Your agent, your call</h3>
+          <p>
+            Teammates can suggest work for your agent, but their words never reach it until you
+            press Send. You stay in charge of your own agent and your own subscription.
+          </p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--tint" id="how" aria-labelledby="how-title">
+    <div class="wrap">
+      <div class="section__head section__head--center">
+        <p class="kicker">How it works</p>
+        <h2 id="how-title">Up and running in three steps.</h2>
+      </div>
+      <ol class="steps">
+        <li class="step">
+          <span class="step__num" aria-hidden="true">1</span>
+          <h3>Start a board</h3>
+          <p>
+            Sign in and start a board. It lives in the cloud, so it stays open for your team even
+            when your laptop is closed.
+          </p>
+        </li>
+        <li class="step">
+          <span class="step__num" aria-hidden="true">2</span>
+          <h3>Invite your team</h3>
+          <p>
+            Share the board. Designers, PMs and engineers join the same space and see each other's
+            cursors, notes and lines as they happen.
+          </p>
+        </li>
+        <li class="step">
+          <span class="step__num" aria-hidden="true">3</span>
+          <h3>Bring your agents</h3>
+          <p>
+            Each person connects the agent they already use, running on their own computer. It
+            shows up as a box everyone can follow.
+          </p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="section" id="context" aria-labelledby="context-title">
+    <div class="wrap">
+      <div class="section__head">
+        <p class="kicker">Context</p>
+        <h2 id="context-title">Bring in what you're already working with.</h2>
+        <p class="section__lede">
+          The issue, the spreadsheet, the design file, the brief. Put them on the board as cards
+          your agents can read, so nobody has to explain the project twice.
+        </p>
+      </div>
+
+      <div class="embeds">
+        <article class="embed">
+          <div class="embed__head">
+            <span class="embed__icon" style="background:var(--agent)"><Icon name="issue" /></span>
+            <span>Linear issue<span class="embed__kind">Issues and projects</span></span>
+            <span class="soon">Coming soon</span>
+          </div>
+          <div class="embed__body">
+            <div class="issue__title">Make onboarding feel personal</div>
+            <div class="issue__meta">
+              <span class="chip">In progress</span>
+              <span class="chip">Onboarding v2</span>
+            </div>
+          </div>
+        </article>
+
+        <article class="embed">
+          <div class="embed__head">
+            <span class="embed__icon" style="background:var(--maya)"><Icon name="sheet" /></span>
+            <span>Google Sheet<span class="embed__kind">Spreadsheets</span></span>
+            <span class="soon">Coming soon</span>
+          </div>
+          <div class="embed__body">
+            <div class="sheet">
+              <span class="h">Step</span><span class="h">Owner</span><span class="h">Status</span>
+              <span>Welcome</span><span>Priya</span><span>Done</span>
+              <span>Profile</span><span>Maya</span><span>Review</span>
+              <span>Invite team</span><span>Sam</span><span>To do</span>
+            </div>
+          </div>
+        </article>
+
+        <article class="embed">
+          <div class="embed__head">
+            <span class="embed__icon" style="background:var(--priya)"><Icon name="shapes" /></span>
+            <span>Figma file<span class="embed__kind">Designs and frames</span></span>
+            <span class="soon">Coming soon</span>
+          </div>
+          <div class="embed__body">
+            <div class="frames"><i></i><i></i><i></i></div>
+          </div>
+        </article>
+
+        <article class="embed embed--wide">
+          <div class="embed__head">
+            <span class="embed__icon" style="background:var(--sam)"><Icon name="doc" /></span>
+            <span>Docs<span class="embed__kind">Briefs, specs and notes</span></span>
+            <span class="soon">Coming soon</span>
+          </div>
+          <div class="embed__body doc-lines">
+            <b>Onboarding brief</b>
+            <i style="width:96%"></i>
+            <i style="width:88%"></i>
+            <i style="width:64%"></i>
+          </div>
+        </article>
+
+        <article class="embed embed--wide">
+          <div class="embed__head">
+            <span class="embed__icon" style="background:var(--jam)"><Icon name="spark" /></span>
+            <span>Claude Artifacts<span class="embed__kind">Tools and pages made in Claude</span></span>
+            <span class="soon">Coming soon</span>
+          </div>
+          <div class="embed__body calc">
+            <span class="calc__dial"></span>
+            <span class="calc__bars"><i style="width:84%"></i><i style="width:62%"></i><i style="width:40%"></i></span>
+          </div>
+        </article>
+
+        <article class="embed embed--plan" id="plan">
+          <div class="embed__head">
+            <span class="embed__icon" style="background:var(--ink)"><Icon name="plan" /></span>
+            <span>Plan view<span class="embed__kind">The same work as a board of tasks, handed to people or agents</span></span>
+            <span class="soon">Coming soon</span>
+          </div>
+          <div class="kanban">
+            <div class="kanban__col">
+              <b>To do</b>
+              <div class="task">
+                Invite step copy
+                <span class="task__who"><span class="s-dot" style="background:var(--priya)"></span>Priya</span>
+              </div>
+              <div class="task">
+                Empty state art
+                <span class="task__who"><span class="s-dot" style="background:var(--maya)"></span>Maya</span>
+              </div>
+            </div>
+            <div class="kanban__col">
+              <b>In progress</b>
+              <div class="task">
+                Greet people by name
+                <span class="task__who"><span class="agent-glyph"><Icon name="spark" /></span>Claude for Maya</span>
+              </div>
+            </div>
+            <div class="kanban__col">
+              <b>Review</b>
+              <div class="task">
+                Fix sign-up form on phones
+                <span class="task__who"><span class="agent-glyph agent-glyph--codex"><Icon name="spark" /></span>Codex for Sam</span>
+              </div>
+            </div>
+            <div class="kanban__col">
+              <b>Done</b>
+              <div class="task">
+                Onboarding brief
+                <span class="task__who"><span class="s-dot" style="background:var(--sam)"></span>Sam</span>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+      <p class="context-note">
+        Live embeds and the Plan view are being built now. Notes, lines, agents and artifacts work
+        today.
+      </p>
+    </div>
+  </section>
+
+  <section class="section section--tint" id="depth" aria-labelledby="depth-title">
+    <div class="wrap">
+      <div class="section__head">
+        <p class="kicker">Simple on top, powerful underneath</p>
+        <h2 id="depth-title">Same box, two depths.</h2>
+        <p class="section__lede">
+          Most of the team sees a clear summary of what an agent did. Engineers can open the very
+          same box into a full coding-agent workbench.
+        </p>
+      </div>
+
+      <div class="depth">
+        <div class="depth__panel">
+          <div class="depth__label">
+            <h3>At a glance</h3>
+            <span>What everyone sees</span>
+          </div>
+          <div class="s-card">
+            <div class="s-card__head">
+              <span class="agent-glyph"><Icon name="spark" /></span>
+              <span><span class="s-card__name">Claude</span> <span class="s-card__owner">Maya's agent</span></span>
+              <span class="status"><span class="pill pill--idle">Done</span></span>
+            </div>
+            <div class="s-card__body">
+              <p class="summary">Updated the onboarding page to greet people by name.</p>
+              <ul class="summary-list">
+                <li><Icon name="check" />New heading uses the person's first name</li>
+                <li><Icon name="check" />Warmer copy in the empty state</li>
+                <li><Icon name="check" />Checked the page on a small phone</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="depth__panel">
+          <div class="depth__label">
+            <h3>Opened up</h3>
+            <span>What an engineer can dig into</span>
+          </div>
+          <div class="s-card">
+            <div class="s-card__head">
+              <span class="agent-glyph"><Icon name="spark" /></span>
+              <span><span class="s-card__name">Claude</span> <span class="s-card__owner">Maya's agent</span></span>
+              <span class="status"><span class="pill pill--working"><span class="pill__dot"></span>Working</span></span>
+            </div>
+            <div class="s-card__body">
+              <div class="wb-meta">
+                <span class="chip">model: your choice</span>
+                <span class="chip"><Icon name="branch" />onboarding-greeting</span>
+                <span class="chip">2 files changed</span>
+              </div>
+              <div class="diff">
+                <div class="diff__file"><span>onboarding/Welcome.tsx</span><span>+12 &minus;4</span></div>
+                <code class="d-del">- &lt;h1&gt;Welcome aboard&lt;/h1&gt;</code>
+                <code class="d-add">+ &lt;h1&gt;Hi {"{"}user.firstName{"}"}, let's get you set up&lt;/h1&gt;</code>
+                <code>  &lt;EmptyState tone="warm" /&gt;</code>
+              </div>
+              <div class="approval">
+                <span>Wants to run <code>pnpm test</code></span>
+                <span class="approval__btns">
+                  <span class="mini-btn">Deny</span>
+                  <span class="mini-btn mini-btn--send">Approve</span>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="depth-points">
+        <p><b>Models and effort</b>Pick the model and how hard it thinks, per agent.</p>
+        <p><b>Diffs and branches</b>Read every change as a diff, and work on branches when you want to.</p>
+        <p><b>Approvals</b>Agents ask before running commands, and their owner decides.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="closing" aria-labelledby="closing-title">
+    <div class="wrap">
+      <div class="closing__panel">
+        <div class="closing__sticky closing__sticky--a" aria-hidden="true">Bring the whole team.</div>
+        <div class="closing__sticky closing__sticky--b" aria-hidden="true">And everyone's agents.</div>
+        <h2 id="closing-title">Start a board and make something together.</h2>
+        <p>Free while in beta. Bring your team and the agents you already use.</p>
+        <div class="hero__ctas">
+          <a class="btn btn--cream" href={APP_URL}>Start a board</a>
+          <a class="btn btn--outline-light" href={APP_URL}>Sign in</a>
+        </div>
+      </div>
+    </div>
+  </section>
+</Layout>

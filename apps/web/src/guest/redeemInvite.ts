@@ -2,6 +2,7 @@ import { GUEST_ROUTE_PREFIX, GuestRedeemResult } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import { boardAccountAuth, refreshAccountBoards } from "./boardAccount";
 import { isCloudBoardsHost } from "./cloudBoardsHost";
 import { guestShareOrigin, type JoinedGuestShare } from "./guestShares";
 
@@ -19,10 +20,16 @@ export async function redeemInvite(input: {
   readonly memberAssertion?: string;
 }): Promise<JoinedGuestShare | string> {
   const origin = guestShareOrigin(input.host);
+  const cloud = isCloudBoardsHost(input.host);
   try {
+    // Only the cloud board host sees the account: someone else's machine never gets its token.
+    const account = cloud ? await boardAccountAuth() : null;
     const response = await fetch(`${origin}${GUEST_ROUTE_PREFIX}/redeem`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...(account === null ? {} : { authorization: account.authorization }),
+      },
       body: JSON.stringify({
         credential: input.credential,
         name: input.name,
@@ -44,6 +51,7 @@ export async function redeemInvite(input: {
     if (result === null || result.threadId === undefined) {
       return "The owner's Tinkjam is too old for this link. Ask them to update it and send a new one.";
     }
+    if (account !== null) void refreshAccountBoards();
     return {
       host: input.host,
       shareId: result.shareId,
@@ -52,7 +60,8 @@ export async function redeemInvite(input: {
       title: "Shared thread",
       joinedAt: new Date().toISOString(),
       // Anyone on a cloud board can invite others with the link they came in on.
-      ...(isCloudBoardsHost(input.host) ? { credential: input.credential } : {}),
+      ...(cloud ? { credential: input.credential } : {}),
+      ...(account === null ? {} : { accountId: account.userId }),
     };
   } catch {
     return "Could not reach the server.";

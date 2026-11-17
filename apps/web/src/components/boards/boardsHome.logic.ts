@@ -1,4 +1,5 @@
 import {
+  type CloudBoardAccountBoard,
   ROOM_BOARD_SUMMARY_MAX_SHAPES,
   type RoomBoard,
   type RoomBoardSize,
@@ -30,6 +31,41 @@ export interface JoinedBoardSource {
   readonly joinedAt: string;
   /** On the cloud board host, on nobody's machine. */
   readonly cloud?: boolean;
+  /** A cloud board the signed-in account joined from someone else's link. */
+  readonly shared?: boolean;
+  /** Listed by the signed-in account, with no session on this browser yet. */
+  readonly remote?: boolean;
+}
+
+/**
+ * The joined boards the home lists: this browser's, then those only the signed-in account lists,
+ * which open as the same person once clicked. `listed` is null while nobody is signed in.
+ */
+export function joinedBoardSources(input: {
+  readonly local: ReadonlyArray<JoinedBoardSource>;
+  readonly listed: ReadonlyArray<CloudBoardAccountBoard> | null;
+}): ReadonlyArray<JoinedBoardSource> {
+  if (input.listed === null) return input.local;
+  const listed = new Map<string, CloudBoardAccountBoard>(
+    input.listed.map((board) => [board.shareId, board]),
+  );
+  const local = input.local.map((share) => {
+    const board = listed.get(share.shareId);
+    return board === undefined ? share : { ...share, shared: !board.maker };
+  });
+  const here = new Set(input.local.map((share) => share.shareId));
+  const remote = input.listed
+    .filter((board) => !here.has(board.shareId))
+    .map((board): JoinedBoardSource => ({
+      shareId: board.shareId,
+      threadId: board.threadId,
+      title: board.title,
+      joinedAt: board.addedAt,
+      cloud: true,
+      shared: !board.maker,
+      remote: true,
+    }));
+  return [...local, ...remote];
 }
 
 export interface TeamBoardSource {
@@ -55,6 +91,8 @@ export type HomeBoard =
       readonly title: string;
       readonly owner: string | null;
       readonly cloud: boolean;
+      readonly shared: boolean;
+      readonly remote: boolean;
       readonly activityAt: string;
     }
   | {
@@ -113,6 +151,8 @@ export function listHomeBoards(input: {
     title: share.title.trim() || UNTITLED_BOARD,
     owner: share.owner ?? null,
     cloud: share.cloud === true,
+    shared: share.shared === true,
+    remote: share.remote === true,
     activityAt: share.joinedAt,
   }));
   const dated = [...own, ...joined].toSorted((left, right) =>

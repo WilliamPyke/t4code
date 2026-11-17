@@ -18,6 +18,7 @@ import * as Schema from "effect/Schema";
 import { isElectron } from "../env";
 import { getLocalStorageItem, setLocalStorageItem } from "../hooks/useLocalStorage";
 import { configuredHostedAppUrl } from "../hostedPairing";
+import { boardAccountAuth, refreshAccountBoards } from "./boardAccount";
 import { cloudBoardsHost, cloudBoardsOrigin } from "./cloudBoardsHost";
 import { type JoinedGuestShare, guestShareEndpointOf, isCloudShare } from "./guestShares";
 
@@ -56,19 +57,26 @@ export async function createCloudBoard(input: {
   const host = cloudBoardsHost();
   if (origin === null || host === null) return "Could not reach the board service.";
   try {
+    // Signed in, the board is the account's from the start, on every device it signs in on.
+    const account = await boardAccountAuth();
     const response = await fetch(`${origin}${CLOUD_BOARD_ROUTE}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...(account === null ? {} : { authorization: account.authorization }),
+      },
       body: JSON.stringify({
         name: input.name,
         ...(input.title === undefined ? {} : { title: input.title }),
       }),
       credentials: "omit",
     });
+    if (response.status === 401) return "Sign in again to make a board.";
     const created = response.ok
       ? Option.getOrNull(decodeCreated(await response.json().catch(() => null)))
       : null;
     if (created === null) return "Could not reach the board service.";
+    if (account !== null) void refreshAccountBoards();
     return {
       host,
       shareId: created.shareId,
@@ -77,6 +85,7 @@ export async function createCloudBoard(input: {
       credential: created.credential,
       title: input.title ?? "Untitled board",
       joinedAt: new Date().toISOString(),
+      ...(account === null ? {} : { accountId: account.userId }),
     };
   } catch {
     return "Could not reach the board service.";

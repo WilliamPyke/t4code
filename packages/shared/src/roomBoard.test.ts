@@ -294,6 +294,20 @@ describe("applyRoomBoardChange", () => {
       expect(Result.isFailure(window(refused))).toBe(true);
     }
     expect(Result.isFailure(apply(EMPTY_ROOM_BOARD, put("l", { kind: "link" })))).toBe(true);
+    // An embed is a link card: its address is set once, and only an http or https one.
+    const figma = "https://www.figma.com/design/BAZsTPbh6W1r66Bdo/Checkout";
+    const embed = applied(
+      EMPTY_ROOM_BOARD,
+      put("e", { kind: "link", url: figma, text: "Checkout", size: { w: 480, h: 360 } }),
+    );
+    expect(embed.notes[0]).toMatchObject({ url: figma, size: { w: 480, h: 360 } });
+    const moved = applied(embed, put("e", { url: "https://evil.test", text: "Checkout", x: 9 }));
+    expect(moved.notes[0]?.url).toBe(figma);
+    for (const url of ["javascript:alert(1)", "data:text/html,hi", "file:///etc/passwd"]) {
+      expect(Result.isFailure(apply(EMPTY_ROOM_BOARD, put("e", { kind: "link", url }))), url).toBe(
+        true,
+      );
+    }
     // A change that carries a read of its own adds the window without it.
     const forged = {
       ...put("pr", { kind: "pull-request", url }),
@@ -1134,6 +1148,11 @@ describe("roomBoardCardIdentity", () => {
     expect(roomBoardCardIdentity(note({ pinnedTo: "message:1" }), () => "Will").label).toBe(
       "Comment from Will on a reply",
     );
+    // A link names the source its address comes from, so an agent knows which tools open it.
+    const linked = (url: string) =>
+      roomBoardCardIdentity(note({ kind: "link", url, guestId: sam }), names).label;
+    expect(linked("https://linear.app/acme/issue/ENG-1/login")).toBe("Linear link from Sam");
+    expect(linked("https://figma.com.evil.test/design/k/x")).toBe("Link from Sam");
     // The owner by the name they show guests, which their cards carry too.
     expect(roomBoardCardIdentity(note({ kind: "comment" }), () => "Alex")).toEqual({
       label: "Comment thread from Alex",

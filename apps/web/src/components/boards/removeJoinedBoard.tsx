@@ -2,6 +2,7 @@ import { guestEnvironmentId } from "@t3tools/client-runtime/environment";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { EllipsisIcon, LogOutIcon } from "lucide-react";
 
+import { isAccountBoard, leaveAccountBoard } from "~/guest/boardAccount";
 import { removeFromCloudBoard } from "~/guest/cloudBoards";
 import { findGuestShare, forgetGuestShare } from "~/guest/guestShares";
 import { ensureLocalApi } from "~/localApi";
@@ -51,6 +52,13 @@ function useRemoveJoinedBoard() {
     );
     if (!confirmed) return;
     const share = findGuestShare(board.shareId);
+    if (board.cloud && isAccountBoard(board.shareId)) {
+      // The account leaves it, so it goes from every device it signs in on.
+      const failed = await leaveAccountBoard(board.shareId);
+      if (failed !== null) toastManager.add({ type: "error", title: failed });
+      else forget(board.shareId);
+      return;
+    }
     if (board.cloud && share?.guestId !== undefined) {
       await removeFromCloudBoard(share, share.guestId);
     }

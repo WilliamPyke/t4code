@@ -1,7 +1,15 @@
 // @effect-diagnostics globalDate:off globalTimers:off cryptoRandomUUID:off - The Worker and its objects are plain Cloudflare handlers, outside the Effect runtime.
 import {
+  CLOUD_BOARD_ACCOUNT_CLAIM_ROUTE,
+  CLOUD_BOARD_ACCOUNT_OPEN_ROUTE,
+  CLOUD_BOARD_ACCOUNT_ROUTE,
   CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
   CLOUD_BOARD_ROUTE,
+  CloudBoardAccountClaimRequest,
+  CloudBoardCreateResult,
+  GuestRedeemResult,
+  type CloudBoardAccountBoard,
+  type CloudBoardAccountOpenResult,
   CLOUD_BOARD_TITLE_ROUTE,
   CloudBoardCreateRequest,
   CloudBoardRemovePersonRequest,
@@ -27,8 +35,6 @@ import {
   RoomBoardAgentChangeRequest,
   RoomBoardChange,
   ThreadId,
-  type CloudBoardCreateResult,
-  type GuestRedeemResult,
 } from "@t3tools/contracts";
 import { DurableObject } from "cloudflare:workers";
 import * as Option from "effect/Option";
@@ -81,13 +87,31 @@ import {
   type RoomFailure,
   type RoomLive,
 } from "./room.ts";
+import {
+  accountBoardOf,
+  accountGuestOf,
+  accountOfGuest,
+  accountsOn,
+  linkAccount,
+  retitledAccountBoard,
+  withAccountBoard,
+  withAccountSession,
+  withoutAccountBoard,
+} from "./account.ts";
+import { clerkKeys, verifyClerkSession, type ClerkKeyLookup } from "./clerk.ts";
 import { hashSecret, isShareId, makeSecret, shareOfSecret } from "./secrets.ts";
 
 interface Env {
   readonly BOARDS: DurableObjectNamespace<BoardRoom>;
   readonly CREATE_LIMITS: DurableObjectNamespace<CreateLimit>;
+  readonly ACCOUNTS: DurableObjectNamespace<BoardAccount>;
   /** Pages that may call this host from a browser, separated by commas. */
   readonly ALLOWED_ORIGINS: string;
+  /**
+   * The Clerk instance's Frontend API origin, whose published keys verify a person's session.
+   * Empty turns accounts off: everything works as for someone signed out.
+   */
+  readonly CLERK_ISSUER?: string;
 }
 
 const INVITE_ROUTE = `${GUEST_ROUTE_PREFIX}/invite`;
@@ -112,6 +136,11 @@ const failureResponse = (failure: RoomFailure) =>
 const noContent = () => new Response(null, { status: 204, headers: NO_STORE });
 
 const decodeCreate = Schema.decodeUnknownOption(Schema.fromJsonString(CloudBoardCreateRequest));
+const decodeCreated = Schema.decodeUnknownOption(Schema.fromJsonString(CloudBoardCreateResult));
+const decodeRedeemed = Schema.decodeUnknownOption(Schema.fromJsonString(GuestRedeemResult));
+const decodeClaim = Schema.decodeUnknownOption(
+  Schema.fromJsonString(CloudBoardAccountClaimRequest),
+);
 const decodeTitle = Schema.decodeUnknownOption(Schema.fromJsonString(CloudBoardTitleRequest));
 const decodeRemove = Schema.decodeUnknownOption(
   Schema.fromJsonString(CloudBoardRemovePersonRequest),
@@ -192,26 +221,160 @@ const MACHINE_ROUTES: Readonly<Record<string, number>> = {
   [`POST ${GUEST_ROOM_BOARD_ROUTE}`]: 192 * 1024,
 };
 
+const allowedOrigins = (env: Env) =>
+  env.ALLOWED_ORIGINS.split(",")
+    .map((origin) => origin.trim())
+    .filter((origin) => origin !== "");
+
+// Per isolate: the instance's keys, fetched once an hour at most.
+const keyLookups = new Map<string, ClerkKeyLookup>();
+
+/**
+ * The account a request is signed by, verified here from its Clerk session token. Never a user id
+ * the page sent. Without the issuer configured, no request is signed in.
+ */
+async function accountOf(request: Request, env: Env): Promise<string | RoomFailure> {
+  const issuer = env.CLERK_ISSUER?.trim() ?? "";
+  if (issuer === "") return roomFailure("unavailable");
+  let keyFor = keyLookups.get(issuer);
+  if (keyFor === undefined) {
+    keyFor = clerkKeys(issuer);
+    keyLookups.set(issuer, keyFor);
+  }
+  const account = await verifyClerkSession(bearerOf(request), {
+    issuer,
+    allowedOrigins: allowedOrigins(env),
+    now: Math.floor(Date.now() / 1000),
+    keyFor,
+  });
+  return account ?? roomFailure("signed_out");
+}
+
+/** Making or joining a board while signed in: the account, a refusal, or null when signed out. */
+async function optionalAccountOf(request: Request, env: Env) {
+  if (bearerOf(request) === "" || (env.CLERK_ISSUER?.trim() ?? "") === "") return null;
+  return accountOf(request, env);
+}
+
+const accountIndexOf = (env: Env, account: string) =>
+  env.ACCOUNTS.get(env.ACCOUNTS.idFromName(account));
+
+/** Ties a new seat to the account and lists the board, then answers as the host did. */
+async function linkedResponse(
+  env: Env,
+  account: string,
+  response: Response,
+  read: (text: string) => { readonly token: string; readonly credential?: string } | null,
+): Promise<Response> {
+  if (!response.ok) return response;
+  const text = await response.text();
+  const seat = read(text);
+  const shareId = seat === null ? null : shareOfSecret(seat.token);
+  if (seat !== null && shareId !== null) {
+    const board = await boardOf(env, shareId).linkAccount(account, seat.token, seat.credential);
+    if (board !== null) await accountIndexOf(env, account).add([board]);
+  }
+  return new Response(text, { status: response.status, headers: response.headers });
+}
+
+async function accountRoute(request: Request, env: Env, url: URL): Promise<Response> {
+  const account = await accountOf(request, env);
+  if (typeof account !== "string") return failureResponse(account);
+  const index = accountIndexOf(env, account);
+  const path = url.pathname;
+  const listed = (boards: ReadonlyArray<CloudBoardAccountBoard>) =>
+    Response.json({ boards }, { headers: NO_STORE });
+  if (path === CLOUD_BOARD_ACCOUNT_ROUTE && request.method === "GET") {
+    return listed(await index.list());
+  }
+  if (path === CLOUD_BOARD_ACCOUNT_CLAIM_ROUTE && request.method === "POST") {
+    const body = await readBody(request, JSON_MAX_BODY_BYTES);
+    if (typeof body !== "string") return failureResponse(body);
+    const claim = decodeClaim(body);
+    if (Option.isNone(claim)) return failureResponse(roomFailure("bad_request"));
+    const boards = await Promise.all(
+      claim.value.boards.map(({ token, credential }) => {
+        const shareId = shareOfSecret(token);
+        return shareId === null
+          ? null
+          : boardOf(env, shareId).linkAccount(account, token, credential);
+      }),
+    );
+    return listed(await index.add(boards.filter((board) => board !== null)));
+  }
+  const shareId = url.searchParams.get(GUEST_SHARE_PARAM);
+  if (!isShareId(shareId)) return failureResponse(roomFailure("bad_request"));
+  if (path === CLOUD_BOARD_ACCOUNT_OPEN_ROUTE && request.method === "POST") {
+    const opened = await boardOf(env, shareId).openAsAccount(account);
+    if (opened === null) {
+      await index.forget(shareId);
+      return failureResponse(roomFailure("ended"));
+    }
+    // The list keeps the board's invite, which the board itself keeps only as a hash.
+    const kept = (await index.add([opened.board])).find((board) => board.shareId === shareId);
+    const result: CloudBoardAccountOpenResult = {
+      token: opened.token,
+      board: kept ?? opened.board,
+    };
+    return Response.json(result, { headers: NO_STORE });
+  }
+  if (path === CLOUD_BOARD_ACCOUNT_ROUTE && request.method === "DELETE") {
+    await boardOf(env, shareId).leaveAsAccount(account);
+    await index.forget(shareId);
+    return noContent();
+  }
+  return failureResponse(roomFailure("unavailable"));
+}
+
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
+  if (path === CLOUD_BOARD_ACCOUNT_ROUTE || path.startsWith(`${CLOUD_BOARD_ACCOUNT_ROUTE}/`)) {
+    return accountRoute(request, env, url);
+  }
   if (path === CLOUD_BOARD_ROUTE && request.method === "POST") {
+    const account = await optionalAccountOf(request, env);
+    if (account !== null && typeof account !== "string") return failureResponse(account);
     const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
     const limit = env.CREATE_LIMITS.get(env.CREATE_LIMITS.idFromName(ip));
     if (!(await limit.take(Date.now()))) return failureResponse(roomFailure("too_fast"));
     const shareId = crypto.randomUUID();
     const target = new URL(CLOUD_BOARD_ROUTE, url);
     target.searchParams.set(GUEST_SHARE_PARAM, shareId);
-    return forward(env, shareId, request, target, JSON_MAX_BODY_BYTES);
+    const created = await forward(env, shareId, request, target, JSON_MAX_BODY_BYTES);
+    return account === null
+      ? created
+      : linkedResponse(env, account, created, (text) => Option.getOrNull(decodeCreated(text)));
   }
   if ((path === INVITE_ROUTE || path === REDEEM_ROUTE) && request.method === "POST") {
+    const account = path === REDEEM_ROUTE ? await optionalAccountOf(request, env) : null;
+    if (account !== null && typeof account !== "string") return failureResponse(account);
     const body = await readBody(request, JSON_MAX_BODY_BYTES);
     if (typeof body !== "string") return failureResponse(body);
     const credential = decodeInvite(body);
     if (Option.isNone(credential)) return failureResponse(roomFailure("bad_request"));
     const shareId = shareOfSecret(credential.value.credential);
     if (shareId === null) return failureResponse(roomFailure("invalid"));
-    return boardOf(env, shareId).fetch(url.toString(), { method: "POST", body });
+    const board = boardOf(env, shareId);
+    if (account === null) return board.fetch(url.toString(), { method: "POST", body });
+    // Someone already on the board comes back as the same person, whatever name they typed.
+    const opened = await board.openAsAccount(account);
+    if (opened !== null) {
+      await accountIndexOf(env, account).add([opened.board]);
+      const result: GuestRedeemResult = {
+        token: opened.token,
+        shareId: opened.board.shareId,
+        threadId: opened.board.threadId,
+      };
+      return Response.json(result, { headers: NO_STORE });
+    }
+    const redeemed = await board.fetch(url.toString(), { method: "POST", body });
+    return linkedResponse(env, account, redeemed, (text) => {
+      const result = Option.getOrNull(decodeRedeemed(text));
+      return result === null
+        ? null
+        : { token: result.token, credential: credential.value.credential };
+    });
   }
   const machineRoute = MACHINE_ROUTES[`${request.method} ${path}`];
   if (machineRoute !== undefined) {
@@ -234,9 +397,7 @@ async function route(request: Request, env: Env): Promise<Response> {
 const allowedOrigin = (request: Request, env: Env) => {
   const origin = request.headers.get("origin");
   if (origin === null) return null;
-  return env.ALLOWED_ORIGINS.split(",").some((allowed) => allowed.trim() === origin)
-    ? origin
-    : null;
+  return allowedOrigins(env).includes(origin) ? origin : null;
 };
 
 /** Pages on the allowed origins call with a bearer token and no cookies. */
@@ -347,6 +508,8 @@ export class BoardRoom extends DurableObject<Env> {
 
   /** Deletes the board: everyone with it open is told it ended, and nothing of it is kept. */
   private async end(): Promise<void> {
+    const accounts = accountsOn(this.room);
+    const shareId = this.room?.shareId;
     this.deleted = true;
     this.room = null;
     for (const stream of this.streams) this.drop(stream, true);
@@ -354,6 +517,9 @@ export class BoardRoom extends DurableObject<Env> {
     this.agents = EMPTY_AGENTS;
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
+    if (shareId !== undefined) {
+      await this.tellAccounts(accounts, (index) => index.forget(shareId));
+    }
   }
 
   private async handle(request: Request): Promise<Response> {
@@ -388,17 +554,8 @@ export class BoardRoom extends DurableObject<Env> {
       case CLOUD_BOARD_PEOPLE_REMOVE_ROUTE: {
         const body = decodeRemove(await request.text());
         if (Option.isNone(body)) return failureResponse(roomFailure("bad_request"));
-        const current = this.room ?? room;
-        const next = removePerson(current, guest.id, body.value.guestId, nowIso());
-        if (Result.isFailure(next)) return failureResponse(next.failure);
-        if (next.success === current) return noContent();
-        const removed = body.value.guestId;
-        for (const stream of this.streams) {
-          if (stream.guestId === removed) this.drop(stream, true);
-        }
-        this.setAgents(agentsWithoutPerson(this.agents, removed), Date.now());
-        await this.save(next.success);
-        return noContent();
+        const refused = await this.remove(guest.id, body.value.guestId);
+        return refused === null ? noContent() : failureResponse(refused);
       }
       case SESSION_ROUTE:
         return noContent();
@@ -407,7 +564,14 @@ export class BoardRoom extends DurableObject<Env> {
       case CLOUD_BOARD_TITLE_ROUTE: {
         const body = decodeTitle(await request.text());
         if (Option.isNone(body)) return failureResponse(roomFailure("bad_request"));
-        await this.save(renameRoom(this.room ?? room, body.value.title, nowIso()));
+        const before = this.room ?? room;
+        const renamed = renameRoom(before, body.value.title, nowIso());
+        await this.save(renamed);
+        if (renamed !== before) {
+          await this.tellAccounts(accountsOn(renamed), (index) =>
+            index.retitle(renamed.shareId, renamed.title),
+          );
+        }
         return noContent();
       }
       case GUEST_HANDOFF_ROUTE: {
@@ -605,6 +769,85 @@ export class BoardRoom extends DurableObject<Env> {
     return failureResponse(roomFailure("unavailable"));
   }
 
+  /**
+   * Takes `guestId` off the board by `by`'s say, as the remove route does: their open pages are
+   * told, their agent's runs go, and their account's list drops the board.
+   */
+  private async remove(by: GuestId, guestId: GuestId): Promise<RoomFailure | null> {
+    const current = this.room;
+    if (current === null) return roomFailure("ended");
+    const next = removePerson(current, by, guestId, nowIso());
+    if (Result.isFailure(next)) return next.failure;
+    if (next.success === current) return null;
+    const account = accountOfGuest(current, guestId);
+    for (const stream of this.streams) {
+      if (stream.guestId === guestId) this.drop(stream, true);
+    }
+    this.setAgents(agentsWithoutPerson(this.agents, guestId), Date.now());
+    await this.save(next.success);
+    if (account !== undefined) {
+      await this.tellAccounts([account], (index) => index.forget(current.shareId));
+    }
+    return null;
+  }
+
+  private async tellAccounts(
+    accounts: ReadonlyArray<string>,
+    tell: (index: DurableObjectStub<BoardAccount>) => Promise<unknown>,
+  ): Promise<void> {
+    // A list that missed this still opens nothing: the board answers for itself when opened.
+    await Promise.allSettled(
+      accounts.map((account) => tell(this.env.ACCOUNTS.get(this.env.ACCOUNTS.idFromName(account)))),
+    );
+  }
+
+  /**
+   * Called by the Worker once it verified `account`: ties it to the person `token` opens the board
+   * as. The listed board, or null when the token opens nothing here or the seat is not theirs.
+   */
+  async linkAccount(
+    account: string,
+    token: string,
+    credential: string | undefined,
+  ): Promise<CloudBoardAccountBoard | null> {
+    const [sessionHash, credentialHash] = await Promise.all([
+      hashSecret(token),
+      credential === undefined ? undefined : hashSecret(credential),
+    ]);
+    const linked = linkAccount(this.room, {
+      account,
+      sessionHash,
+      ...(credential === undefined || credentialHash === undefined
+        ? {}
+        : { credential: { value: credential, hash: credentialHash } }),
+      now: nowIso(),
+    });
+    if (Result.isFailure(linked)) return null;
+    await this.save(linked.success.room);
+    return linked.success.board;
+  }
+
+  /** Called by the Worker once it verified `account`: a new session as the account's person here. */
+  async openAsAccount(account: string): Promise<CloudBoardAccountOpenResult | null> {
+    const shareId = this.room?.shareId;
+    if (shareId === undefined) return null;
+    const token = makeSecret(shareId);
+    const hash = await hashSecret(token);
+    const opened = withAccountSession(this.room, account, hash);
+    if (Result.isFailure(opened)) return null;
+    await this.save(opened.success.room);
+    return {
+      token,
+      board: accountBoardOf(opened.success.room, opened.success.guest, { addedAt: nowIso() }),
+    };
+  }
+
+  /** Called by the Worker once it verified `account`: the account's person leaves the board. */
+  async leaveAsAccount(account: string): Promise<void> {
+    const guest = accountGuestOf(this.room, account);
+    if (guest !== undefined) await this.remove(guest.id, guest.id);
+  }
+
   /** Keeps what people's agents are doing, and shows everyone when that changed. */
   private setAgents(agents: AgentsLive, now: number) {
     this.agents = agents;
@@ -728,6 +971,64 @@ export class BoardRoom extends DurableObject<Env> {
     for (const open of this.streams) {
       this.send(open, sseFrame(cursorsEventFor(this.live, open.guestId, now)));
     }
+  }
+}
+
+const ACCOUNT_BOARD_PREFIX = "board:";
+
+/**
+ * One account's list of its cloud boards, keyed by its Clerk user id. Only the Worker calls it,
+ * after verifying the account; the boards themselves say who may open them.
+ */
+export class BoardAccount extends DurableObject<Env> {
+  async list(): Promise<ReadonlyArray<CloudBoardAccountBoard>> {
+    const stored = await this.ctx.storage.list<CloudBoardAccountBoard>({
+      prefix: ACCOUNT_BOARD_PREFIX,
+    });
+    return [...stored.values()].toSorted((left, right) =>
+      left.addedAt.localeCompare(right.addedAt),
+    );
+  }
+
+  async add(
+    boards: ReadonlyArray<CloudBoardAccountBoard>,
+  ): Promise<ReadonlyArray<CloudBoardAccountBoard>> {
+    const before = await this.list();
+    return this.keep(before, boards.reduce(withAccountBoard, before));
+  }
+
+  async forget(shareId: string): Promise<void> {
+    const before = await this.list();
+    await this.keep(before, withoutAccountBoard(before, shareId));
+  }
+
+  async retitle(shareId: string, title: string): Promise<void> {
+    const before = await this.list();
+    await this.keep(before, retitledAccountBoard(before, shareId, title));
+  }
+
+  /** Writes only what changed between the two lists; each board is its own key. */
+  private async keep(
+    before: ReadonlyArray<CloudBoardAccountBoard>,
+    after: ReadonlyArray<CloudBoardAccountBoard>,
+  ): Promise<ReadonlyArray<CloudBoardAccountBoard>> {
+    const kept = new Set(after.map((board) => board.shareId));
+    const dropped = before
+      .filter((board) => !kept.has(board.shareId))
+      .map((board) => ACCOUNT_BOARD_PREFIX + board.shareId);
+    const changed = after.filter((board) => !before.includes(board));
+    // One storage call takes at most 128 keys.
+    for (let at = 0; at < changed.length; at += 128) {
+      await this.ctx.storage.put(
+        Object.fromEntries(
+          changed.slice(at, at + 128).map((board) => [ACCOUNT_BOARD_PREFIX + board.shareId, board]),
+        ),
+      );
+    }
+    for (let at = 0; at < dropped.length; at += 128) {
+      await this.ctx.storage.delete(dropped.slice(at, at + 128));
+    }
+    return after;
   }
 }
 

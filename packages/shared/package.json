@@ -215,6 +215,10 @@
       "types": "./src/roomBoard.ts",
       "import": "./src/roomBoard.ts"
     },
+    "./roomEmbed": {
+      "types": "./src/roomEmbed.ts",
+      "import": "./src/roomEmbed.ts"
+    },
     "./guestRoom": {
       "types": "./src/guestRoom.ts",
       "import": "./src/guestRoom.ts"

@@ -42,9 +42,12 @@ import {
   ROOM_BOARD_NOTE_SIZE,
   ROOM_BOARD_TASK_SIZE,
   roomBoardCardChangedAt,
+  roomLinkLabel,
+  roomLinkPromptText,
   roomPullRequestLabel,
   roomWindowBoxId,
 } from "@t3tools/shared/roomBoard";
+import { roomEmbedOf } from "@t3tools/shared/roomEmbed";
 import * as Schema from "effect/Schema";
 
 import { boardVotable } from "./boardVotes.logic";
@@ -202,8 +205,9 @@ export interface BoardRect extends BoardPoint {
 }
 
 /** How big a new card of this kind is, for finding it a spot. */
-export const boardNewNoteSize = (kind: RoomBoardNote["kind"]): RoomBoardSize =>
-  boardNoteSize({ kind }) ?? (kind === "task" ? ROOM_BOARD_TASK_SIZE : ROOM_BOARD_NOTE_SIZE);
+export const boardNewNoteSize = (kind: RoomBoardNote["kind"], url?: string): RoomBoardSize =>
+  boardNoteSize({ kind, ...(url === undefined ? {} : { url }) }) ??
+  (kind === "task" ? ROOM_BOARD_TASK_SIZE : ROOM_BOARD_NOTE_SIZE);
 
 const PLACE_GAP = 16;
 const PLACE_REACH = 1_200;
@@ -754,6 +758,21 @@ const BOARD_THREAD_BOX_SIZE: RoomBoardSize = { w: 340, h: 460 };
 const BOARD_CODE_WINDOW_SIZE: RoomBoardSize = { w: 560, h: 420 };
 /** How big a pull request window is until someone resizes it. */
 const BOARD_PULL_REQUEST_SIZE: RoomBoardSize = { w: 360, h: 300 };
+/** A link card whose source frames its page, and one that shows only its title and address. */
+const BOARD_EMBED_SIZE: RoomBoardSize = { w: 480, h: 360 };
+const BOARD_LINK_SIZE: RoomBoardSize = { w: 288, h: 132 };
+
+const embeds = new Map<string, ReturnType<typeof roomEmbedOf>>();
+/** `roomEmbedOf`, read once per address, as sizes and lines ask for it on every frame. */
+export function boardEmbedOf(url: string) {
+  let embed = embeds.get(url);
+  if (embed === undefined) {
+    embed = roomEmbedOf(url);
+    if (embeds.size >= 256) embeds.clear();
+    embeds.set(url, embed);
+  }
+  return embed;
+}
 
 const boardLength = (value: number) =>
   Math.round(Math.min(ROOM_BOARD_MAX_CARD_SIZE, Math.max(ROOM_BOARD_MIN_CARD_SIZE, value)));
@@ -779,7 +798,7 @@ export function resizeBoardFromLeft(
 
 /** The size a note shows at, or undefined for one that grows with its text. */
 export const boardNoteSize = (
-  note: Pick<RoomBoardNote, "kind" | "size">,
+  note: Pick<RoomBoardNote, "kind" | "size" | "url">,
 ): RoomBoardSize | undefined =>
   note.size ??
   (note.kind === "artifact"
@@ -790,7 +809,11 @@ export const boardNoteSize = (
         ? BOARD_CODE_WINDOW_SIZE
         : note.kind === "pull-request"
           ? BOARD_PULL_REQUEST_SIZE
-          : undefined);
+          : note.kind === "link"
+            ? note.url !== undefined && boardEmbedOf(note.url)?.embedUrl !== undefined
+              ? BOARD_EMBED_SIZE
+              : BOARD_LINK_SIZE
+            : undefined);
 
 export const boardCardBox = (at: BoardPoint, size?: RoomBoardSize): BoardBox => ({
   x: at.x,
@@ -810,7 +833,7 @@ export const boardPinScale = (zoom: number): number =>
 
 /** Where a line meets a card or note. A comment pin's depends on the zoom it is drawn at. */
 export function boardNoteBox(
-  note: BoardPoint & Partial<Pick<RoomBoardNote, "kind" | "size">>,
+  note: BoardPoint & Partial<Pick<RoomBoardNote, "kind" | "size" | "url">>,
   zoom = 1,
 ): BoardBox {
   if (note.kind === "comment") {
@@ -1526,50 +1549,6 @@ export function appendNoteToDraft(draft: string, note: string): string {
 export const boardNoteMessage = (note: RoomBoardNote): string =>
   note.url === undefined ? note.text : [note.text.trim(), note.url].filter(Boolean).join("\n");
 
-/** A link card's address as the card shows it. GitHub pull requests, issues and files read short. */
-export interface BoardLink {
-  readonly href: string;
-  readonly title: string;
-  readonly detail: string;
-}
-
-const GITHUB_KINDS: Readonly<Record<string, string>> = { pull: "Pull request", issues: "Issue" };
-
-const decodeSegment = (segment: string) => {
-  try {
-    return decodeURIComponent(segment);
-  } catch {
-    return segment;
-  }
-};
-
-export function parseBoardLink(value: string): BoardLink | null {
-  if (!isRoomBoardUrl(value)) return null;
-  const url = new URL(value);
-  const host = url.hostname.replace(/^www\./, "");
-  const parts = url.pathname
-    .split("/")
-    .filter((part) => part !== "")
-    .map(decodeSegment);
-  const [owner, repo, section, ...rest] = parts;
-  if (host === "github.com" && owner !== undefined && repo !== undefined) {
-    const name = `${owner}/${repo}`;
-    const kind = section === undefined ? undefined : GITHUB_KINDS[section];
-    if (kind !== undefined && /^\d+$/.test(rest[0] ?? "")) {
-      return { href: url.href, title: `${name} #${rest[0]}`, detail: kind };
-    }
-    if ((section === "blob" || section === "tree") && rest.length >= 2) {
-      return { href: url.href, title: rest.slice(1).join("/"), detail: `${name} · ${rest[0]}` };
-    }
-    return { href: url.href, title: name, detail: host };
-  }
-  return {
-    href: url.href,
-    title: host,
-    detail: parts.length === 0 ? url.search : `/${parts.join("/")}`,
-  };
-}
-
 /** The address in pasted or typed text that is one http or https URL and nothing else. */
 export function boardUrlIn(text: string): string | null {
   const trimmed = text.trim();
@@ -1823,11 +1802,12 @@ const sharedPersonName = (people: BoardPeople, guestId: string | undefined): str
     ? (people.ownerName ?? "the owner")
     : (people.guests.find((guest) => guest.id === guestId)?.name ?? "a guest");
 
-const CARD_LABEL_PLURALS: ReadonlyArray<readonly [RegExp, (by: string) => string, string]> = [
-  [/^Note from (.+)$/, (by) => `Note from ${by}`, "notes from"],
-  [/^Task from (.+)$/, (by) => `Task from ${by}`, "tasks from"],
-  [/^Link from (.+)$/, (by) => `Link from ${by}`, "links from"],
-  [/^Comment thread from (.+)$/, (by) => `Comment thread from ${by}`, "comment threads from"],
+// Each matches a card's kind ("Figma link" among links) and who it is from.
+const CARD_LABEL_PLURALS: ReadonlyArray<readonly [RegExp, (kind: string) => string]> = [
+  [/^(Note) from (.+)$/, () => "notes"],
+  [/^(Task) from (.+)$/, () => "tasks"],
+  [/^((?:[\w.-]+ ){0,2}[Ll]ink) from (.+)$/, (kind) => (kind === "Link" ? "links" : `${kind}s`)],
+  [/^(Comment thread) from (.+)$/, () => "comment threads"],
 ];
 
 /**
@@ -1847,16 +1827,16 @@ export function boardCardsLine(cards: ReadonlyArray<string>, people: BoardPeople
   for (const sent of cards) {
     let label = sent;
     let plural: string | null = null;
-    for (const [pattern, write, many] of CARD_LABEL_PLURALS) {
-      const by = pattern.exec(sent)?.[1];
-      if (by === undefined) continue;
+    for (const [pattern, many] of CARD_LABEL_PLURALS) {
+      const [, kind, by] = pattern.exec(sent) ?? [];
+      if (kind === undefined || by === undefined) continue;
       const name = owner.has(by)
         ? boardPersonName(people, undefined)
         : by === viewerName
           ? "You"
           : by;
-      label = write(name);
-      plural = `${many} ${name}`;
+      label = `${kind} from ${name}`;
+      plural = `${many(kind)} from ${name}`;
       break;
     }
     counted.set(label, { count: (counted.get(label)?.count ?? 0) + 1, plural });
@@ -1920,7 +1900,7 @@ export function boardPromptCard(
       case "task":
         return `Task from ${by}`;
       case "link":
-        return `Link from ${by}`;
+        return roomLinkLabel(note.url, by);
       case "comment":
         return `Comment thread from ${by}`;
       default:
@@ -1943,14 +1923,15 @@ export function boardPromptCard(
               ? ""
               : `${text}\nStatus: ${note.done === true ? "done" : "not done"}`
             : note.kind === "link"
-              ? [note.url ?? "", text].filter(Boolean).join("\n")
+              ? roomLinkPromptText(note)
               : note.kind === "comment"
                 ? commentThreadText(note, people)
                 : comment && text !== "" && quote !== undefined
                   ? `On the reply: "${quote}"\n${text}`
                   : text;
   if (body.trim() === "") return null;
-  const said = (text === "" ? (note.url ?? "") : text).split("\n")[0] ?? "";
+  const said =
+    (note.kind === "link" ? body : text === "" ? (note.url ?? "") : text).split("\n")[0] ?? "";
   return {
     ref: roomBoardNoteRef(note.id),
     label: labelBy(boardPersonName(people, note.guestId)),

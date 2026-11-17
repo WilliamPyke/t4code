@@ -8,15 +8,23 @@
   "workers_dev": false,
   "routes": [{ "pattern": "boards.trellium.org", "custom_domain": true }],
   "vars": {
-    // Pages that may call the board host from a browser, separated by commas.
+    // Pages that may call the board host from a browser, separated by commas. A signed-in
+    // person's session token must also have been made for one of them.
     "ALLOWED_ORIGINS": "https://app.trellium.org,http://localhost:5733",
+    // The Clerk instance's Frontend API origin (the host in the web app's publishable key). Its
+    // public keys verify sessions; no Clerk secret is used. Empty turns accounts off.
+    "CLERK_ISSUER": "https://adequate-quail-9442.clerk.accounts.dev",
   },
   "durable_objects": {
     "bindings": [
       { "name": "BOARDS", "class_name": "BoardRoom" },
       { "name": "CREATE_LIMITS", "class_name": "CreateLimit" },
+      { "name": "ACCOUNTS", "class_name": "BoardAccount" },
     ],
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BoardRoom", "CreateLimit"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["BoardRoom", "CreateLimit"] },
+    { "tag": "v2", "new_sqlite_classes": ["BoardAccount"] },
+  ],
   "observability": { "enabled": true },
 }

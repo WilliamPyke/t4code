@@ -65,6 +65,7 @@ import {
 import {
   type ClipboardEvent,
   type ComponentProps,
+  type DragEvent,
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
@@ -204,6 +205,7 @@ import {
   BOARD_PAGE_TO_ARTIFACT_TEXT,
   boardCommentAskBoxes,
   boardCommentPromptCard,
+  boardEmbedOf,
   boardUrlIn,
   boardValueOf,
   boardViewportOf,
@@ -223,7 +225,6 @@ import {
   panToCentre,
   panToShow,
   panToShowAdded,
-  parseBoardLink,
   placeBoardCards,
   placeBoardItem,
   putBoardEdit,
@@ -244,6 +245,8 @@ import {
   roomBoardFitAwaits,
 } from "./roomBoardNavigation";
 import { RoomArtifactLive } from "./RoomBoardArtifact";
+import { BoardEmbedIcon, RoomEmbedBody, useBoardSurfaceSize } from "./RoomBoardEmbed";
+import { boardLiveEmbeds } from "./boardEmbed.logic";
 import { type ReadRoomCodePatch, RoomCodeWindow } from "./RoomBoardCode";
 import { PullRequestStateIcon, RoomPullRequestWindow } from "./RoomBoardPullRequest";
 import { CommentPin, CommentThreadPanel } from "./RoomBoardComments";
@@ -943,6 +946,20 @@ export function RoomBoard({
   } | null>(null);
   const [linking, setLinking] = useState<Linking | null>(null);
   const [linkDraft, setLinkDraft] = useState<string | null>(null);
+  // The embeds this viewer clicked to show, newest last, and the one they are using now.
+  const [embedsOpened, setEmbedsOpened] = useState<ReadonlyArray<string>>([]);
+  const [embedInUse, setEmbedInUse] = useState<string | null>(null);
+  const surfaceSize = useBoardSurfaceSize(surfaceRef);
+  const liveEmbeds = boardLiveEmbeds(
+    shown.notes,
+    surfaceSize === null ? null : visibleBoardRect(view, surfaceSize),
+    view.zoom,
+    embedsOpened,
+  );
+  const openEmbed = (noteId: string) => {
+    setEmbedsOpened((opened) => [...opened.filter((id) => id !== noteId), noteId].slice(-8));
+    setEmbedInUse(noteId);
+  };
   // What the address typed in the toolbar adds: a link card or a pull request window.
   const [draftKind, setDraftKind] = useState<"link" | "pull-request">("link");
   const draftUrl = (text: string) =>
@@ -1982,7 +1999,7 @@ export function RoomBoard({
     });
     send({ kind: "note", id }, value);
     lastCard.current = noteRef(id);
-    const size = boardNewNoteSize(fields.kind);
+    const size = boardNewNoteSize(fields.kind, fields.url);
     const rect = { x: value.x, y: value.y, width: size.w, height: size.h };
     if (touchFirst() && (fields.kind === undefined || fields.kind === "task"))
       revealForTyping(rect);
@@ -2007,7 +2024,10 @@ export function RoomBoard({
   };
   const addCard = (fields: Pick<RoomBoardNote, "kind" | "url">, wanted?: BoardPoint) => {
     if (!canEdit || full) return null;
-    return newNote(fields, wanted ?? freeSpot(fields.kind));
+    return newNote(
+      fields,
+      wanted ?? freeSpot(fields.kind, boardNewNoteSize(fields.kind, fields.url)),
+    );
   };
   // Draws the card added at once and puts the caret in its text, so what is typed next goes there
   // and never to the button that added it.
@@ -2173,7 +2193,7 @@ export function RoomBoard({
       return true;
     }
     if (url !== null) {
-      addLink(url);
+      addLink(url, placeBoardItem(boardNewNoteSize("link", url), at, takenRects()));
       return true;
     }
     if (text.trim() === "" || full) return false;
@@ -2184,6 +2204,30 @@ export function RoomBoard({
     if (!isBoardKey(event.target)) return;
     const text = event.clipboardData.getData("text/plain");
     if (pasteText(text, lastPointer.current ?? viewCentre())) event.preventDefault();
+  };
+  // A link dragged in from a browser tab or another app lands as a card where it is dropped. A
+  // drop on a text field is that field's.
+  const takesDrop = (event: DragEvent<HTMLDivElement>) =>
+    canEdit &&
+    !full &&
+    isBoardKey(event.target) &&
+    ["text/uri-list", "text/plain"].some((type) => event.dataTransfer.types.includes(type));
+  const dragOverBoard = (event: DragEvent<HTMLDivElement>) => {
+    if (!takesDrop(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  };
+  const dropOnBoard = (event: DragEvent<HTMLDivElement>) => {
+    if (!takesDrop(event)) return;
+    const listed = event.dataTransfer
+      .getData("text/uri-list")
+      .split(/\r?\n/)
+      .find((line) => line.trim() !== "" && !line.startsWith("#"));
+    const url = boardUrlIn(listed ?? event.dataTransfer.getData("text/plain"));
+    const at = pointerOnBoard(event);
+    if (url === null || at === null) return;
+    event.preventDefault();
+    addLink(url, placeBoardItem(boardNewNoteSize("link", url), at, takenRects()));
   };
   /**
    * A plain note centred on `at`, in this viewer's last colour: exactly there when `exact`, as for
@@ -4361,6 +4405,8 @@ export function RoomBoard({
           }}
           onPointerLeave={cursor.leave}
           onPaste={pasteOnBoard}
+          onDragOver={dragOverBoard}
+          onDrop={dropOnBoard}
           // A prompt box taking focus brings its Send button into the board's visible area.
           onFocusCapture={(event) => {
             // A keyboard already open for another field stays open for this one.
@@ -4701,6 +4747,16 @@ export function RoomBoard({
                     link={link}
                     quote={boardNoteQuote(note, messages)}
                     onResize={canEdit ? resizeNote : undefined}
+                    embed={
+                      note.kind === "link"
+                        ? {
+                            live: liveEmbeds.has(note.id),
+                            active: embedInUse === note.id && liveEmbeds.has(note.id),
+                            onUse: () => openEmbed(note.id),
+                            onRelease: () => setEmbedInUse(null),
+                          }
+                        : undefined
+                    }
                     onAddNext={
                       canEdit && !full && followsOn(note)
                         ? () => addAndType(() => addNextNote(note))
@@ -5331,7 +5387,17 @@ function BoardNote({
   onAddNext,
   changedLabel,
   agentWork,
+  embed,
 }: {
+  /** A link card's page: whether it loads now and is in use, and how to use and leave it. */
+  readonly embed?:
+    | {
+        readonly live: boolean;
+        readonly active: boolean;
+        readonly onUse: () => void;
+        readonly onRelease: () => void;
+      }
+    | undefined;
   /** Why it is marked as changed since this person was last here; absent when it is not. */
   readonly changedLabel?: string | undefined;
   /** The box whose agent just added or changed it, for a few seconds. */
@@ -5415,9 +5481,9 @@ function BoardNote({
   const thread = note.kind === "thread";
   const code = note.kind === "code";
   const pullRequest = note.kind === "pull-request";
-  // A pull request window names its pull request, links to it and shows its own title.
-  const parsed = note.url === undefined || pullRequest ? null : parseBoardLink(note.url);
-  const titled = artifact || thread || code || pullRequest;
+  // A link card is a window named after its source, with the page when the source frames it.
+  const linked = note.kind === "link" && note.url !== undefined ? boardEmbedOf(note.url) : null;
+  const titled = artifact || thread || code || pullRequest || linked !== null;
   const titleLine = titled;
   const mine = isRoomCardOwnedBy(note, people.viewer);
   const canChange = canEdit && (!thread || mine);
@@ -5430,7 +5496,7 @@ function BoardNote({
   // Once this person types here, their own draft shows until they leave it, whoever else types.
   const [drafting, setDrafting] = useState(false);
   const text = (drafting ? null : boardLiveText(note.text, liveDrag)) ?? note.text;
-  // Notes and tasks are paper in a paint; titled cards are windows; a link is a plain card.
+  // Notes and tasks are paper in a paint; titled cards, links among them, are windows.
   const paper = note.kind === undefined || note.kind === "task";
   // Paper's text moves the note like the rest of it; a click on the note selected alone types.
   const alone = useBoardSelectedAlone(noteRef(note.id));
@@ -5447,6 +5513,8 @@ function BoardNote({
       ) {
         focusTextAt(on, event.clientX, event.clientY);
       }
+      // A click on an embed's page, not a drag, hands the page the pointer.
+      if (on instanceof Element && on.closest("[data-board-embed-cover]") !== null) embed?.onUse();
     },
   );
   return (
@@ -5501,6 +5569,8 @@ function BoardNote({
               onCheckedChange={(done) => onChange(note, (current) => ({ ...current, done }))}
             />
           </span>
+        ) : linked !== null ? (
+          <BoardEmbedIcon source={linked.source} />
         ) : note.kind === "link" ? (
           <LinkIcon aria-hidden className="size-3 shrink-0 opacity-60" />
         ) : artifact ? (
@@ -5530,11 +5600,13 @@ function BoardNote({
                   ? `Code window from ${author}`
                   : pullRequest
                     ? `Pull request from ${author}`
-                    : note.pinnedTo === undefined
-                      ? paper
-                        ? null
-                        : author
-                      : `${author} on a reply`}
+                    : linked !== null
+                      ? `${linked.source === "web" ? "Link" : linked.name} from ${author}`
+                      : note.pinnedTo === undefined
+                        ? paper
+                          ? null
+                          : author
+                        : `${author} on a reply`}
         </span>
         <div className={cn("flex items-center gap-1", !selected && BOARD_HOVER_CHROME_CLASS)}>
           {compact ? <CardActionsMenu {...menuOf(note)} /> : null}
@@ -5601,25 +5673,6 @@ function BoardNote({
         </div>
       </div>
       <div className={cn("flex flex-col", size !== undefined && "min-h-0 flex-1 overflow-hidden")}>
-        {parsed === null ? null : (
-          <div className="flex items-start gap-2 px-3 pb-1">
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-xs font-medium">{parsed.title}</p>
-              {parsed.detail === "" ? null : (
-                <p className="truncate text-2xs text-muted-foreground">{parsed.detail}</p>
-              )}
-            </div>
-            <Button
-              size="micro"
-              variant="outline"
-              onPointerDown={stopPointer}
-              render={<a href={parsed.href} target="_blank" rel="noreferrer noopener" />}
-            >
-              <ExternalLinkIcon />
-              Open
-            </Button>
-          </div>
-        )}
         {quote === undefined ? null : (
           <div className="mx-3 mb-1.5 flex shrink-0 flex-col items-start gap-0.5">
             <blockquote
@@ -5651,7 +5704,7 @@ function BoardNote({
               note.kind === "task"
                 ? "Task"
                 : note.kind === "link"
-                  ? "Caption"
+                  ? "Title"
                   : artifact
                     ? "Artifact title"
                     : code
@@ -5670,7 +5723,7 @@ function BoardNote({
               note.kind === "task"
                 ? "Write a task"
                 : note.kind === "link"
-                  ? "Add a caption"
+                  ? (linked?.title ?? "Add a title")
                   : artifact
                     ? "Name this artifact"
                     : code
@@ -5804,6 +5857,15 @@ function BoardNote({
           />
         ) : null}
         {code || pullRequest ? codeWindow : null}
+        {linked === null || note.url === undefined ? null : (
+          <RoomEmbedBody
+            embed={linked}
+            url={note.url}
+            live={embed?.live === true}
+            active={embed?.active === true}
+            onRelease={() => embed?.onRelease()}
+          />
+        )}
         {box === undefined ? null : (
           <>
             <BoardScrollTail

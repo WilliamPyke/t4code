@@ -5,6 +5,7 @@ import {
 import { guestEnvironmentId } from "@t3tools/client-runtime/environment";
 import { GuestShareAccess, type GuestShareEndpoint } from "@t3tools/client-runtime/rpc";
 import {
+  type CloudBoardAccountBoard,
   type GuestId,
   type GuestShareView,
   type RoomAgentActivity,
@@ -54,6 +55,11 @@ const JoinedGuestShare = Schema.Struct({
   credential: Schema.optional(Schema.String),
   /** Who this browser is on the board, once its stream said, so it can leave from anywhere. */
   guestId: Schema.optional(Schema.String),
+  /**
+   * The Tinkjam account this cloud board was made, joined or opened under on this browser. It goes
+   * from here once that account is no longer signed in.
+   */
+  accountId: Schema.optional(Schema.String),
 });
 export type JoinedGuestShare = typeof JoinedGuestShare.Type;
 
@@ -98,10 +104,27 @@ export function rememberGuestShare(share: JoinedGuestShare) {
   ]);
 }
 
+/**
+ * The signed-in account's cloud boards, as the board host lists them for every device it signs in
+ * on. Null while nobody is signed in, or before the list arrives.
+ */
+export const accountBoardsAtom = Atom.make<ReadonlyArray<CloudBoardAccountBoard> | null>(null).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("account-boards"),
+);
+
 export function forgetGuestShare(shareId: string) {
   const shares = readGuestShares();
   if (shares.some((share) => share.shareId === shareId)) {
     writeGuestShares(shares.filter((share) => share.shareId !== shareId));
+  }
+  // Left, removed or deleted: the host took it off the account's list too.
+  const listed = appAtomRegistry.get(accountBoardsAtom);
+  if (listed?.some((board) => board.shareId === shareId)) {
+    appAtomRegistry.set(
+      accountBoardsAtom,
+      listed.filter((board) => board.shareId !== shareId),
+    );
   }
 }
 

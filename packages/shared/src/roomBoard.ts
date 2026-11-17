@@ -47,6 +47,7 @@ import * as Schema from "effect/Schema";
 
 import { replaceComposerContextReferences } from "./composerContextReferences.ts";
 import { sanitizeLinkedPrompt } from "./promptLinks.ts";
+import { roomEmbedOf } from "./roomEmbed.ts";
 
 export const ROOM_BOARD_FULL = "This board has as many notes as it holds. Remove one first.";
 export const ROOM_COMMENT_THREAD_FULL = `A comment thread holds ${ROOM_BOARD_MAX_REPLIES} replies. Start a new one.`;
@@ -1068,6 +1069,23 @@ export function roomPullRequestLabel(note: Pick<RoomBoardNote, "url" | "pullRequ
     : `Pull request #${ref.number} "${title}"`;
 }
 
+/** A link card as a card's label names it: "Figma link from Sam", or "Link from Sam". */
+export function roomLinkLabel(url: string | undefined, by: string): string {
+  const embed = url === undefined ? null : roomEmbedOf(url);
+  return embed === null || embed.source === "web"
+    ? `Link from ${by}`
+    : `${embed.name} link from ${by}`;
+}
+
+/**
+ * What a prompt carries of a link card: its title (the one someone gave it, else the one read
+ * from the address) and the address, which the agent opens with its own tools. Never the page.
+ */
+export function roomLinkPromptText(note: Pick<RoomBoardNote, "text" | "url">): string {
+  const title = note.text.trim() || (note.url === undefined ? "" : roomEmbedOf(note.url)?.title);
+  return [title, note.url].filter(Boolean).join("\n");
+}
+
 /**
  * A card's label and who wrote it, from the board, so it reads the same to everyone: "Note from
  * Sam", "Task from the owner", 'Artifact "Plan"'. `nameOf` names a guest, or with no id the
@@ -1097,7 +1115,7 @@ export function roomBoardCardIdentity(
             : note.kind === "task"
               ? `Task from ${by}`
               : note.kind === "link"
-                ? `Link from ${by}`
+                ? roomLinkLabel(note.url, by)
                 : note.kind === "comment"
                   ? `Comment thread from ${by}`
                   : note.pinnedTo === undefined

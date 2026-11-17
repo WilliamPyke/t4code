@@ -421,6 +421,8 @@ A cloud board is kept by the board service instead of on your computer, so it op
 
 Everyone on a cloud board can edit it, rename it and copy its invite link from the header. The **here now** button there lists who is on the board. Anyone can **Leave board** from it. The person who made the board can also **Remove** someone, and **Delete board** deletes it for everyone; that cannot be undone. **Remove from my boards** on the home page or sidebar leaves a cloud board too; its invite link brings you back.
 
+Without signing in, your cloud boards live in this browser only. **Sign in** on the boards home keeps them with your account instead: the boards you make or join while signed in, and the ones this browser already had, show on every device where you sign in, and open there as the same person on the board. Signing out takes the boards you made, joined or opened while signed in off that browser; they stay with your account.
+
 A cloud board has no agent of its own. Each person brings theirs. When you make a cloud board and this browser has one computer connected, your agent comes along by itself, so **Thread** and **Ask an agent** work at once. Otherwise, or on a board someone invited you to, choose **Thread**, **Ask an agent** or **Attach my agent**, then **Continue on my machine** to add the board to Tinkjam on your computer. Your thread boxes then run on your computer, and only you can prompt them. If this browser has no computer connected, connect one under **Settings → Environments** first. A box whose person is not on the board shows **Offline**.
 
 Templates that use the board's own thread, code windows and pull request windows are only on boards kept on a computer.

@@ -11,12 +11,13 @@ import {
   type RoomBoardSummary,
   type RoomBoardSummaryShape,
 } from "@t3tools/contracts";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { ChevronDownIcon, MegaphoneIcon, PlusIcon, SearchIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type MouseEvent, useEffect, useState } from "react";
 
 import { isElectron } from "~/env";
-import { guestSharesAtom, isCloudShare } from "~/guest/guestShares";
+import { openAccountBoard } from "~/guest/boardAccount";
+import { accountBoardsAtom, guestSharesAtom, isCloudShare } from "~/guest/guestShares";
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { workspaceAreaProps } from "~/lib/workspaceFocus";
 import {
@@ -40,8 +41,15 @@ import { Input } from "../ui/input";
 import { SidebarInset } from "../ui/sidebar";
 import { Spinner } from "../ui/spinner";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import { toastManager } from "../ui/toast";
+import { BoardsAccount } from "./BoardsAccount";
 import { BoardThumbnail } from "./BoardThumbnail";
-import { type HomeBoard, listHomeBoards, teamBoardShapes } from "./boardsHome.logic";
+import {
+  type HomeBoard,
+  joinedBoardSources,
+  listHomeBoards,
+  teamBoardShapes,
+} from "./boardsHome.logic";
 import { openBoardTemplates, useNewBoardWaiting, useStartNewBoard } from "./newBoard";
 import { JoinedBoardMenu } from "./removeJoinedBoard";
 
@@ -52,6 +60,7 @@ export function BoardsHome() {
   const threads = useThreadShells();
   const projects = useProjects();
   const joined = useAtomValue(guestSharesAtom);
+  const accountBoards = useAtomValue(accountBoardsAtom);
   const { teams } = useTeams();
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const startNewBoard = useStartNewBoard();
@@ -63,7 +72,10 @@ export function BoardsHome() {
       ?.title;
   const sources = {
     threads,
-    joined: joined.map((share) => ({ ...share, cloud: isCloudShare(share) })),
+    joined: joinedBoardSources({
+      local: joined.map((share) => ({ ...share, cloud: isCloudShare(share) })),
+      listed: accountBoards,
+    }),
     teams: teams ?? [],
     isOwnEnvironment: (environmentId: string) => !isGuestEnvironment(environmentId),
     projectName,
@@ -115,6 +127,7 @@ export function BoardsHome() {
               </>
             ) : null}
           </Button>
+          <BoardsAccount />
           {all.length > 0 ? (
             <label className="flex w-full items-center gap-2 sm:w-64">
               <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
@@ -242,12 +255,31 @@ function BoardTile({
 }) {
   const summary = useBoardSummary(board, summaryThreadIds);
   const teamShapes = useTeamBoardShapes(board.kind === "team" ? board.teamId : null);
+  const navigate = useNavigate();
+  const [opening, setOpening] = useState(false);
+  // A board only the account lists gets a session here first, as the same person on it.
+  const openRemote = async () => {
+    if (board.kind !== "joined" || opening) return;
+    setOpening(true);
+    const opened = await openAccountBoard(board.shareId);
+    setOpening(false);
+    if (typeof opened === "string") {
+      toastManager.add({ type: "error", title: opened });
+      return;
+    }
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: { environmentId: guestEnvironmentId(opened.shareId), threadId: opened.threadId },
+    });
+  };
   const subtitle =
     board.kind === "own"
       ? projectName
       : board.kind === "joined"
         ? board.cloud
-          ? "Cloud"
+          ? board.shared
+            ? "Cloud · shared with you"
+            : "Cloud"
           : board.owner === null
             ? "Shared with you"
             : `Shared by ${board.owner}`
@@ -264,6 +296,15 @@ function BoardTile({
     >
       <Link
         {...tileLink(board)}
+        {...(board.kind === "joined" && board.remote
+          ? {
+              onClick: (event: MouseEvent) => {
+                event.preventDefault();
+                void openRemote();
+              },
+              "aria-busy": opening || undefined,
+            }
+          : {})}
         className="flex h-full flex-col overflow-hidden rounded-board border border-board-hairline bg-card shadow-paint transition-shadow outline-none hover:shadow-board focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       >
         <div className="border-b border-board-hairline">

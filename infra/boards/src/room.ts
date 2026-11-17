@@ -52,6 +52,10 @@ export interface CloudGuest {
   readonly sessionHash: string;
   /** Sessions the export gave this person's machines, so the app there shows the board too. */
   readonly machineSessions?: ReadonlyArray<string>;
+  /** The Tinkjam account (Clerk user id) this person is, once they signed in with it here. */
+  readonly accountId?: string;
+  /** Sessions the account opened on its other devices, each the same person as this one. */
+  readonly accountSessions?: ReadonlyArray<string>;
 }
 
 export const DEFAULT_BOARD_TITLE = "Untitled board";
@@ -69,6 +73,8 @@ const FAILURES = {
   // joined to it stops posting.
   ended: { status: 410, message: "This board was deleted, or you are no longer on it." },
   not_maker: { status: 403, message: "Only the person who made this board can do this." },
+  signed_out: { status: 401, message: "Your sign-in ran out. Sign in again and try once more." },
+  taken: { status: 409, message: "You are on this board as someone else already." },
   too_fast: { status: 429, message: "Too many requests at once. Try again in a minute." },
   too_large: { status: 400, message: "This request is too large." },
   bad_request: { status: 400, message: "The request was not valid." },
@@ -171,7 +177,9 @@ export function joinRoom(
 export const guestBySession = (room: CloudRoom | null, sessionHash: string) =>
   room?.guests.find(
     (guest) =>
-      guest.sessionHash === sessionHash || guest.machineSessions?.includes(sessionHash) === true,
+      guest.sessionHash === sessionHash ||
+      guest.machineSessions?.includes(sessionHash) === true ||
+      guest.accountSessions?.includes(sessionHash) === true,
   );
 
 export const renameRoom = (room: CloudRoom, title: string, now: string): CloudRoom =>
