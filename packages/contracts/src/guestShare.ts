@@ -289,6 +289,15 @@ export type RoomTaskAnswer = typeof RoomTaskAnswer.Type;
 export const RoomTaskRun = Schema.Struct({ boxId: RoomBoardNoteId, at: IsoDateTime });
 export type RoomTaskRun = typeof RoomTaskRun.Type;
 
+/** A task's place in the board's Plan, in column order: to do, in progress, done. */
+const ROOM_TASK_STATUSES = ["todo", "doing", "done"] as const;
+export const RoomTaskStatus = Schema.Literals(ROOM_TASK_STATUSES);
+export type RoomTaskStatus = typeof RoomTaskStatus.Type;
+/** The day a task is due, as `YYYY-MM-DD`, with no time or zone. */
+const RoomTaskDue = Schema.String.check(Schema.isPattern(/^\d{4}-(?:0[1-9]|1[0-2])-\d{2}$/));
+/** Where a task sits in its Plan column: lower first. */
+const RoomTaskOrder = Schema.Finite.check(Schema.isBetween({ minimum: -1e12, maximum: 1e12 }));
+
 export const ROOM_BOARD_MIN_CARD_SIZE = 120;
 export const ROOM_BOARD_MAX_CARD_SIZE = 1_600;
 const RoomBoardLength = Schema.Int.check(
@@ -608,6 +617,15 @@ export const RoomBoardNote = Schema.Struct({
   ),
   /** A task that is done. */
   done: Schema.optional(Schema.Boolean),
+  /**
+   * A task someone started that is not done. To do and done are `done`'s, so a client that
+   * predates it reads every task as before. `roomTaskStatus` reads a task's status.
+   */
+  status: Schema.optional(Schema.Literal("doing")),
+  /** The day a task is due. */
+  due: Schema.optional(RoomTaskDue),
+  /** Where a task sits in its Plan column. Absent: after the ones that have one. */
+  order: Schema.optional(RoomTaskOrder),
   assignee: Schema.optional(RoomBoardAssignee),
   /**
    * A link card's address, which clients read and the server never fetches, or a pull request
@@ -868,10 +886,10 @@ export const RoomBoardChange = Schema.Union([
     ...RoomBoardSize.fields,
   }),
   /**
-   * Adds the note, or replaces the text and place of the one with this id. `kind`, `url`,
-   * `pinnedTo`, `quote` and `section` are kept from when it was added. Absent `size`, `done`, `assignee`
-   * and `color` stay as they were, so an older client's edit keeps them; a null `assignee`
-   * clears it.
+   * Adds the note, or replaces the one with this id; `kind`, `url`, `pinnedTo`, `quote` and
+   * `section` stay as added. Absent `size`, `done`, `status`, `due`, `order`, `assignee` and `color`
+   * stay as they were, so an older client's edit keeps them; a null `assignee` or `due` clears it.
+   * `status` sets `done` too, and the two must agree when both are sent.
    */
   Schema.Struct({
     type: Schema.Literal("note.put"),
@@ -884,6 +902,9 @@ export const RoomBoardChange = Schema.Union([
     quote: RoomBoardNote.fields.quote,
     size: RoomBoardNote.fields.size,
     done: RoomBoardNote.fields.done,
+    status: Schema.optional(RoomTaskStatus),
+    due: Schema.optional(Schema.NullOr(RoomTaskDue)),
+    order: RoomBoardNote.fields.order,
     assignee: Schema.optional(Schema.NullOr(RoomBoardAssignee)),
     color: RoomBoardNote.fields.color,
     section: RoomBoardNote.fields.section,

@@ -40,6 +40,7 @@ import {
   type RoomBoardReaction,
   type RoomBoardSize,
   type RoomBoxModel,
+  type RoomTaskStatus,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
@@ -145,8 +146,19 @@ function putNote(
     return Result.fail("A link card needs an http or https address, and only a link card has one.");
   }
   const assigns = change.assignee !== undefined && change.assignee !== null;
-  if (kind !== "task" && (change.done !== undefined || assigns)) {
-    return Result.fail("Only a task can be done or assigned.");
+  const plans =
+    change.status !== undefined ||
+    (change.due !== undefined && change.due !== null) ||
+    change.order !== undefined;
+  if (kind !== "task" && (change.done !== undefined || assigns || plans)) {
+    return Result.fail("Only a task can be done, assigned or planned.");
+  }
+  if (
+    change.status !== undefined &&
+    change.done !== undefined &&
+    change.done !== (change.status === "done")
+  ) {
+    return Result.fail("A task's status and whether it is done must agree.");
   }
   if (change.assignee?.guestId !== undefined && !scope.hasPerson(change.assignee.guestId)) {
     return Result.fail("A task can only be assigned to someone in the room.");
@@ -181,21 +193,43 @@ function putNote(
       ...(kind === "comment" ? { createdAt: at } : {}),
       ...(change.section === true ? { section: true } : {}),
     } satisfies RoomBoardNote);
-  const { done: _done, assignee: _assignee, size: _size, color: _color, ...rest } = base;
-  const done = change.done ?? base.done === true;
+  const {
+    done: _done,
+    status: _status,
+    due: _due,
+    order: _order,
+    assignee: _assignee,
+    size: _size,
+    color: _color,
+    ...rest
+  } = base;
+  // Unticked, a done task goes back to to do; ticked or not, an older client's edit keeps it.
+  const status =
+    change.status ??
+    (change.done === true
+      ? "done"
+      : change.done === false && base.done === true
+        ? "todo"
+        : roomTaskStatus(base));
+  const due = change.due === undefined ? base.due : change.due;
+  const order = change.order ?? base.order;
   const assignee = change.assignee === undefined ? base.assignee : change.assignee;
   const size = change.size ?? base.size;
   const color = change.color ?? base.color;
   // A card edited since a prompt carried it goes with the next one again.
   const edited =
-    existing !== undefined && (change.text !== existing.text || done !== (existing.done === true));
+    existing !== undefined &&
+    (change.text !== existing.text || status !== roomTaskStatus(existing));
   const next: RoomBoardNote = {
     ...rest,
     ...(edited ? { editedAt: at } : {}),
     text: change.text,
     x: change.x,
     y: change.y,
-    ...(done ? { done } : {}),
+    ...(status === "done" ? { done: true } : {}),
+    ...(status === "doing" ? { status } : {}),
+    ...(due === undefined || due === null ? {} : { due }),
+    ...(order === undefined ? {} : { order }),
     ...(assignee === undefined || assignee === null ? {} : { assignee }),
     ...(size === undefined ? {} : { size }),
     ...(color === undefined ? {} : { color }),
@@ -214,15 +248,26 @@ const sameSize = (left: RoomBoardSize | undefined, right: RoomBoardSize | undefi
 const sameContent = (left: RoomBoardNote, right: RoomBoardNote) =>
   left.text === right.text &&
   left.done === right.done &&
+  left.status === right.status &&
+  left.due === right.due &&
   left.assignee?.guestId === right.assignee?.guestId &&
   (left.assignee === undefined) === (right.assignee === undefined) &&
   left.color === right.color;
 
+// Like a card's place, its order in a Plan column is not what it says.
 const sameNote = (left: RoomBoardNote, right: RoomBoardNote) =>
   sameContent(left, right) &&
   left.x === right.x &&
   left.y === right.y &&
+  left.order === right.order &&
   sameSize(left.size, right.size);
+
+/**
+ * Which Plan column a task is in: done when ticked, whatever else it says, so a card an older
+ * client or an agent ticked is done; in progress once started; else to do.
+ */
+export const roomTaskStatus = (note: Pick<RoomBoardNote, "done" | "status">): RoomTaskStatus =>
+  note.done === true ? "done" : note.status === "doing" ? "doing" : "todo";
 
 /**
  * Whether `person` (null for the room's owner) may remove a card or rename a thread box: the owner
@@ -762,7 +807,13 @@ export function applyRoomBoardChange(
       if (task?.kind !== "task") return Result.fail("This task is not on the board.");
       const { run: _run, ...rest } = task;
       if (change.boxId === null) {
-        return Result.succeed(task.run === undefined ? board : withNote(board, task, rest));
+        // A run that never went, or was cleared, leaves an unanswered task to do again.
+        const { status: _status, ...open } = rest;
+        return Result.succeed(
+          task.run === undefined
+            ? board
+            : withNote(board, task, task.answer === undefined ? open : rest),
+        );
       }
       const box = board.notes.find((note) => note.id === change.boxId && note.kind === "thread");
       if (box === undefined) return Result.fail("This thread box is not on the board.");
@@ -776,6 +827,7 @@ export function applyRoomBoardChange(
       return Result.succeed(
         withNote(board, task, {
           ...rest,
+          status: "doing",
           assignee: author === null ? {} : { guestId: author },
           run: { boxId: box.id, at },
         }),
@@ -786,8 +838,8 @@ export function applyRoomBoardChange(
 
 /**
  * The board once a thread box's turn shows on it: each task run in that box before the turn is
- * ticked off and answered by it, as the box owner's; one someone else took since only loses its
- * run. Any other board is left as it was.
+ * answered by it, as the box owner's, and stays in progress until a person ticks it off; one
+ * someone else took since only loses its run. Any other board is left as it was.
  */
 export function roomBoardWithBoxRunDone(
   board: RoomBoard,
@@ -807,7 +859,7 @@ export function roomBoardWithBoxRunDone(
       if (note.assignee !== undefined && note.assignee.guestId !== box.guestId) return rest;
       return {
         ...rest,
-        done: true,
+        ...(note.done === true ? {} : { status: "doing" as const }),
         assignee: person,
         answer: { ...person, excerpt: roomTaskAnswerExcerpt(turn.reply), turnId: turn.id, boxId },
       };

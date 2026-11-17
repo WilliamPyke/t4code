@@ -160,7 +160,7 @@ function ActiveSshPasswordPrompt({
           <DialogDescription>
             Enter the password or verification code required by <code>{target}</code>. Tinkjam
             passes your response to the local SSH process and keeps it in memory to reuse for this
-            host. T Code does not write it to disk.
+            host. Tinkjam does not write it to disk.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel scrollFade={false}>

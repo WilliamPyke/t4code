@@ -3,6 +3,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { ScopedThreadRef } from "@t3tools/contracts";
+import { PencilIcon } from "lucide-react";
 import { useState } from "react";
 
 import { threadEnvironment } from "~/state/threads";
@@ -73,12 +74,17 @@ export function BoardTitle({
     return (
       <button
         type="button"
-        className="max-w-full cursor-text truncate rounded-sm text-start outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+        className="group/title -mx-1 inline-flex max-w-full cursor-text items-center gap-1.5 rounded-md px-1 py-0.5 text-start outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
         aria-label={`Rename board ${title}`}
         data-board-title
+        onPointerDown={(event) => event.stopPropagation()}
         onClick={() => setDraft(title)}
       >
-        {title}
+        <span className="min-w-0 truncate">{title}</span>
+        <PencilIcon
+          aria-hidden
+          className="size-3 shrink-0 text-muted-foreground opacity-60 group-hover/title:opacity-100"
+        />
       </button>
     );
   }

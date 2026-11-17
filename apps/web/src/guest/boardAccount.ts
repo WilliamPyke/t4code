@@ -6,10 +6,13 @@ import {
   CloudBoardAccountOpenResult,
   GUEST_SHARE_PARAM,
 } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/reactivity";
 
+import { hasCloudPublicConfig } from "../cloud/publicConfig";
+import { isElectron } from "../env";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { boardsToClaim, sharesOfOtherAccounts } from "./boardAccount.logic";
 import { cloudBoardsHost, cloudBoardsOrigin } from "./cloudBoardsHost";
@@ -25,6 +28,8 @@ import {
 /** Who is signed in to Tinkjam here, and how to get their current session token. */
 interface BoardAccountSession {
   readonly userId: string;
+  /** The name the account joins boards under, so it is never asked for. */
+  readonly name: string | null;
   readonly readToken: () => Promise<string | null>;
 }
 
@@ -32,6 +37,38 @@ const boardAccountAtom = Atom.make<BoardAccountSession | null>(null).pipe(
   Atom.keepAlive,
   Atom.withLabel("board-account"),
 );
+
+// Whether sign-in has said who, if anyone, is signed in on this page yet.
+const boardAccountLoadedAtom = Atom.make(false).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("board-account-loaded"),
+);
+
+/**
+ * Whether this build signs people in to keep their cloud boards: a browser build with sign-in and
+ * a cloud board host. Without, everything works signed out and no sign-in shows.
+ */
+export const boardAccountsEnabled = () =>
+  !isElectron &&
+  Boolean((import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined)?.trim()) &&
+  hasCloudPublicConfig() &&
+  cloudBoardsOrigin() !== null;
+
+export type BoardAccountState =
+  | { readonly status: "off" | "loading" | "signed-out" }
+  | { readonly status: "signed-in"; readonly name: string | null };
+
+/** Who is signed in for cloud boards, as React reads it. */
+export function useBoardAccount(): BoardAccountState {
+  const account = useAtomValue(boardAccountAtom);
+  const loaded = useAtomValue(boardAccountLoadedAtom);
+  if (!boardAccountsEnabled()) return { status: "off" };
+  if (!loaded) return { status: "loading" };
+  return account === null ? { status: "signed-out" } : { status: "signed-in", name: account.name };
+}
+
+/** The signed-in account's name, or null signed out or with none. */
+export const readBoardAccountName = () => readBoardAccount()?.name ?? null;
 
 const decodeList = Schema.decodeUnknownOption(CloudBoardAccountList);
 const decodeOpened = Schema.decodeUnknownOption(CloudBoardAccountOpenResult);
@@ -128,6 +165,7 @@ async function claimLocalBoards(): Promise<void> {
  * opened under an account no longer signed in goes from this browser.
  */
 export function syncBoardAccount(session: BoardAccountSession | null): void {
+  appAtomRegistry.set(boardAccountLoadedAtom, true);
   const before = readBoardAccount();
   if (before?.userId === session?.userId) {
     if (session !== null) appAtomRegistry.set(boardAccountAtom, session);
@@ -176,6 +214,7 @@ export async function openAccountBoard(shareId: string): Promise<JoinedGuestShar
     joinedAt: board.addedAt,
     guestId: board.guestId,
     accountId: account.userId,
+    ...(board.maker ? { made: true } : {}),
     ...(board.credential === undefined ? {} : { credential: board.credential }),
   };
   rememberGuestShare(share);

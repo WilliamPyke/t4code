@@ -382,6 +382,16 @@ describe("Teams", () => {
       const { teams, team, invite } = yield* withTeam;
       yield* teams.acceptInvite({ userId: "cat", name: invite.name, profile: profile("Cat") });
       yield* teams.changeBoard({ userId: "ben", teamId: team.id, change: note("from-ben") });
+      // Another member may not remove it; the team's owner may, below.
+      expect(
+        yield* Effect.flip(
+          teams.changeBoard({
+            userId: "cat",
+            teamId: team.id,
+            change: { type: "note.remove", noteId: "from-ben" },
+          }),
+        ),
+      ).toMatchObject(refusal("board_rejected"));
       yield* teams.changeBoard({
         userId: "ann",
         teamId: team.id,

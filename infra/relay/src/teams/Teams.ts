@@ -741,7 +741,7 @@ const make = Effect.gen(function* () {
   const changeBoard: Teams["Service"]["changeBoard"] = Effect.fn("relay.teams.change_board")(
     function* (input) {
       const { change } = input;
-      yield* requireMember(input.teamId, input.userId);
+      const team = yield* requireMember(input.teamId, input.userId);
       // Comments pin to one thread's replies or sit in a room with an owner to resolve them, no
       // agent runs a thread box or fills an artifact here, and a task here is always for a named
       // member.
@@ -760,11 +760,15 @@ const make = Effect.gen(function* () {
       }
       const { scope, memberNames } = yield* boardScope(input.teamId);
       const author = GuestId.make(input.userId);
+      // The team's owner removes any card, as a room's owner does, so a card whose author left
+      // the team does not stay on its board for good.
+      const actor =
+        change.type === "note.remove" && team.ownerUserId === input.userId ? null : author;
       for (let attempt = 0; attempt < BOARD_WRITE_ATTEMPTS; attempt++) {
         const stored = yield* readBoard(input.teamId);
         const version = stored?.version ?? 0;
         const current = roomBoardWithCards(stored?.board ?? EMPTY_ROOM_BOARD, scope.hasCard);
-        const applied = applyRoomBoardChange(current, scope, author, change, yield* nowIso);
+        const applied = applyRoomBoardChange(current, scope, actor, change, yield* nowIso);
         if (Result.isFailure(applied)) {
           return yield* refuse(
             applied.failure === ROOM_BOARD_FULL ? "board_full" : "board_rejected",

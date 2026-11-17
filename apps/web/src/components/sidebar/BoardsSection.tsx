@@ -5,14 +5,15 @@ import {
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ROOM_BOARD_NOTE_COLORS, ThreadId } from "@t3tools/contracts";
-import { Link, useLocation, useParams } from "@tanstack/react-router";
+import { Link, useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import { LayoutGridIcon, PlusIcon } from "lucide-react";
 
-import { guestSharesAtom, isCloudShare } from "~/guest/guestShares";
+import { openAccountBoard } from "~/guest/boardAccount";
+import { accountBoardsAtom, guestSharesAtom, isCloudShare } from "~/guest/guestShares";
 import { cn } from "~/lib/utils";
 import { useThreadShells } from "~/state/entities";
 
-import { listHomeBoards } from "../boards/boardsHome.logic";
+import { joinedBoardSources, listHomeBoards } from "../boards/boardsHome.logic";
 import { useNewBoardWaiting, useStartNewBoard } from "../boards/newBoard";
 import { JoinedBoardMenu } from "../boards/removeJoinedBoard";
 import { roomBoardLocation } from "../room/roomBoardNavigation";
@@ -20,6 +21,7 @@ import { paintSwatchClassName } from "../room/RoomNoteColor";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
+import { toastManager } from "../ui/toast";
 
 // Kept short: the section sits above the thread list, which keeps the rest of the height.
 const RECENT_BOARDS = 3;
@@ -38,6 +40,8 @@ const boardPaint = (key: string) => {
 export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
   const threads = useThreadShells();
   const joined = useAtomValue(guestSharesAtom);
+  const accountBoards = useAtomValue(accountBoardsAtom);
+  const navigate = useNavigate();
   const startNewBoard = useStartNewBoard();
   const waiting = useNewBoardWaiting();
   const atHome = useLocation({ select: (location) => location.pathname === "/" });
@@ -50,7 +54,15 @@ export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
   });
   const recent = listHomeBoards({
     threads,
-    joined: joined.map((share) => ({ ...share, cloud: isCloudShare(share) })),
+    // Signed in, the account's boards too, so a new device lists them before any is opened here.
+    joined: joinedBoardSources({
+      local: joined.map((share) => ({
+        ...share,
+        cloud: isCloudShare(share),
+        maker: share.made === true,
+      })),
+      listed: accountBoards,
+    }),
     teams: [],
     isOwnEnvironment: (environmentId) => !isGuestEnvironment(environmentId),
   }).slice(0, RECENT_BOARDS);
@@ -101,6 +113,27 @@ export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
                         environmentId: guestEnvironmentId(board.shareId),
                         threadId: board.threadId,
                       }}
+                      {...(board.remote
+                        ? {
+                            // Only the account lists it: a session here first, as the same person.
+                            onClick: (event) => {
+                              event.preventDefault();
+                              void openAccountBoard(board.shareId).then((opened) => {
+                                if (typeof opened === "string") {
+                                  toastManager.add({ type: "error", title: opened });
+                                  return;
+                                }
+                                void navigate({
+                                  to: "/$environmentId/$threadId",
+                                  params: {
+                                    environmentId: guestEnvironmentId(opened.shareId),
+                                    threadId: opened.threadId,
+                                  },
+                                });
+                              });
+                            },
+                          }
+                        : {})}
                     />
                   )
                 }

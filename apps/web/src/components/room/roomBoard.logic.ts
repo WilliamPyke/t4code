@@ -45,6 +45,7 @@ import {
   roomLinkLabel,
   roomLinkPromptText,
   roomPullRequestLabel,
+  roomTaskStatus,
   roomWindowBoxId,
 } from "@t3tools/shared/roomBoard";
 import { roomEmbedOf } from "@t3tools/shared/roomEmbed";
@@ -667,7 +668,7 @@ export function boardTakenRects(
 }
 
 /** Where a note is and how big, at its given size or, for heights the browser decides, a guess. */
-function boardNoteRect(note: RoomBoardNote): BoardRect {
+export function boardNoteRect(note: RoomBoardNote): BoardRect {
   const size = boardNoteSize(note);
   return {
     x: note.x,
@@ -987,6 +988,9 @@ const valueKey = (value: BoardValue | undefined): string => {
     value.assignee === undefined ? null : (value.assignee.guestId ?? ""),
     value.size === undefined ? null : `${value.size.w}x${value.size.h}`,
     value.color ?? null,
+    value.status ?? null,
+    value.due ?? null,
+    value.order ?? null,
   ]);
 };
 
@@ -1202,7 +1206,13 @@ export function boardChangeOf(target: BoardTarget, value: BoardValue): RoomBoard
     ...(value.color === undefined ? {} : { color: value.color }),
     ...(value.section === true ? { section: true } : {}),
     ...(value.kind === "task"
-      ? { done: value.done === true, assignee: value.assignee ?? null }
+      ? {
+          done: value.done === true,
+          status: roomTaskStatus(value),
+          due: value.due ?? null,
+          ...(value.order === undefined ? {} : { order: value.order }),
+          assignee: value.assignee ?? null,
+        }
       : {}),
   };
 }

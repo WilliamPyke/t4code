@@ -17,6 +17,7 @@ import {
   boardTemplateChanges,
   boardTemplateShapes,
   cloudBoardTemplateChanges,
+  STARTER_BOARD_TEMPLATES,
 } from "./boardTemplates";
 import {
   type NewBoardPlace,
@@ -124,6 +125,16 @@ describe("listHomeBoards", () => {
     const local = [
       { shareId: "here", threadId: "t-here", title: "Here", joinedAt: NOW_ISO, cloud: true },
       { shareId: "machine", threadId: "t-m", title: "Machine", joinedAt: NOW_ISO },
+      {
+        shareId: "made-here",
+        threadId: "t-mh",
+        title: "Made here",
+        joinedAt: "2026-11-01T00:00:00.000Z",
+        // Opened since it was made, so it lists by then.
+        openedAt: "2026-11-18T00:00:00.000Z",
+        cloud: true,
+        maker: true,
+      },
     ];
     const account = (shareId: string, maker: boolean) => ({
       shareId: GuestShareId.make(shareId),
@@ -146,12 +157,13 @@ describe("listHomeBoards", () => {
     });
     expect(
       boards.map((board) =>
-        board.kind === "joined" ? [board.shareId, board.shared, board.remote] : null,
+        board.kind === "joined" ? [board.shareId, board.shared, board.remote, board.maker] : null,
       ),
     ).toEqual([
-      ["here", true, false],
-      ["machine", false, false],
-      ["elsewhere", false, true],
+      ["made-here", false, false, true],
+      ["here", true, false, false],
+      ["machine", false, false, false],
+      ["elsewhere", false, true, true],
     ]);
   });
 });
@@ -325,7 +337,16 @@ describe("cloud board templates", () => {
     ).map((template) => template.id);
     expect(fits).toContain(BLANK_BOARD_TEMPLATE.id);
     // Their own thread boxes run on the agent their maker brings to the board.
-    expect(fits).toEqual(["blank", "research-agents", "build-agents", "retro"]);
+    expect(fits).toEqual([
+      "blank",
+      "project-kickoff",
+      "research-agents",
+      "build-agents",
+      "design-review",
+      "retro",
+    ]);
+    // Every template a first board is offered works in the cloud.
+    for (const template of STARTER_BOARD_TEMPLATES) expect(fits).toContain(template.id);
     for (const template of BOARD_TEMPLATES) {
       const changes = cloudBoardTemplateChanges(template, () => "id") ?? [];
       expect(changes.filter((change) => change.type === "card.move")).toEqual([]);

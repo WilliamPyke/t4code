@@ -21,6 +21,7 @@ import {
   type RoomBoardReactionEmoji,
   type RoomBoardSize,
   type RoomBoardViewport,
+  type RoomTaskStatus,
   type RoomCodeState,
   type RoomCursor,
   type RoomViewport,
@@ -86,6 +87,7 @@ import {
   roomBoardAfterAgentTurn,
   roomBoxCodeWindows,
   roomBoxExcerpt,
+  roomTaskStatus,
   roomWindowBoxId,
   type RoomBoardScope,
 } from "@t3tools/shared/roomBoard";
@@ -316,6 +318,16 @@ import {
   useBoardSelectedAlone,
 } from "./RoomBoardSelection";
 import { BoardPromptBox } from "./RoomBoardPrompt";
+import { BoardPlan, BoardViewSwitch, useBoardViewMode } from "./BoardPlan";
+import {
+  type BoardViewMode,
+  boardPlanAppendOrder,
+  boardPlanAttachments,
+  boardPlanColumns,
+  boardPlanMove,
+  boardPlanTaskSpot,
+  boardPlanWithStatus,
+} from "./boardPlan.logic";
 import { BoardEdgeLine } from "./RoomBoardEdge";
 import {
   CLICK_SLOP,
@@ -777,6 +789,8 @@ export function RoomBoard({
   roomModel,
   cloud,
   bringAgent,
+  view: viewMode,
+  onViewChange,
 }: {
   readonly title: string;
   /** Null when the thread is not shared, so there is no room to arrange a board for. */
@@ -899,8 +913,12 @@ export function RoomBoard({
    * Attach my agent open this instead, which says how to bring one.
    */
   readonly bringAgent?: (() => void) | undefined;
+  /** Board or Plan, as the host's URL keeps it. Absent: the board keeps it in the page's URL. */
+  readonly view?: BoardViewMode | undefined;
+  readonly onViewChange?: ((view: BoardViewMode) => void) | undefined;
 }) {
   const board = room?.board ?? EMPTY_ROOM_BOARD;
+  const [pickedView, pickView] = useBoardViewMode(viewMode, onViewChange);
   const running = useRoomRunning();
   const hasProgress = useRoomHasProgress();
   const [edits, setEdits] = useState(NO_BOARD_EDITS);
@@ -2566,7 +2584,7 @@ export function RoomBoard({
   };
   // Running tasks with an agent: as with an ask, each task goes along a line into its box as a
   // card, first marked as run there so everyone sees which box has it; that box's next turn on the
-  // board ticks it off. Only idle boxes are offered, so that next turn is the run's.
+  // board answers it. Only idle boxes are offered, so that next turn is the run's.
   const live = use(RoomLiveContext);
   const boxWaiting = (boxId: string) =>
     boardBoxRequests(room?.messages ?? NO_GUEST_MESSAGES, boxId).length > 0;
@@ -3638,15 +3656,96 @@ export function RoomBoard({
   const markerId = `board-arrow${useId().replace(/[^\w-]/g, "")}`;
   // oxlint-disable-next-line react-hooks/refs -- builds the open menu's entries; none runs until it is picked
   const menuParts = contextMenuParts();
+  // The Plan is the same tasks as the board's: a team's relay may not keep their status yet.
+  const plannable = cards === undefined && room !== null;
+  const planShown = plannable && pickedView === "plan";
+  const planColumns = planShown ? boardPlanColumns(shown.notes) : null;
+  const planAttachments = planShown ? boardPlanAttachments(shown) : null;
+  const placeTasks = (
+    placements: ReadonlyArray<{ id: string; status: RoomTaskStatus; order: number }>,
+  ) => {
+    for (const placement of placements) {
+      const note = shown.notes.find((candidate) => candidate.id === placement.id);
+      if (note === undefined) continue;
+      changeNote(note, (current) => ({
+        ...boardPlanWithStatus(current, placement.status),
+        order: placement.order,
+      }));
+    }
+  };
+  const movePlanTask = (taskId: string, to: RoomTaskStatus, index: number) => {
+    if (canEdit && planColumns !== null) placeTasks(boardPlanMove(planColumns, taskId, to, index));
+  };
+  const addPlanTask = (status: RoomTaskStatus, text: string) => {
+    if (!canEdit || full || planColumns === null) return;
+    const { order, placements } = boardPlanAppendOrder(planColumns[status]);
+    placeTasks(placements);
+    const id = randomUUID();
+    send(
+      { kind: "note", id },
+      settleBoardValue({
+        ...boardPlanWithStatus(
+          {
+            id,
+            text: text.slice(0, ROOM_BOARD_NOTE_MAX_LENGTH),
+            ...boardPlanTaskSpot(shown, [...cardIds, ...upcomingCardIds]),
+            kind: "task",
+            ...(viewer === null ? {} : { guestId: viewer }),
+          },
+          status,
+        ),
+        order,
+      }),
+    );
+  };
+  const showOnBoard = (task: RoomBoardNote) => {
+    pickView("board");
+    showCards([task.id]);
+  };
+  const planBox = (task: RoomBoardNote) => {
+    const boxId = task.run?.boxId ?? planAttachments?.get(task.id)?.boxIds[0];
+    if (boxId === undefined) return undefined;
+    const box = threadBoxes.find((candidate) => candidate.id === boxId);
+    return {
+      id: boxId,
+      name: box === undefined ? "Thread box" : box.title || boardBoxName(box, people),
+      color: boardCursorColor(guests, box?.guestId),
+    };
+  };
+  const planActions = (task: RoomBoardNote) => {
+    const take = takeOf(task);
+    return {
+      onShow: () => showOnBoard(task),
+      onRun:
+        canRunBoardTask(task, viewer) && runTargets.length > 0 && !taskBusy(task)
+          ? () => {
+              showOnBoard(task);
+              openRun([task]);
+            }
+          : undefined,
+      onTake: take,
+      onDelete:
+        canEdit && isRoomCardOwnedBy(task, viewer)
+          ? () => send({ kind: "note", id: task.id }, null)
+          : undefined,
+    };
+  };
 
   return (
     <div className="@container/board flex min-h-0 min-w-0 flex-1 flex-col overflow-clip overscroll-none">
       {/* The board fills this; its chrome floats over the canvas. */}
-      <div className="group/room relative flex min-h-0 flex-1 flex-col">
+      <div
+        className={cn(
+          "group/room relative flex min-h-0 flex-1 flex-col",
+          planShown && "bg-board-canvas",
+        )}
+      >
+        {/* Over the canvas on the board; above the columns in the Plan, which has no canvas. */}
         <header
           data-board-chrome="top"
           className={cn(
-            "pointer-events-none absolute inset-x-3 top-3 z-30 flex flex-wrap items-start gap-2",
+            "pointer-events-none z-30 flex flex-wrap items-start gap-2",
+            planShown ? "relative mx-3 mt-3 mb-2" : "absolute inset-x-3 top-3",
             COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
           )}
         >
@@ -3665,6 +3764,11 @@ export function RoomBoard({
               ) : null}
             </h1>
           </BoardFloat>
+          {plannable ? (
+            <BoardFloat className="pointer-events-auto p-1">
+              <BoardViewSwitch view={planShown ? "plan" : "board"} onView={pickView} />
+            </BoardFloat>
+          ) : null}
           <div className="pointer-events-auto ms-auto flex max-w-full min-w-0 flex-wrap items-center justify-end gap-2">
             {notice === null ? null : (
               <BoardFloat className="px-3 py-1.5">
@@ -3691,8 +3795,14 @@ export function RoomBoard({
                 viewer={viewer}
                 open={agentsOpen}
                 onOpenChange={setAgentsOpen}
-                onShow={showBox}
-                onShowTask={(noteId) => showCards([noteId])}
+                onShow={(boxId) => {
+                  if (planShown) pickView("board");
+                  showBox(boxId);
+                }}
+                onShowTask={(noteId) => {
+                  if (planShown) pickView("board");
+                  showCards([noteId]);
+                }}
                 isOnScreen={boxOnScreen}
                 hasThreadBoxes={threadBoxes.some((box) => box.id !== ROOM_BOARD_ROOM_BOX)}
                 cloud={!holds.agents}
@@ -3721,7 +3831,11 @@ export function RoomBoard({
         </header>
         <div
           data-board-chrome="bottom"
-          className="pointer-events-none absolute inset-x-3 bottom-3 z-30 flex justify-center"
+          inert={planShown}
+          className={cn(
+            "pointer-events-none absolute inset-x-3 bottom-3 z-30 flex justify-center",
+            planShown && "invisible",
+          )}
         >
           <BoardFloat className="pointer-events-auto max-w-full gap-0.5 overflow-x-auto rounded-xl p-1">
             {linkDraft === null ? (
@@ -4007,7 +4121,11 @@ export function RoomBoard({
         </div>
         <div
           data-board-corner
-          className="absolute bottom-16 left-3 z-30 flex flex-col items-start gap-2 @4xl/board:bottom-3"
+          inert={planShown}
+          className={cn(
+            "absolute bottom-16 left-3 z-30 flex flex-col items-start gap-2 @4xl/board:bottom-3",
+            planShown && "invisible",
+          )}
         >
           {minimapShown ? (
             // A selection docked above the toolbar would sit under it.
@@ -4101,7 +4219,10 @@ export function RoomBoard({
             // up lifts a little.
             "data-[board-resting]:select-none data-[board-resting]:[-webkit-touch-callout:none] [&_[data-board-lifted]]:shadow-lg [&_[data-board-lifted]]:outline-2 [&_[data-board-lifted]]:-outline-offset-2 [&_[data-board-lifted]]:outline-primary/60",
             following !== null && "transition-[background-position,background-size] duration-200",
+            // Laid out still under the Plan, so Show on board finds each card where it is.
+            planShown && "absolute inset-0 invisible",
           )}
+          inert={planShown}
           style={boardGridStyle(view)}
           {...pan}
           // While a pointer is held on the board, artifact pages let it through; see RoomArtifactBody.
@@ -5011,6 +5132,38 @@ export function RoomBoard({
             </div>
           ) : null}
         </div>
+        {planColumns === null || planAttachments === null ? null : (
+          <BoardPlan
+            columns={planColumns}
+            attachments={planAttachments}
+            people={people}
+            guests={guests}
+            ownerAssignable={ownerAssignable}
+            canEdit={canEdit}
+            cannotAdd={cannotAdd}
+            boxOf={planBox}
+            workerOf={(task) => {
+              const worker = running.find((agent) => agent.taskId === task.id);
+              return worker === undefined ? undefined : boardAgentName(people, worker.guestId);
+            }}
+            history={
+              <BoardHistoryButtons
+                canUndo={
+                  canEdit &&
+                  (history.undo.length > 0 ||
+                    boardAgentTurnToUndo(shown, viewer, undefined) !== undefined)
+                }
+                canRedo={canEdit && history.redo.length > 0}
+                onUndo={() => travel("undo")}
+                onRedo={() => travel("redo")}
+              />
+            }
+            onAdd={addPlanTask}
+            onChange={changeNote}
+            onMove={movePlanTask}
+            actionsOf={planActions}
+          />
+        )}
         {contextMenu === null || menuParts === null ? null : (
           // A right-click on the open menu, or the Menu key in it, opens no browser menu over it.
           <div className="contents" onContextMenu={(event) => event.preventDefault()}>
@@ -5561,13 +5714,18 @@ function BoardNote({
         )}
       >
         {note.kind === "task" ? (
-          <span className="flex" onPointerDown={stopPointer}>
+          <span className="flex items-center" onPointerDown={stopPointer}>
             <Checkbox
               aria-label="Done"
               checked={note.done === true}
               disabled={!canEdit}
               onCheckedChange={(done) => onChange(note, (current) => ({ ...current, done }))}
             />
+            {roomTaskStatus(note) === "doing" ? (
+              <BoardChip tone="primary" className="ms-1.5">
+                In progress
+              </BoardChip>
+            ) : null}
           </span>
         ) : linked !== null ? (
           <BoardEmbedIcon source={linked.source} />

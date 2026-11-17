@@ -51,7 +51,7 @@ export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
       "A task being run shows its box's name and how it is going, like “Working” or “Didn't finish”, for everyone. Click it to go to the box. A finished turn ticks the task off; Stop ends the run, and Clear takes the mark off a run that did not finish.",
       "Stop a thread box's agent from the box itself, beside its working status, or from its row in the Agents list.",
       "In the Agents list, a box running tasks says “Working on:” and the task. Click the task to go to it.",
-      "A task run in a box whose agent is slow to start keeps saying “Starting” until the run begins or ends, instead of “Didn't finish” after 30 seconds, wherever your T3 Code can see that box's runs.",
+      "A task run in a box whose agent is slow to start keeps saying “Starting” until the run begins or ends, instead of “Didn't finish” after 30 seconds, wherever your Tinkjam can see that box's runs.",
       "A thread box you stopped says Stopped where its working status was, or Failed if its run ended with an error, until it runs again.",
       "The Agents list shows recent changes by agents, newest first: what each box added or changed, with Show, and Undo or Redo for those who may take it back.",
     ],

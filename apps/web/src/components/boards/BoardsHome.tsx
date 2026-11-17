@@ -31,11 +31,10 @@ import { readTeamBoard, useTeams } from "~/teams/teams";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 import { useWhatsNewSeen } from "~/whatsNew";
 
-import { BoardBackdrop, BoardChip } from "../room/BoardChrome";
+import { BoardChip } from "../room/BoardChrome";
 import { BOARD_PERSON_COLORS } from "../room/roomBoard.logic";
 import { roomBoardLocation } from "../room/roomBoardNavigation";
 import { Button } from "../ui/button";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 import { Group, GroupSeparator } from "../ui/group";
 import { Input } from "../ui/input";
 import { SidebarInset } from "../ui/sidebar";
@@ -43,6 +42,8 @@ import { Spinner } from "../ui/spinner";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { toastManager } from "../ui/toast";
 import { BoardsAccount } from "./BoardsAccount";
+import { BoardsWelcome } from "./BoardsWelcome";
+import { SignInNudge } from "./SignInNudge";
 import { BoardThumbnail } from "./BoardThumbnail";
 import {
   type HomeBoard,
@@ -73,7 +74,11 @@ export function BoardsHome() {
   const sources = {
     threads,
     joined: joinedBoardSources({
-      local: joined.map((share) => ({ ...share, cloud: isCloudShare(share) })),
+      local: joined.map((share) => ({
+        ...share,
+        cloud: isCloudShare(share),
+        maker: share.made === true,
+      })),
       listed: accountBoards,
     }),
     teams: teams ?? [],
@@ -109,134 +114,116 @@ export function BoardsHome() {
         // Room for the floating sidebar button on phones.
         <WorkspacePageHeader className="md:hidden" />
       )}
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-6 sm:px-6">
-        <header className="flex flex-wrap items-center gap-3" data-boards-home-header>
-          <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <h1 className="text-2xl leading-tight font-semibold">Boards</h1>
-            <p className="text-sm text-muted-foreground">
-              Where you, your team and everyone's agents work on the same thing.
-            </p>
-          </div>
-          <Button variant="ghost-muted" render={<Link to="/whats-new" />} data-whats-new-link>
-            <MegaphoneIcon />
-            What's new
-            {whatsNew.unseen ? (
-              <>
-                <span aria-hidden className="size-1.5 rounded-full bg-primary" />
-                <span className="sr-only">(new)</span>
-              </>
+      {all.length === 0 ? (
+        bootstrapped ? (
+          <BoardsWelcome />
+        ) : null
+      ) : (
+        <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-6 sm:px-6">
+          <header className="flex flex-wrap items-center gap-3" data-boards-home-header>
+            <div className="flex min-w-0 flex-1 flex-col gap-1">
+              <h1 className="text-2xl leading-tight font-semibold">Boards</h1>
+              <p className="text-sm text-muted-foreground">
+                Where you, your team and everyone's agents work on the same thing.
+              </p>
+            </div>
+            <Button variant="ghost-muted" render={<Link to="/whats-new" />} data-whats-new-link>
+              <MegaphoneIcon />
+              What's new
+              {whatsNew.unseen ? (
+                <>
+                  <span aria-hidden className="size-1.5 rounded-full bg-primary" />
+                  <span className="sr-only">(new)</span>
+                </>
+              ) : null}
+            </Button>
+            <BoardsAccount />
+            {all.length > 0 ? (
+              <label className="flex w-full items-center gap-2 sm:w-64">
+                <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                <Input
+                  type="search"
+                  value={query}
+                  placeholder="Search boards"
+                  aria-label="Search boards"
+                  onChange={(event) => setQuery(event.currentTarget.value)}
+                />
+              </label>
             ) : null}
-          </Button>
-          <BoardsAccount />
-          {all.length > 0 ? (
-            <label className="flex w-full items-center gap-2 sm:w-64">
-              <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-              <Input
-                type="search"
-                value={query}
-                placeholder="Search boards"
-                aria-label="Search boards"
-                onChange={(event) => setQuery(event.currentTarget.value)}
-              />
-            </label>
-          ) : null}
-          <Group aria-label="New board">
-            <Button
-              disabled={waiting}
-              aria-busy={waiting || undefined}
-              onClick={() => void startNewBoard()}
-              data-new-board
+            <Group aria-label="New board">
+              <Button
+                disabled={waiting}
+                aria-busy={waiting || undefined}
+                onClick={() => void startNewBoard()}
+                data-new-board
+              >
+                {newBoardIcon}
+                New board
+              </Button>
+              <GroupSeparator />
+              <Button
+                size="icon"
+                aria-label="New board from a template"
+                title="New board from a template"
+                onClick={openBoardTemplates}
+                data-new-board-template
+              >
+                <ChevronDownIcon />
+              </Button>
+            </Group>
+          </header>
+          <SignInNudge cloudBoards={joined.some(isCloudShare)} />
+          {shown.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No boards match "{query.trim()}".</p>
+          ) : (
+            <ul
+              className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+              data-boards-grid
             >
-              {newBoardIcon}
-              New board
-            </Button>
-            <GroupSeparator />
-            <Button
-              size="icon"
-              aria-label="New board from a template"
-              title="New board from a template"
-              onClick={openBoardTemplates}
-              data-new-board-template
-            >
-              <ChevronDownIcon />
-            </Button>
-          </Group>
-        </header>
-        {all.length === 0 ? (
-          bootstrapped ? (
-            <BoardBackdrop className="flex min-h-80 flex-col rounded-board border border-board-hairline">
-              <Empty data-boards-empty>
-                <div className="rounded-board border border-board-hairline bg-card px-8 py-7 text-card-foreground shadow-board">
-                  <EmptyHeader className="max-w-md">
-                    <EmptyTitle>Start your first board</EmptyTitle>
-                    <EmptyDescription>
-                      A board is where you and your agents work together: notes, thread boxes and
-                      what they make, side by side. Share it when you want others in.
-                    </EmptyDescription>
-                    <div className="mt-5 flex justify-center gap-2">
-                      <Button
-                        disabled={waiting}
-                        aria-busy={waiting || undefined}
-                        onClick={() => void startNewBoard()}
-                      >
-                        {newBoardIcon}
-                        New board
-                      </Button>
-                      <Button variant="outline" onClick={openBoardTemplates}>
-                        From a template
-                      </Button>
-                    </div>
-                  </EmptyHeader>
-                </div>
-              </Empty>
-            </BoardBackdrop>
-          ) : null
-        ) : shown.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No boards match "{query.trim()}".</p>
-        ) : (
-          <ul
-            className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-            data-boards-grid
-          >
-            {query.trim() === "" ? (
-              <li>
-                <button
-                  type="button"
-                  disabled={waiting}
-                  aria-busy={waiting || undefined}
-                  className="group/new flex h-full min-h-48 w-full flex-col items-center justify-center gap-2.5 rounded-board border border-dashed border-foreground/20 text-sm font-medium text-foreground outline-none transition-colors hover:border-foreground/35 hover:bg-card focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-                  onClick={() => void startNewBoard()}
-                >
-                  <span
-                    aria-hidden
-                    className="grid size-8 place-items-center rounded-lg border border-board-hairline bg-card text-muted-foreground shadow-paint group-hover/new:text-foreground"
+              {query.trim() === "" ? (
+                <li>
+                  <button
+                    type="button"
+                    disabled={waiting}
+                    aria-busy={waiting || undefined}
+                    className="group/new flex h-full min-h-48 w-full flex-col items-center justify-center gap-2.5 rounded-board border border-dashed border-foreground/20 text-sm font-medium text-foreground outline-none transition-colors hover:border-foreground/35 hover:bg-card focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                    onClick={() => void startNewBoard()}
                   >
-                    {waiting ? <Spinner aria-hidden size="md" /> : <PlusIcon className="size-4" />}
-                  </span>
-                  New board
-                </button>
-              </li>
-            ) : null}
-            {shown.map((board) => (
-              <BoardTile
-                key={board.key}
-                board={board}
-                projectName={
-                  board.kind === "own"
-                    ? projectName(board.environmentId, board.projectId)
-                    : undefined
-                }
-                summaryThreadIds={
-                  board.kind === "own"
-                    ? (threadIdsByEnvironment.get(board.environmentId) ?? NO_THREAD_IDS)
-                    : NO_THREAD_IDS
-                }
-                nowMs={nowMs}
-              />
-            ))}
-          </ul>
-        )}
-      </div>
+                    <span
+                      aria-hidden
+                      className="grid size-8 place-items-center rounded-lg border border-board-hairline bg-card text-muted-foreground shadow-paint group-hover/new:text-foreground"
+                    >
+                      {waiting ? (
+                        <Spinner aria-hidden size="md" />
+                      ) : (
+                        <PlusIcon className="size-4" />
+                      )}
+                    </span>
+                    New board
+                  </button>
+                </li>
+              ) : null}
+              {shown.map((board) => (
+                <BoardTile
+                  key={board.key}
+                  board={board}
+                  projectName={
+                    board.kind === "own"
+                      ? projectName(board.environmentId, board.projectId)
+                      : undefined
+                  }
+                  summaryThreadIds={
+                    board.kind === "own"
+                      ? (threadIdsByEnvironment.get(board.environmentId) ?? NO_THREAD_IDS)
+                      : NO_THREAD_IDS
+                  }
+                  nowMs={nowMs}
+                />
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </SidebarInset>
   );
 }
@@ -277,9 +264,9 @@ function BoardTile({
       ? projectName
       : board.kind === "joined"
         ? board.cloud
-          ? board.shared
-            ? "Cloud · shared with you"
-            : "Cloud"
+          ? board.maker
+            ? "Made by you"
+            : "Shared with you"
           : board.owner === null
             ? "Shared with you"
             : `Shared by ${board.owner}`

@@ -855,7 +855,7 @@ describe("resolveBoard", () => {
     });
   });
 
-  it("sends a task whole, so clearing its assignee reaches the room", () => {
+  it("sends a task whole, so clearing its assignee or due day reaches the room", () => {
     const task = { id: "t", text: "Fix login", x: 1, y: 2, kind: "task" as const };
     const target = { kind: "note", id: "t" } as const;
     expect(boardChangeOf(target, { ...task, done: true })).toEqual({
@@ -866,7 +866,17 @@ describe("resolveBoard", () => {
       y: 2,
       kind: "task",
       done: true,
+      status: "done",
+      due: null,
       assignee: null,
+    });
+    // Ticked on the board while in progress, its status says done with it.
+    expect(
+      boardChangeOf(target, { ...task, done: true, status: "doing", order: 3, due: "2026-12-01" }),
+    ).toMatchObject({ done: true, status: "done", order: 3, due: "2026-12-01" });
+    expect(boardChangeOf(target, { ...task, status: "doing" })).toMatchObject({
+      done: false,
+      status: "doing",
     });
     const assigned: RoomBoard = {
       positions: {},

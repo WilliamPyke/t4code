@@ -132,9 +132,9 @@ export function BoardRunPopover({
           <p className="text-xs text-muted-foreground">
             {mode === "one"
               ? count === 1
-                ? "The box's agent does it, and its finished turn ticks it off."
-                : "One box's agent does them in order, and its finished turn ticks them off."
-              : "Each task gets a new thread box beside it, and each box's finished turn ticks its task off."}
+                ? "The box's agent does it and answers on the task. It stays in progress until someone ticks it off."
+                : "One box's agent does them in order and answers on each. They stay in progress until someone ticks them off."
+              : "Each task gets a new thread box beside it, whose agent answers on it. Each stays in progress until someone ticks it off."}
           </p>
           <div className="flex min-w-0 items-center gap-1.5">
             <div className="min-w-0 flex-1">

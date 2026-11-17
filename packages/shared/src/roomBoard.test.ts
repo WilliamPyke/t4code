@@ -44,6 +44,7 @@ import {
   roomBoxRequestOf,
   roomCommentAnswer,
   roomCommentRequestOf,
+  roomTaskStatus,
   roomWindowBoxId,
 } from "./roomBoard.ts";
 
@@ -757,6 +758,73 @@ describe("applyRoomBoardChange", () => {
       true,
     );
   });
+
+  it("plans a task: its status agrees with done, and its due day and order stay until changed", () => {
+    // Tasks from before the Plan: ticked is done, anything else to do.
+    const old: RoomBoard = {
+      positions: {},
+      notes: [
+        { id: "t", text: "Ship", x: 0, y: 0, kind: "task" },
+        { id: "d", text: "Plan", x: 0, y: 0, kind: "task", done: true },
+        { id: "n", text: "A note", x: 0, y: 0 },
+      ],
+    };
+    expect(old.notes.map(roomTaskStatus)).toEqual(["todo", "done", "todo"]);
+    expect(isRoomBoard(old)).toBe(true);
+
+    const started = applied(old, put("t", { text: "Ship", status: "doing", order: 2 }));
+    expect(started.notes[0]).toEqual({
+      id: "t",
+      text: "Ship",
+      x: 0,
+      y: 0,
+      kind: "task",
+      status: "doing",
+      order: 2,
+      editedAt: at,
+      changed: { at, guestId: sam },
+    });
+    // An older client's edit says nothing of the status or order, which stay.
+    expect(applied(started, put("t", { text: "Ship", done: false }))).toBe(started);
+    // Ticked on the board, it is done; unticked, back to to do.
+    const ticked = applied(started, put("t", { text: "Ship", done: true }));
+    expect([ticked.notes[0]?.done, ticked.notes[0]?.status]).toEqual([true, undefined]);
+    expect(roomTaskStatus(applied(ticked, put("t", { text: "Ship", done: false })).notes[0]!)).toBe(
+      "todo",
+    );
+    // Moved to Done in the Plan, it is ticked on the board, and back.
+    const moved = applied(started, put("t", { text: "Ship", status: "done" }));
+    expect(moved.notes[0]?.done).toBe(true);
+    expect(applied(moved, put("t", { text: "Ship", status: "todo" })).notes[0]?.done).toBe(
+      undefined,
+    );
+    // Reordering moves it without changing what it says.
+    const reordered = applied(started, put("t", { text: "Ship", order: 0.5 }));
+    expect(reordered.notes[0]).toMatchObject({ order: 0.5, changed: { at, guestId: sam } });
+    expect(applied(started, put("t", { text: "Ship", order: 2 }))).toBe(started);
+
+    const due = applied(old, put("t", { text: "Ship", due: "2026-12-01" }));
+    expect(due.notes[0]?.due).toBe("2026-12-01");
+    expect(applied(due, put("t", { text: "Ship" })).notes[0]?.due).toBe("2026-12-01");
+    expect(applied(due, put("t", { text: "Ship", due: null })).notes[0]?.due).toBeUndefined();
+    expect(isRoomBoard(due)).toBe(true);
+
+    const refused: ReadonlyArray<Partial<Extract<RoomBoardChange, { type: "note.put" }>>> = [
+      { status: "done", done: false },
+      { status: "doing", done: true },
+    ];
+    for (const fields of refused) {
+      expect(Result.isFailure(apply(old, put("t", { text: "Ship", ...fields })))).toBe(true);
+    }
+    for (const fields of [{ status: "doing" }, { due: "2026-12-01" }, { order: 1 }] as const) {
+      expect(Result.isFailure(apply(old, put("n", { text: "A note", ...fields })))).toBe(true);
+    }
+    expect(applied(old, put("n", { text: "A note", due: null }))).toBe(old);
+    expect(
+      isRoomBoard({ ...old, notes: [{ ...old.notes[0]!, due: "1 December" }] }),
+      "a due day is a date",
+    ).toBe(false);
+  });
 });
 
 describe("running a task in a thread box", () => {
@@ -785,6 +853,7 @@ describe("running a task in a thread box", () => {
       x: 0,
       y: 0,
       kind: "task",
+      status: "doing",
       assignee: { guestId: sam },
       run: { boxId: "box", at },
     });
@@ -802,17 +871,33 @@ describe("running a task in a thread box", () => {
     }
   });
 
-  it("takes a run off, and leaves a task with none as it was", () => {
+  it("takes a run off, back to to do unless answered, and leaves a task with none as it was", () => {
     const running = Result.getOrThrow(run("t", "box"));
     const off = Result.getOrThrow(
       applyRoomBoardChange(running, scope, ana, { type: "task.run", noteId: "t", boxId: null }, at),
     );
-    expect(off.notes[0]).toEqual({ ...running.notes[0], run: undefined });
+    expect(off.notes[0]).toEqual({ ...running.notes[0], run: undefined, status: undefined });
     expect(off.notes[0] && "run" in off.notes[0]).toBe(false);
+    const answered: RoomBoard = {
+      ...running,
+      notes: running.notes.map((note) =>
+        note.id === "t" ? { ...note, answer: { excerpt: "Done", turnId: "run:0" } } : note,
+      ),
+    };
+    const offAnswered = Result.getOrThrow(
+      applyRoomBoardChange(
+        answered,
+        scope,
+        ana,
+        { type: "task.run", noteId: "t", boxId: null },
+        at,
+      ),
+    );
+    expect(offAnswered.notes[0]?.status).toBe("doing");
     expect(Result.getOrThrow(run("t", null))).toBe(board);
   });
 
-  it("ticks off the tasks run in a box when its turn shows, answered by that box", () => {
+  it("answers the tasks run in a box when its turn shows, leaving them for a person to tick", () => {
     const running = Result.getOrThrow(run("t", "box"));
     const turn = { id: "run:1", reply: "Fixed the login form.", at: "2026-11-15T10:03:00.000Z" };
     expect(roomBoardWithBoxRunDone(running, "box", turn).notes[0]).toEqual({
@@ -821,7 +906,7 @@ describe("running a task in a thread box", () => {
       x: 0,
       y: 0,
       kind: "task",
-      done: true,
+      status: "doing",
       assignee: { guestId: sam },
       answer: { guestId: sam, excerpt: "Fixed the login form.", turnId: "run:1", boxId: "box" },
     });

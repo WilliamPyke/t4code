@@ -35,6 +35,10 @@ export interface JoinedBoardSource {
   readonly shared?: boolean;
   /** Listed by the signed-in account, with no session on this browser yet. */
   readonly remote?: boolean;
+  /** This person made the cloud board, so they may delete it for everyone. */
+  readonly maker?: boolean;
+  /** When this browser last opened it. */
+  readonly openedAt?: string | undefined;
 }
 
 /**
@@ -51,7 +55,9 @@ export function joinedBoardSources(input: {
   );
   const local = input.local.map((share) => {
     const board = listed.get(share.shareId);
-    return board === undefined ? share : { ...share, shared: !board.maker };
+    return board === undefined
+      ? share
+      : { ...share, shared: !board.maker, maker: board.maker || share.maker === true };
   });
   const here = new Set(input.local.map((share) => share.shareId));
   const remote = input.listed
@@ -63,6 +69,7 @@ export function joinedBoardSources(input: {
       joinedAt: board.addedAt,
       cloud: true,
       shared: !board.maker,
+      maker: board.maker,
       remote: true,
     }));
   return [...local, ...remote];
@@ -93,6 +100,7 @@ export type HomeBoard =
       readonly cloud: boolean;
       readonly shared: boolean;
       readonly remote: boolean;
+      readonly maker: boolean;
       readonly activityAt: string;
     }
   | {
@@ -153,7 +161,8 @@ export function listHomeBoards(input: {
     cloud: share.cloud === true,
     shared: share.shared === true,
     remote: share.remote === true,
-    activityAt: share.joinedAt,
+    maker: share.maker === true,
+    activityAt: latest(share.joinedAt, share.openedAt ?? null),
   }));
   const dated = [...own, ...joined].toSorted((left, right) =>
     (right.activityAt ?? "").localeCompare(left.activityAt ?? ""),

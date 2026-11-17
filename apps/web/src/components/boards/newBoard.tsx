@@ -14,6 +14,7 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   type EnvironmentId,
+  CLOUD_BOARD_TITLE_MAX_LENGTH,
   GUEST_NAME_MAX_LENGTH,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
@@ -28,9 +29,10 @@ import { isCommandPaletteOpen, openCommandPalette } from "~/commandPaletteBus";
 import {
   cloudBoardHandoff,
   createCloudBoard,
+  knownBoardName,
   putOnCloudBoard,
-  readBoardName,
   rememberBoardName,
+  suggestedBoardName,
 } from "~/guest/cloudBoards";
 import { cloudBoardsOrigin } from "~/guest/cloudBoardsHost";
 import { type JoinedGuestShare, rememberGuestShare } from "~/guest/guestShares";
@@ -253,6 +255,7 @@ function useCreateBoard() {
   return async (
     project: EnvironmentProject,
     template: BoardTemplate = BLANK_BOARD_TEMPLATE,
+    title: string | null = null,
   ): Promise<boolean> => {
     const defaults = threadDefaults(project);
     if (defaults === null) {
@@ -269,7 +272,7 @@ function useCreateBoard() {
       input: {
         threadId,
         projectId: project.id,
-        title: UNTITLED_BOARD,
+        title: title ?? UNTITLED_BOARD,
         ...defaults,
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         branch: null,
@@ -310,7 +313,7 @@ function useCreateBoard() {
     // A template's board opens showing all of it, once its cards reach this page.
     if (notes > 0) fitRoomBoardOnOpen(roomBoardViewKey(ref), notes);
     // Typing on a new board names it; it never reaches a prompt the user has not clicked into.
-    nameBoardOnOpen(ref);
+    if (title === null) nameBoardOnOpen(ref);
     void navigate(newBoardLocation(ref));
     return true;
   };
@@ -372,7 +375,8 @@ function useCreateCloudBoard() {
   const bringAgent = useBringAgentToNewBoard();
   return async (
     template: BoardTemplate = BLANK_BOARD_TEMPLATE,
-    name: string | null = readBoardName(),
+    name: string | null = knownBoardName(),
+    title: string | null = null,
   ): Promise<boolean> => {
     const changes = cloudBoardTemplateChanges(template, randomUUID);
     if (changes === null) {
@@ -387,7 +391,7 @@ function useCreateCloudBoard() {
       appAtomRegistry.set(cloudNameAtom, template);
       return false;
     }
-    const created = await createCloudBoard({ name, title: UNTITLED_BOARD });
+    const created = await createCloudBoard({ name, title: title ?? UNTITLED_BOARD });
     if (typeof created === "string") {
       toastManager.add({ type: "error", title: "Could not start a board", description: created });
       return false;
@@ -403,7 +407,7 @@ function useCreateCloudBoard() {
     const ref = scopeThreadRef(guestEnvironmentId(created.shareId), created.threadId);
     const notes = changes.filter((change) => change.type === "note.put").length;
     if (notes > 0) fitRoomBoardOnOpen(`guest:${created.shareId}`, notes);
-    nameBoardOnOpen(ref);
+    if (title === null) nameBoardOnOpen(ref);
     void navigate({
       to: "/$environmentId/$threadId",
       params: { environmentId: ref.environmentId, threadId: ref.threadId },
@@ -428,6 +432,8 @@ export function useStartNewBoard() {
   return async (
     template: BoardTemplate = BLANK_BOARD_TEMPLATE,
     place: NewBoardPlace = readPlace(),
+    /** What it is called from the start; without, the board opens with its name to type. */
+    title: string | null = null,
   ) => {
     if (appAtomRegistry.get(newBoardWaitingAtom)) return;
     const decide = (now: typeof machines, waited: boolean) =>
@@ -452,11 +458,11 @@ export function useStartNewBoard() {
       }
     }
     if (decision.kind === "cloud") {
-      await createCloudBoard(template);
+      await createCloudBoard(template, knownBoardName(), title);
       return;
     }
     if (decision.kind === "use") {
-      await createBoard(decision.project, template);
+      await createBoard(decision.project, template, title);
       return;
     }
     if (decision.kind === "ask") {
@@ -469,7 +475,7 @@ export function useStartNewBoard() {
         ? null
         : await openScratchProject(environmentId, "Could not start a board");
     if (scratch !== null) {
-      await createBoard(scratch, template);
+      await createBoard(scratch, template, title);
       return;
     }
     openCommandPalette({ open: "add-project" });
@@ -673,10 +679,11 @@ function NewBoardTemplatePicker() {
   );
 }
 
-/** Asks the name a new cloud board's maker joins it under, once per browser. */
+/** Asks the name a new cloud board's maker joins it under, once per browser, and the board's. */
 function CloudBoardNameDialog({ template }: { readonly template: BoardTemplate }) {
   const createCloudBoard = useCreateCloudBoard();
-  const [name, setName] = useState("");
+  const [name, setName] = useState(suggestedBoardName);
+  const [title, setTitle] = useState("");
   const [pending, setPending] = useState(false);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -684,7 +691,7 @@ function CloudBoardNameDialog({ template }: { readonly template: BoardTemplate }
     if (trimmed === "" || pending) return;
     rememberBoardName(trimmed);
     setPending(true);
-    const made = await createCloudBoard(template, trimmed);
+    const made = await createCloudBoard(template, trimmed, title.trim() || null);
     setPending(false);
     if (made) closeCloudName();
   };
@@ -698,10 +705,9 @@ function CloudBoardNameDialog({ template }: { readonly template: BoardTemplate }
       <DialogPopup className="sm:max-w-sm" bottomStickOnMobile={false}>
         <form className="flex min-h-0 flex-col" onSubmit={submit}>
           <DialogHeader>
-            <DialogTitle>New board</DialogTitle>
+            <DialogTitle>Start a board</DialogTitle>
             <DialogDescription>
-              This board lives in the cloud, so it works when your computer is off. Everyone on it
-              sees your name.
+              Everyone you invite sees your name. You only pick it once.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
@@ -712,8 +718,19 @@ function CloudBoardNameDialog({ template }: { readonly template: BoardTemplate }
                 autoComplete="name"
                 maxLength={GUEST_NAME_MAX_LENGTH}
                 value={name}
+                onFocus={(event) => event.currentTarget.select()}
                 onChange={(event) => setName(event.currentTarget.value)}
                 data-cloud-board-name
+              />
+            </label>
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              Board name
+              <Input
+                maxLength={CLOUD_BOARD_TITLE_MAX_LENGTH}
+                placeholder={UNTITLED_BOARD}
+                value={title}
+                onChange={(event) => setTitle(event.currentTarget.value)}
+                data-cloud-board-title
               />
             </label>
           </DialogPanel>

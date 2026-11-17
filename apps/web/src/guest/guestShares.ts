@@ -60,6 +60,10 @@ const JoinedGuestShare = Schema.Struct({
    * from here once that account is no longer signed in.
    */
   accountId: Schema.optional(Schema.String),
+  /** Whether this person made the cloud board, so may delete it. */
+  made: Schema.optional(Schema.Boolean),
+  /** When this browser last opened the board. */
+  openedAt: Schema.optional(Schema.String),
 });
 export type JoinedGuestShare = typeof JoinedGuestShare.Type;
 
@@ -102,6 +106,18 @@ export function rememberGuestShare(share: JoinedGuestShare) {
     ...readGuestShares().filter((existing) => existing.shareId !== share.shareId),
     share,
   ]);
+}
+
+// Opening a board again within this long does not count as a newer visit, so a reload writes nothing.
+const OPENED_STEP_MS = 10 * 60_000;
+
+/** Notes that this browser opened the board now, so the boards it lists come most recent first. */
+export function markGuestShareOpened(shareId: string, now = new Date()) {
+  const share = findGuestShare(shareId);
+  if (share === null) return;
+  const last = Date.parse(share.openedAt ?? share.joinedAt);
+  if (Number.isFinite(last) && now.getTime() - last < OPENED_STEP_MS) return;
+  rememberGuestShare({ ...share, openedAt: now.toISOString() });
 }
 
 /**
@@ -223,7 +239,8 @@ export const layerGuestShareAccess = Layer.succeed(
           share !== null &&
           (share.title !== view.title ||
             share.owner !== view.ownerName ||
-            (view.guestId !== undefined && share.guestId !== view.guestId))
+            (view.guestId !== undefined && share.guestId !== view.guestId) ||
+            (view.guestId !== undefined && view.maker === view.guestId && share.made !== true))
         ) {
           const { owner: _, ...rest } = share;
           rememberGuestShare({
@@ -231,6 +248,7 @@ export const layerGuestShareAccess = Layer.succeed(
             title: view.title,
             ...(view.ownerName === undefined ? {} : { owner: view.ownerName }),
             ...(view.guestId === undefined ? {} : { guestId: view.guestId }),
+            ...(view.guestId !== undefined && view.maker === view.guestId ? { made: true } : {}),
           });
         }
       });

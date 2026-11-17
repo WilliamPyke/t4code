@@ -76,6 +76,7 @@ import {
   guestSharesAtom,
   isCloudShare,
   type JoinedGuestShare,
+  markGuestShareOpened,
 } from "~/guest/guestShares";
 import { renameCloudBoard } from "~/guest/cloudBoards";
 import { useIncrementalTimelineEntries } from "~/hooks/useIncrementalTimelineEntries";
@@ -149,6 +150,7 @@ import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { BoardTitle } from "../boards/BoardTitle";
+import { BoardCoach } from "./BoardCoach";
 import { BringAgentDialog } from "./BringAgentDialog";
 import { CloudBoardSharing } from "./CloudBoardSharing";
 import { GuestHtmlRender } from "./GuestHtmlRender";
@@ -374,6 +376,8 @@ function GuestThreadSession({
 }) {
   // Stable for the share: the timeline's file and item sources hang off it.
   const [endpoint] = useState(() => guestShareEndpointOf(share));
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- notes in this browser's storage when it last opened the board
+  useEffect(() => markGuestShareOpened(share.shareId), [share.shareId]);
   const { view, online, running, ownerCode } = useAtomValue(guestRoomAtom(share.shareId));
   // Mounting the thread opens the share's stream, which also says who is in the room.
   const thread = useEnvironmentThread(threadRef.environmentId, threadRef.threadId);
@@ -902,6 +906,14 @@ function GuestThreadSession({
         onOpenChange={setBringingAgent}
         onContinue={() => openOnMyMachine(endpoint, share.host, { board: true })}
       />
+      {cloud ? (
+        <BoardCoach
+          accountId={share.accountId}
+          onBringAgent={
+            roomCloud?.agents === true && machine == null ? () => setBringingAgent(true) : undefined
+          }
+        />
+      ) : null}
       {machine == null || addingAt === null ? null : (
         <BoardThreadPicker
           environmentId={machine.environmentId}

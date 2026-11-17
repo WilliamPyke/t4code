@@ -1,9 +1,7 @@
-import { UserButton, useAuth } from "@clerk/react";
+import { UserButton } from "@clerk/react";
 import { LogInIcon } from "lucide-react";
 
-import { hasCloudPublicConfig } from "~/cloud/publicConfig";
-import { isElectron } from "~/env";
-import { cloudBoardsOrigin } from "~/guest/cloudBoardsHost";
+import { boardAccountsEnabled, useBoardAccount } from "~/guest/boardAccount";
 
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { Button } from "../ui/button";
@@ -14,15 +12,14 @@ import { Button } from "../ui/button";
  */
 export function BoardsAccount() {
   // The desktop app's sign-in is for Tinkjam Connect; its boards stay on this computer for now.
-  if (isElectron || !hasCloudPublicConfig() || cloudBoardsOrigin() === null) return null;
+  if (!boardAccountsEnabled()) return null;
   return <ConfiguredBoardsAccount />;
 }
 
 function ConfiguredBoardsAccount() {
-  const { isLoaded, isSignedIn } = useAuth();
+  const account = useBoardAccount();
   const { openAuthPrompt } = useT3ConnectAuthPrompt();
-  if (!isLoaded) return null;
-  if (!isSignedIn) {
+  if (account.status === "signed-out") {
     return (
       <Button
         variant="outline"
@@ -35,9 +32,13 @@ function ConfiguredBoardsAccount() {
       </Button>
     );
   }
+  if (account.status !== "signed-in") return null;
   return (
-    <span data-boards-account>
-      <UserButton showName />
+    <span className="flex min-w-0 items-center gap-2" data-boards-account>
+      {account.name === null ? null : (
+        <span className="max-w-40 truncate text-sm font-medium">{account.name}</span>
+      )}
+      <UserButton />
     </span>
   );
 }

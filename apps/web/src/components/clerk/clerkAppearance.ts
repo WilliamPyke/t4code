@@ -9,7 +9,7 @@ const authFlowElements = {
 export const clerkAppearance = {
   // index.css orders this layer below components and utilities so the element classes below win.
   cssLayerName: "clerk",
-  options: { shimmer: false },
+  options: { shimmer: false, logoImageUrl: "/tinkjam-mark.svg", logoPlacement: "inside" },
   variables: {
     borderRadius: "0.5rem",
     // Clerk reuses its primary color for filled buttons and bare links.
@@ -46,3 +46,41 @@ export const clerkAppearance = {
   signIn: { elements: authFlowElements },
   signUp: { elements: authFlowElements },
 } satisfies NonNullable<ClerkProviderProps["appearance"]>;
+
+const TO_CONTINUE = "to continue to Tinkjam";
+
+/**
+ * Clerk names the product with its dashboard's application name; every line that would show it
+ * says Tinkjam instead.
+ */
+export const clerkLocalization = {
+  signIn: {
+    start: {
+      title: "Sign in to Tinkjam",
+      subtitle: "Your boards, on every device.",
+      titleCombined: "Sign in or sign up for Tinkjam",
+      subtitleCombined: "Your boards, on every device.",
+      actionText: "New to Tinkjam?",
+      actionLink: "Create an account",
+    },
+    password: { subtitle: TO_CONTINUE },
+    passkey: { subtitle: TO_CONTINUE },
+    emailCode: { subtitle: TO_CONTINUE },
+    emailLink: { subtitle: TO_CONTINUE },
+    phoneCode: { subtitle: TO_CONTINUE },
+  },
+  signUp: {
+    start: {
+      title: "Create your Tinkjam account",
+      titleCombined: "Create your Tinkjam account",
+      subtitle: "Your boards, on every device.",
+      subtitleCombined: "Your boards, on every device.",
+      actionText: "Already use Tinkjam?",
+      actionLink: "Sign in",
+    },
+    emailCode: { subtitle: TO_CONTINUE },
+    emailLink: { subtitle: TO_CONTINUE },
+    phoneCode: { subtitle: TO_CONTINUE },
+    continue: { subtitle: TO_CONTINUE },
+  },
+} satisfies NonNullable<ClerkProviderProps["localization"]>;

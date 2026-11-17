@@ -353,8 +353,8 @@ message answers nothing. A guest's own Tinkjam opens on the thread they
 [continued on their machine](#continue-on-your-own-machine) from this room, joining first if they
 have not. Nothing runs until you send it. While a guest's agent works on the task, its card says
 so; when that turn finishes, the card shows **Answered by** their agent, or the owner's, with the
-start of its reply, and the task is ticked off. Untick it if the work is not done. An interrupted
-or failed turn leaves the task unanswered, and nobody's turn answers a task someone else has.
+start of its reply, and the task is in progress until someone ticks it off. An interrupted or
+failed turn leaves the task unanswered, and nobody's turn answers a task someone else has.
 
 ### Run tasks with an agent
 
@@ -367,10 +367,21 @@ A guest's run waits for the owner like any other prompt of theirs, unless it run
 machine.
 
 Each task being run shows its box's name and how it is going, such as **Working**, **Waiting for
-the owner** or **Didn't finish**; click it to go to the box. When the box's turn finishes, the task
-is ticked off and answered by that box. Whoever runs the box's agent can **Stop** it from the task;
-a stopped or failed run leaves the task open, and **Clear** takes its mark off. Tasks run only in
-your own thread boxes, not in the room thread's own card; use **Take it to my agent** for that.
+the owner** or **Didn't finish**; click it to go to the box. Running a task puts it in progress;
+when the box's turn finishes, the box answers it, and it stays in progress until someone ticks it
+off. Whoever runs the box's agent can **Stop** it from the task; a stopped or failed run leaves the
+task open, and **Clear** takes its mark off. Tasks run only in your own thread boxes, not in the
+room thread's own card; use **Take it to my agent** for that.
+
+### Plan the work
+
+**Plan** in the board's header shows the board's tasks as columns: **To do**, **In progress** and
+**Done**. They are the same tasks as on the board, so ticking a task on the board moves it to Done,
+and moving it here changes it there, for everyone. Drag a card to another column or place, or use
+its menu's **Move to**. **Add a task** at the bottom of a column adds it there and on the board,
+beside the other tasks. Click a card to change its text, status, assignee or due day; **Show on
+board** goes to its card, and **Run with an agent** runs it as on the board. The address keeps
+which view is open, so a link to the Plan opens the Plan.
 
 ### See where everyone's code is
 

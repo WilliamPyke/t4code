@@ -65,7 +65,7 @@ export const roomBoxOn = (room: Pick<ThreadGuestShare, "board">, boxId: string |
     : room.board?.notes.find((note) => note.id === boxId && note.kind === "thread");
 
 /**
- * The board with a task marked done and answered by this person's agent: a guest's, or the
+ * The board with a task in progress and answered by this person's agent: a guest's, or the
  * owner's when `guestId` is undefined. Only a task that is no one's or already this person's
  * takes it; any other id, or the same turn again, leaves the board as it was.
  */
@@ -86,7 +86,8 @@ export function roomBoardWithTaskAnswered(
   const person = guestId === undefined ? {} : { guestId };
   const answered: RoomBoardNote = {
     ...task,
-    done: true,
+    // A person ticks it off once they have read the answer.
+    ...(task.done === true ? {} : { status: "doing" as const }),
     assignee: person,
     answer: { ...person, excerpt: roomTaskAnswerExcerpt(turn.reply), turnId: turn.id },
   };

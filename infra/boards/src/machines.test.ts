@@ -214,7 +214,7 @@ describe("a person's own machine on a cloud board", () => {
     expect(undone.board?.notes.some((candidate) => candidate.id === "card-1")).toBe(false);
   });
 
-  it("ticks off a task run in a box when the box's turn comes", () => {
+  it("answers a task run in a box when the box's turn comes, leaving it in progress", () => {
     const boxed = withBox(twoPeople(), ada, "box-ada");
     const tasked = change(boxed, grace, {
       type: "note.put",
@@ -230,7 +230,8 @@ describe("a person's own machine on a cloud board", () => {
       postTurn(running, ada, turn("run-2", { boxId: "box-ada" }), later),
     );
     const task = posted.board?.notes.find((note) => note.id === "task-1");
-    expect(task).toMatchObject({ done: true, assignee: { guestId: ada } });
+    expect(task).toMatchObject({ status: "doing", assignee: { guestId: ada } });
+    expect(task?.done).toBeUndefined();
     expect(task?.answer).toMatchObject({ turnId: "run-2", boxId: "box-ada" });
   });
 

@@ -401,7 +401,7 @@ it.effect("answers a task with the turn of the guest it is for, and no other car
       x: 0,
       y: 0,
       kind: "task",
-      done: true,
+      status: "doing",
       assignee: {},
       answer: { excerpt: "Owner did run:owner.", turnId: "run:owner" },
       changed: { at: DateTime.formatIso(yield* DateTime.now) },
@@ -410,8 +410,8 @@ it.effect("answers a task with the turn of the guest it is for, and no other car
     assert.isUndefined(after.notes.get("note")?.answer);
     const task = after.notes.get("task");
     assert.deepEqual(
-      [task?.done, task?.assignee, task?.answer?.guestId],
-      [true, { guestId: sam }, sam],
+      [task?.status, task?.assignee, task?.answer?.guestId],
+      ["doing", { guestId: sam }, sam],
     );
     assert.equal(task?.answer?.excerpt.length, ROOM_TASK_ANSWER_MAX_LENGTH);
     assert.isTrue(task?.answer?.excerpt.endsWith("…"));
@@ -779,7 +779,7 @@ it.effect("shows a thread box's last turns, and keeps the owner's box threads ap
     );
     assert.deepEqual(yield* boxThreadsInShell, [ThreadId.make("thread:box")]);
 
-    // A task run in the box is ticked off by the box's next turn, which answers it.
+    // A task run in the box is answered by the box's next turn, and stays for a person to tick.
     yield* change({ type: "note.put", noteId: "task", text: "Fix", x: 0, y: 0, kind: "task" });
     yield* change({ type: "task.run", noteId: "task", boxId: "box" });
     for (const id of ["run:1", "run:2", "run:2", "run:3", "run:4"]) yield* turn("box", id);
@@ -788,7 +788,7 @@ it.effect("shows a thread box's last turns, and keeps the owner's box threads ap
     assert.deepInclude(
       (yield* share).board?.notes.find((note) => note.id === "task"),
       {
-        done: true,
+        status: "doing",
         answer: { excerpt: "Reply run:1", turnId: "run:1", boxId: "box" },
       },
     );

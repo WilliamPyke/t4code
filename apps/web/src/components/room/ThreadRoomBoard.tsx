@@ -69,6 +69,7 @@ import {
   boardModelName,
   boardNewBoxModel,
 } from "./boardBoxModel.logic";
+import type { BoardViewMode } from "./boardPlan.logic";
 import { BoardSplit } from "./BoardSplit";
 import { RoomBoard, RoomCursors } from "./RoomBoard";
 import { RoomReplyProvider, revealRoomReply } from "./RoomReplyComments";
@@ -152,10 +153,14 @@ export function ThreadRoomBoard({
   threadRef,
   chat,
   onChat,
+  view,
+  onView,
 }: {
   readonly threadRef: ScopedThreadRef;
   readonly chat: string | null;
   readonly onChat: (chat: string | null) => void;
+  readonly view: BoardViewMode;
+  readonly onView: (view: BoardViewMode) => void;
 }) {
   const navigate = useNavigate();
   const shell = useThreadShell(threadRef);
@@ -522,6 +527,8 @@ export function ThreadRoomBoard({
               room={room}
               shareId={roomId}
               viewKey={roomBoardViewKey(threadRef)}
+              view={view}
+              onViewChange={onView}
               sharing={<BoardSharing threadRef={threadRef} shared={share !== null} />}
               titleEditor={<BoardTitle threadRef={threadRef} title={title} />}
               online={presence?.online ?? []}

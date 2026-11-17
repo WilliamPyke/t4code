@@ -18,7 +18,8 @@ import * as Schema from "effect/Schema";
 import { isElectron } from "../env";
 import { getLocalStorageItem, setLocalStorageItem } from "../hooks/useLocalStorage";
 import { configuredHostedAppUrl } from "../hostedPairing";
-import { boardAccountAuth, refreshAccountBoards } from "./boardAccount";
+import { boardAccountAuth, readBoardAccountName, refreshAccountBoards } from "./boardAccount";
+import { friendlyName } from "./boardAccount.logic";
 import { cloudBoardsHost, cloudBoardsOrigin } from "./cloudBoardsHost";
 import { type JoinedGuestShare, guestShareEndpointOf, isCloudShare } from "./guestShares";
 
@@ -29,13 +30,20 @@ const decodeHandoff = Schema.decodeUnknownOption(GuestHandoff);
 const BOARD_NAME_KEY = "t3code:board-name:v1";
 const BoardName = Schema.String;
 
-export function readBoardName(): string | null {
+function readBoardName(): string | null {
   try {
     return getLocalStorageItem(BOARD_NAME_KEY, BoardName)?.trim() || null;
   } catch {
     return null;
   }
 }
+
+/** The name to join a board under without asking: the account's, else the one this browser keeps. */
+export const knownBoardName = (): string | null => readBoardAccountName() ?? readBoardName();
+
+/** The name a name field starts with: the known one, else a friendly one to keep or replace. */
+export const suggestedBoardName = (): string =>
+  knownBoardName() ?? friendlyName((count) => Math.floor(Math.random() * count));
 
 export function rememberBoardName(name: string) {
   try {
@@ -85,6 +93,7 @@ export async function createCloudBoard(input: {
       credential: created.credential,
       title: input.title ?? "Untitled board",
       joinedAt: new Date().toISOString(),
+      made: true,
       ...(account === null ? {} : { accountId: account.userId }),
     };
   } catch {

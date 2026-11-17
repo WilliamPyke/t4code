@@ -1,9 +1,9 @@
 import { guestEnvironmentId } from "@t3tools/client-runtime/environment";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { EllipsisIcon, LogOutIcon } from "lucide-react";
+import { EllipsisIcon, LogOutIcon, Trash2Icon } from "lucide-react";
 
-import { isAccountBoard, leaveAccountBoard } from "~/guest/boardAccount";
-import { removeFromCloudBoard } from "~/guest/cloudBoards";
+import { isAccountBoard, leaveAccountBoard, openAccountBoard } from "~/guest/boardAccount";
+import { deleteCloudBoard, removeFromCloudBoard } from "~/guest/cloudBoards";
 import { findGuestShare, forgetGuestShare } from "~/guest/guestShares";
 import { ensureLocalApi } from "~/localApi";
 
@@ -15,6 +15,8 @@ interface JoinedBoardRef {
   readonly shareId: string;
   readonly title: string;
   readonly cloud: boolean;
+  /** This person made the cloud board, so they delete it rather than leave it. */
+  readonly maker?: boolean;
 }
 
 /**
@@ -43,7 +45,7 @@ function useRemoveJoinedBoard() {
   return async (board: JoinedBoardRef) => {
     const confirmed = await ensureLocalApi().dialogs.confirm(
       [
-        `Remove "${board.title}" from your boards?`,
+        board.cloud ? `Leave "${board.title}"?` : `Remove "${board.title}" from your boards?`,
         board.cloud
           ? "You leave the board. Everyone else on it keeps it, and the invite link brings you back."
           : "It goes from this browser only. Everyone else on it keeps it. To come back, you need a new link from the owner.",
@@ -66,7 +68,30 @@ function useRemoveJoinedBoard() {
   };
 }
 
-/** The menu on a joined board's card with the way to remove it from this browser. */
+/** Deletes a cloud board for everyone, opening it here first when only the account lists it. */
+export function useDeleteCloudBoard() {
+  const forget = useForgetJoinedBoard();
+  return async (board: Pick<JoinedBoardRef, "shareId" | "title">) => {
+    const confirmed = await ensureLocalApi().dialogs.confirm(
+      [
+        `Delete "${board.title}"?`,
+        "It is deleted for everyone on it, with everything on it. This cannot be undone.",
+      ].join("\n"),
+      { variant: "destructive" },
+    );
+    if (!confirmed) return;
+    const share = findGuestShare(board.shareId) ?? (await openAccountBoard(board.shareId));
+    const failed = typeof share === "string" ? share : await deleteCloudBoard(share);
+    if (failed === null) forget(board.shareId, "Board deleted");
+    else
+      toastManager.add({ type: "error", title: "Could not delete the board", description: failed });
+  };
+}
+
+/**
+ * The menu on a joined board's card: its maker deletes a cloud board, anyone else leaves it, and
+ * a board on someone's machine goes from this browser.
+ */
 export function JoinedBoardMenu({
   board,
   size = "icon-xs",
@@ -77,6 +102,7 @@ export function JoinedBoardMenu({
   readonly variant?: "outline" | "ghost-muted";
 }) {
   const remove = useRemoveJoinedBoard();
+  const deleteBoard = useDeleteCloudBoard();
   return (
     <Menu>
       <MenuTrigger
@@ -93,10 +119,25 @@ export function JoinedBoardMenu({
         <EllipsisIcon />
       </MenuTrigger>
       <MenuPopup align="end">
-        <MenuItem variant="destructive" onClick={() => void remove(board)} data-remove-joined-board>
-          <LogOutIcon />
-          Remove from my boards
-        </MenuItem>
+        {board.cloud && board.maker === true ? (
+          <MenuItem
+            variant="destructive"
+            onClick={() => void deleteBoard(board)}
+            data-delete-cloud-board
+          >
+            <Trash2Icon />
+            Delete board
+          </MenuItem>
+        ) : (
+          <MenuItem
+            variant="destructive"
+            onClick={() => void remove(board)}
+            data-remove-joined-board
+          >
+            <LogOutIcon />
+            {board.cloud ? "Leave board" : "Remove from my boards"}
+          </MenuItem>
+        )}
       </MenuPopup>
     </Menu>
   );
