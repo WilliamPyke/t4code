@@ -49,12 +49,12 @@ const teamsRequest = Effect.fn("teams.request")(function* <A>(
   const { relayUrl } = resolveCloudPublicConfig();
   const session = appAtomRegistry.get(managedRelaySessionAtom);
   if (relayUrl === null || session === null) {
-    return yield* failWith("Sign in to T Connect to use teams.");
+    return yield* failWith("Sign in to Tinkjam Connect to use teams.");
   }
   const token = yield* session
     .readClerkToken()
-    .pipe(Effect.mapError(() => failWith("Could not read your T Connect sign-in.")));
-  if (!token) return yield* failWith("Sign in to T Connect to use teams.");
+    .pipe(Effect.mapError(() => failWith("Could not read your Tinkjam Connect sign-in.")));
+  if (!token) return yield* failWith("Sign in to Tinkjam Connect to use teams.");
   const request = HttpClientRequest.make(init.method ?? "GET")(new URL(path, relayUrl)).pipe(
     HttpClientRequest.bearerToken(token),
   );
@@ -63,20 +63,22 @@ const teamsRequest = Effect.fn("teams.request")(function* <A>(
     .execute(
       init.body === undefined ? request : HttpClientRequest.bodyJsonUnsafe(request, init.body),
     )
-    .pipe(Effect.mapError(() => failWith("Could not reach T Connect.")));
+    .pipe(Effect.mapError(() => failWith("Could not reach Tinkjam Connect.")));
   const json = yield* response.json.pipe(Effect.orElseSucceed(() => null));
   if (response.status >= 400) {
     if (response.status === 429) return yield* failWith("Too many tries. Wait a minute.");
-    if (response.status === 401) return yield* failWith("Sign in to T Connect again.");
+    if (response.status === 401) return yield* failWith("Sign in to Tinkjam Connect again.");
     return yield* failWith(
       Option.match(decodeRefusal(json), {
-        onNone: () => "T Connect could not do that. Try again.",
+        onNone: () => "Tinkjam Connect could not do that. Try again.",
         onSome: (refusal) => refusal.message,
       }),
     );
   }
   return yield* Schema.decodeEffect(success)(json).pipe(
-    Effect.mapError(() => failWith("T Connect answered with something this app cannot read.")),
+    Effect.mapError(() =>
+      failWith("Tinkjam Connect answered with something this app cannot read."),
+    ),
   );
 }, Effect.provide(FetchHttpClient.layer));
 
@@ -114,7 +116,7 @@ function failureMessage(result: AsyncResult.AsyncResult<unknown, TeamsRequestErr
     : null;
 }
 
-/** Whether teams can show: this build has T Connect and someone is signed in to it. */
+/** Whether teams can show: this build has Tinkjam Connect and someone is signed in to it. */
 export function useTeamsAccount(): string | null {
   const session = useAtomValue(managedRelaySessionAtom);
   return hasCloudPublicConfig() ? (session?.accountId ?? null) : null;
@@ -228,7 +230,7 @@ export const changeTeamBoard = (teamId: string, change: RoomBoardChange) =>
   );
 
 /**
- * Joins a thread shared to the team: T Connect signs who this member is for the owner's machine,
+ * Joins a thread shared to the team: Tinkjam Connect signs who this member is for the owner's machine,
  * which lets them in under their account. Joining again is how a member comes back.
  */
 export async function joinTeamThread(
@@ -237,7 +239,10 @@ export async function joinTeamThread(
 ): Promise<TeamsOutcome<JoinedGuestShare>> {
   const host = guestLinkHost(thread.host);
   if (host === null) {
-    return { ok: false, message: "This thread's machine is outside this app's T Connect domain." };
+    return {
+      ok: false,
+      message: "This thread's machine is outside this app's Tinkjam Connect domain.",
+    };
   }
   const assertion = await run(
     teamsRequest(RelayTeamAssertionResponse, `${teamPath(teamId)}/assertions`, {

@@ -164,7 +164,7 @@ function SwitchPlan({
           ? ["This app's updates are off here, so reinstall it yourself to switch."]
           : []),
         ...(switchesLocal && isMacPlatform(navigator.platform)
-          ? ["If T Code does not reopen after it restarts, open it again."]
+          ? ["If Tinkjam does not reopen after it restarts, open it again."]
           : []),
       ]}
       restarts={everything.restarts}

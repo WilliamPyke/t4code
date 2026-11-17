@@ -44,7 +44,7 @@ import {
 } from "./room.ts";
 
 /**
- * A person's own T Code joined to a cloud board, exactly as it joins a room an owner's machine
+ * A person's own Tinkjam joined to a cloud board, exactly as it joins a room an owner's machine
  * serves: a short-lived handoff token opens the export once or twice, and the export hands out a
  * room token that opens the room routes for that person only. Only hashes are kept.
  */

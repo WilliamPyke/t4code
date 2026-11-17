@@ -472,7 +472,7 @@ function MachineRow(props: {
     : machine.connected
       ? null
       : machine.connectOnly
-        ? "T Connect"
+        ? "Tinkjam Connect"
         : "Not connected";
   return (
     <Pressable

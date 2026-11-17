@@ -266,7 +266,7 @@ function GuestShareDialog({
           <DialogTitle>Share with guests</DialogTitle>
           <DialogDescription>
             Guests see the thread as you do, including command output and the agent&apos;s
-            reasoning, and can copy the conversation to their own T Code. Each message they send
+            reasoning, and can copy the conversation to their own Tinkjam. Each message they send
             waits for you.
           </DialogDescription>
         </DialogHeader>

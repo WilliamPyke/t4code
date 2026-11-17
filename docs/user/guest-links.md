@@ -9,8 +9,8 @@ send waits until you send or dismiss it, unless you let a guest
 ## Share a thread
 
 Guest links are a beta. Turn on **Settings → Labs → Guest links** for the machine that runs the
-thread. They also need [T Connect](./remote-access.md): sign in and link that machine, because the
-link points at its T Connect address. The machine must stay online while the guest uses it.
+thread. They also need [Tinkjam Connect](./remote-access.md): sign in and link that machine, because the
+link points at its Tinkjam Connect address. The machine must stay online while the guest uses it.
 While the setting is off, every guest link on that machine stops working; links that have not
 expired work again when you turn it back on.
 
@@ -20,8 +20,8 @@ expired work again when you turn it back on.
    people you want in the thread. Anyone who has the link can join until 8 people have, so send it
    only to them. Each person picks a
    name no one else on the link uses, and opening the link again in the same browser takes them
-   back to the thread. The link opens in the hosted T Code app when your server is
-   [set up for one](#where-the-link-opens), and on your machine's T Connect address otherwise.
+   back to the thread. The link opens in the hosted Tinkjam app when your server is
+   [set up for one](#where-the-link-opens), and on your machine's Tinkjam Connect address otherwise.
 3. When a guest sends a message, it appears at the end of the thread under their name and the
    sidebar shows **Request**. Choose **Send** to run it as a normal turn, or **Dismiss**. Files they
    attached show with the message, and **Send** includes them. The agent is told which guest wrote
@@ -39,7 +39,7 @@ link's first end, but not after it.
 Choose **Stop sharing**, in the thread header or the share dialog, to end the link for everyone at
 once. **Replace link** in the dialog ends it too and makes a new one: pick how long the new link
 lasts, the first choice being as long as the old one did. Archiving the thread or unlinking the
-machine from T Connect also ends it. If anyone has joined, T Code asks you to confirm before it
+machine from Tinkjam Connect also ends it. If anyone has joined, Tinkjam asks you to confirm before it
 stops sharing or replaces the link. You can send or dismiss guest messages from the mobile app.
 
 ## See the room as a board
@@ -86,7 +86,7 @@ following**, ends it.
 Besides notes, add a **Task**, which anyone can tick off and assign to someone in the room, or a
 **Link**: type or paste an address, or paste one on the board or into an empty note. A link to a
 GitHub pull request, issue or file shows as its repository and number or path, and **Open**
-opens it in a new tab; T Code does not load the page. To draw an arrow, drag the dot on a card's
+opens it in a new tab; Tinkjam does not load the page. To draw an arrow, drag the dot on a card's
 edge onto another card; click an arrow to delete it. Drag a card's bottom corners to resize it;
 everyone sees the new size. Press Escape while dragging, resizing or drawing an arrow to put
 everything back as it was; nothing is sent.
@@ -136,7 +136,7 @@ the note is over it, or choose **Use as message** on the note. Its text lands in
 after anything you had written (pressing it twice adds it once), and the note stays where it was
 on the board. A card the drop would do nothing for is simply moved there. Nothing is sent until you send it, and a guest's message still waits for the owner. A guest
 whose agent has a card on the board can instead drag a note onto **Your agent** or choose **Give
-to my agent**: it opens as a draft in their own T Code, as a task does below.
+to my agent**: it opens as a draft in their own Tinkjam, as a task does below.
 
 ### Thread boxes
 
@@ -339,7 +339,7 @@ A **Pull request** window shows one GitHub pull request, kept current: its title
 open, a draft, merged or closed, its checks (and which are failing), commits, files and lines
 changed, and its branches. Choose **Pull request** in the board's tools and paste its address,
 paste a pull request address on the board, or choose **Show pull request** on a thread box whose
-thread has one. Only the owner's T Code reads GitHub, with the owner's own sign-in, so guests need
+thread has one. Only the owner's Tinkjam reads GitHub, with the owner's own sign-in, so guests need
 no GitHub access, and a pull request the owner's account cannot see says so. It reads again when
 added, when anyone chooses **Refresh**, and every few minutes while someone has the board open.
 A board holds up to 10 pull request windows.
@@ -349,7 +349,7 @@ A board holds up to 10 pull request windows.
 Choose **Take it to my agent** on a task, or drag it onto your own agent's card (the owner's is
 the thread's card), to make it yours and put its text in your own message box. For the owner, that is the shared thread, where the
 message box says sending it answers the task; dismiss that notice, or clear the draft, and the
-message answers nothing. A guest's own T Code opens on the thread they
+message answers nothing. A guest's own Tinkjam opens on the thread they
 [continued on their machine](#continue-on-your-own-machine) from this room, joining first if they
 have not. Nothing runs until you send it. While a guest's agent works on the task, its card says
 so; when that turn finishes, the card shows **Answered by** their agent, or the owner's, with the
@@ -412,7 +412,7 @@ palette's **Open board of...** lists those threads. The board opens where you la
 device, panned and zoomed the same, with the same conversation beside it; if that box or its thread
 is gone, the thread's own conversation opens instead.
 
-Someone who continued the thread on their own machine has the board in their own T Code: **Board**
+Someone who continued the thread on their own machine has the board in their own Tinkjam: **Board**
 in the joined thread's header opens it, and their own boxes run on that machine.
 
 ## Boards in the cloud
@@ -421,7 +421,7 @@ A cloud board is kept by the board service instead of on your computer, so it op
 
 Everyone on a cloud board can edit it, rename it and copy its invite link from the header. The **here now** button there lists who is on the board. Anyone can **Leave board** from it. The person who made the board can also **Remove** someone, and **Delete board** deletes it for everyone; that cannot be undone. **Remove from my boards** on the home page or sidebar leaves a cloud board too; its invite link brings you back.
 
-A cloud board has no agent of its own. Each person brings theirs. When you make a cloud board and this browser has one computer connected, your agent comes along by itself, so **Thread** and **Ask an agent** work at once. Otherwise, or on a board someone invited you to, choose **Thread**, **Ask an agent** or **Attach my agent**, then **Continue on my machine** to add the board to T Code on your computer. Your thread boxes then run on your computer, and only you can prompt them. If this browser has no computer connected, connect one under **Settings → Environments** first. A box whose person is not on the board shows **Offline**.
+A cloud board has no agent of its own. Each person brings theirs. When you make a cloud board and this browser has one computer connected, your agent comes along by itself, so **Thread** and **Ask an agent** work at once. Otherwise, or on a board someone invited you to, choose **Thread**, **Ask an agent** or **Attach my agent**, then **Continue on my machine** to add the board to Tinkjam on your computer. Your thread boxes then run on your computer, and only you can prompt them. If this browser has no computer connected, connect one under **Settings → Environments** first. A box whose person is not on the board shows **Offline**.
 
 Templates that use the board's own thread, code windows and pull request windows are only on boards kept on a computer.
 
@@ -463,18 +463,18 @@ is not approved. Removing a username applies to links that person joins afterwar
 The shared thread offers the sign-in only when the server that runs the thread was started with a
 GitHub app's client ID in `T3CODE_GITHUB_APP_CLIENT_ID` and its client secret in
 `T3CODE_GITHUB_APP_CLIENT_SECRET`. The app must list
-`https://<your T Connect host>/api/guest/sign-in/callback` as a callback URL. T Code asks GitHub
+`https://<your Tinkjam Connect host>/api/guest/sign-in/callback` as a callback URL. Tinkjam asks GitHub
 for no permissions, reads the guest's username and account number, then discards the token.
 
 ## Continue on your own machine
 
-A guest who has T Code can take the thread to their own machine. On the shared thread's page,
-choose **Continue on my machine**. It opens T Code, which asks before it contacts the owner's
+A guest who has Tinkjam can take the thread to their own machine. On the shared thread's page,
+choose **Continue on my machine**. It opens Tinkjam, which asks before it contacts the owner's
 machine, then shows what comes over and offers:
 
 - **Join with the code**, when you have the same repository on a connected machine. Your thread
   starts in a new worktree from the owner's branch, as its remote has it, and your setup script
-  runs on it. T Code tells you when the owner has work that is not pushed yet, because you will
+  runs on it. Tinkjam tells you when the owner has work that is not pushed yet, because you will
   not get that work.
 - **Conversation only**, which starts a thread without a project.
 
@@ -483,7 +483,7 @@ on your first message. Your turns run on your machine, with your own provider lo
 permission mode, so this works on a Claude or ChatGPT plan. Share code back the usual way, with a
 branch or a pull request.
 
-The shared thread comes along too: the T Code you joined in lists it under **Shared with me**,
+The shared thread comes along too: the Tinkjam you joined in lists it under **Shared with me**,
 signed in as the same guest, so you read the room and use its [board](#see-the-room-as-a-board)
 beside your own thread. **Board** in your joined thread's header opens it. A thread you joined
 before this existed has no **Board** button; its board stays where you opened the guest link.
@@ -493,12 +493,12 @@ then lands as a draft in the joined thread; see [Take a task to your agent](#tak
 
 ### Your turns show in the room
 
-The thread stays connected to the room it came from. When a turn starts in it, T Code tells the
+The thread stays connected to the room it came from. When a turn starts in it, Tinkjam tells the
 owner's machine your agent is working and on what prompt; when the turn finishes, it sends the
 prompt and your agent's final reply. With each, it also sends your thread's branch name, whether
 it is pushed, and any open pull request for it, so the room can
 [see where your code is](#see-where-everyones-code-is), and which task the turn answers, if you
-took one. The owner and every guest see them as your agent's, for example **Sam's agent**. T Code
+took one. The owner and every guest see them as your agent's, for example **Sam's agent**. Tinkjam
 tells you this before you
 join, and the thread header says **Your turns show in the room** while it is on. Choose **Leave
 room** there to stop; your thread keeps working as a plain copy, and what the room already shows
@@ -545,17 +545,17 @@ chip says when something was cut. If the room has ended or the owner removed you
 saying you are in it.
 
 The copy holds the messages you could see when you chose it, up to the most recent 400. Images and
-other files in them stay behind. The link T Code opens is good for 10 minutes; choose **Continue
+other files in them stay behind. The link Tinkjam opens is good for 10 minutes; choose **Continue
 on my machine** again if it runs out. Joining works on desktop and web, not yet in the mobile app.
 A thread you already joined shows **Catch up** and **Leave room** above the composer there; the
 mobile app does not show guests' own turns.
 
 ## What a guest sees
 
-A guest gets T Code in their browser with the thread in the sidebar, under **Shared with me**. To
+A guest gets Tinkjam in their browser with the thread in the sidebar, under **Shared with me**. To
 put your name over your threads there, set **Settings → Labs → Guest links → Name shown to
 guests**; a guest sees a new name the next time they open the thread. Threads from other links they joined in that browser
-are listed there too, and someone who uses T Code with their own machines sees shared threads
+are listed there too, and someone who uses Tinkjam with their own machines sees shared threads
 beside their own. A shared thread is listed for as long as its link lasts.
 
 A guest sees the thread's recent history and everything after, in the same timeline you see, as
@@ -576,17 +576,17 @@ sharing. Share only threads you are comfortable showing.
 
 ### Where the link opens
 
-A guest link normally opens on your machine's T Connect address. If you run a hosted copy of the
-T Code web app, start the server with its address in `T3CODE_HOSTED_APP_URL` (for example
+A guest link normally opens on your machine's Tinkjam Connect address. If you run a hosted copy of the
+Tinkjam web app, start the server with its address in `T3CODE_HOSTED_APP_URL` (for example
 `https://app.example.org`) and new links open there instead, naming your machine:
-`https://app.example.org/guest?host=<your T Connect host>#<invite>`.
+`https://app.example.org/guest?host=<your Tinkjam Connect host>#<invite>`.
 
 With a hosted app, the link you copy is a short readable one, such as
-`https://app.example.org/r/tulip-otter-harbor`. T Connect keeps what the name stands for until the
+`https://app.example.org/r/tulip-otter-harbor`. Tinkjam Connect keeps what the name stands for until the
 link expires, and the hosted app looks it up. The name is the key to the thread, so treat it like
 the full link.
 
-The hosted app follows a link only to a machine in its own T Connect domain: with the app at
+The hosted app follows a link only to a machine in its own Tinkjam Connect domain: with the app at
 `app.example.org`, that is `<name>.example.org`. Build the hosted app with `VITE_GUEST_HOST_ZONE`
 set to the domain if your machines' addresses are somewhere else. A link that names any other
 host is refused before anything is sent to it.

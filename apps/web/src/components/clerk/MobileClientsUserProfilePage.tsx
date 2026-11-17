@@ -94,8 +94,8 @@ function EmptyMobileClients() {
       <EmptyHeader>
         <EmptyTitle>No mobile clients</EmptyTitle>
         <EmptyDescription>
-          Install T Code on your phone and sign in to T Connect to get push notifications and Live
-          Activities.
+          Install Tinkjam on your phone and sign in to Tinkjam Connect to get push notifications and
+          Live Activities.
         </EmptyDescription>
       </EmptyHeader>
     </Empty>

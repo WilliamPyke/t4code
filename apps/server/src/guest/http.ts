@@ -485,7 +485,7 @@ const boardAgentErrorResponse = (error: RoomBoardAgentError) =>
 const encodeBoardView = encodeForGuest(RoomBoardAgentView);
 const encodeBoardResult = Schema.encodeEffect(RoomBoardAgentResult);
 
-// Read by the guest's own T Code server for the agent of the guest's own box there.
+// Read by the guest's own Tinkjam server for the agent of the guest's own box there.
 const roomBoardRoute = HttpRouter.add(
   "GET",
   GUEST_ROOM_BOARD_ROUTE,
@@ -513,7 +513,7 @@ const roomBoardRoute = HttpRouter.add(
 const BOARD_AGENT_MAX_BODY_BYTES = 192 * 1024;
 const decodeBoardAgentChange = Schema.decodeUnknownEffect(RoomBoardAgentChangeRequest);
 
-// Posted by the guest's own T Code server when the agent of the guest's own box there calls a
+// Posted by the guest's own Tinkjam server when the agent of the guest's own box there calls a
 // board tool.
 const roomBoardChangeRoute = HttpRouter.add(
   "POST",

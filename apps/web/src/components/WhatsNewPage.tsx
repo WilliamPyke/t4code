@@ -48,7 +48,7 @@ export function WhatsNewPage() {
         <header className="flex flex-col gap-1">
           <h1 className="text-2xl leading-tight font-semibold">What's new</h1>
           <p className="text-sm text-muted-foreground">
-            What changed in T Code, newest first, and where to find it.
+            What changed in Tinkjam, newest first, and where to find it.
           </p>
         </header>
         <ol className="flex flex-col gap-8">

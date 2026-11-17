@@ -492,7 +492,7 @@ function GuestThreadSession({
   const guestId = view.guestId;
   const reportOpenFailure = (error: string | null) => {
     if (error !== null) {
-      toastManager.add({ type: "error", title: "Could not open your T Code", description: error });
+      toastManager.add({ type: "error", title: "Could not open your Tinkjam", description: error });
     }
   };
   // This guest's own box's changes are on their machine; anyone else's the owner's server reads.
@@ -514,7 +514,7 @@ function GuestThreadSession({
     });
     return result._tag === "Success" ? roomCodePatchRead(result.value) : ROOM_CODE_PATCH_UNREADABLE;
   };
-  // The task becomes this guest's, and a draft in their own T Code; neither sends anything.
+  // The task becomes this guest's, and a draft in their own Tinkjam; neither sends anything.
   const takeTask = (task: RoomBoardNote) => {
     const opened = openOnMyMachine(endpoint, share.host, {
       task: { shareId: share.shareId, taskId: task.id, text: task.text },
@@ -1322,7 +1322,7 @@ function GuestGitHubSignIn({
 }
 
 /**
- * Opens the guest's own T Code on a short-lived handoff token, with a task or artifact card as a
+ * Opens the guest's own Tinkjam on a short-lived handoff token, with a task or artifact card as a
  * draft when given one. Call it in the click itself: a tab opened after a request counts as a
  * popup. Resolves to what went wrong, or null.
  */
@@ -1358,7 +1358,7 @@ async function openOnMyMachine(
 }
 
 /**
- * Takes the guest to their own T Code with a short-lived token, where they get their own copy
+ * Takes the guest to their own Tinkjam with a short-lived token, where they get their own copy
  * of this thread. From then on their turns run on their machine, not the owner's.
  */
 function ContinueOnMyMachine({

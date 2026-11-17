@@ -349,7 +349,7 @@ function useBoardSummary(
   return data?.boards.find((summary) => summary.threadId === board.threadId) ?? null;
 }
 
-/** A team board's cards, read once from T Connect as the board itself reads them. */
+/** A team board's cards, read once from Tinkjam Connect as the board itself reads them. */
 function useTeamBoardShapes(
   teamId: string | null,
 ): ReadonlyArray<RoomBoardSummaryShape> | undefined {
@@ -357,7 +357,7 @@ function useTeamBoardShapes(
     readonly teamId: string;
     readonly shapes: ReadonlyArray<RoomBoardSummaryShape>;
   } | null>(null);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the team's board from T Connect once for its tile
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the team's board from Tinkjam Connect once for its tile
   useEffect(() => {
     if (teamId === null) return;
     let stopped = false;

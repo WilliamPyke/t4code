@@ -86,7 +86,7 @@ function summarize(
         prompt.value === null
           ? {
               title: "Open this thread",
-              description: "It opens in T Code if you're connected to the machine it runs on.",
+              description: "It opens in Tinkjam if you're connected to the machine it runs on.",
               prompt: null,
               details: [],
             }
@@ -188,7 +188,7 @@ function HostedPromptLinkLanding({
         <Alert className="mt-5" variant="error">
           <AlertTitle>This prompt had hidden characters, it may be malicious</AlertTitle>
           <AlertDescription>
-            T Code removed {prompt.hiddenCharacters} hidden character
+            Tinkjam removed {prompt.hiddenCharacters} hidden character
             {prompt.hiddenCharacters === 1 ? "" : "s"}. Read the prompt before you send it.
           </AlertDescription>
         </Alert>
@@ -211,7 +211,7 @@ function HostedPromptLinkLanding({
           </Button>
         ) : null}
         <Button variant="ghost" render={<a href={DESKTOP_DOWNLOAD_URL} />}>
-          Get T Code
+          Get Tinkjam
         </Button>
       </div>
       <label className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">

@@ -210,7 +210,7 @@ export function ConnectionEnvironmentRow(props: {
           ) : null}
           {props.environment.isRelayManaged ? (
             <Text className="text-sm text-foreground-muted">
-              Managed by T Connect. Tunnel details update automatically.
+              Managed by Tinkjam Connect. Tunnel details update automatically.
             </Text>
           ) : (
             <>

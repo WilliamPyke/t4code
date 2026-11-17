@@ -38,7 +38,7 @@ export const layer = Layer.effect(
           user.fullName?.trim() ||
           user.username?.trim() ||
           user.primaryEmailAddress?.emailAddress.split("@")[0] ||
-          "T Code user";
+          "Tinkjam user";
         return Option.some<TeamProfile>({ name, avatarUrl: user.hasImage ? user.imageUrl : null });
       },
       Effect.timeout(LOOKUP_TIMEOUT),

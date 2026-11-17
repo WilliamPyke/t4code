@@ -86,7 +86,7 @@ it("says the machine is not connected when its session is not here, not that acc
   const result = await useOrchestrationCommand(command, { reportFailure: false })(target(first));
   assert(result._tag === "Failure");
   expect(Cause.squash(result.cause)).toMatchObject({
-    message: "Not connected to this machine. Check that T Code is running there.",
+    message: "Not connected to this machine. Check that Tinkjam is running there.",
   });
   expect(state.run).not.toHaveBeenCalled();
 });

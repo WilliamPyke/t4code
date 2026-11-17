@@ -66,8 +66,8 @@ function NewTeamDialog() {
           <DialogHeader>
             <DialogTitle>New team</DialogTitle>
             <DialogDescription>
-              Teammates join with their T Connect account and see the threads you share with the
-              team.
+              Teammates join with their Tinkjam Connect account and see the threads you share with
+              the team.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>

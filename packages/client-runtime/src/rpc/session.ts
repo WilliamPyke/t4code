@@ -163,7 +163,7 @@ function mapSessionRpcError(
   }
 }
 
-/** Over T Connect the relay already reached the host, so a socket that drops failed between this device and the tunnel. */
+/** Over Tinkjam Connect the relay already reached the host, so a socket that drops failed between this device and the tunnel. */
 function socketFailureLocation(via: "relay" | "direct") {
   return { hop: via === "relay" ? "tunnel" : "server", via } as const;
 }

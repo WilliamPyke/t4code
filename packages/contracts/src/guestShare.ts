@@ -14,7 +14,7 @@ import {
 import { ModelSelection } from "./modelSelection.ts";
 
 /**
- * A guest share lets a few unauthenticated browsers watch a thread over T Connect and propose
+ * A guest share lets a few unauthenticated browsers watch a thread over Tinkjam Connect and propose
  * messages the owner must send or dismiss. The thread projection holds this public state; the
  * credentials are derived from the share id with a server key and never stored.
  */
@@ -201,7 +201,7 @@ export const ThreadGuestMessage = Schema.Struct({
 export type ThreadGuestMessage = typeof ThreadGuestMessage.Type;
 
 /**
- * One turn a guest ran in their own T Code after joining from the room: their prompt and their
+ * One turn a guest ran in their own Tinkjam after joining from the room: their prompt and their
  * agent's final reply. The room only shows it. It never starts a turn here and never reaches the
  * owner's agent.
  */
@@ -1194,7 +1194,7 @@ export const providerAllowsDirectGuestSend = (
 
 export const ThreadGuestShare = Schema.Struct({
   id: GuestShareId,
-  /** The T Connect tunnel hostname the link points at. Guest routes require it to still serve. */
+  /** The Tinkjam Connect tunnel hostname the link points at. Guest routes require it to still serve. */
   host: TrimmedNonEmptyString,
   createdAt: IsoDateTime,
   expiresAt: IsoDateTime,
@@ -1311,7 +1311,7 @@ export const GuestShareCreateInput = Schema.Struct({
    * everyone on it stays. Without such a link a new one is made.
    */
   extend: Schema.optional(Schema.Boolean),
-  /** Shares to this team instead of making a guest link. Needs T Connect and membership. */
+  /** Shares to this team instead of making a guest link. Needs Tinkjam Connect and membership. */
   teamId: Schema.optional(TrimmedNonEmptyString),
 });
 export type GuestShareCreateInput = typeof GuestShareCreateInput.Type;
@@ -1326,12 +1326,12 @@ export type GuestShareCreateResult = typeof GuestShareCreateResult.Type;
 
 const GUEST_SHARE_CREATE_MESSAGES = {
   disabled: "Guest links are off. Turn them on in Settings > Labs.",
-  connect_unavailable: "Guest links need a running T Connect tunnel.",
+  connect_unavailable: "Guest links need a running Tinkjam Connect tunnel.",
   thread_unavailable: "This thread cannot be shared.",
   read_failed: "Failed to read the shared thread.",
   changed: "The guest link changed while it was being created.",
   team_unavailable:
-    "Could not share with this team. Check that this machine is linked to T Connect with an account in the team.",
+    "Could not share with this team. Check that this machine is linked to Tinkjam Connect with an account in the team.",
 } as const;
 
 export class GuestShareCreateError extends Schema.TaggedError<GuestShareCreateError>()(
@@ -1422,7 +1422,7 @@ export const GuestRedeemRequest = Schema.Struct({
     }),
   ),
   /**
-   * A team member's signed assertion from T Connect. A thread shared to a team takes nothing else,
+   * A team member's signed assertion from Tinkjam Connect. A thread shared to a team takes nothing else,
    * and joins the member under their account's name instead of `name`.
    */
   memberAssertion: Schema.optional(TrimmedNonEmptyString),
@@ -1494,7 +1494,7 @@ export const SharedThreadCheckout = Schema.Struct({
 export type SharedThreadCheckout = typeof SharedThreadCheckout.Type;
 
 /**
- * Lets the guest's own T Code post the turns it runs back to the room, read what the room said
+ * Lets the guest's own Tinkjam post the turns it runs back to the room, read what the room said
  * since, and read an artifact card its user takes to their agent, until the share ends or the
  * guest is removed. The token opens nothing else.
  */
@@ -1555,7 +1555,7 @@ export const ThreadRoomLink = Schema.Struct({
 });
 export type ThreadRoomLink = typeof ThreadRoomLink.Type;
 
-/** A turn the guest's own T Code posts to the room. */
+/** A turn the guest's own Tinkjam posts to the room. */
 export const GuestTurnRequest = Schema.Struct({
   id: ThreadGuestTurn.fields.id,
   prompt: ThreadGuestTurn.fields.prompt,
@@ -1606,7 +1606,7 @@ export const GuestTurnRequest = Schema.Struct({
 export type GuestTurnRequest = typeof GuestTurnRequest.Type;
 
 /**
- * The guest's own T Code saying a turn started (`running`, with the prompt) or stopped without
+ * The guest's own Tinkjam saying a turn started (`running`, with the prompt) or stopped without
  * a turn to post (`idle`). Posting the finished turn also clears it.
  */
 export const GuestAgentActivityRequest = Schema.Struct({
@@ -1630,7 +1630,7 @@ export const GuestAgentActivityRequest = Schema.Struct({
 export type GuestAgentActivityRequest = typeof GuestAgentActivityRequest.Type;
 
 /**
- * An artifact card as the guest's own T Code reads it, so the user's agent can revise it: its
+ * An artifact card as the guest's own Tinkjam reads it, so the user's agent can revise it: its
  * title and what it shows now. Absent `body`: nothing filled it yet.
  */
 export const RoomArtifactRead = Schema.Struct({
@@ -1691,13 +1691,13 @@ export const GUEST_SIGN_IN_ROUTE = `${GUEST_ROUTE_PREFIX}/sign-in`;
 export const GUEST_SIGN_IN_BEGIN_ROUTE = `${GUEST_ROUTE_PREFIX}/sign-in/begin`;
 /** GitHub sends the guest's browser back here (GET) with `code` and `state`. */
 export const GUEST_SIGN_IN_CALLBACK_ROUTE = `${GUEST_ROUTE_PREFIX}/sign-in/callback`;
-/** Mints a short-lived token the guest's own T Code uses to read the export: `?share=<id>`. */
+/** Mints a short-lived token the guest's own Tinkjam uses to read the export: `?share=<id>`. */
 export const GUEST_HANDOFF_ROUTE = `${GUEST_ROUTE_PREFIX}/handoff`;
-/** The thread's export, for a bearer handoff token. Called by another T Code server. */
+/** The thread's export, for a bearer handoff token. Called by another Tinkjam server. */
 export const GUEST_EXPORT_ROUTE = `${GUEST_ROUTE_PREFIX}/export`;
-/** A guest's own T Code posts a turn it ran here, with a bearer room token. */
+/** A guest's own Tinkjam posts a turn it ran here, with a bearer room token. */
 export const GUEST_ROOM_TURN_ROUTE = `${GUEST_ROUTE_PREFIX}/room/turns`;
-/** A guest's own T Code says a turn started or stopped here, with a bearer room token. */
+/** A guest's own Tinkjam says a turn started or stopped here, with a bearer room token. */
 export const GUEST_ROOM_ACTIVITY_ROUTE = `${GUEST_ROUTE_PREFIX}/room/activity`;
 /**
  * On the answer to a posted turn or activity: when the room ends now, as an ISO time. The owner

@@ -219,7 +219,7 @@ describe("resolveUserMessagePresentation", () => {
     ).toBe(`Draw ${typed}\n\n${chip}`);
   });
 
-  it("attributes older server-sent restart continuations to T Code, not another agent", () => {
+  it("attributes older server-sent restart continuations to Tinkjam, not another agent", () => {
     const text = "Note: the T3 server restarted.";
     expect(
       resolveUserMessagePresentation({

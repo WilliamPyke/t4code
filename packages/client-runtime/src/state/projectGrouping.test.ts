@@ -88,7 +88,7 @@ const repositoryIdentity = {
   provider: SourceControlProviderKind.make("github"),
   owner: "t3tools",
   name: "t3code",
-  displayName: "T Code",
+  displayName: "Tinkjam",
 };
 
 function makeProject(

@@ -17,7 +17,7 @@ import { useAtomCommand } from "./use-atom-command";
 /** Why a change to threads or projects did not go to this machine. */
 export const orchestrationDeniedMessage = (access: Exclude<EnvironmentScopeAccess, "granted">) =>
   access === "not-connected"
-    ? "Not connected to this machine. Check that T Code is running there."
+    ? "Not connected to this machine. Check that Tinkjam is running there."
     : "This connection cannot change threads or projects.";
 
 export function useOrchestrationCommand<W extends { readonly environmentId: EnvironmentId }, A, E>(

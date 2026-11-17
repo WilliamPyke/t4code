@@ -42,7 +42,7 @@ provider login.
    global `vp`, use `pnpm install --frozen-lockfile` and `pnpm exec vp run dev --steady`.
 
    `--steady` (or `T3CODE_DEV_STEADY=1`) keeps the server running when files change. Plain
-   `vp run dev` restarts the server on every saved file, which is right for developing T Code but
+   `vp run dev` restarts the server on every saved file, which is right for developing Tinkjam but
    cuts off your agents' turns and your guests' connections while you use it. Restart the command
    after you pull.
 
@@ -50,7 +50,7 @@ provider login.
    **Settings → Labs → Guest links**, and set **Name shown to guests** there.
 
 You can now share a thread (**Share with guests** in the thread menu), and **Continue on my
-machine** in a room someone else shared opens in your T Code.
+machine** in a room someone else shared opens in your Tinkjam.
 
 ## Things to know
 

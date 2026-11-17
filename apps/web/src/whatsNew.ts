@@ -126,7 +126,7 @@ export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
     date: "2026-11-14",
     title: "Boards are home",
     items: [
-      "T Code now opens on Boards: every board you have, with a live preview, who is on it and when it last changed. Ctrl+Alt+G (Cmd+Option+G) goes there from anywhere.",
+      "Tinkjam now opens on Boards: every board you have, with a live preview, who is on it and when it last changed. Ctrl+Alt+G (Cmd+Option+G) goes there from anywhere.",
       "New board starts a blank board with its title ready to rename. Ctrl+Alt+Shift+B (Cmd+Option+Shift+B) makes one from anywhere.",
       "Start from a template: Boards → the arrow beside New board, or “New board from template…” in the command palette. Plan a feature, Bug bash, Design review and Retro come with sections and notes to fill in.",
       "A board's thread opens its board from the sidebar, and threads inside a thread box leave the Threads list. Search still finds them.",
@@ -206,7 +206,7 @@ export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
     date: "2026-11-12",
     title: "Teams, tasks and live pointers",
     items: [
-      "Teams: choose + beside Teams in the sidebar and invite people with a link. Members join with their T Connect account, and a thread shared with a team stays listed for 90 days.",
+      "Teams: choose + beside Teams in the sidebar and invite people with a link. Members join with their Tinkjam Connect account, and a thread shared with a team stays listed for 90 days.",
       "Each team has a board with a card for every thread shared with it.",
       "Tasks you can assign. Take it to my agent puts a task in your message box, and the finished turn ticks it off.",
       "See everyone's pointer on the board with their name, and click a name to follow them.",
@@ -218,7 +218,7 @@ export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
     date: "2026-11-11",
     title: "Guests in the full app",
     items: [
-      "With a hosted app, a guest link opens the full T Code app, with shared threads under Shared with me.",
+      "With a hosted app, a guest link opens the full Tinkjam app, with shared threads under Shared with me.",
       "Links can be three easy words, like /r/tulip-otter-harbor. Share with guests again shows the same link, and Replace link makes a new one.",
       "Settings → Labs → Guest links → Name shown to guests labels your threads in a guest's sidebar.",
       "Guests can sign in with GitHub, and messages from your approved contributors send without asking.",
@@ -234,7 +234,7 @@ export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
       "Everyone sees each other's waiting messages, and you send or dismiss each one.",
       "Remove a guest, and see who has the thread open right now.",
       "Let a guest send without asking when the thread's provider signs in with an API key.",
-      "Continue on my machine takes the thread to a guest's own T Code, on your branch if they like.",
+      "Continue on my machine takes the thread to a guest's own Tinkjam, on your branch if they like.",
     ],
   },
 ];

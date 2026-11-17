@@ -245,7 +245,7 @@ const GUEST_ACCESS_MESSAGES = {
   ended: "This room has ended, or you are no longer in it.",
   too_fast: "Too many requests at once. Try again in a minute.",
   team_member_required:
-    "This thread is shared with a team. Open it from the team's page in T Code while signed in.",
+    "This thread is shared with a team. Open it from the team's page in Tinkjam while signed in.",
   artifact_gone: GUEST_FAILURE.artifactGone,
   box_gone: GUEST_FAILURE.boxGone,
   box_not_yours: GUEST_FAILURE.boxNotYours,

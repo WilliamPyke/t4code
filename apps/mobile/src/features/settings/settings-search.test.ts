@@ -7,7 +7,7 @@ const SECTIONS = [
   {
     title: "Connections",
     rows: [
-      { id: "account", label: "T Account" },
+      { id: "account", label: "Tinkjam Account" },
       { id: "SettingsEnvironments", label: "Environments" },
     ],
   },

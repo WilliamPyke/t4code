@@ -172,7 +172,7 @@ function routeAddressKey(route: ConnectionRoute): string | null {
 export function connectionRouteLabel(route: ConnectionRoute): string {
   switch (connectionRouteKind(route)) {
     case "relay":
-      return "T Connect";
+      return "Tinkjam Connect";
     case "loopback":
       return "This device";
     case "lan":
@@ -415,7 +415,7 @@ export function isLearned(route: ConnectionRoute): boolean {
 
 /**
  * A learned route borrows the credential of the route it was learned over, so
- * it cannot outlive that route: removing T Connect also removes routes learned
+ * it cannot outlive that route: removing Tinkjam Connect also removes routes learned
  * through it, and removing a paired address removes routes that borrow its
  * token.
  */

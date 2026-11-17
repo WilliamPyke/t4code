@@ -48,7 +48,7 @@ export function BringAgentDialog({
           <DialogDescription>
             {hasMachine
               ? "Agents here run on each person's own computer. Continue on your machine to add this board there, then come back to add thread boxes and ask your agent."
-              : "Agents here run on each person's own computer, in T Code. Connect your computer to this browser first, then come back to this board."}
+              : "Agents here run on each person's own computer, in Tinkjam. Connect your computer to this browser first, then come back to this board."}
           </DialogDescription>
           {error === null ? null : (
             <p role="alert" className="text-sm text-destructive">

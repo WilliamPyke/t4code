@@ -106,7 +106,7 @@ const appendRelayCredentialResponseHeaders = HttpEffect.appendPreResponseHandler
     ),
 );
 
-// T Code hosts never retry sooner than Retry-After, so during a Cloudflare
+// Tinkjam hosts never retry sooner than Retry-After, so during a Cloudflare
 // rate limit they wait out the pause instead of retrying into it.
 const appendCloudflareRetryAfter = (error: unknown) => {
   const retryAfterMillis = ManagedEndpointProvider.cloudflareRetryAfterMillis(error);
@@ -509,7 +509,7 @@ export const layerGuestLinksApi = HttpApiBuilder.group(
 
 /** How long a member assertion opens a team share; joining uses it at once. */
 const TEAM_ASSERTION_LIFETIME_SECONDS = 5 * 60;
-const FALLBACK_TEAM_PROFILE = { name: "T Code user", avatarUrl: null };
+const FALLBACK_TEAM_PROFILE = { name: "Tinkjam user", avatarUrl: null };
 
 const teamErrorCases = {
   TeamRequestError: (error: Teams.TeamRequestError) =>

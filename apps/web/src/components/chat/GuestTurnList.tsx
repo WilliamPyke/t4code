@@ -12,7 +12,7 @@ import ChatMarkdown from "../ChatMarkdown";
 import { guestBubbleClassName } from "./guestMessageStyle";
 
 /**
- * Turns guests ran in their own T Code after joining from the room. They sit on the agent's
+ * Turns guests ran in their own Tinkjam after joining from the room. They sit on the agent's
  * side with a guest's dashed edge, so no one reads them as the thread's own agent. The reply is
  * markdown as an agent's is, without raw HTML: it comes from another machine.
  */

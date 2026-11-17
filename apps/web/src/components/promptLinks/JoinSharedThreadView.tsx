@@ -314,7 +314,7 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
       ) : link.board === true ? (
         <JoinPage
           title="Bring your agent to this board?"
-          description={`T Code will ask ${link.host} for the board. Your agent joins it from this computer, on your own provider sign-in.`}
+          description={`Tinkjam will ask ${link.host} for the board. Your agent joins it from this computer, on your own provider sign-in.`}
         >
           <Button size="sm" onClick={() => void loadPreview()}>
             Continue
@@ -323,7 +323,7 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
       ) : task === undefined ? (
         <JoinPage
           title="Bring this shared thread to your machine?"
-          description={`T Code will ask ${link.host} for the conversation. You get your own thread: your turns run here, on your own provider login.`}
+          description={`Tinkjam will ask ${link.host} for the conversation. You get your own thread: your turns run here, on your own provider login.`}
         >
           <Button size="sm" onClick={() => void loadPreview()}>
             Continue

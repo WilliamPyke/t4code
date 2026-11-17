@@ -239,7 +239,7 @@ export function parseJoinLink(search: string): PromptLinkResult<JoinLink> {
   ) {
     return {
       ok: false,
-      error: `This link names ${taskId === null ? "an artifact" : "a task"} T Code cannot read.`,
+      error: `This link names ${taskId === null ? "an artifact" : "a task"} Tinkjam cannot read.`,
     };
   }
   const card = { shareId, prompt: prompt.value };

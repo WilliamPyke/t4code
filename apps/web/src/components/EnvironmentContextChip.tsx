@@ -33,7 +33,7 @@ export function EnvironmentContextChip(props: {
         }
       />
       <TooltipPopup side="top">
-        {environment ? "T Code environment" : "Machine not in this app"}
+        {environment ? "Tinkjam environment" : "Machine not in this app"}
       </TooltipPopup>
     </Tooltip>
   );

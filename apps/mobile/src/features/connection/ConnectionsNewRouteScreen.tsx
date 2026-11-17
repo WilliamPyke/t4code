@@ -374,7 +374,7 @@ function T3ConnectSection() {
         />
       ) : (
         <ListRow
-          label="Sign in to T Connect"
+          label="Sign in to Tinkjam Connect"
           description="Reach your machines from anywhere, no network setup."
           disabled={!isLoaded}
           onPress={() => navigation.navigate("SettingsAuth")}

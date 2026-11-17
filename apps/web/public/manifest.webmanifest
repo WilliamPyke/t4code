@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "T Code",
-  "short_name": "T Code",
+  "name": "Tinkjam",
+  "short_name": "Tinkjam",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

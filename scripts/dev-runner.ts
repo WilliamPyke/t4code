@@ -1020,7 +1020,7 @@ const devRunnerCli = Command.make("dev-runner", {
   ),
   steady: Flag.Boolean("steady").pipe(
     Flag.withDescription(
-      "Run the server without restarting it when files change (equivalent to T3CODE_DEV_STEADY=1), for using T Code rather than developing it. Restart the command to pick up changes.",
+      "Run the server without restarting it when files change (equivalent to T3CODE_DEV_STEADY=1), for using Tinkjam rather than developing it. Restart the command to pick up changes.",
     ),
     Flag.withFallbackConfig(optionalBooleanConfig("T3CODE_DEV_STEADY")),
   ),

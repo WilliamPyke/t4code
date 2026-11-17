@@ -180,7 +180,7 @@ const SESSION_ROUTES: Readonly<Record<string, { method: string; maxBytes: number
   [GUEST_HANDOFF_ROUTE]: { method: "POST", maxBytes: JSON_MAX_BODY_BYTES },
 };
 
-// Called by a person's own T Code with a bearer handoff or room token, which names the board.
+// Called by a person's own Tinkjam with a bearer handoff or room token, which names the board.
 // The same caps as a machine's guest routes.
 const MACHINE_ROUTES: Readonly<Record<string, number>> = {
   [`GET ${GUEST_EXPORT_ROUTE}`]: 0,
@@ -505,7 +505,7 @@ export class BoardRoom extends DurableObject<Env> {
     return Response.json(result, { headers: NO_STORE });
   }
 
-  /** The routes a person's own T Code calls, with the token the export or a handoff gave it. */
+  /** The routes a person's own Tinkjam calls, with the token the export or a handoff gave it. */
   private async machine(request: Request, url: URL): Promise<Response> {
     const now = Date.now();
     const hash = await hashSecret(bearerOf(request));

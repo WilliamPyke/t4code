@@ -8,7 +8,7 @@ import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from ".
 
 /**
  * The teams the signed-in account is in, each opening its page. Nothing renders while signed
- * out or in a build without T Connect.
+ * out or in a build without Tinkjam Connect.
  */
 export function TeamsSection() {
   const { accountId, teams } = useTeams();

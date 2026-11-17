@@ -91,7 +91,7 @@ const buildEnvironmentAuthHeaders = Effect.fn("environmentHttpAuth.buildEnvironm
 );
 
 /**
- * A DPoP request is T Connect work, so its span starts an exported trace that
+ * A DPoP request is Tinkjam Connect work, so its span starts an exported trace that
  * the environment continues; its local caller's span would leave that trace
  * without a root.
  */

@@ -31,8 +31,8 @@ export function TriageDraftHero(props: {
             )}
           </TooltipTrigger>
           <TooltipPopup side="bottom">
-            The agent reads T Code's logs and source here, and asks before it applies a fix or posts
-            anything.
+            The agent reads Tinkjam's logs and source here, and asks before it applies a fix or
+            posts anything.
           </TooltipPopup>
         </Tooltip>
         <span aria-hidden className="text-muted-foreground">
