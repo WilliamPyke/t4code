@@ -518,33 +518,56 @@ function runAgent(): void {
         | undefined;
       const notes = (board?.cards ?? [])
         .filter((card) => card.kind === "note" && (card.text ?? "").trim() !== "")
-        .slice(0, 20);
+        .slice(0, 40);
       if (signal.aborted) return;
       if (notes.length === 0) return say("There are no notes on this board to turn into tasks.");
-      const added = (await tool("t3_board_add", {
-        section: "Tasks",
-        // The first is planned too, so the Plan shows what an agent can set.
-        cards: notes.map((note, index) => ({
-          text: note.text,
-          task: true,
-          ...(index === 0 ? { priority: "high", assignee: "me" } : {}),
-        })),
-      })) as { done?: ReadonlyArray<string>; refused?: ReadonlyArray<{ reason?: string }> };
+      type Answer = { done?: ReadonlyArray<string>; refused?: ReadonlyArray<{ reason?: string }> };
+      // Within the tools' caps (20 cards an add, 40 changes an update), as a careful model sends.
+      const inCalls = async <T>(
+        items: ReadonlyArray<T>,
+        size: number,
+        call: (part: ReadonlyArray<T>) => Promise<Answer>,
+      ) => {
+        const done: Array<string> = [];
+        const refused: Array<{ reason?: string }> = [];
+        for (let start = 0; start < items.length && !signal.aborted; start += size) {
+          const answer = await call(items.slice(start, start + size));
+          done.push(...(answer.done ?? []));
+          refused.push(...(answer.refused ?? []));
+        }
+        return { done, refused };
+      };
+      const added = await inCalls(
+        notes,
+        20,
+        async (part) =>
+          (await tool("t3_board_add", {
+            section: "Tasks",
+            cards: part.map((note) => ({ text: note.text, task: true })),
+          })) as Answer,
+      );
       if (signal.aborted) return;
-      // Changes cards that were there before the turn too, so undoing it has something to put back.
-      const first = added.done?.[0];
-      const moved = (await tool("t3_board_update", {
-        changes: [
-          ...notes.flatMap((note) =>
-            note.id === undefined ? [] : [{ id: note.id, section: "Turned into tasks" }],
-          ),
-          ...(first === undefined ? [] : [{ id: first, status: "doing" }]),
-        ],
-      })) as { done?: ReadonlyArray<string>; refused?: ReadonlyArray<{ reason?: string }> };
-      const refused = [...(added.refused ?? []), ...(moved.refused ?? [])];
+      // Plans the new tasks and moves the notes, which were there before the turn too, so undoing
+      // it has something to put back.
+      const plan = [
+        ...added.done.map((id, index) =>
+          index === 0
+            ? { id, status: "doing", priority: "high", assignee: "me" }
+            : { id, priority: index < 3 ? "medium" : "low" },
+        ),
+        ...notes.flatMap((note) =>
+          note.id === undefined ? [] : [{ id: note.id, section: "Turned into tasks" }],
+        ),
+      ];
+      const moved = await inCalls(
+        plan,
+        40,
+        async (part) => (await tool("t3_board_update", { changes: part })) as Answer,
+      );
+      const refused = [...added.refused, ...moved.refused];
       await say(
-        `Added ${added.done?.length ?? 0} tasks to the "Tasks" section (the first is yours, high priority and in progress) and moved ${
-          moved.done?.filter((id) => id !== first).length ?? 0
+        `Added ${added.done.length} tasks to the "Tasks" section (the first is yours, high priority and in progress, the rest prioritised) and moved ${
+          moved.done.filter((id) => !added.done.includes(id)).length
         } notes into "Turned into tasks".${
           refused.length === 0 ? "" : ` The board refused ${refused.length}: ${refused[0]?.reason}`
         }`,

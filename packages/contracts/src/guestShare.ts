@@ -768,6 +768,9 @@ export const RoomBoardAgentCardState = Schema.Struct({
 });
 export type RoomBoardAgentCardState = typeof RoomBoardAgentCardState.Type;
 
+/** The removed comment threads a board keeps for undo. */
+export const ROOM_BOARD_REMOVED_MAX = 10;
+
 /** The agent turns a board remembers, newest last, so each can be shown and taken back. */
 export const ROOM_BOARD_AGENT_TURNS_MAX = 8;
 
@@ -805,8 +808,13 @@ export const RoomBoardAgentTurn = Schema.Struct({
 });
 export type RoomBoardAgentTurn = typeof RoomBoardAgentTurn.Type;
 
-/** Changes one board tool call makes at most. */
-const ROOM_BOARD_AGENT_MAX_CHANGES = 20;
+/** Cards one board tool call adds at most. */
+const ROOM_BOARD_AGENT_MAX_CARDS = 20;
+/** Changes one board tool call makes at most: one call can plan every card one add makes, twice. */
+const ROOM_BOARD_AGENT_MAX_CHANGES = 40;
+// Models read these messages when they send too many, so they say how to carry on.
+const ROOM_BOARD_AGENT_CARDS_CAP = `At most ${ROOM_BOARD_AGENT_MAX_CARDS} cards per call; add the rest in a second call.`;
+const ROOM_BOARD_AGENT_CHANGES_CAP = `At most ${ROOM_BOARD_AGENT_MAX_CHANGES} changes per call; send the rest in a second call.`;
 const RoomBoardAgentCardText = TrimmedNonEmptyString.check(
   Schema.isMaxLength(ROOM_BOARD_NOTE_MAX_LENGTH),
 );
@@ -833,7 +841,9 @@ export const RoomBoardAgentAddInput = Schema.Struct({
       due: Schema.optional(RoomBoardAgentDue),
       assignee: Schema.optional(RoomBoardAgentPerson),
     }),
-  ).check(Schema.isMaxLength(ROOM_BOARD_AGENT_MAX_CHANGES)),
+  )
+    .check(Schema.isMaxLength(ROOM_BOARD_AGENT_MAX_CARDS, { message: ROOM_BOARD_AGENT_CARDS_CAP }))
+    .annotate({ description: ROOM_BOARD_AGENT_CARDS_CAP }),
   /** A section's id or title. A title no section has makes a new one. */
   section: Schema.optional(RoomBoardAgentCardText),
 });
@@ -853,7 +863,12 @@ export const RoomBoardAgentUpdateInput = Schema.Struct({
       section: Schema.optional(RoomBoardAgentCardText),
       lineTo: Schema.optional(RoomBoardAgentCardId),
     }),
-  ).check(Schema.isMinLength(1), Schema.isMaxLength(ROOM_BOARD_AGENT_MAX_CHANGES)),
+  )
+    .check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(ROOM_BOARD_AGENT_MAX_CHANGES, { message: ROOM_BOARD_AGENT_CHANGES_CAP }),
+    )
+    .annotate({ description: ROOM_BOARD_AGENT_CHANGES_CAP }),
 });
 export type RoomBoardAgentUpdateInput = typeof RoomBoardAgentUpdateInput.Type;
 
@@ -941,6 +956,16 @@ export const RoomBoard = Schema.Struct({
    * ignored. Absent: the top-left section.
    */
   start: Schema.optional(RoomBoardNoteId),
+  /**
+   * Comment threads removed lately, newest last, so an undo can put one back with its replies,
+   * which no change can send again. Only `note.remove` fills it and `note.put` of the same id
+   * takes one back; a day later, or past the cap, it is gone for good.
+   */
+  removed: Schema.optional(
+    Schema.Array(Schema.Struct({ note: RoomBoardNote, at: IsoDateTime })).check(
+      Schema.isMaxLength(ROOM_BOARD_REMOVED_MAX),
+    ),
+  ),
 });
 export type RoomBoard = typeof RoomBoard.Type;
 

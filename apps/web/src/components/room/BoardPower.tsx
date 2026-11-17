@@ -120,8 +120,11 @@ export interface BoardPowerProps {
   readonly onRedo?: (() => void) | undefined;
   readonly view: BoardViewMode;
   readonly onView?: ((view: BoardViewMode) => void) | undefined;
-  /** The viewer's own agent boxes, by ref, most fitting first. */
-  readonly ownBoxes: ReadonlyArray<string>;
+  /**
+   * Picks which of the viewer's own agent boxes takes a draft, asking them when nothing says, then
+   * runs `then` with its ref. False when they have none.
+   */
+  readonly chooseOwnBox: (then: (ref: string) => void) => boolean;
   /** Adds the viewer's own agent box and gives its ref, where they can; null when it could not. */
   readonly onAddOwnBox?: (() => string | null) | undefined;
   readonly onBringAgent?: (() => void) | undefined;
@@ -214,17 +217,21 @@ export function useBoardPower(props: BoardPowerProps): {
       itemOf(ref)?.querySelector<HTMLTextAreaElement>(
         "textarea[data-box-prompt]:not([readonly])",
       ) ?? null;
-    const own =
-      props.ownBoxes.find((ref) => props.selection.has(ref) && prompt(ref) !== null) ??
-      props.ownBoxes.find((ref) => prompt(ref) !== null);
     const fill = (ref: string) => {
       props.onShowCard(ref);
       window.requestAnimationFrame(() => {
         const field = prompt(ref);
         if (field !== null) typeInto(field, text);
+        else {
+          toastManager.add({
+            type: "info",
+            title: "That agent box is busy",
+            description: "Wait for it to finish, or pick another box, then ask again.",
+          });
+        }
       });
     };
-    if (own !== undefined) return fill(own);
+    if (props.chooseOwnBox(fill)) return;
     const added = props.onAddOwnBox?.() ?? null;
     if (added !== null) return fill(added);
     if (props.onBringAgent !== undefined) {

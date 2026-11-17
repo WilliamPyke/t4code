@@ -601,21 +601,33 @@ export function boardBounds(rects: ReadonlyArray<BoardRect>): BoardRect | null {
 }
 
 /**
- * Where a new item goes beside `rect`: to its right and level with its top, or the nearest clear
- * spot, inside `within` when that has one.
+ * Where a new item goes beside `rect`, so the line between them stays short: to its right and
+ * level with its top, else below it and level with its left, else the clear spot nearest its
+ * right. Never where the view happens to be: the view moves to it instead.
  */
-export const besideBoardItem = (
+export function besideBoardItem(
   rect: BoardRect,
   size: RoomBoardSize,
   taken: ReadonlyArray<BoardRect>,
-  within?: BoardRect,
-): BoardPoint =>
-  placeBoardItem(
-    size,
-    { x: rect.x + rect.width + CARD_GAP + size.w / 2, y: rect.y + size.h / 2 },
-    taken,
-    within,
-  );
+): BoardPoint {
+  const clear = (at: BoardPoint) =>
+    !taken.some((other) =>
+      rectsMeet(
+        {
+          x: at.x - PLACE_GAP,
+          y: at.y - PLACE_GAP,
+          width: size.w + PLACE_GAP * 2,
+          height: size.h + PLACE_GAP * 2,
+        },
+        other,
+      ),
+    );
+  const right = { x: Math.round(rect.x + rect.width + CARD_GAP), y: Math.round(rect.y) };
+  const below = { x: Math.round(rect.x), y: Math.round(rect.y + rect.height + CARD_GAP) };
+  if (clear(right)) return right;
+  if (clear(below)) return below;
+  return placeBoardItem(size, { x: right.x + size.w / 2, y: right.y + size.h / 2 }, taken);
+}
 
 /**
  * Where new boxes for `items` go, in their order: one column right of `selection`, a card gap
@@ -2986,15 +2998,56 @@ export function boardSelectionRemoval(
 
 /**
  * Whether undo can put a deleted card back as it was. A thread box, code window or pull request
- * window is tied to a machine, and a comment thread or what the owner's server wrote into a card
- * cannot be sent again, so those are gone once deleted.
+ * window is tied to a machine, and what the owner's server wrote into a card cannot be sent again,
+ * so those are gone once deleted. The board keeps a removed comment thread, replies and all.
  */
 export const boardNoteRestorable = (note: RoomBoardNote) =>
-  note.kind !== "thread" &&
-  note.kind !== "code" &&
-  note.kind !== "pull-request" &&
-  note.kind !== "comment" &&
-  !hasServerContent(note);
+  note.kind === "comment" ||
+  (note.kind !== "thread" &&
+    note.kind !== "code" &&
+    note.kind !== "pull-request" &&
+    !hasServerContent(note));
+
+/**
+ * The comment threads on these cards, which go with them when they are deleted: each with a line
+ * to or from one, or whose pin sits on one. `drawnHeight` is a card's height as drawn, where its
+ * text decides it. A section holds cards, not the comments over it.
+ */
+export function boardCommentsOn(
+  board: RoomBoard,
+  noteIds: ReadonlyArray<string>,
+  drawnHeight: (noteId: string) => number | undefined = () => undefined,
+): ReadonlyArray<string> {
+  const going = new Set(noteIds);
+  const cards = board.notes.filter(
+    (note) => going.has(note.id) && note.kind !== "comment" && note.section !== true,
+  );
+  const refs = new Set(cards.map((note) => roomBoardNoteRef(note.id)));
+  const boxes = cards.map((note) => boardNoteBox(note, 1, drawnHeight(note.id)));
+  const lined = (ref: string) =>
+    (board.edges ?? []).some(
+      (edge) =>
+        (edge.from === ref && refs.has(edge.to)) || (edge.to === ref && refs.has(edge.from)),
+    );
+  const middle = BOARD_PIN_SIZE / 2;
+  const pinnedOn = (note: RoomBoardNote) =>
+    note.pinnedTo === undefined &&
+    boxes.some(
+      (box) =>
+        note.x + middle >= box.x &&
+        note.x + middle <= box.x + box.width &&
+        note.y + middle >= box.y &&
+        note.y + middle <= box.y + box.height,
+    );
+  return board.notes
+    .filter(
+      (note) =>
+        note.kind === "comment" &&
+        !going.has(note.id) &&
+        (lined(roomBoardNoteRef(note.id)) || pinnedOn(note)),
+    )
+    .map((note) => note.id);
+}
 
 /**
  * What deleting these notes sends: first the lines on the ones undo can bring back, so one undo
@@ -3077,7 +3130,9 @@ export function boardHistoryChanges(
     const [from, to] = direction === "undo" ? [after, before] : [before, after];
     const now = boardValueOf(board, target);
     if (valueKey(now) !== valueKey(from)) return null;
-    if (to === null && hasServerContent(now)) return null;
+    // The board keeps a removed comment thread, so deleting it again loses nothing.
+    const commentThread = now !== null && "text" in now && now.kind === "comment";
+    if (to === null && hasServerContent(now) && !commentThread) return null;
     changes.push({ target, value: withColorOf(to, from) });
   }
   return changes;

@@ -56,7 +56,7 @@ describe("boardMarkdown", () => {
         { id: "t3", text: "", x: 600, y: 0, kind: "task", assignee: {} },
       ],
       markdown:
-        "# Launch\n\n- [x] Ship it (Done)\n- [ ] Write docs (In progress, High, due 2026-11-20, for Maya)\n- [ ] Untitled task (To do, for Sam)\n",
+        "# Launch\n\n- [x] Ship it (Done, no priority, no due date, unassigned)\n- [ ] Write docs (In progress, High priority, due 2026-11-20, for Maya)\n- [ ] Untitled task (To do, no priority, no due date, for Sam)\n",
     },
     {
       name: "links as links, and an artifact and a link's snapshot as their text",
@@ -91,10 +91,10 @@ describe("boardMarkdown", () => {
       ],
       edges: [{ id: "e", from: "note:l", to: "note:s" }],
       markdown:
-        "# Launch\n\n- [Spec \\[v2\\]](https://x.dev/spec)\n\n### Snapshot of Spec [v2]\n\nThe spec says hi.\n\n### Plan\n\n## Steps\n\n1. Go\n",
+        "# Launch\n\n## Snapshot of Spec [v2]\n\nThe spec says hi.\n\n## Plan\n\n### Steps\n\n1. Go\n\n## Loose notes\n\n- [Spec \\[v2\\]](https://x.dev/spec)\n",
     },
     {
-      name: "loose cards first, then each section as a heading over the cards on it",
+      name: "each section over the cards on it, then loose cards under a heading of their own",
       notes: [
         { id: "s2", text: "Later", x: 0, y: 1000, section: true, size: { w: 600, h: 400 } },
         { id: "s1", text: "", x: 0, y: 400, section: true, size: { w: 600, h: 400 } },
@@ -103,7 +103,68 @@ describe("boardMarkdown", () => {
         { id: "out", text: "Loose", x: 900, y: 0 },
       ],
       markdown:
-        "# Launch\n\n- Loose\n\n## Untitled section\n\n- Inside first\n\n## Later\n\n- Inside later\n",
+        "# Launch\n\n## Untitled section\n\n- Inside first\n\n## Later\n\n- Inside later\n\n## Loose notes\n\n- Loose\n",
+    },
+    {
+      name: "a planned board: Now, Next and Later with their tasks, a snapshot, and loose notes",
+      notes: [
+        { id: "now", text: "Now", x: 0, y: 0, section: true, size: { w: 700, h: 400 } },
+        { id: "next", text: "Next", x: 800, y: 0, section: true, size: { w: 700, h: 400 } },
+        { id: "later", text: "Later", x: 1600, y: 0, section: true, size: { w: 700, h: 400 } },
+        {
+          id: "t1",
+          text: "Fix login",
+          x: 40,
+          y: 60,
+          kind: "task",
+          status: "doing",
+          priority: "urgent",
+          due: "2026-11-18",
+          assignee: { guestId: maya },
+          agent: { boxId: "box", turnId: "turn" },
+        },
+        { id: "t2", text: "Pricing page", x: 300, y: 60, kind: "task", assignee: {} },
+        { id: "t3", text: "Onboarding emails", x: 840, y: 60, kind: "task", priority: "low" },
+        { id: "t4", text: "Dark mode", x: 1640, y: 60, kind: "task", done: true },
+        {
+          id: "link",
+          text: "ENG-142",
+          x: 0,
+          y: 600,
+          kind: "link",
+          url: "https://linear.app/x/ENG-142",
+        },
+        {
+          id: "snap",
+          text: "",
+          x: 0,
+          y: 760,
+          kind: "artifact",
+          artifact: {
+            body: "# ENG-142\n\nStatus: In progress",
+            turnId: "t",
+            updatedAt: "2026-11-01T00:00:00.000Z",
+          },
+        },
+        // Below the snapshot, on no section: never under its heading.
+        { id: "idea", text: "Ask support what users say", x: 0, y: 1300 },
+        { id: "box", text: "Planner", x: 2400, y: 0, kind: "thread" },
+      ],
+      edges: [{ id: "e", from: "note:link", to: "note:snap" }],
+      markdown: [
+        "# Launch",
+        "## Now",
+        "- [ ] Fix login (In progress, Urgent priority, due 2026-11-18, for Maya)\n- [ ] Pricing page (To do, no priority, no due date, for Sam)",
+        "## Next",
+        "- [ ] Onboarding emails (To do, Low priority, no due date, unassigned)",
+        "## Later",
+        "- [x] Dark mode (Done, no priority, no due date, unassigned)",
+        "## Snapshot of ENG-142",
+        "### ENG-142",
+        "Status: In progress",
+        "## Loose notes",
+        "- [ENG-142](https://linear.app/x/ENG-142)\n- Ask support what users say\n",
+      ].join("\n\n"),
     },
   ])("writes $name", ({ notes, edges, markdown }) => {
     expect(boardMarkdown(board(notes, edges), "Launch", people)).toBe(markdown);
@@ -130,7 +191,7 @@ describe("boardPlanMarkdown", () => {
       { id: "n", text: "A note", x: 0, y: 0 },
     ];
     expect(boardPlanMarkdown(board(notes), "Launch", people)).toBe(
-      "# Launch: Plan\n\n## To do\n\n- [ ] First (To do, Urgent)\n- [ ] Second (To do)\n\n## In progress\n\n_No tasks_\n\n## Done\n\n- [x] Done one (Done)\n",
+      "# Launch: Plan\n\n## To do\n\n- [ ] First (To do, Urgent priority, no due date, unassigned)\n- [ ] Second (To do, no priority, no due date, unassigned)\n\n## In progress\n\n_No tasks_\n\n## Done\n\n- [x] Done one (Done, no priority, no due date, unassigned)\n",
     );
   });
 });

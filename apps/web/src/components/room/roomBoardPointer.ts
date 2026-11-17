@@ -35,7 +35,12 @@ let holding: { readonly element: Element; readonly pointerId: number } | null = 
 
 /** Takes the pointer for a gesture, which `dropHeldPointer` can cancel. */
 export function holdPointer(event: PointerEvent<Element>) {
-  event.currentTarget.setPointerCapture(event.pointerId);
+  try {
+    event.currentTarget.setPointerCapture(event.pointerId);
+  } catch {
+    // A pointer the browser no longer has (or a scripted one) cannot be captured; the gesture
+    // still runs where it listens beyond the element.
+  }
   holding = { element: event.currentTarget, pointerId: event.pointerId };
 }
 

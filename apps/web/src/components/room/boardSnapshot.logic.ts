@@ -37,9 +37,9 @@ export const boardLinkTitle = (note: Pick<RoomBoardNote, "text" | "url">): strin
   "Link";
 
 /**
- * Which of the viewer's own thread boxes brings a link in: the one whose agent wrote its snapshot
- * last, else one the link card has a line into, else their first. Only a box of the viewer's own
- * can be asked, so it runs on their agent and their connections; null when they have none.
+ * The viewer's own thread box a link itself points to bringing it in: the one whose agent wrote
+ * its snapshot last, else one the link card has a line into; null when neither is theirs. Only a
+ * box of the viewer's own can be asked, so it runs on their agent and their connections.
  */
 export function boardBringInBox(
   board: RoomBoard,
@@ -54,7 +54,7 @@ export function boardBringInBox(
   const linked = own.find((boxId) =>
     (board.edges ?? []).some((edge) => edge.from === link && edge.to === roomBoxRef(boxId)),
   );
-  return linked ?? own[0] ?? null;
+  return linked ?? null;
 }
 
 /** Text cut to `max` for a prompt, saying so when it was cut, so the agent knows there is more. */

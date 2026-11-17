@@ -27,6 +27,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { useStableCallback } from "~/hooks/useStableCallback";
+import { useThreadActions } from "~/hooks/useThreadActions";
 import { cn, randomUUID } from "~/lib/utils";
 import { deriveThreadAgentWorking } from "~/session-logic";
 import { useGitStackedAction, useSourceControlActionRunning } from "~/state/sourceControlActions";
@@ -385,6 +386,12 @@ export function ThreadRoomBoard({
     }
     return result._tag === "Success";
   };
+  const { deleteThread } = useThreadActions();
+  // Only the owner's own boxes: the room thread is the board's, and a guest's box is theirs.
+  const boxChatDeleter = (boxId: string) => {
+    const ref = ownBox(boxId) === undefined ? null : boxThreadRef(boxId);
+    return ref === null ? undefined : () => void deleteThread(ref);
+  };
   const interruptTurn = useAtomCommand(threadEnvironment.interruptTurn, "stop the agent");
   // The owner's agent runs their own boxes and the guests' requests they sent, in the box's thread.
   const stopBox = (boxId: string) => {
@@ -573,6 +580,7 @@ export function ThreadRoomBoard({
               openingPullRequest={openingPullRequest}
               onPromptBox={canPrompt ? promptBox : undefined}
               stopBox={canPrompt ? stopBox : undefined}
+              boxChatDeleter={boxChatDeleter}
               boxRunEnd={boxRunEnd}
               roomModel={
                 roomSelection === null ? undefined : boardModelName(roomSelection, providers)

@@ -45,23 +45,53 @@ const linkText = (text: string) => text.replace(/[[\]]/g, (bracket) => `\\${brac
 // An export is read by others: everyone goes by their name, the one exporting too, never "You".
 const byName = (people: BoardPeople): BoardPeople => ({ ...people, viewer: "" });
 
-/** A task's checklist line: its box, its text, and what the Plan shows of it. */
+/** A task's checklist line: its box, its text, and all the Plan shows of it, set or not. */
 function boardTaskMarkdown(task: RoomBoardNote, people: BoardPeople): string {
   const status = roomTaskStatus(task);
   const marks = [
     STATUS_NAMES[status],
-    ...(task.priority === undefined ? [] : [PRIORITY_NAMES[task.priority]]),
-    ...(task.due === undefined ? [] : [`due ${task.due}`]),
-    ...(task.assignee === undefined
-      ? []
-      : [`for ${boardPersonName(people, task.assignee.guestId)}`]),
+    task.priority === undefined ? "no priority" : `${PRIORITY_NAMES[task.priority]} priority`,
+    task.due === undefined ? "no due date" : `due ${task.due}`,
+    task.assignee === undefined
+      ? "unassigned"
+      : `for ${boardPersonName(people, task.assignee.guestId)}`,
   ];
   const text = task.text.trim() || "Untitled task";
   return listItem(`- [${status === "done" ? "x" : " "}]`, `${text} (${marks.join(", ")})`);
 }
 
-/** One card as Markdown, or null for what has no words to export (a thread box, a code window). */
-function cardMarkdown(board: RoomBoard, note: RoomBoardNote, people: BoardPeople): string | null {
+/**
+ * A body's own headings moved below `level`, so what an artifact says stays under its heading
+ * and never reads as the board's next section. Code blocks are left as they are.
+ */
+function headingsBelow(body: string, level: number): string {
+  let fenced = false;
+  const lines = body.split("\n").map((line) => {
+    if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
+    const heading = fenced ? null : /^(#{1,6})(\s.*)$/.exec(line);
+    return { line, depth: heading?.[1]?.length, rest: heading?.[2] ?? "" };
+  });
+  const top = Math.min(...lines.flatMap(({ depth }) => depth ?? []));
+  const shift = Number.isFinite(top) ? Math.max(0, level + 1 - top) : 0;
+  return lines
+    .map(({ line, depth, rest }) =>
+      depth === undefined ? line : `${"#".repeat(Math.min(6, depth + shift))}${rest}`,
+    )
+    .join("\n");
+}
+
+/** An artifact under a heading of its own at `level`, or null for any other card. */
+function artifactMarkdown(board: RoomBoard, note: RoomBoardNote, level: number): string | null {
+  if (note.kind !== "artifact") return null;
+  const from = boardSnapshotLink(board, note.id);
+  const title =
+    from === undefined ? note.text.trim() || "Artifact" : `Snapshot of ${boardLinkTitle(from)}`;
+  const body = note.artifact?.body.trim() ?? "";
+  return `${"#".repeat(level)} ${title}\n\n${body === "" ? "_Empty_" : headingsBelow(body, level)}`;
+}
+
+/** One card as a list item, or null for what has no words to export (a thread box, a code window). */
+function cardMarkdown(note: RoomBoardNote, people: BoardPeople): string | null {
   switch (note.kind) {
     case undefined:
       return note.text.trim() === "" ? null : listItem("-", note.text);
@@ -70,43 +100,24 @@ function cardMarkdown(board: RoomBoard, note: RoomBoardNote, people: BoardPeople
     case "link":
     case "pull-request":
       return note.url === undefined ? null : `- [${linkText(boardLinkTitle(note))}](${note.url})`;
-    case "artifact": {
-      const from = boardSnapshotLink(board, note.id);
-      const title =
-        from === undefined ? note.text.trim() || "Artifact" : `Snapshot of ${boardLinkTitle(from)}`;
-      const body = note.artifact?.body.trim() ?? "";
-      return `### ${title}\n\n${body === "" ? "_Empty_" : body}`;
-    }
     default:
       return null;
   }
 }
 
-/** Cards in reading order as a block: list items run together, anything else stands apart. */
-function cardsMarkdown(
-  board: RoomBoard,
-  notes: ReadonlyArray<RoomBoardNote>,
-  people: BoardPeople,
-): string {
-  const parts = boardReadingOrder(notes.map((note) => ({ note, rect: rectOf(note) }))).flatMap(
-    ({ note }) => {
-      const part = cardMarkdown(board, note, people);
-      return part === null ? [] : [part];
-    },
-  );
-  return parts
-    .map((part, index) => {
-      const previous = parts[index - 1];
-      if (previous === undefined) return part;
-      return previous.startsWith("- ") && part.startsWith("- ") ? `\n${part}` : `\n\n${part}`;
-    })
-    .join("");
-}
+const inReadingOrder = (notes: ReadonlyArray<RoomBoardNote>) =>
+  boardReadingOrder(notes.map((note) => ({ note, rect: rectOf(note) }))).map(({ note }) => note);
+
+/** Cards in reading order as one list, or "" for none. */
+const cardsMarkdown = (notes: ReadonlyArray<RoomBoardNote>, people: BoardPeople): string =>
+  inReadingOrder(notes)
+    .flatMap((note) => cardMarkdown(note, people) ?? [])
+    .join("\n");
 
 /**
- * The board as Markdown: its title, the cards on no section, then each section as a heading over
- * the cards on it, top to bottom. Notes are bullets, tasks a checklist with what the Plan shows,
- * links links, and artifacts and snapshots their text. Comments and agent boxes are left out.
+ * The board as Markdown: each section's cards under its heading, then each loose artifact under
+ * its own, then the other loose cards under "Loose notes" (one plain list on a board with neither).
+ * Comments and agent boxes are left out.
  */
 export function boardMarkdown(board: RoomBoard, title: string, viewing: BoardPeople): string {
   const people = byName(viewing);
@@ -123,18 +134,29 @@ export function boardMarkdown(board: RoomBoard, title: string, viewing: BoardPeo
         (left, right) => left.rect.width * left.rect.height - right.rect.width * right.rect.height,
       )[0]?.note.id;
   const cards = board.notes.filter((note) => note.section !== true && note.kind !== "comment");
+  const artifacts = (notes: ReadonlyArray<RoomBoardNote>, level: number) =>
+    inReadingOrder(notes).flatMap((note) => artifactMarkdown(board, note, level) ?? []);
   const loose = cards.filter((note) => sectionOf(note) === undefined);
+  const looseArtifacts = artifacts(loose, 2);
+  const looseList = cardsMarkdown(loose, people);
   const blocks = [
     `# ${title.trim() || "Board"}`,
-    cardsMarkdown(board, loose, people),
     ...sections.map(({ note: section }) => {
-      const inside = cardsMarkdown(
-        board,
-        cards.filter((note) => sectionOf(note) === section.id),
-        people,
-      );
-      return `## ${section.text.trim() || "Untitled section"}${inside === "" ? "" : `\n\n${inside}`}`;
+      const on = cards.filter((note) => sectionOf(note) === section.id);
+      return [
+        `## ${section.text.trim() || "Untitled section"}`,
+        cardsMarkdown(on, people),
+        ...artifacts(on, 3),
+      ]
+        .filter((block) => block !== "")
+        .join("\n\n");
     }),
+    ...looseArtifacts,
+    sections.length === 0 && looseArtifacts.length === 0
+      ? looseList
+      : looseList === ""
+        ? ""
+        : `## Loose notes\n\n${looseList}`,
   ];
   return `${blocks.filter((block) => block !== "").join("\n\n")}\n`;
 }

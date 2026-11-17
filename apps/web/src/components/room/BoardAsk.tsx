@@ -5,6 +5,14 @@ import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useState } 
 import { isMacPlatform, randomUUID } from "~/lib/utils";
 
 import { Button } from "../ui/button";
+import {
+  Dialog,
+  DialogDescription,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from "../ui/dialog";
 import { Popover, PopoverPopup } from "../ui/popover";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Textarea } from "../ui/textarea";
@@ -358,5 +366,50 @@ export function AgentWorkMark({ name, color }: { readonly name: string; readonly
         <span className="truncate">{name}</span>
       </span>
     </span>
+  );
+}
+
+/** Which of the viewer's own boxes a draft goes to, when nothing on the board says which. */
+export function BoardBoxPicker({
+  boxes,
+  onPick,
+  onClose,
+}: {
+  readonly boxes: ReadonlyArray<{
+    readonly id: string;
+    readonly title: string;
+    readonly model?: string;
+  }>;
+  readonly onPick: (boxId: string) => void;
+  readonly onClose: () => void;
+}) {
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <DialogPopup className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Which of your agent boxes?</DialogTitle>
+          <DialogDescription>
+            The draft goes in its prompt. Nothing runs until you press Send.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogPanel>
+          <div className="flex flex-col gap-2">
+            {boxes.map((box) => (
+              <Button key={box.id} variant="outline" onClick={() => onPick(box.id)}>
+                <span className="min-w-0 flex-1 truncate text-left">{box.title}</span>
+                {box.model === undefined ? null : (
+                  <span className="shrink-0 text-xs text-muted-foreground">{box.model}</span>
+                )}
+              </Button>
+            ))}
+          </div>
+        </DialogPanel>
+      </DialogPopup>
+    </Dialog>
   );
 }

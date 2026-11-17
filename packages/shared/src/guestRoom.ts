@@ -333,7 +333,8 @@ export function roomBoardAfterChange(
  * Tasks they were given are left with no one, and lose their agent's answers.
  */
 export function roomBoardWithoutGuest(board: RoomBoard, guestId: GuestId): RoomBoard {
-  const withoutCards = roomBoardWithoutCards(board, [
+  // Removed comment threads kept for undo go too, rather than keep what they wrote in them.
+  const { removed: _forUndo, ...withoutCards } = roomBoardWithoutCards(board, [
     roomBoardGuestCard(guestId),
     roomBoardAgentCard(guestId),
   ]);

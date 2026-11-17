@@ -88,6 +88,7 @@ import { copyCloudBoard, renameCloudBoard } from "~/guest/cloudBoards";
 import { useIncrementalTimelineEntries } from "~/hooks/useIncrementalTimelineEntries";
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { useStableCallback } from "~/hooks/useStableCallback";
+import { useThreadActions } from "~/hooks/useThreadActions";
 import { configuredHostedAppUrl } from "~/hostedPairing";
 import { useTheme } from "~/hooks/useTheme";
 import { cn, randomUUID } from "~/lib/utils";
@@ -477,6 +478,14 @@ function GuestThreadSession({
     if (machine == null || threadId === undefined) return undefined;
     return () =>
       void interruptOwnBox({ environmentId: machine.environmentId, input: { threadId } });
+  };
+  const { deleteThread } = useThreadActions();
+  // A box's chat is on this person's own machine: theirs to delete with the box.
+  const boxChatDeleter = (boxId: string) => {
+    const threadId = machine?.boxes[boxId];
+    if (machine == null || threadId === undefined) return undefined;
+    const ref = scopeThreadRef(machine.environmentId, threadId);
+    return () => void deleteThread(ref);
   };
   // Where the box goes once the guest picks which of their threads it is.
   const [addingAt, setAddingAt] = useState<BoardPoint | null>(null);
@@ -961,6 +970,7 @@ function GuestThreadSession({
               onCursor={viewOnly ? undefined : (presence) => postBoardCursor(endpoint, presence)}
               onPromptBox={agents ? promptBox : undefined}
               stopBox={agents ? stopBox : undefined}
+              boxChatDeleter={boxChatDeleter}
               askInComments={agents && machine != null}
               readCodePatch={readCodePatch}
               onRefreshPullRequest={

@@ -161,6 +161,40 @@ export function boardAskDefaultTarget(
   return (targets.find((target) => target.id !== BOARD_ASK_NEW_BOX) ?? targets[0])?.id ?? null;
 }
 
+/** Where a draft for the viewer's own agent goes: a box, or a choice for them to make. */
+export type BoardDraftBox =
+  | { readonly boxId: string }
+  | { readonly pick: ReadonlyArray<string> }
+  | null;
+
+/**
+ * Which of the viewer's own boxes (`own`, never anyone else's) a draft for their agent goes to:
+ * the one selected when exactly one is, else `preferred` (as the box that wrote what is being
+ * refreshed), else the one they used last on this board, else the one that ran last, else their
+ * only one. With several and nothing to go on, they pick. Null when they have none.
+ */
+export function boardDraftBox(
+  own: ReadonlyArray<{ readonly id: string; readonly ranAt?: string | undefined }>,
+  hints: {
+    readonly selected: ReadonlyArray<string>;
+    readonly preferred?: string | null | undefined;
+    readonly lastUsed: string | null;
+  },
+): BoardDraftBox {
+  const ids = own.map((box) => box.id);
+  const selected = hints.selected.filter((id) => ids.includes(id));
+  if (selected.length === 1 && selected[0] !== undefined) return { boxId: selected[0] };
+  for (const hint of [hints.preferred, hints.lastUsed]) {
+    if (typeof hint === "string" && ids.includes(hint)) return { boxId: hint };
+  }
+  const ran = own
+    .filter((box) => box.ranAt !== undefined)
+    .toSorted((a, b) => (b.ranAt ?? "").localeCompare(a.ranAt ?? ""))[0];
+  if (ran !== undefined) return { boxId: ran.id };
+  if (ids.length === 0) return null;
+  return ids.length === 1 && ids[0] !== undefined ? { boxId: ids[0] } : { pick: ids };
+}
+
 /**
  * The lines an ask draws while the board has room: the box's line to the artifact it edits, if
  * missing, then one into the box from each card with none there yet. `going` is every card that

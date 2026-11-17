@@ -50,16 +50,18 @@ describe("boardBringInBox", () => {
   const link = note("link", { kind: "link", url: URL });
 
   it("only ever picks one of the viewer's own boxes", () => {
+    // A link with nothing pointing to a box leaves it to the viewer's choice (`boardDraftBox`).
     const plain = board([link], []);
-    expect(boardBringInBox(plain, boxes, sam, "link")).toBe("samBox");
-    expect(boardBringInBox(plain, boxes, null, "link")).toBe(ROOM_BOARD_ROOM_BOX);
+    expect(boardBringInBox(plain, boxes, sam, "link")).toBeNull();
     expect(boardBringInBox(plain, boxes, GuestId.make("kim"), "link")).toBeNull();
-    // Lee's agent wrote the snapshot and the link has a line into Lee's box: still Sam's own.
+    // Lee's agent wrote the snapshot and the link has a line into Lee's box: never Lee's.
     const others = board(
       [link, snapshot("# Fix login", { boxId: "leeBox", guestId: lee })],
       [line("note:link", "note:snap"), line("note:link", "note:leeBox")],
     );
-    expect(boardBringInBox(others, boxes, sam, "link")).toBe("samBox");
+    expect(boardBringInBox(others, boxes, sam, "link")).toBeNull();
+    const roomBox = board([link], [line("note:link", "card:thread")]);
+    expect(boardBringInBox(roomBox, boxes, null, "link")).toBe(ROOM_BOARD_ROOM_BOX);
   });
 
   it("prefers the viewer's box that wrote the snapshot, then one the link feeds", () => {

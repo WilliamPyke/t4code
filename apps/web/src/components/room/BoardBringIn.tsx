@@ -74,6 +74,11 @@ export function useBoardBringIn(input: {
   readonly prompt: (boxId: string, prompt: BoardPrompt) => Promise<boolean>;
   /** Shows a box and puts the caret in its prompt field. */
   readonly focusBox: (boxId: string) => void;
+  /**
+   * Picks which of the viewer's own boxes takes the draft, `preferred` when the link points to
+   * one, asking them when nothing says which, then runs `then` with it.
+   */
+  readonly chooseBox: (preferred: string | null, then: (boxId: string) => void) => void;
 }) {
   const { board, people, viewer } = input;
   const [preparing, setPreparing] = useState<Preparing | null>(null);
@@ -89,7 +94,8 @@ export function useBoardBringIn(input: {
 
   const actionFor = (link: RoomBoardNote, snapshotId: string | null): BoardBringInAction | null => {
     if (link.kind !== "link" || link.url === undefined) return null;
-    const boxId = boardBringInBox(board, input.boxes, viewer, link.id);
+    const preferred = boardBringInBox(board, input.boxes, viewer, link.id);
+    const hasOwnBox = input.boxes.some((box) => (box.guestId ?? null) === viewer);
     const label = snapshotId === null ? "Bring in with my agent" : "Refresh with my agent";
     const noRoom =
       snapshotId === null && input.canEdit && !input.canAddArtifact
@@ -99,7 +105,7 @@ export function useBoardBringIn(input: {
             run: undefined,
           }
         : null;
-    if (boxId === null) {
+    if (!hasOwnBox) {
       if (input.bringAgent !== undefined) {
         return {
           label: "Bring your agent to read this",
@@ -128,7 +134,7 @@ export function useBoardBringIn(input: {
     return {
       label,
       hint: "Writes a prompt in your thread box asking your agent to open this with its own connections and write what it says onto the board. Nothing runs until you press Send.",
-      run: () => prepare(boxId, link.id, snapshotId),
+      run: () => input.chooseBox(preferred, (boxId) => prepare(boxId, link.id, snapshotId)),
     };
   };
 
@@ -143,11 +149,13 @@ export function useBoardBringIn(input: {
     const card = link === undefined ? null : boardPromptCard(link, people);
     if (link?.url === undefined || card === null) return undefined;
     const title = boardLinkTitle(link);
+    const box = input.boxes.find((candidate) => candidate.id === boxId)?.title ?? "";
+    const where = ` · in ${box === "" ? "your agent box" : box}`;
     return {
       key: preparing.key,
       text: roomEmbedBringInPrompt(link.url),
       cards: [{ ...card, status: "new" }],
-      title: preparing.refresh ? `Refresh ${title}` : `Bring in ${title}`,
+      title: `${preparing.refresh ? "Refresh" : "Bring in"} ${title}${where}`,
       fills: preparing.refresh
         ? "Its reply replaces the snapshot for everyone; Restore previous brings this one back."
         : "Its reply becomes a snapshot beside the link, for everyone.",

@@ -221,6 +221,7 @@ import {
   boardThreadBoxTitle,
   boardSelectionItems,
   boardSelectionRemoval,
+  boardCommentsOn,
   boardDeletion,
   boardDuplicateOffset,
   boardLineSlots,
@@ -300,6 +301,7 @@ import {
   AgentWorkMark,
   type BoardAsking,
   BoardAskPopover,
+  BoardBoxPicker,
   boardAskShortcut,
   isBoardAskKey,
   lastBoardAskTarget,
@@ -314,6 +316,7 @@ import {
   boardAskLines,
   boardAskSuggestions,
   boardAskTargets,
+  boardDraftBox,
 } from "./boardAsk.logic";
 import { type BoardRunning, BoardRunPopover, TaskRunChip, newBoardRunning } from "./BoardRun";
 import {
@@ -781,6 +784,8 @@ interface Linking {
   readonly to: BoardPoint;
   /** Where on screen the grip was pressed. */
   readonly press: BoardPoint;
+  /** The pointer dragging from a grip; absent with the Line tool, which picks by clicks. */
+  readonly pointerId?: number;
 }
 
 const edgeAt = (x: number, y: number) =>
@@ -855,6 +860,7 @@ export function RoomBoard({
   onRefreshPullRequest,
   boxPullRequestUrl,
   stopBox,
+  boxChatDeleter,
   boxRunEnd,
   roomModel,
   cloud,
@@ -973,6 +979,8 @@ export function RoomBoard({
   readonly boxPullRequestUrl?: ((boxId: string) => string | undefined) | undefined;
   /** Stops the run of a box's agent, where this viewer may: absent for a box they may not. */
   readonly stopBox?: ((boxId: string) => (() => void) | undefined) | undefined;
+  /** Deletes a box's chat, where it is this viewer's own here: absent for a box whose it is not. */
+  readonly boxChatDeleter?: ((boxId: string) => (() => void) | undefined) | undefined;
   /**
    * How a box's last run ended, from the machine that ran it, where this client reads that
    * machine: null when none ended yet there. Undefined for a box whose machine it cannot read.
@@ -1019,6 +1027,13 @@ export function RoomBoard({
   const [history, setHistory] = useState(NO_HISTORY);
   // Cards whose deleting Undo could not take back, waiting for a yes.
   const [confirmingDelete, setConfirmingDelete] = useState<ReadonlyArray<string> | null>(null);
+  // The viewer's own boxes a draft could go to, while they pick one.
+  const [pickingBox, setPickingBox] = useState<{
+    readonly ids: ReadonlyArray<string>;
+    readonly onPick: (boxId: string) => void;
+  } | null>(null);
+  // Whether deleting the boxes among them deletes their chats too: off unless the person ticks it.
+  const [deletingChats, setDeletingChats] = useState(false);
   const [queueChange] = useState(boardChangeQueue);
   // The view left here last time, which the board reopens on when it still shows a card.
   const [remembered] = useState(() =>
@@ -2748,15 +2763,10 @@ export function RoomBoard({
   ) => {
     const element = drawnItem(ref);
     if (!canEdit || full || element === null) return null;
-    const area = boardAreaOf(surfaceRef.current);
+    // It lands beside what it came from, and the view follows it there.
     const id = newNote(
       { kind, ...(url === undefined ? {} : { url }), ...(text === undefined ? {} : { text }) },
-      besideBoardItem(
-        drawnRect(element),
-        boardNewNoteSize(kind),
-        takenRects(),
-        area === null ? undefined : visibleBoardRect(view, area),
-      ),
+      besideBoardItem(drawnRect(element), boardNewNoteSize(kind), takenRects()),
     );
     const line = randomUUID();
     const added = noteRef(id);
@@ -3104,6 +3114,34 @@ export function RoomBoard({
     focusItem(ref);
     return id;
   });
+  // The viewer's own boxes by name and model, to pick one from.
+  const askTargetsFor = boardAskTargets(threadBoxes, viewer, false, (boxId) => {
+    if (boxId === ROOM_BOARD_ROOM_BOX) return shown.roomBoxModel?.name ?? roomModel;
+    const box = shown.notes.find((note) => note.id === boxId);
+    return box?.boxModel?.name ?? box?.thread?.turns.at(-1)?.model;
+  });
+  // Which of the viewer's own boxes a draft for their agent goes to, asking when nothing says.
+  const chooseDraftBox = (preferred: string | null, then: (boxId: string) => void) => {
+    const own = threadBoxes
+      .filter((box) => (box.guestId ?? null) === viewer)
+      .map((box) => ({
+        id: box.id,
+        ranAt: shown.notes.find((note) => note.id === box.id)?.thread?.turns.at(-1)?.at,
+      }));
+    const choice = boardDraftBox(own, {
+      selected: own.map((box) => box.id).filter((id) => selected.has(boardBoxRef(id))),
+      preferred,
+      lastUsed: lastBoardAskTarget(askKey),
+    });
+    if (choice === null) return false;
+    const go = (boxId: string) => {
+      rememberBoardAskTarget(askKey, boxId);
+      then(boxId);
+    };
+    if ("boxId" in choice) go(choice.boxId);
+    else setPickingBox({ ids: choice.pick, onPick: go });
+    return true;
+  };
   const bringIn = useBoardBringIn({
     board: shown,
     people,
@@ -3118,6 +3156,7 @@ export function RoomBoard({
     settle: (ref) => queueChange(ref, () => Promise.resolve(true)),
     prompt: (boxId, prompt) => onPromptBox?.(boxId, prompt) ?? Promise.resolve(false),
     focusBox: (boxId) => focusItem(boardBoxRef(boxId)),
+    chooseBox: (preferred, then) => void chooseDraftBox(preferred, then),
   });
   const fitAll = () => {
     const area = boardAreaOf(surfaceRef.current);
@@ -3310,28 +3349,47 @@ export function RoomBoard({
     event.stopPropagation();
     holdPointer(event);
     setSelectedEdge(null);
-    setLinking({ from, box, to: at, press: { x: event.clientX, y: event.clientY } });
+    setLinking({
+      from,
+      box,
+      to: at,
+      press: { x: event.clientX, y: event.clientY },
+      pointerId: event.pointerId,
+    });
   };
-  const moveLink = (event: PointerEvent<HTMLElement>) => {
-    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-    drawLinkTo(event);
-  };
-  const endLink = (event: PointerEvent<HTMLElement>) => {
-    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-    event.currentTarget.releasePointerCapture(event.pointerId);
-    const from = linking?.from;
+  type LinkPointer = Pick<globalThis.PointerEvent, "clientX" | "clientY" | "pointerId" | "type">;
+  const moveLink = useStableCallback((event: LinkPointer) => {
+    if (linking?.pointerId === event.pointerId) drawLinkTo(event);
+  });
+  const endLink = useStableCallback((event: LinkPointer) => {
+    if (linking === null || linking.pointerId !== event.pointerId) return;
+    dropHeldPointer();
+    const { from, press } = linking;
     stopLinking();
+    if (event.type === "pointercancel") return;
     // A grip sits on the end of any line drawn from it, so a click there is the line's.
-    if (
-      linking !== null &&
-      Math.hypot(event.clientX - linking.press.x, event.clientY - linking.press.y) < CLICK_SLOP
-    ) {
+    if (Math.hypot(event.clientX - press.x, event.clientY - press.y) < CLICK_SLOP) {
       setSelectedEdge(edgeAt(event.clientX, event.clientY));
       return;
     }
-    const to = linkTargetAt(event.clientX, event.clientY, from ?? null);
-    if (from !== undefined && to !== null) addEdge(from, to.ref);
-  };
+    const to = linkTargetAt(event.clientX, event.clientY, from);
+    if (to !== null) addEdge(from, to.ref);
+  });
+  // A line drawn from a grip follows its pointer anywhere: over other cards, off the grip after
+  // a fast flick, and where the browser could not capture it, such as a scripted drag.
+  const linkPointer = linking?.pointerId;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- listens on the window for the pointer a grip drag holds, wherever it goes, until it lets go
+  useEffect(() => {
+    if (linkPointer === undefined) return;
+    window.addEventListener("pointermove", moveLink, true);
+    window.addEventListener("pointerup", endLink, true);
+    window.addEventListener("pointercancel", endLink, true);
+    return () => {
+      window.removeEventListener("pointermove", moveLink, true);
+      window.removeEventListener("pointerup", endLink, true);
+      window.removeEventListener("pointercancel", endLink, true);
+    };
+  }, [linkPointer, moveLink, endLink]);
   /** With the Line tool: a click picks the card a line starts from, the next the one it ends on. */
   const pickLineEnd = (event: MouseEvent<HTMLElement>) => {
     const target = linkTargetAt(event.clientX, event.clientY, linking?.from ?? null);
@@ -3359,7 +3417,7 @@ export function RoomBoard({
     setLineTool((on) => !on);
     surfaceRef.current?.focus({ preventScroll: true });
   };
-  const link = canEdit ? { onStart: startLink, onMove: moveLink, onEnd: endLink } : undefined;
+  const link = canEdit ? { onStart: startLink } : undefined;
 
   const closeComment = () => {
     setOpenComment(null);
@@ -3514,7 +3572,18 @@ export function RoomBoard({
     });
   // Deleting takes effect at once, since Undo, or the toast's, puts it back. What Undo cannot put
   // back, as a thread box's conversation, asks first.
-  const removeNotes = (noteIds: ReadonlyArray<string>) => {
+  // The comment threads on a deleted card go with it, and the same undo brings them back.
+  const withCommentsOn = (noteIds: ReadonlyArray<string>) => [
+    ...noteIds,
+    ...boardCommentsOn(shown, noteIds, (id) => drawnItem(noteRef(id))?.offsetHeight).filter(
+      (id) => {
+        const comment = shown.notes.find((note) => note.id === id);
+        return comment !== undefined && isRoomCardOwnedBy(comment, viewer);
+      },
+    ),
+  ];
+  const removeNotes = (chosen: ReadonlyArray<string>) => {
+    const noteIds = withCommentsOn(chosen);
     const { edgeIds } = boardDeletion(shown, noteIds);
     for (const id of edgeIds) send({ kind: "edge", id }, null);
     for (const id of noteIds) send({ kind: "note", id }, null);
@@ -3522,7 +3591,7 @@ export function RoomBoard({
     if (steps === null) return;
     const toast = toastManager.add({
       type: "info",
-      title: noteIds.length === 1 ? "Deleted" : `Deleted ${noteIds.length}`,
+      title: chosen.length === 1 ? "Deleted" : `Deleted ${chosen.length}`,
       actionProps: {
         children: "Undo",
         onClick: () => {
@@ -3534,9 +3603,14 @@ export function RoomBoard({
   };
   const deleteNotes = (noteIds: ReadonlyArray<string>) => {
     if (noteIds.length === 0) return;
-    if (boardDeletion(shown, noteIds).undoable) removeNotes(noteIds);
+    if (boardDeletion(shown, withCommentsOn(noteIds)).undoable) removeNotes(noteIds);
     else setConfirmingDelete(noteIds);
   };
+  // A box's chat stays where it is unless its owner, asked, deletes it too.
+  const deletingBoxes = shown.notes.filter(
+    (note) => note.kind === "thread" && confirmingDelete?.includes(note.id) === true,
+  );
+  const boxChats = deletingBoxes.flatMap((box) => boxChatDeleter?.(box.id) ?? []);
   // What is someone else's stays on the board, and selected; what goes leaves the selection with
   // it, and comes back selected with an undo.
   const deleteSelection = () => {
@@ -4027,7 +4101,10 @@ export function RoomBoard({
           label={box.title === "" ? "Prompt this thread" : `Prompt ${box.title}`}
           placeholder={box.guestId === undefined ? "Ask your agent" : guestBoxPlaceholder}
           model={renderBoxModel?.(box.id)}
-          onPrompt={(prompt) => onPromptBox(box.id, prompt)}
+          onPrompt={(prompt) => {
+            rememberBoardAskTarget(askKey, box.id);
+            return onPromptBox(box.id, prompt);
+          }}
           onPin={canEdit && onChange !== undefined ? pinPromptCard : undefined}
           draft={bringIn.draftFor(box.id)}
         />
@@ -4389,9 +4466,7 @@ export function RoomBoard({
     onRedo: canEdit ? () => travel("redo") : undefined,
     view: planShown ? pickedView : "board",
     onView: plannable ? pickView : undefined,
-    ownBoxes: threadBoxes
-      .filter((box) => (box.guestId ?? null) === viewer)
-      .map((box) => boardBoxRef(box.id)),
+    chooseOwnBox: (then) => chooseDraftBox(null, (boxId) => then(boardBoxRef(boxId))),
     onAddOwnBox: canAddOwnBox
       ? () => {
           const id = flushSync(() =>
@@ -5849,24 +5924,60 @@ export function RoomBoard({
               ) : null}
             </SelectionBar>
           )}
+          {pickingBox === null ? null : (
+            <BoardBoxPicker
+              boxes={pickingBox.ids.map((id) => {
+                const target = askTargetsFor.find((candidate) => candidate.id === id);
+                const title = threadBoxes.find((box) => box.id === id)?.title ?? "";
+                return {
+                  id,
+                  title: target?.label ?? (title === "" ? "Untitled thread" : title),
+                  ...(target?.model === undefined ? {} : { model: target.model }),
+                };
+              })}
+              onPick={(boxId) => {
+                setPickingBox(null);
+                pickingBox.onPick(boxId);
+              }}
+              onClose={() => setPickingBox(null)}
+            />
+          )}
           <AlertDialog
             open={confirmingDelete !== null}
             onOpenChange={(open) => {
-              if (!open) setConfirmingDelete(null);
+              if (open) return;
+              setConfirmingDelete(null);
+              setDeletingChats(false);
             }}
           >
             <AlertDialogPopup>
               <AlertDialogHeader>
                 <AlertDialogTitle>
-                  {confirmingDelete?.length === 1
-                    ? "Delete this card?"
-                    : `Delete ${confirmingDelete?.length ?? 0} cards?`}
+                  {confirmingDelete?.length !== 1
+                    ? `Delete ${confirmingDelete?.length ?? 0} cards?`
+                    : deletingBoxes.length === 1
+                      ? "Delete this agent box?"
+                      : "Delete this card?"}
                 </AlertDialogTitle>
                 <AlertDialogDescription>
-                  A thread box&apos;s conversation, a comment thread, or what an agent wrote cannot
-                  be brought back with Undo.
+                  {deletingBoxes.length === 0
+                    ? "What an agent wrote, a code window or a pull request window cannot be brought back with Undo."
+                    : `Undo can't bring ${deletingBoxes.length === 1 ? "the box" : "the boxes"} back. ${
+                        boxChats.length > 0
+                          ? `${boxChats.length === 1 ? "The chat stays" : "The chats stay"} in your list.`
+                          : "The chat stays with whoever runs the box."
+                      }`}
                 </AlertDialogDescription>
               </AlertDialogHeader>
+              {boxChats.length > 0 ? (
+                <label className="flex cursor-pointer items-center gap-2 px-6 pb-4 text-sm">
+                  <Checkbox
+                    checked={deletingChats}
+                    onCheckedChange={(checked) => setDeletingChats(checked === true)}
+                  />
+                  {boxChats.length === 1 ? "Also delete the chat" : "Also delete the chats"}
+                </label>
+              ) : null}
               <AlertDialogFooter>
                 <AlertDialogClose render={<Button variant="outline" size="sm" />}>
                   Cancel
@@ -5876,7 +5987,9 @@ export function RoomBoard({
                   size="sm"
                   onClick={() => {
                     if (confirmingDelete !== null) removeNotes(confirmingDelete);
+                    if (deletingChats) for (const deleteChat of boxChats) deleteChat();
                     setConfirmingDelete(null);
+                    setDeletingChats(false);
                   }}
                 >
                   Delete
@@ -6104,11 +6217,9 @@ type DragBy = (target: BoardTarget, from: BoardPoint, dx: number, dy: number) =>
 /** Sends a card as `update` makes it from how it reads now. */
 type ChangeNote = (note: RoomBoardNote, update: (note: RoomBoardNote) => RoomBoardNote) => void;
 
-/** Draws an arrow from a card or note: hold it and let go over another. */
+/** Draws an arrow from a card or note: hold it and let go over another. The board follows the drag. */
 interface LinkHandlers {
   readonly onStart: (from: string, event: PointerEvent<HTMLElement>) => void;
-  readonly onMove: (event: PointerEvent<HTMLElement>) => void;
-  readonly onEnd: (event: PointerEvent<HTMLElement>) => void;
 }
 
 /** Resizes a card by its id and a bottom corner: while the corner is held, then once let go. */
@@ -6215,14 +6326,11 @@ function LinkHandle({
       data-board-link
       aria-label="Drag to another card to draw a line"
       className={cn(
-        "group/link pointer-events-none absolute z-10 grid size-7 cursor-crosshair touch-none place-items-center opacity-0 transition-opacity group-hover/item:pointer-events-auto group-hover/item:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
+        "group/link pointer-events-none absolute z-10 grid size-7 cursor-crosshair touch-none place-items-center opacity-0 transition-opacity group-hover/item:pointer-events-auto group-hover/item:opacity-100 group-data-[board-selected]/item:pointer-events-auto group-data-[board-selected]/item:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
         // A pin's touches its right side, so the pointer reaches it without leaving the pin.
         pin ? "-right-7 top-0.5" : LINK_HANDLE_SPOTS[side],
       )}
       onPointerDown={(event) => link.onStart(from, event)}
-      onPointerMove={link.onMove}
-      onPointerUp={link.onEnd}
-      onPointerCancel={link.onEnd}
     >
       <span className="size-3 rounded-full border-2 border-primary bg-background shadow-board transition-transform group-hover/link:scale-150 group-hover/link:bg-primary" />
     </button>

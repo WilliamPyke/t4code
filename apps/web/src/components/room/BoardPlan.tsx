@@ -91,7 +91,12 @@ import {
 import { TaskAssigneeDot, TaskDueChip, TaskPriorityIcon, TaskPriorityMark } from "./BoardTaskMarks";
 import { BoardProgressLine } from "./RoomBoardArtifact";
 import { WhyNot } from "./RoomBoardWhy";
-import { type BoardPeople, boardCursorColor, boardPersonName } from "./roomBoard.logic";
+import {
+  type BoardPeople,
+  boardAgentName,
+  boardCursorColor,
+  boardPersonName,
+} from "./roomBoard.logic";
 import { useBoxProgress } from "./roomBoardLive";
 
 /**
@@ -1574,7 +1579,10 @@ function PlanTaskDialog({
         <DialogHeader>
           <DialogTitle>Task</DialogTitle>
           <DialogDescription>
-            Added by {boardPersonName(people, task.guestId)}
+            Added by{" "}
+            {task.agent === undefined
+              ? boardPersonName(people, task.guestId)
+              : boardAgentName(people, task.guestId)}
             {line === "" ? "" : ` · joined to ${line}`}
           </DialogDescription>
         </DialogHeader>

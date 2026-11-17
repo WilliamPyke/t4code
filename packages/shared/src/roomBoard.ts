@@ -9,6 +9,7 @@ import {
   ROOM_BOARD_MAX_REACTIONS,
   ROOM_BOARD_MAX_REPLIES,
   ROOM_BOARD_MAX_THREADS,
+  ROOM_BOARD_REMOVED_MAX,
   ROOM_BOARD_ROOM_BOX,
   ROOM_BOARD_THREAD_CARD,
   ROOM_BOX_CARD_LABELS_MAX,
@@ -329,6 +330,24 @@ const sameContent = (left: RoomBoardNote, right: RoomBoardNote) =>
   left.color === right.color &&
   sameMentions(left.mentions, right.mentions);
 
+const REMOVED_KEPT_MS = 24 * 60 * 60 * 1000;
+type RemovedEntry = NonNullable<RoomBoard["removed"]>[number];
+const removedLongAgo = (entry: RemovedEntry, at: string) =>
+  Date.parse(at) - Date.parse(entry.at) > REMOVED_KEPT_MS;
+
+/** A comment thread removed lately that a `note.put` of its id brings back. */
+const removedComment = (board: RoomBoard, noteId: string, at: string) => {
+  const entry = board.removed?.find((candidate) => candidate.note.id === noteId);
+  return entry === undefined || removedLongAgo(entry, at) ? undefined : entry.note;
+};
+
+const withRemoved = (board: RoomBoard, removed: ReadonlyArray<RemovedEntry>): RoomBoard => {
+  if (removed.length > 0) return { ...board, removed };
+  if (board.removed === undefined) return board;
+  const { removed: _gone, ...rest } = board;
+  return rest;
+};
+
 // Like a card's place, its order in a Plan column is not what it says.
 const sameNote = (left: RoomBoardNote, right: RoomBoardNote) =>
   sameContent(left, right) &&
@@ -640,6 +659,20 @@ export function applyRoomBoardChange(
       if (existing === undefined && board.notes.length >= ROOM_BOARD_MAX_NOTES) {
         return Result.fail(ROOM_BOARD_FULL);
       }
+      const removed = existing === undefined ? removedComment(board, change.noteId, at) : undefined;
+      if (removed !== undefined && change.kind === "comment") {
+        if (!isRoomCardOwnedBy(removed, author)) {
+          return Result.fail(
+            "Only whoever started this comment thread, or the owner, can bring it back.",
+          );
+        }
+        return Result.succeed(
+          withRemoved(
+            { ...board, notes: [...board.notes, { ...removed, x: change.x, y: change.y }] },
+            (board.removed ?? []).filter((entry) => entry.note.id !== removed.id),
+          ),
+        );
+      }
       if (
         existing === undefined &&
         change.kind === "artifact" &&
@@ -704,9 +737,13 @@ export function applyRoomBoardChange(
         return Result.fail("Only the owner and whoever added this card can remove it.");
       }
       const ref = roomBoardNoteRef(change.noteId);
+      const kept = (board.removed ?? []).filter((entry) => !removedLongAgo(entry, at));
       return Result.succeed(
         roomBoardWithEdges(
-          { ...board, notes: board.notes.filter((note) => note.id !== change.noteId) },
+          withRemoved(
+            { ...board, notes: board.notes.filter((note) => note.id !== change.noteId) },
+            note.kind === "comment" ? [...kept, { note, at }].slice(-ROOM_BOARD_REMOVED_MAX) : kept,
+          ),
           (edge) => edge.from !== ref && edge.to !== ref,
         ),
       );

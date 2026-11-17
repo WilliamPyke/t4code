@@ -182,7 +182,8 @@ shared thread, one with a board of its own, or one joined from someone's room ca
 While a box's agent works, everyone sees what it is doing: waiting its turn, thinking, using a
 tool, writing its reply, or waiting for whoever runs it to approve something. An artifact a box
 fills shows the reply as it is written, a few seconds behind for a box on a guest's machine.
-Removing a box leaves its thread where it is. If you archive or delete a box's thread, the box's
+Deleting a box asks first, and its chat stays in your list unless you tick **Also delete the
+chat**. If you archive or delete a box's thread, the box's
 next prompt starts a new thread for it. A board holds up to 12
 thread boxes.
 
@@ -273,7 +274,8 @@ to move it. A thread holds up to 30 replies.
 When a thread is settled, choose **Resolve**. Resolved threads are hidden: **Resolved** in the
 board's toolbar shows them, and **Reopen** brings one back. Anyone can resolve or reopen a thread.
 Each person deletes their own replies, and the owner can delete any; only whoever started a thread,
-or the owner, deletes the whole thread.
+or the owner, deletes the whole thread. A thread whose pin sits on a card, or that has a line to
+it, is deleted with the card, and one Undo brings both back.
 
 A thread with a line into a thread box goes with its prompts whole, every comment with who wrote
 it; a very long thread sends its first comment and its newest replies. A new comment placed on a
@@ -346,7 +348,8 @@ fills the artifact.
 Many sources (Linear, GitHub, Notion, Jira, Superhuman, private Google Docs) do not show inside a
 link card. To let everyone read one, choose **Bring in with my agent** on its link card, or
 **Add and bring in** when you add the link from the toolbar. Tinkjam writes a prompt in one of
-your own thread boxes asking your agent to open the link with the tools you connected to it (a
+your own thread boxes (the one you selected, else the one you used last; with several it asks
+which) asking your agent to open the link with the tools you connected to it (a
 Linear or Google Drive connection, for example) and write a snapshot of it: for an issue its
 status, assignee and latest comments, for a spreadsheet its sheets and first rows, for a design
 its pages and frames. Read the prompt, change it if you like, and press **Send**; nothing runs

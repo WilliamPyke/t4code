@@ -79,6 +79,7 @@ import {
   boardGroupMove,
   boardAgentTurnToUndo,
   boardAgentTurnsSeen,
+  boardCommentsOn,
   boardDeletion,
   boardDuplicateOffset,
   boardHistoryChanges,
@@ -513,24 +514,18 @@ describe("placeBoardItem", () => {
     expect(taken.some((rect) => covers(at, note, rect))).toBe(false);
   });
 
-  it("puts a card made from another beside it, to its right and clear of what is there", () => {
+  it("puts a card made from another right beside it, else below it, never far off", () => {
     const box = { x: 100, y: 100, width: 340, height: 460 };
     const artifact = boardNewNoteSize("artifact");
     expect(besideBoardItem(box, artifact, [box])).toEqual({ x: 480, y: 100 });
+    // A snapshot of a link whose right holds the box that reads it goes below the link.
     const neighbour = { x: 470, y: 80, width: 300, height: 300 };
-    const at = besideBoardItem(box, artifact, [box, neighbour]);
-    expect(covers(at, artifact, neighbour)).toBe(false);
-    expect(covers(at, artifact, box)).toBe(false);
-    // Beside would reach past what the board shows: a clear spot in view comes first.
-    const view = { x: 0, y: 0, width: 780, height: 1_000 };
-    const shown = besideBoardItem(box, artifact, [box], view);
-    expect(inside(shown, artifact, view)).toBe(true);
-    expect(covers(shown, artifact, box)).toBe(false);
-    // With no clear spot in view it still goes beside.
-    expect(besideBoardItem(box, artifact, [box], { ...view, height: 600 })).toEqual({
-      x: 480,
-      y: 100,
-    });
+    expect(besideBoardItem(box, artifact, [box, neighbour])).toEqual({ x: 100, y: 600 });
+    // Both taken: the clear spot nearest its right, clear of everything and still close.
+    const under = { x: 100, y: 580, width: 340, height: 200 };
+    const at = besideBoardItem(box, artifact, [box, neighbour, under]);
+    expect([box, neighbour, under].some((rect) => covers(at, artifact, rect))).toBe(false);
+    expect(Math.hypot(at.x - 480, at.y - 100)).toBeLessThan(500);
   });
 
   it("puts new boxes for tasks in one column right of them, level with each, a gap apart", () => {
@@ -2013,6 +2008,12 @@ describe("boardArtifactAuthor", () => {
     expect(boardCommentAgentAuthor({ guestId: sam, agent }, owner)).toBe("Sam's agent · Haiku");
     expect(boardCommentAgentAuthor({ agent }, asSam)).toBe("Owner's agent · Haiku");
     expect(boardCommentAgentAuthor({ agent: {} }, owner)).toBe("Your agent");
+    // The same card the owner's agent made reads as theirs to everyone else, named.
+    const replayed = { agent: { model: "Board: notes to tasks" } };
+    expect(boardCommentAgentAuthor(replayed, owner)).toBe("Your agent · Board: notes to tasks");
+    expect(boardCommentAgentAuthor(replayed, { ...asSam, ownerName: "Alex" })).toBe(
+      "Alex's agent · Board: notes to tasks",
+    );
     expect(boardCommentReplying({ guestId: sam, phase: "thinking" }, owner)).toBe(
       "Sam's agent is replying… · Thinking",
     );
@@ -3358,12 +3359,26 @@ describe("undoing a delete, through the room's own rules", () => {
     x: 160,
     y: 90,
     kind: "comment",
-    guestId: sam,
+    guestId: ana,
     createdAt: at,
-    replies: [{ id: "r", text: "Yes", guestId: ana, at }],
+    replies: [{ id: "r", text: "Yes", guestId: sam, at }],
   };
+  // Sits on `other` with no line to it.
+  const onOther: RoomBoardNote = {
+    ...comment,
+    id: "p",
+    text: "Who owns this?",
+    x: 420,
+    y: 120,
+    replies: [{ id: "r2", text: "Me", guestId: sam, at }],
+  };
+  const elsewhere: RoomBoardNote = { ...comment, id: "e", x: 900, y: 900, replies: [] };
   const pin = { id: "pin", from: "note:c", to: "note:n" };
-  const full: RoomBoard = { positions: {}, notes: [mentioned, other, comment], edges: [pin] };
+  const full: RoomBoard = {
+    positions: {},
+    notes: [mentioned, other, comment, onOther, elsewhere],
+    edges: [pin],
+  };
   const applyAll = (start: RoomBoard, changes: ReadonlyArray<RoomBoardChange>) =>
     changes.reduce((current, change) => {
       const next = applyRoomBoardChange(current, scope, ana, change, at);
@@ -3371,18 +3386,22 @@ describe("undoing a delete, through the room's own rules", () => {
       return next.success;
     }, start);
 
-  it("brings a note back with its mentions and the comment thread pinned to it", () => {
-    const { edgeIds } = boardDeletion(full, ["n", "o"]);
+  it("takes the comment threads on a note with it, and one undo brings both back, replies and all", () => {
+    // Pinned with a line, or sitting on the card: never one elsewhere.
+    const comments = boardCommentsOn(full, ["n", "o"]);
+    expect(comments).toEqual(["c", "p"]);
+    const going = ["n", "o", ...comments];
+    const { edgeIds, undoable } = boardDeletion(full, going);
+    expect(undoable).toBe(true);
     const entry: BoardHistoryEntry = [
       ...edgeIds.map((id) => ({ target: { kind: "edge", id } as const, after: null })),
-      { target: { kind: "note", id: "n" } as const, after: null },
-      { target: { kind: "note", id: "o" } as const, after: null },
+      ...going.map((id) => ({ target: { kind: "note", id } as const, after: null })),
     ].map((step) => ({ ...step, before: boardStepBefore(new Map(), full, step.target) }));
     const deleted = applyAll(
       full,
       entry.map(({ target, after }) => boardChangeOf(target, after)),
     );
-    expect(deleted.notes.map((note) => note.id)).toEqual(["c"]);
+    expect(deleted.notes.map((note) => note.id)).toEqual(["e"]);
     const undo = boardHistoryChanges(deleted, entry, "undo");
     expect(undo).not.toBeNull();
     const back = applyAll(
@@ -3391,6 +3410,11 @@ describe("undoing a delete, through the room's own rules", () => {
     );
     expect(back.notes.find((note) => note.id === "n")?.mentions).toEqual(mentioned.mentions);
     expect(back.notes.find((note) => note.id === "o")).toBeDefined();
+    expect(back.notes.find((note) => note.id === "c")).toEqual(comment);
+    expect(back.notes.find((note) => note.id === "p")).toEqual(onOther);
     expect(back.edges).toEqual([pin]);
+    expect(back.removed).toBeUndefined();
+    // And redo deletes them all again.
+    expect(boardHistoryChanges(back, entry, "redo")).not.toBeNull();
   });
 });

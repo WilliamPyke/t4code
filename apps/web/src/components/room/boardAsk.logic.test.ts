@@ -6,6 +6,7 @@ import {
   boardAgentWorkFresh,
   boardAskCards,
   boardAskDefaultTarget,
+  boardDraftBox,
   boardAskLines,
   boardAskSuggestions,
   boardAskTargets,
@@ -155,6 +156,42 @@ describe("boardAskTargets and boardAskDefaultTarget", () => {
       BOARD_ASK_NEW_BOX,
     );
     expect(boardAskDefaultTarget([], { selectedBoxes: [], lastUsed: "mine" })).toBeNull();
+  });
+});
+
+describe("boardDraftBox", () => {
+  const own = [
+    { id: "thread", ranAt: "2026-11-17T09:00:00.000Z" },
+    { id: "qa", ranAt: "2026-11-17T10:00:00.000Z" },
+    { id: "spare" },
+  ];
+  const none = { selected: [], lastUsed: null };
+
+  it.each([
+    ["the one selected", { ...none, selected: ["spare"] }, { boxId: "spare" }],
+    [
+      "not two selected",
+      { ...none, selected: ["spare", "thread"], lastUsed: "thread" },
+      { boxId: "thread" },
+    ],
+    ["never someone else's selected", { ...none, selected: ["eves"] }, { boxId: "qa" }],
+    [
+      "the box that wrote it",
+      { ...none, preferred: "spare", lastUsed: "thread" },
+      { boxId: "spare" },
+    ],
+    ["the one used last here", { ...none, lastUsed: "thread" }, { boxId: "thread" }],
+    ["else the one that ran last, not the board's main box", none, { boxId: "qa" }],
+  ] as const)("goes to %s", (_, hints, expected) => {
+    expect(boardDraftBox(own, hints)).toEqual(expected);
+  });
+
+  it("asks which when nothing says, and takes an only box", () => {
+    expect(boardDraftBox([{ id: "thread" }, { id: "spare" }], none)).toEqual({
+      pick: ["thread", "spare"],
+    });
+    expect(boardDraftBox([{ id: "spare" }], none)).toEqual({ boxId: "spare" });
+    expect(boardDraftBox([], { ...none, lastUsed: "eves" })).toBeNull();
   });
 });
 

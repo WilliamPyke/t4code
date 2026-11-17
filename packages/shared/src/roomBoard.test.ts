@@ -659,6 +659,18 @@ describe("applyRoomBoardChange", () => {
 
     const moved = applied(both, put("c", { text: "Is this right?", x: 40, y: 40 }));
     expect(moved.notes[0]?.replies).toHaveLength(2);
+    // A removed thread is kept a day, so an undo puts it back, replies and all, for whoever could
+    // remove it; past that a put of its id starts a new thread.
+    const gone = applied(both, { type: "note.remove", noteId: "c" });
+    expect(gone.notes.map((note) => note.id)).toEqual(["note", "pinned"]);
+    const back = put("c", { kind: "comment", text: "Is this right?" });
+    const restored = applied(gone, back);
+    expect(restored.notes.at(-1)).toEqual(both.notes[0]);
+    expect(restored.removed).toBeUndefined();
+    expect(Result.isFailure(applyRoomBoardChange(gone, scope, eve, back, at))).toBe(true);
+    const dayOn = "2026-11-14T10:00:01.000Z";
+    const fresh = Result.getOrThrow(applyRoomBoardChange(gone, scope, sam, back, dayOn));
+    expect(fresh.notes.at(-1)?.replies).toBeUndefined();
     const removed = Result.getOrThrow(applyRoomBoardChange(both, scope, eve, unreply("r1"), at));
     expect(removed.notes[0]?.replies).toEqual([{ id: "r2", text: "Agreed", at: later }]);
     expect(applied(both, unreply("gone"))).toBe(both);

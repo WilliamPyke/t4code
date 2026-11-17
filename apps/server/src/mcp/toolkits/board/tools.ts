@@ -35,7 +35,7 @@ const BoardReadTool = Tool.make("t3_board_read", {
 
 const BoardAddTool = Tool.make("t3_board_add", {
   description:
-    "Add notes, or tasks (`task: true`), to this thread's board as this thread's agent, all in one call: breaking work into tasks is one call with every task. `status`, `priority`, `due` or `assignee` also make a card a task. Assigning only labels a task: it starts nobody's agent. The cards go together next to the board's tasks or this thread's box, or in `section`: a section's id or title (a new title makes one; `cards: []` only makes the section). Returns new ids, and refusals with reasons.",
+    "Add notes, or tasks (`task: true`), to this thread's board as this thread's agent, all in one call: breaking work into tasks is one call with every task. At most 20 cards per call; add the rest in a second call.`status`, `priority`, `due` or `assignee` also make a card a task. Assigning only labels a task: it starts nobody's agent. The cards go together next to the board's tasks or this thread's box, or in `section`: a section's id or title (a new title makes one; `cards: []` only makes the section). Returns new ids, and refusals with reasons.",
   parameters: RoomBoardAgentAddInput,
   success: RoomBoardAgentResult,
   ...boardTool,
@@ -48,7 +48,7 @@ const BoardAddTool = Tool.make("t3_board_add", {
 
 const BoardUpdateTool = Tool.make("t3_board_update", {
   description:
-    "Change cards on this thread's board, by id from t3_board_read, many in one call: `text` edits a note or task; `status` (todo, doing, done), `priority`, `due` and `assignee` plan a task (null clears one); `section` moves a card into a section (id or title; a new title makes one); `lineTo` draws a line to another card. Cannot remove cards, attach cards to another person's agent, or edit a card that goes to one. Returns refusals with reasons.",
+    "Change cards on this thread's board, by id from t3_board_read, many in one call: `text` edits a note or task; `status` (todo, doing, done), `priority`, `due` and `assignee` plan a task (null clears one); `section` moves a card into a section (id or title; a new title makes one); `lineTo` draws a line to another card. At most 40 changes per call; send the rest in a second call. Cannot remove cards, attach cards to another person's agent, or edit a card that goes to one. Returns refusals with reasons.",
   parameters: RoomBoardAgentUpdateInput,
   success: RoomBoardAgentResult,
   ...boardTool,
