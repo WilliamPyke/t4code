@@ -22,6 +22,7 @@ import {
   previewOf,
   removeMember,
   renameWorkspace,
+  roleChangedItem,
   setMemberRole,
   withInvite,
   workspaceView,
@@ -103,6 +104,30 @@ export class BoardWorkspace extends DurableObject<WorkspaceEnv> {
     return memberOf(await this.state(), account)?.role ?? null;
   }
 
+  /** Who a board of the workspace may `@` mention, by member id. */
+  async memberIds(): Promise<ReadonlyArray<string>> {
+    return (await this.state())?.members.map((member) => member.memberId) ?? [];
+  }
+
+  /** The accounts of these members, for a board putting a mention in their inbox. */
+  async accountsOf(memberIds: ReadonlyArray<string>): Promise<Readonly<Record<string, string>>> {
+    const members = (await this.state())?.members ?? [];
+    return Object.fromEntries(
+      members.flatMap((member) =>
+        memberIds.includes(member.memberId) ? [[member.memberId, member.account]] : [],
+      ),
+    );
+  }
+
+  /** The owners' accounts, who answer requests for edit access to the workspace's boards. */
+  async ownerAccounts(): Promise<ReadonlyArray<string>> {
+    return (
+      (await this.state())?.members.flatMap((member) =>
+        member.role === "owner" ? [member.account] : [],
+      ) ?? []
+    );
+  }
+
   async join(
     account: string,
     code: string,
@@ -142,9 +167,21 @@ export class BoardWorkspace extends DurableObject<WorkspaceEnv> {
     memberId: string,
     role: CloudWorkspaceRole,
   ): Promise<Answer<null>> {
-    const changed = setMemberRole(await this.state(), account, memberId, role);
+    const before = await this.state();
+    const changed = setMemberRole(before, account, memberId, role);
     if (Result.isFailure(changed)) return { failure: changed.failure };
     await this.keep(changed.success);
+    const told = roleChangedItem(before, changed.success, {
+      by: account,
+      memberId,
+      id: crypto.randomUUID(),
+      at: new Date().toISOString(),
+    });
+    if (told !== null) {
+      await indexOf(this.env, told.account)
+        .deliver([told.item])
+        .catch(() => undefined);
+    }
     return { value: null };
   }
 

@@ -489,6 +489,14 @@ Everyone in a workspace sees its boards and opens them as themselves, without th
 
 An owner can make someone else an owner, remove someone, or delete the workspace; anyone can leave it. Someone removed, or who left, can no longer open its boards, and their cards on them stay. The last owner must make someone else an owner, or delete the workspace, before leaving. Deleting a workspace does not delete its boards: they stay with everyone already on them. A workspace holds up to 50 people and 500 boards.
 
+### Mentions, your inbox and My tasks
+
+Type `@` in a note, a task, a comment or a reply to pick someone on the board, or in its workspace; use the arrow keys and Enter, or click. Their name shows in their colour, and a mention of you is outlined. A mention only tells that person: it never reaches anyone's agent.
+
+Signed in, the bell on the boards home and in a board's header is your inbox. It shows when someone mentions you, gives you a task, replies to a comment you started, asks to edit a board you manage, or changes what you can do. Choose an item to open its board on that card, or the Plan with that task open; **Mark all read** clears the count. Items stay for 30 days. A board with something new for you has a dot on the home. **My tasks** on the home lists every task given to you, by board.
+
+Someone signed in who can only view a board can choose **Ask for edit access**, with a short note if they like. Whoever made the board, and the owners of its workspace, get it in their inbox with **Approve** and **Decline**; approving lets them edit at once, on the page they have open. One request per person per board can wait at a time. On a board kept on a computer, mentions show, but nothing goes to an inbox.
+
 A cloud board has no agent of its own. Each person brings theirs. When you make a cloud board and this browser has one computer connected, your agent comes along by itself, so **Thread** and **Ask an agent** work at once. Otherwise, or on a board someone invited you to, choose **Thread**, **Ask an agent** or **Attach my agent**. **Bring your agent** lists your computers with whether each is online; choose **Bring my agent** on one and your agent's box appears in the middle of your view, ready for your first prompt, in no project or the project you pick (the next time, the one you picked last). Your thread boxes then run on that computer, and only you can prompt them. A box whose person is not on the board shows **Offline**.
 
 ### Connect your computer with Tinkjam Sync

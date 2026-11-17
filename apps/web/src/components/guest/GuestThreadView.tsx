@@ -80,6 +80,7 @@ import {
   isCloudShare,
   type JoinedGuestShare,
   markGuestShareOpened,
+  reopeningSharesAtom,
 } from "~/guest/guestShares";
 import { boardLinksOf } from "~/guest/boardLinks.logic";
 import { renameCloudBoard } from "~/guest/cloudBoards";
@@ -125,6 +126,7 @@ import {
   boardLocalModelPick,
   boardNewBoxModel,
 } from "../room/boardBoxModel.logic";
+import { BoardMentionsProvider } from "../room/BoardMentions";
 import { BoardSplit } from "../room/BoardSplit";
 import { BoardThreadPicker } from "../room/BoardThreadPicker";
 import { RoomBoard, RoomCursors } from "../room/RoomBoard";
@@ -154,6 +156,7 @@ import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { BoardTitle } from "../boards/BoardTitle";
+import { InboxBell } from "../boards/InboxBell";
 import { BringAgentDialog } from "./BringAgentDialog";
 import { CloudBoardSharing } from "./CloudBoardSharing";
 import { ViewOnlyBar } from "./ViewOnlyBar";
@@ -363,15 +366,25 @@ export function GuestThreadRoute({ threadRef }: { readonly threadRef: ScopedThre
     useAtomValue(guestSharesAtom).find(
       (candidate) => guestEnvironmentId(candidate.shareId) === threadRef.environmentId,
     ) ?? null;
+  const reopening = [...useAtomValue(reopeningSharesAtom)].some(
+    (shareId) => guestEnvironmentId(shareId) === threadRef.environmentId,
+  );
   return (
     <SidebarInset className="flex h-svh min-h-0 flex-col overflow-hidden overscroll-y-none md:h-dvh">
-      {share === null || share.threadId !== threadRef.threadId ? (
+      {share === null && reopening ? (
+        <GuestNotice title="Opening the board..." />
+      ) : share === null || share.threadId !== threadRef.threadId ? (
         <GuestNotice
           title="This board has ended, or the link is not valid"
           detail="Ask whoever shared it with you for a new link."
         />
       ) : (
-        <GuestThreadSession key={share.shareId} share={share} threadRef={threadRef} />
+        // A new session (asked-for edit access) opens the board anew.
+        <GuestThreadSession
+          key={`${share.shareId}:${share.token}`}
+          share={share}
+          threadRef={threadRef}
+        />
       )}
     </SidebarInset>
   );
@@ -835,137 +848,153 @@ function GuestThreadSession({
         open={!cloud && panelOpen}
         panel={cloud ? null : <div className="flex h-full min-h-0 flex-col">{conversation}</div>}
         board={
-          <RoomBoard
-            title={view.title}
-            room={view}
+          <BoardMentionsProvider
             shareId={share.shareId}
-            viewKey={`guest:${share.shareId}`}
-            online={online}
-            messages={boardMessages(
-              projection.visibleTurnItems.map((row) => row.item),
-              BOARD_THREAD_MESSAGES,
-              "Owner",
-            )}
-            agentWorking={deriveThreadAgentWorking(projection)}
-            ownerCode={ownerCode}
-            onTakeTask={agents ? takeTask : undefined}
-            onGiveNote={agents ? giveNote : undefined}
-            cloud={roomCloud}
-            bringAgent={
-              roomCloud?.agents === true && machine == null
-                ? () => setBringingAgent(true)
-                : undefined
-            }
-            ownBoxHandle={ownBox}
-            ownerAssignable={!cloud}
-            onToggleChat={cloud ? undefined : () => setPanelOpen((open) => !open)}
-            {...(cloud
-              ? {
-                  onBack: () => void navigate({ to: "/" }),
-                  backLabel: "Boards",
-                  titleEditor: viewOnly ? undefined : (
-                    <BoardTitle
-                      threadRef={threadRef}
-                      title={view.title}
-                      rename={(title) => renameCloudBoard(share, title)}
-                    />
-                  ),
-                  sharing: viewOnly ? (
-                    <>
-                      <ViewOnlyBar viewing={viewing ?? 0} />
-                      {sharing}
-                    </>
-                  ) : (
-                    sharing
-                  ),
-                }
-              : {})}
-            viewOnly={viewOnly}
-            viewer={boardViewer}
-            ownerName={view.ownerName}
-            cursorLayer={
-              <GuestBoardCursors
-                shareId={share.shareId}
-                guests={view.guests}
-                ownerName={view.ownerName}
-              />
-            }
-            onOpenThread={() => setPanelOpen(true)}
-            onOpenReply={(messageId) => {
-              revealRoomReply(messageId);
-              setPanelOpen(true);
-            }}
-            onChange={viewOnly ? undefined : (change) => postBoardChange(endpoint, change)}
-            onCursor={viewOnly ? undefined : (presence) => postBoardCursor(endpoint, presence)}
-            onPromptBox={agents ? promptBox : undefined}
-            stopBox={agents ? stopBox : undefined}
-            askInComments={agents && machine != null}
-            readCodePatch={readCodePatch}
-            onRefreshPullRequest={
-              cloud ? undefined : (noteId) => refreshRoomPullRequest(endpoint, noteId)
-            }
-            onAddThread={!agents || machine == null ? undefined : setAddingAt}
-            renderBoxModel={(boxId) =>
-              viewOnly ? null : machine == null ? (
-                <span className="truncate text-2xs text-muted-foreground">
-                  {machine === null ? (cloud ? "Your agent is not here" : "Goes to the owner") : ""}
-                </span>
-              ) : (
-                <OwnBoxModelPicker
-                  machine={machine}
-                  boxId={boxId}
-                  pick={ownBoxSelection(machine, boxId)}
-                  chosen={ownBoxNote(boxId)?.boxModel}
-                  onPick={(selection, name) => pickOwnBoxModel(boxId, selection, name)}
-                />
-              )
-            }
-            boxRunEnd={ownBoxRunEnd}
-            roomModel={view.model.name}
-            guestBoxPlaceholder={
-              machine === undefined
-                ? "Ask an agent"
-                : machine === null && !cloud
-                  ? "Ask the owner's agent"
-                  : "Ask your agent"
-            }
-            conversationBoxIds={Object.keys(machine?.boxes ?? {})}
-            onOpenConversation={(boxId) => {
-              const threadId = machine?.boxes[boxId];
-              if (machine != null && threadId !== undefined) {
-                void navigate({
-                  to: "/$environmentId/$threadId",
-                  params: { environmentId: machine.environmentId, threadId },
-                });
+            guests={view.guests}
+            viewer={guestId ?? null}
+          >
+            <RoomBoard
+              title={view.title}
+              room={view}
+              shareId={share.shareId}
+              viewKey={`guest:${share.shareId}`}
+              online={online}
+              messages={boardMessages(
+                projection.visibleTurnItems.map((row) => row.item),
+                BOARD_THREAD_MESSAGES,
+                "Owner",
+              )}
+              agentWorking={deriveThreadAgentWorking(projection)}
+              ownerCode={ownerCode}
+              onTakeTask={agents ? takeTask : undefined}
+              onGiveNote={agents ? giveNote : undefined}
+              cloud={roomCloud}
+              bringAgent={
+                roomCloud?.agents === true && machine == null
+                  ? () => setBringingAgent(true)
+                  : undefined
               }
-            }}
-            ownerWritingArtifactId={ownerWritingArtifactId(
-              projection.visibleTurnItems.map((row) => row.item),
-              deriveThreadStructureRuntime(projection)?.activeRunId,
-              view.shareId,
-            )}
-            needsApproval={(pendingRequests?.approvals.length ?? 0) > 0}
-            renderBoxApproval={(boxId) => {
-              const threadId = machine?.boxes[boxId];
-              return machine == null || threadId === undefined ? null : (
-                <BoxApproval threadRef={scopeThreadRef(machine.environmentId, threadId)} />
-              );
-            }}
-            onUseNote={
-              cloud
-                ? undefined
-                : (text) => {
-                    // Only a draft in the message box: the guest sends it, and the owner still approves it.
-                    flushSync(() => {
-                      setDraft((current) =>
-                        appendNoteToDraft(current, text).slice(0, GUEST_MESSAGE_MAX_LENGTH),
-                      );
-                      setPanelOpen(true);
-                    });
-                    composerRef.current?.focus();
+              ownBoxHandle={ownBox}
+              ownerAssignable={!cloud}
+              onToggleChat={cloud ? undefined : () => setPanelOpen((open) => !open)}
+              {...(cloud
+                ? {
+                    onBack: () => void navigate({ to: "/" }),
+                    backLabel: "Boards",
+                    titleEditor: viewOnly ? undefined : (
+                      <BoardTitle
+                        threadRef={threadRef}
+                        title={view.title}
+                        rename={(title) => renameCloudBoard(share, title)}
+                      />
+                    ),
+                    sharing: (
+                      <>
+                        {viewOnly ? (
+                          <ViewOnlyBar
+                            viewing={viewing ?? 0}
+                            shareId={share.shareId}
+                            viewCredential={share.viewOnly === true ? share.token : undefined}
+                            granted={view.granted}
+                          />
+                        ) : null}
+                        <InboxBell nudge={view.inboxAt} />
+                        {sharing}
+                      </>
+                    ),
                   }
-            }
-          />
+                : {})}
+              viewOnly={viewOnly}
+              viewer={boardViewer}
+              ownerName={view.ownerName}
+              cursorLayer={
+                <GuestBoardCursors
+                  shareId={share.shareId}
+                  guests={view.guests}
+                  ownerName={view.ownerName}
+                />
+              }
+              onOpenThread={() => setPanelOpen(true)}
+              onOpenReply={(messageId) => {
+                revealRoomReply(messageId);
+                setPanelOpen(true);
+              }}
+              onChange={viewOnly ? undefined : (change) => postBoardChange(endpoint, change)}
+              onCursor={viewOnly ? undefined : (presence) => postBoardCursor(endpoint, presence)}
+              onPromptBox={agents ? promptBox : undefined}
+              stopBox={agents ? stopBox : undefined}
+              askInComments={agents && machine != null}
+              readCodePatch={readCodePatch}
+              onRefreshPullRequest={
+                cloud ? undefined : (noteId) => refreshRoomPullRequest(endpoint, noteId)
+              }
+              onAddThread={!agents || machine == null ? undefined : setAddingAt}
+              renderBoxModel={(boxId) =>
+                viewOnly ? null : machine == null ? (
+                  <span className="truncate text-2xs text-muted-foreground">
+                    {machine === null
+                      ? cloud
+                        ? "Your agent is not here"
+                        : "Goes to the owner"
+                      : ""}
+                  </span>
+                ) : (
+                  <OwnBoxModelPicker
+                    machine={machine}
+                    boxId={boxId}
+                    pick={ownBoxSelection(machine, boxId)}
+                    chosen={ownBoxNote(boxId)?.boxModel}
+                    onPick={(selection, name) => pickOwnBoxModel(boxId, selection, name)}
+                  />
+                )
+              }
+              boxRunEnd={ownBoxRunEnd}
+              roomModel={view.model.name}
+              guestBoxPlaceholder={
+                machine === undefined
+                  ? "Ask an agent"
+                  : machine === null && !cloud
+                    ? "Ask the owner's agent"
+                    : "Ask your agent"
+              }
+              conversationBoxIds={Object.keys(machine?.boxes ?? {})}
+              onOpenConversation={(boxId) => {
+                const threadId = machine?.boxes[boxId];
+                if (machine != null && threadId !== undefined) {
+                  void navigate({
+                    to: "/$environmentId/$threadId",
+                    params: { environmentId: machine.environmentId, threadId },
+                  });
+                }
+              }}
+              ownerWritingArtifactId={ownerWritingArtifactId(
+                projection.visibleTurnItems.map((row) => row.item),
+                deriveThreadStructureRuntime(projection)?.activeRunId,
+                view.shareId,
+              )}
+              needsApproval={(pendingRequests?.approvals.length ?? 0) > 0}
+              renderBoxApproval={(boxId) => {
+                const threadId = machine?.boxes[boxId];
+                return machine == null || threadId === undefined ? null : (
+                  <BoxApproval threadRef={scopeThreadRef(machine.environmentId, threadId)} />
+                );
+              }}
+              onUseNote={
+                cloud
+                  ? undefined
+                  : (text) => {
+                      // Only a draft in the message box: the guest sends it, and the owner still approves it.
+                      flushSync(() => {
+                        setDraft((current) =>
+                          appendNoteToDraft(current, text).slice(0, GUEST_MESSAGE_MAX_LENGTH),
+                        );
+                        setPanelOpen(true);
+                      });
+                      composerRef.current?.focus();
+                    }
+              }
+            />
+          </BoardMentionsProvider>
         }
       />
       <BringAgentDialog

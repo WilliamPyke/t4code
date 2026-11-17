@@ -2,11 +2,12 @@
   "id": "/",
   "name": "Tinkjam",
   "short_name": "Tinkjam",
+  "description": "Boards where your team and your agents work side by side.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#161616",
-  "theme_color": "#161616",
+  "background_color": "#FFF7EC",
+  "theme_color": "#FFF7EC",
   "icons": [
     {
       "src": "/favicon-32x32.png",

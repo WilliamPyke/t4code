@@ -4,11 +4,12 @@ import { Link } from "@tanstack/react-router";
 import { CheckIcon } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
-import { APP_DISPLAY_NAME, TINKJAM_SYNC_URL } from "~/branding";
+import { APP_DISPLAY_NAME, TINKJAM_SYNC_COMMAND, TINKJAM_SYNC_URL } from "~/branding";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { isElectron } from "../env";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
 import { useRelayEnvironmentDiscovery } from "../state/environments";
+import { CommandBlock } from "./CommandBlock";
 import { InstallT3Commands } from "./InstallT3Commands";
 import { useT3ConnectAuthPrompt } from "./clerk/useT3ConnectAuthPrompt";
 import { CloudEnvironmentConnectRows } from "./cloud/CloudEnvironmentConnectList";
@@ -41,15 +42,13 @@ export function HostedEmptyState() {
             <EmptyDescription>
               {localEnvironmentOff
                 ? "Turn it back on, or connect a different computer."
-                : cloudEnabled
-                  ? "Your agents run on your computer."
-                  : "Your agents run on your computer. Start Tinkjam there first."}
+                : "Your agents, such as Claude Code or Codex, run on your own computer. Connect it to use them here."}
             </EmptyDescription>
           </EmptyHeader>
           <EmptyContent>
             {localEnvironmentOff ? (
               <Button render={<Link to="/settings/connections" />} size="sm">
-                Open Environments
+                Your computers
               </Button>
             ) : (
               <ol className="w-full space-y-4 text-left">
@@ -88,7 +87,8 @@ function T3ConnectSteps() {
         )}
       </SetupStep>
       <SetupStep number={2}>
-        <RunOnComputer command="t3 connect" />
+        <p>Copy this into a terminal on your computer, then open the link it prints:</p>
+        <CommandBlock command={TINKJAM_SYNC_COMMAND} className="mt-2" />
         {isSignedIn ? (
           <div className="mt-4 space-y-1.5">
             <CloudEnvironmentConnectRows
@@ -123,7 +123,7 @@ function PairingSteps() {
       </SetupStep>
       <SetupStep number={2}>
         <Button render={<Link to="/settings/connections" />} size="sm">
-          Add pairing link
+          Paste the link it prints
         </Button>
       </SetupStep>
     </>

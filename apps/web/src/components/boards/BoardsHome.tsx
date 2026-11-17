@@ -25,6 +25,7 @@ import { type MouseEvent, useEffect, useState } from "react";
 
 import { isElectron } from "~/env";
 import { refreshAccountBoards, useBoardAccount } from "~/guest/boardAccount";
+import { useInboxCount } from "~/guest/inbox";
 import {
   accountBoardsAtom,
   guestSharesAtom,
@@ -64,6 +65,8 @@ import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { toastManager } from "../ui/toast";
 import { AccountNameAsk, BoardsAccount } from "./BoardsAccount";
 import { BoardsWelcome } from "./BoardsWelcome";
+import { InboxBell } from "./InboxBell";
+import { MyTasks } from "./MyTasks";
 import { SignInNudge } from "./SignInNudge";
 import { BoardThumbnail } from "./BoardThumbnail";
 import {
@@ -256,6 +259,8 @@ export function BoardsHome() {
                 </>
               ) : null}
             </Button>
+            <MyTasks />
+            <InboxBell />
             <BoardsAccount />
             {all.length > 0 ? (
               <label className="flex w-full items-center gap-2 sm:w-64">
@@ -469,6 +474,8 @@ function BoardTile({
         ? teamShapes
         : decodeBoardPreview(board.preview);
   const live = summary !== null && summary.shared && summary.online > 0;
+  const unread =
+    useInboxCount()?.boards.includes(board.kind === "joined" ? board.shareId : "") === true;
   return (
     <li
       className="relative"
@@ -498,6 +505,14 @@ function BoardTile({
         </div>
         <div className="flex min-w-0 flex-col gap-1 p-3">
           <div className="flex min-w-0 items-center gap-2">
+            {unread ? (
+              <span
+                className="size-2 shrink-0 rounded-full bg-primary"
+                role="img"
+                aria-label="Something new for you"
+                data-board-unread
+              />
+            ) : null}
             <h2 className="min-w-0 flex-1 truncate text-sm font-semibold" data-board-name>
               {board.title}
             </h2>

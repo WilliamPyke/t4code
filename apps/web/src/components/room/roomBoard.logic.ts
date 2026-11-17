@@ -1341,6 +1341,7 @@ export function boardChangeOf(target: BoardTarget, value: BoardValue): RoomBoard
     ...(value.size === undefined ? {} : { size: value.size }),
     ...(value.color === undefined ? {} : { color: value.color }),
     ...(value.section === true ? { section: true } : {}),
+    ...(value.mentions === undefined ? {} : { mentions: value.mentions }),
     ...(value.kind === "task"
       ? {
           done: value.done === true,

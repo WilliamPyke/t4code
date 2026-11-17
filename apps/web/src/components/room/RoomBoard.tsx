@@ -15,6 +15,7 @@ import {
   type RoomBoardAgentTurn,
   type RoomBoardAssignee,
   type RoomBoardChange,
+  type RoomBoardMention,
   type RoomBoardNote,
   type RoomBoardNoteColor,
   type RoomBoardReaction,
@@ -90,6 +91,7 @@ import {
   roomBoardAfterAgentTurn,
   roomBoxCodeWindows,
   roomBoxExcerpt,
+  roomMentionsIn,
   roomTaskStatus,
   roomWindowBoxId,
   type RoomBoardScope,
@@ -362,6 +364,8 @@ import {
 } from "./boardPlan.logic";
 import { BoardEdgeLine, boardStroke } from "./RoomBoardEdge";
 import { TaskAssigneeDot, TaskDueChip, TaskPriorityMark } from "./BoardTaskMarks";
+import { MentionChips, useMentionPicker } from "./BoardMentions";
+import { useBoardFocusRequest } from "./boardFocus";
 import {
   CLICK_SLOP,
   boardPressKind,
@@ -2033,8 +2037,16 @@ export function RoomBoard({
     hand();
   };
   // Everyone else reads the text as it is typed, with the pointer; the board stores it on blur.
-  const writeNote = (note: RoomBoardNote, text: string) => {
-    hold({ kind: "note", id: note.id }, { ...noteNow(note), text });
+  const writeNote = (note: RoomBoardNote, text: string, added?: RoomBoardMention) => {
+    const current = noteNow(note);
+    // Someone picked with `@` stays mentioned while the text names them.
+    const mentions = roomMentionsIn([...(current.mentions ?? []), ...(added ? [added] : [])], text);
+    hold(
+      { kind: "note", id: note.id },
+      current.mentions === undefined && mentions.length === 0
+        ? { ...current, text }
+        : { ...current, text, mentions },
+    );
     sendDrag();
   };
   // Escape in a title: back to what is stored, sending nothing.
@@ -3347,16 +3359,22 @@ export function RoomBoard({
     onChange === undefined
       ? Promise.resolve(false)
       : queueChange(noteRef(noteId), () => onChange(change));
-  const sendComment = (note: RoomBoardNote, text: string) => {
+  const sendComment = (
+    note: RoomBoardNote,
+    text: string,
+    mentions: ReadonlyArray<RoomBoardMention> = [],
+  ) => {
+    const named = mentions.length === 0 ? {} : { mentions };
     if (note.id !== draftNote?.id) {
       return changeComment(note.id, {
         type: "comment.reply",
         noteId: note.id,
         replyId: randomUUID(),
         text,
+        ...named,
       });
     }
-    send({ kind: "note", id: note.id }, settleBoardValue({ ...note, text }));
+    send({ kind: "note", id: note.id }, settleBoardValue({ ...note, text, ...named }));
     const to = boardCommentLineTo(shown, draftComment?.on ?? null);
     if (to !== null) {
       const line = randomUUID();
@@ -3416,7 +3434,7 @@ export function RoomBoard({
           height: pin,
         }}
         askBoxes={askBoxes}
-        onSend={(text) => sendComment(openNote, text)}
+        onSend={(text, mentions) => sendComment(openNote, text, mentions)}
         onAsk={(boxId, text) => askInComment(openNote, boxId, text)}
         onRemoveReply={(replyId) =>
           void changeComment(openNote.id, {
@@ -4150,6 +4168,25 @@ export function RoomBoard({
   const planShown = plannable && pickedView !== "board";
   const planColumns = planShown ? boardPlanColumns(shown.notes) : null;
   const planAttachments = planShown ? boardPlanAttachments(shown) : null;
+  // A task an inbox item opened in the Plan.
+  const [planTask, setPlanTask] = useState<{ readonly id: string; readonly stamp: number } | null>(
+    null,
+  );
+  useBoardFocusRequest(shareId, (focus) => {
+    if (!shown.notes.some((note) => note.id === focus.noteId)) return room !== null;
+    if (focus.plan && plannable) {
+      if (!planShown) pickView("plan");
+      setPlanTask({ id: focus.noteId, stamp: focus.stamp });
+      return true;
+    }
+    if (planShown) {
+      pickView("board");
+      return false;
+    }
+    if (drawnItem(noteRef(focus.noteId)) === null) return false;
+    showCards([focus.noteId]);
+    return true;
+  });
   const placeTasks = (
     placements: ReadonlyArray<{ id: string; status: RoomTaskStatus; order: number }>,
   ) => {
@@ -5865,6 +5902,7 @@ export function RoomBoard({
             onMoveAll={movePlanTasks}
             onDeleteAll={deleteNotes}
             actionsOf={planActions}
+            openTask={planTask}
           />
         )}
         {contextMenu === null ? null : (
@@ -6285,7 +6323,8 @@ function BoardNote({
   readonly onDrop: (note: RoomBoardNote) => void;
   readonly onBlur: (target: BoardTarget) => void;
   readonly onRevert: (target: BoardTarget) => void;
-  readonly onText: (note: RoomBoardNote, text: string) => void;
+  /** `added`: someone just picked with `@`. */
+  readonly onText: (note: RoomBoardNote, text: string, added?: RoomBoardMention) => void;
   /** Ticks a task done, or unticks it back to where it was in the Plan. */
   readonly onTick: (note: RoomBoardNote, done: boolean) => void;
   /** Absent when a pasted link cannot become a card of its own, on a full board. */
@@ -6351,6 +6390,9 @@ function BoardNote({
   // Once this person types here, their own draft shows until they leave it, whoever else types.
   const [drafting, setDrafting] = useState(false);
   const text = (drafting ? null : boardLiveText(note.text, liveDrag)) ?? note.text;
+  const mention = useMentionPicker((pick) =>
+    onText(note, pick.text.slice(0, ROOM_BOARD_NOTE_MAX_LENGTH), pick.mention),
+  );
   // Notes and tasks are paper in a paint; titled cards, links among them, are windows.
   const paper = note.kind === undefined || note.kind === "task";
   // A task's actions sit in its menu, as on its Plan card: a card full of buttons is easy to
@@ -6648,8 +6690,10 @@ function BoardNote({
             onChange={(event) => {
               setDrafting(true);
               onText(note, event.target.value);
+              if (paper) mention.track(event.currentTarget);
             }}
             onKeyDown={(event) => {
+              if (mention.keyDown(event)) return;
               // A title goes back to what is stored on Escape; a note's text is kept, and saved.
               if (event.key === "Escape") {
                 event.stopPropagation();
@@ -6663,6 +6707,7 @@ function BoardNote({
             }}
             onBlur={() => {
               setDrafting(false);
+              mention.close();
               onBlur(target);
             }}
             onPaste={(event) => {
@@ -6674,6 +6719,8 @@ function BoardNote({
             }}
           />
         )}
+        {mention.popup}
+        {paper ? <MentionChips mentions={note.mentions} /> : null}
         {note.kind === "task" ? (
           <TaskProgress note={note} people={people} worker={worker} boxName={boxName} />
         ) : null}

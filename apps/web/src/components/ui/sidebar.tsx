@@ -728,11 +728,12 @@ const sidebarMenuButtonVariants = cva(
     },
     variants: {
       size: {
+        // Finger-sized on a touch screen; as before with a mouse.
         default:
-          "h-8 rounded-[var(--control-radius)] px-[var(--sidebar-row-content-inset)] py-1.5 text-sm",
-        icon: "size-8 justify-center rounded-[var(--control-radius)] p-0",
+          "h-8 rounded-[var(--control-radius)] px-[var(--sidebar-row-content-inset)] py-1.5 text-sm pointer-coarse:h-10",
+        icon: "size-8 justify-center rounded-[var(--control-radius)] p-0 pointer-coarse:size-10",
         lg: "h-12 rounded-[var(--control-radius)] px-[var(--sidebar-row-content-inset)] py-2 text-sm group-data-[collapsible=icon]:p-0!",
-        sm: "h-7 rounded-[var(--control-radius)] px-[var(--sidebar-row-content-inset)] py-2 text-xs",
+        sm: "h-7 rounded-[var(--control-radius)] px-[var(--sidebar-row-content-inset)] py-2 text-xs pointer-coarse:h-10",
       },
       variant: {
         default: "font-medium text-sidebar-muted-foreground/80",

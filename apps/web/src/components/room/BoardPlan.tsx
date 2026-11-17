@@ -1,11 +1,13 @@
-import type {
-  RoomBoardAssignee,
-  RoomBoardNote,
-  RoomTaskPriority,
-  RoomTaskStatus,
-  ThreadGuest,
+import {
+  ROOM_BOARD_NOTE_MAX_LENGTH,
+  type RoomBoardAssignee,
+  type RoomBoardMention,
+  type RoomBoardNote,
+  type RoomTaskPriority,
+  type RoomTaskStatus,
+  type ThreadGuest,
 } from "@t3tools/contracts";
-import { roomTaskStatus } from "@t3tools/shared/roomBoard";
+import { roomMentionsIn, roomTaskStatus } from "@t3tools/shared/roomBoard";
 import {
   AppWindowIcon,
   ArrowDownIcon,
@@ -66,6 +68,7 @@ import { Textarea } from "../ui/textarea";
 import { Toggle } from "../ui/toggle";
 import { Toggle as GroupToggle, ToggleGroup } from "../ui/toggle-group";
 import { BoardChip, PersonDot } from "./BoardChrome";
+import { useMentionPicker } from "./BoardMentions";
 import {
   BOARD_PLAN_COLUMNS,
   BOARD_PLAN_PRIORITIES,
@@ -212,7 +215,10 @@ export function BoardPlan({
   onMoveAll,
   onDeleteAll,
   actionsOf,
+  openTask = null,
 }: {
+  /** A task to open, as an inbox item asks; each new `stamp` opens it again. */
+  readonly openTask?: { readonly id: string; readonly stamp: number } | null;
   readonly layout: "columns" | "list";
   readonly columns: BoardPlanColumns;
   readonly attachments: ReadonlyMap<string, BoardPlanAttached>;
@@ -239,6 +245,11 @@ export function BoardPlan({
   readonly actionsOf: (task: RoomBoardNote) => PlanTaskActions;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
+  const [openedStamp, setOpenedStamp] = useState<number | null>(null);
+  if (openTask !== null && openTask.stamp !== openedStamp) {
+    setOpenedStamp(openTask.stamp);
+    setEditing(openTask.id);
+  }
   const [adding, setAdding] = useState<RoomTaskStatus | null>(null);
   const [filter, setFilter] = useState<BoardPlanFilter>(NO_PLAN_FILTER);
   const [sorts, setSorts] = useState(MANUAL_SORTS);
@@ -1482,10 +1493,23 @@ function PlanTaskDialog({
 }) {
   // Null until this person types, so an edit someone else makes meanwhile shows and stays.
   const [draft, setDraft] = useState<string | null>(null);
+  // People picked with `@` since the last save.
+  const [picked, setPicked] = useState<ReadonlyArray<RoomBoardMention>>([]);
+  const mention = useMentionPicker((pick) => {
+    setDraft(pick.text.slice(0, ROOM_BOARD_NOTE_MAX_LENGTH));
+    setPicked((current) => [...current, pick.mention]);
+  });
   const saveText = () => {
     if (!canEdit || draft === null) return;
     setDraft(null);
-    if (draft !== task.text) onChange(task, (current) => ({ ...current, text: draft }));
+    setPicked([]);
+    if (draft === task.text && picked.length === 0) return;
+    onChange(task, (current) => {
+      const mentions = roomMentionsIn([...(current.mentions ?? []), ...picked], draft);
+      return current.mentions === undefined && mentions.length === 0
+        ? { ...current, text: draft }
+        : { ...current, text: draft, mentions };
+    });
   };
   const close = () => {
     saveText();
@@ -1542,9 +1566,19 @@ function PlanTaskDialog({
             value={draft ?? task.text}
             readOnly={!canEdit}
             placeholder="Write a task"
-            onChange={(event) => setDraft(event.target.value)}
-            onBlur={saveText}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              mention.track(event.currentTarget);
+            }}
+            onKeyDown={(event) => {
+              mention.keyDown(event);
+            }}
+            onBlur={() => {
+              mention.close();
+              saveText();
+            }}
           />
+          {mention.popup}
           <div className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-muted-foreground">Status</span>
             <ToggleGroup

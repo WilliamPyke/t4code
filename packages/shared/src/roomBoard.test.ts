@@ -470,6 +470,85 @@ describe("applyRoomBoardChange", () => {
     expect(Result.getOrThrow(room).roomBoxModel).toEqual(boxModel);
   });
 
+  it("keeps @mentions of people on the board while the text names them, never the author", () => {
+    const eve = GuestId.make("guest:eve");
+    const gone = GuestId.make("guest:gone");
+    const onBoard: RoomBoardScope = {
+      hasCard: () => false,
+      hasPerson: (guestId) => guestId === eve || guestId === sam,
+      hasMember: (memberId) => memberId === "member-maya",
+    };
+    const change = (board: RoomBoard, next: RoomBoardChange) =>
+      applyRoomBoardChange(board, onBoard, sam, next, at);
+    const mentions = [
+      { guestId: eve, name: "Eve" },
+      { memberId: "member-maya", name: "Maya" },
+      // Naming yourself does nothing.
+      { guestId: sam, name: "Sam" },
+    ];
+    const named = Result.getOrThrow(
+      change(EMPTY_ROOM_BOARD, put("n", { text: "@Eve and @Maya, from @Sam", mentions })),
+    );
+    expect(named.notes[0]?.mentions).toEqual(mentions.slice(0, 2));
+    // Whoever is named may move or edit the card and stay named.
+    const byEve = applyRoomBoardChange(
+      named,
+      onBoard,
+      eve,
+      put("n", { text: "@Eve and @Maya, from @Sam", x: 9, mentions: named.notes[0]?.mentions }),
+      at,
+    );
+    expect(Result.getOrThrow(byEve).notes[0]?.mentions).toEqual(mentions.slice(0, 2));
+    // An edit that says nothing of them keeps those the text still names.
+    const edited = Result.getOrThrow(change(named, put("n", { text: "@Maya only" })));
+    expect(edited.notes[0]?.mentions).toEqual([{ memberId: "member-maya", name: "Maya" }]);
+    // Only someone on the board or in its workspace, named one way.
+    for (const wanted of [
+      [{ guestId: gone, name: "Gone" }],
+      [{ memberId: "member-else", name: "Else" }],
+      [{ guestId: eve, memberId: "member-maya", name: "Eve" }],
+    ]) {
+      expect(
+        Result.isFailure(change(EMPTY_ROOM_BOARD, put("x", { text: "@Gone", mentions: wanted }))),
+      ).toBe(true);
+    }
+    // Someone already mentioned stays mentioned after they left the board.
+    const left = {
+      ...named,
+      notes: [{ ...named.notes[0]!, mentions: [{ guestId: gone, name: "Gone" }] }],
+    };
+    const kept = Result.getOrThrow(
+      change(left, put("n", { text: "@Gone, hi", mentions: [{ guestId: gone, name: "Gone" }] })),
+    );
+    expect(kept.notes[0]?.mentions).toEqual([{ guestId: gone, name: "Gone" }]);
+    // A machine's room has no workspace: nobody is a member.
+    expect(
+      Result.isFailure(
+        applyRoomBoardChange(
+          EMPTY_ROOM_BOARD,
+          scope,
+          sam,
+          put("y", { text: "@Maya", mentions: [{ memberId: "member-maya", name: "Maya" }] }),
+          at,
+        ),
+      ),
+    ).toBe(true);
+    const thread: RoomBoard = {
+      positions: {},
+      notes: [{ id: "c", text: "Look", x: 0, y: 0, guestId: eve, kind: "comment" }],
+    };
+    const replied = Result.getOrThrow(
+      change(thread, {
+        type: "comment.reply",
+        noteId: "c",
+        replyId: "r1",
+        text: "@Eve agreed",
+        mentions: [{ guestId: eve, name: "Eve" }],
+      }),
+    );
+    expect(replied.notes[0]?.replies?.[0]?.mentions).toEqual([{ guestId: eve, name: "Eve" }]);
+  });
+
   it("keeps a comment thread's replies, signed and timed by the board, for the room to resolve", () => {
     const eve = GuestId.make("guest:eve");
     const later = "2026-11-13T10:05:00.000Z";

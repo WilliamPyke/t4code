@@ -36,6 +36,7 @@ import {
   type RoomBoardChange,
   type RoomBoardContextCard,
   type RoomBoardEdge,
+  type RoomBoardMention,
   type RoomBoardNote,
   type RoomBoardReaction,
   type RoomBoardSize,
@@ -69,7 +70,68 @@ export interface RoomBoardScope {
   readonly hasCard: (cardId: string) => boolean;
   /** Called only for a named person; a task with no one named is for the room's owner. */
   readonly hasPerson: (guestId: GuestId) => boolean;
+  /** Members of the board's workspace someone may `@` mention. Absent: a board in no workspace. */
+  readonly hasMember?: ((memberId: string) => boolean) | undefined;
 }
+
+/** Names one mentioned person, whichever way they are named. */
+export const roomMentionKey = (mention: Pick<RoomBoardMention, "guestId" | "memberId">) =>
+  mention.guestId === undefined ? `member:${mention.memberId ?? ""}` : `guest:${mention.guestId}`;
+
+/** The mentions whose `@Name` the text still has, each person once. */
+export function roomMentionsIn(
+  mentions: ReadonlyArray<RoomBoardMention>,
+  text: string,
+): ReadonlyArray<RoomBoardMention> {
+  const seen = new Set<string>();
+  return mentions.filter((mention) => {
+    const key = roomMentionKey(mention);
+    if (seen.has(key) || !text.includes(`@${mention.name}`)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * The mentions a note or reply by `author` keeps. Each new one names exactly one person on the
+ * board or in its workspace; one it already had stays while the text names it, even once they
+ * left. Absent `wanted` keeps those it had. Naming yourself does nothing.
+ */
+function roomMentionsOf(
+  scope: RoomBoardScope,
+  author: GuestId | null,
+  text: string,
+  wanted: ReadonlyArray<RoomBoardMention> | undefined,
+  had: ReadonlyArray<RoomBoardMention> | undefined,
+): Result.Result<ReadonlyArray<RoomBoardMention>, string> {
+  if (wanted === undefined) return Result.succeed(roomMentionsIn(had ?? [], text));
+  const known = new Set((had ?? []).map(roomMentionKey));
+  for (const mention of wanted) {
+    if ((mention.guestId === undefined) === (mention.memberId === undefined)) {
+      return Result.fail("A mention names one person.");
+    }
+    if (known.has(roomMentionKey(mention))) continue;
+    const there =
+      mention.guestId === undefined
+        ? scope.hasMember?.(mention.memberId ?? "") === true
+        : scope.hasPerson(mention.guestId);
+    if (!there) return Result.fail("You can only mention people on this board.");
+  }
+  return Result.succeed(
+    roomMentionsIn(
+      wanted.filter(
+        (mention) =>
+          author === null || mention.guestId !== author || known.has(roomMentionKey(mention)),
+      ),
+      text,
+    ),
+  );
+}
+
+const sameMentions = (
+  left: ReadonlyArray<RoomBoardMention> | undefined,
+  right: ReadonlyArray<RoomBoardMention> | undefined,
+) => (left ?? []).map(roomMentionKey).join(" ") === (right ?? []).map(roomMentionKey).join(" ");
 
 const CARD_REF = roomBoardCardRef("");
 const isOnBoard = (scope: RoomBoardScope, board: RoomBoard, ref: string) =>
@@ -175,6 +237,9 @@ function putNote(
   if (change.color !== undefined && (kind !== undefined || pinned !== undefined)) {
     return Result.fail("Only a note or a section can have a colour.");
   }
+  const mentioned = roomMentionsOf(scope, author, change.text, change.mentions, existing?.mentions);
+  if (Result.isFailure(mentioned)) return Result.fail(mentioned.failure);
+  const mentions = mentioned.success;
   // An artifact's content, a task's answer and a thread box's turns come only from the owner's
   // server, never a change.
   const base: RoomBoardNote =
@@ -203,6 +268,7 @@ function putNote(
     assignee: _assignee,
     size: _size,
     color: _color,
+    mentions: _mentions,
     ...rest
   } = base;
   // Unticked, a done task goes back to to do; ticked or not, an older client's edit keeps it.
@@ -237,6 +303,7 @@ function putNote(
     ...(assignee === undefined || assignee === null ? {} : { assignee }),
     ...(size === undefined ? {} : { size }),
     ...(color === undefined ? {} : { color }),
+    ...(mentions.length === 0 ? {} : { mentions }),
   };
   // Moving or resizing a card is not changing it, for whoever catches up on the board later.
   return Result.succeed(
@@ -257,7 +324,8 @@ const sameContent = (left: RoomBoardNote, right: RoomBoardNote) =>
   left.priority === right.priority &&
   left.assignee?.guestId === right.assignee?.guestId &&
   (left.assignee === undefined) === (right.assignee === undefined) &&
-  left.color === right.color;
+  left.color === right.color &&
+  sameMentions(left.mentions, right.mentions);
 
 // Like a card's place, its order in a Plan column is not what it says.
 const sameNote = (left: RoomBoardNote, right: RoomBoardNote) =>
@@ -742,11 +810,14 @@ export function applyRoomBoardChange(
       const text = change.text.trim();
       if (text === "") return Result.fail("A reply needs some text.");
       if (replies.length >= ROOM_BOARD_MAX_REPLIES) return Result.fail(ROOM_COMMENT_THREAD_FULL);
+      const mentioned = roomMentionsOf(scope, author, text, change.mentions, undefined);
+      if (Result.isFailure(mentioned)) return Result.fail(mentioned.failure);
       const reply = {
         id: change.replyId,
         text,
         ...(author === null ? {} : { guestId: author }),
         at,
+        ...(mentioned.success.length === 0 ? {} : { mentions: mentioned.success }),
       };
       return Result.succeed(withNote(board, note, { ...note, replies: [...replies, reply] }));
     }

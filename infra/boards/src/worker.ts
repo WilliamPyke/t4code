@@ -17,6 +17,11 @@ import {
   GuestRedeemResult,
   type CloudBoardAccountBoard,
   type CloudBoardAccountOpenResult,
+  type CloudBoardAccessRequest,
+  type CloudInbox,
+  type CloudInboxCount,
+  type CloudInboxItem,
+  type CloudMyTask,
   type CloudWorkspaceBoard,
   CLOUD_BOARD_TITLE_ROUTE,
   CloudBoardCreateRequest,
@@ -91,6 +96,7 @@ import {
   isViewLink,
   joinRoom,
   managesBoard,
+  mentionedMembers,
   moveCursor,
   onlineOf,
   openingEvents,
@@ -121,7 +127,18 @@ import {
   withAccountSession,
   withoutAccountBoard,
 } from "./account.ts";
+import { accessAnswerItem, accessRequestItem, answerAccess, askAccess } from "./accessRequests.ts";
 import { clerkKeys, verifyClerkSession, type ClerkKeyLookup } from "./clerk.ts";
+import {
+  inboxAfter,
+  inboxCountOf,
+  inboxDeliveries,
+  inboxRead,
+  taskIndexChanges,
+  withInboxAt,
+  type InboxDelivery,
+} from "./inbox.ts";
+import { inboxRoute } from "./inboxRoutes.ts";
 import { hashSecret, isShareId, makeSecret, makeViewSecret, shareOfSecret } from "./secrets.ts";
 import {
   lockOutAccount,
@@ -320,6 +337,11 @@ async function accountRoute(request: Request, env: Env, url: URL): Promise<Respo
     );
     return listed(await index.add(boards.filter((board) => board !== null)));
   }
+  const inbox = await inboxRoute(request, env, url, {
+    account,
+    readBody: (maxBytes) => readBody(request, maxBytes),
+  });
+  if (inbox !== null) return inbox;
   const shareId = url.searchParams.get(GUEST_SHARE_PARAM);
   if (!isShareId(shareId)) return failureResponse(roomFailure("bad_request"));
   if (path === CLOUD_BOARD_ACCOUNT_OPEN_ROUTE && request.method === "POST") {
@@ -648,7 +670,11 @@ export class BoardRoom extends DurableObject<Env> {
           this.setAgents(agentsWithoutPerson(this.agents, body.value.guestId), Date.now());
           this.sendCursors(Date.now());
         }
-        await this.save(next.success);
+        const told =
+          next.success === current
+            ? next.success
+            : await this.tellRoleChanged(next.success, guest, body.value.guestId, body.value.role);
+        await this.save(told);
         return noContent();
       }
       case CLOUD_BOARD_LINK_ROUTE: {
@@ -714,9 +740,11 @@ export class BoardRoom extends DurableObject<Env> {
         if (!allowRequest(this.recent, `board:${guest.id}`, BOARD_CHANGE_RATE_LIMIT, Date.now())) {
           return failureResponse(roomFailure("too_fast"));
         }
-        const next = changeBoard(this.room ?? room, guest.id, change.value, nowIso());
+        const members = await this.membersFor(this.room ?? room, change.value);
+        const before = this.room ?? room;
+        const next = changeBoard(before, guest.id, change.value, nowIso(), members);
         if (Result.isFailure(next)) return failureResponse(next.failure);
-        await this.save(next.success);
+        await this.saveChange(before, next.success);
         return noContent();
       }
       case GUEST_BOARD_CURSOR_ROUTE: {
@@ -880,15 +908,12 @@ export class BoardRoom extends DurableObject<Env> {
         const change = decodeAgentChange(body);
         if (Option.isNone(change)) return failureResponse(roomFailure("bad_request"));
         if (!allow("agent", BOARD_AGENT_RATE_LIMIT)) return tooFast();
-        const changed = changeBoardAsAgent(
-          this.room ?? room,
-          guest.id,
-          change.value,
-          nowIso(),
-          () => crypto.randomUUID(),
+        const before = this.room ?? room;
+        const changed = changeBoardAsAgent(before, guest.id, change.value, nowIso(), () =>
+          crypto.randomUUID(),
         );
         if (Result.isFailure(changed)) return failureResponse(changed.failure);
-        await this.save(changed.success.room);
+        await this.saveChange(before, changed.success.room);
         return Response.json(changed.success.result, { headers: NO_STORE });
       }
     }
@@ -1069,6 +1094,190 @@ export class BoardRoom extends DurableObject<Env> {
     await this.save(rest);
   }
 
+  private indexOf(account: string) {
+    return this.env.ACCOUNTS.get(this.env.ACCOUNTS.idFromName(account));
+  }
+
+  /** The member ids of the board's workspace, read only when the change mentions a member. */
+  private async membersFor(room: CloudRoom, change: RoomBoardChange): Promise<ReadonlySet<string>> {
+    if (room.workspaceId === undefined || mentionedMembers(change).length === 0) return new Set();
+    const ids = await workspaceOf(this.env, room.workspaceId)
+      .memberIds()
+      .catch((): ReadonlyArray<string> => []);
+    return new Set(ids);
+  }
+
+  /** Keeps a change someone made, once what it gives people is in their inboxes. */
+  private async saveChange(before: CloudRoom, next: CloudRoom): Promise<void> {
+    if (next === before) return;
+    const at = nowIso();
+    const told = await this.deliver(
+      next,
+      inboxDeliveries(before, next, { at, newId: () => crypto.randomUUID() }),
+    );
+    await this.save(withInboxAt(next, told, at));
+  }
+
+  /**
+   * Puts each item in its person's inbox: an account on the board as it is now, a workspace member
+   * as the workspace says now, never the author's own. Who on the board was told, so their open
+   * pages read their inbox again.
+   */
+  private async deliver(
+    room: CloudRoom,
+    deliveries: ReadonlyArray<InboxDelivery>,
+  ): Promise<ReadonlyArray<GuestId>> {
+    if (deliveries.length === 0) return [];
+    const memberIds = deliveries.flatMap((delivery) =>
+      "memberId" in delivery ? [delivery.memberId] : [],
+    );
+    const members: Readonly<Record<string, string>> =
+      memberIds.length === 0 || room.workspaceId === undefined
+        ? {}
+        : await workspaceOf(this.env, room.workspaceId)
+            .accountsOf(memberIds)
+            .catch(() => ({}));
+    const byAccount = new Map<string, Array<CloudInboxItem>>();
+    const seen = new Set<string>();
+    const told: Array<GuestId> = [];
+    for (const delivery of deliveries) {
+      const account = "account" in delivery ? delivery.account : members[delivery.memberId];
+      if (account === undefined) continue;
+      if (delivery.author !== undefined && accountOfGuest(room, delivery.author) === account) {
+        continue;
+      }
+      const key = `${account} ${delivery.item.noteId ?? delivery.item.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      byAccount.set(account, [...(byAccount.get(account) ?? []), delivery.item]);
+      const guestId = "guestId" in delivery ? delivery.guestId : accountGuestOf(room, account)?.id;
+      if (guestId !== undefined) told.push(guestId);
+    }
+    await Promise.allSettled(
+      [...byAccount].map(([account, items]) => this.indexOf(account).deliver(items)),
+    );
+    return told;
+  }
+
+  /** Tells someone the board's manager changed what they can do; the board with them told. */
+  private async tellRoleChanged(
+    room: CloudRoom,
+    by: CloudGuest,
+    guestId: GuestId,
+    role: "edit" | "view",
+  ): Promise<CloudRoom> {
+    const account = accountOfGuest(room, guestId);
+    if (account === undefined) return room;
+    const at = nowIso();
+    const item: CloudInboxItem = {
+      id: crypto.randomUUID(),
+      kind: "access-changed",
+      at,
+      by: by.name,
+      title: room.title,
+      shareId: room.shareId,
+      threadId: room.threadId,
+      ...(room.workspaceId === undefined ? {} : { workspaceId: room.workspaceId }),
+      role,
+    };
+    await this.indexOf(account)
+      .deliver([item])
+      .catch(() => undefined);
+    return withInboxAt(room, [guestId], at);
+  }
+
+  /** The accounts that answer access requests: the maker's, and the workspace's owners'. */
+  private async managerAccounts(room: CloudRoom): Promise<ReadonlyArray<string>> {
+    const maker = room.guests.find((guest) => guest.id === room.maker);
+    const owners =
+      room.workspaceId === undefined
+        ? []
+        : await workspaceOf(this.env, room.workspaceId)
+            .ownerAccounts()
+            .catch((): ReadonlyArray<string> => []);
+    return [
+      ...new Set([
+        ...(maker?.accountId === undefined || maker.locked === true ? [] : [maker.accountId]),
+        ...owners,
+      ]),
+    ];
+  }
+
+  /**
+   * Called by the Worker once it verified `account`: asks whoever manages the board for edit
+   * access. The request's id, which the asking page watches for.
+   */
+  async askAccess(account: string, ask: CloudBoardAccessRequest): Promise<Answer<string>> {
+    const room = this.room;
+    const viewing =
+      room !== null &&
+      ask.credential !== undefined &&
+      isViewLink(room, await hashSecret(ask.credential));
+    const asked = askAccess(this.room, {
+      id: crypto.randomUUID(),
+      account,
+      name: ask.name,
+      message: ask.message,
+      viewing,
+      now: nowIso(),
+    });
+    if (Result.isFailure(asked)) return { failure: asked.failure };
+    const { request } = asked.success;
+    const managers = (await this.managerAccounts(asked.success.room)).filter(
+      (manager) => manager !== account,
+    );
+    const item = accessRequestItem(asked.success.room, request);
+    await Promise.allSettled(managers.map((manager) => this.indexOf(manager).deliver([item])));
+    const told = managers.flatMap(
+      (manager) => accountGuestOf(asked.success.room, manager)?.id ?? [],
+    );
+    await this.save(withInboxAt(asked.success.room, told, request.at));
+    return { value: request.id };
+  }
+
+  /**
+   * Called by the Worker once it verified `account`: approves or declines a request, for its maker
+   * or an owner of its workspace. Approved, the person's open page can edit at once.
+   */
+  async answerAccess(account: string, requestId: string, approve: boolean): Promise<Answer<null>> {
+    const room = this.room;
+    if (room === null) return { failure: roomFailure("ended") };
+    const guest = accountGuestOf(room, account);
+    const manages =
+      guest === undefined
+        ? room.workspaceId !== undefined &&
+          (await workspaceOf(this.env, room.workspaceId)
+            .roleOf(account)
+            .catch(() => null)) === "owner"
+        : await this.manages(room, guest);
+    const now = nowIso();
+    const answered = answerAccess(this.room ?? room, {
+      requestId,
+      approve,
+      manages,
+      guestId: GuestId.make(crypto.randomUUID()),
+      now,
+    });
+    if (Result.isFailure(answered)) return { failure: answered.failure };
+    const { request, seat } = answered.success;
+    const next = answered.success.room;
+    const requester = this.indexOf(request.account);
+    await requester
+      .deliver([accessAnswerItem(next, request, guest?.name ?? "An owner of its workspace")])
+      .catch(() => undefined);
+    if (seat !== null) {
+      await requester
+        .add([this.withPreview(accountBoardOf(next, seat, { addedAt: now }))])
+        .catch(() => undefined);
+    }
+    const managers = await this.managerAccounts(next);
+    const item = accessRequestItem(next, request, true);
+    await Promise.allSettled(managers.map((manager) => this.indexOf(manager).deliver([item])));
+    const told = accountGuestOf(next, request.account)?.id;
+    await this.save(withInboxAt(next, told === undefined ? [] : [told], now));
+    return { value: null };
+  }
+
   /** Keeps what people's agents are doing, and shows everyone when that changed. */
   private setAgents(agents: AgentsLive, now: number) {
     this.agents = agents;
@@ -1088,6 +1297,7 @@ export class BoardRoom extends DurableObject<Env> {
     if (chunks.length > ROOM_MAX_CHUNKS) throw new Error("A board grew past what it can keep.");
     const before = (await this.ctx.storage.get<number>(CHUNK_COUNT_KEY)) ?? 0;
     const boardChanged = room.board !== this.room?.board;
+    const previous = this.room;
     this.room = room;
     if (boardChanged) this.previewLater();
     await this.ctx.storage.put({
@@ -1109,6 +1319,24 @@ export class BoardRoom extends DurableObject<Env> {
       if (guest !== undefined)
         this.send(stream, sseFrame({ type: "view", view: viewFor(room, guest, stream.manages) }));
     }
+    await this.keepTaskIndex(previous, room);
+  }
+
+  /** Gives each account whose tasks here changed its tasks here now, for its "My tasks". */
+  private async keepTaskIndex(previous: CloudRoom | null, room: CloudRoom): Promise<void> {
+    if (
+      previous === null ||
+      (previous.board === room.board &&
+        previous.guests === room.guests &&
+        previous.title === room.title &&
+        previous.workspaceId === room.workspaceId)
+    ) {
+      return;
+    }
+    const changes = taskIndexChanges(previous, room);
+    await Promise.allSettled(
+      changes.map(({ account, tasks }) => this.indexOf(account).setTasks(room.shareId, tasks)),
+    );
   }
 
   /** Sends the board's preview to its lists once changes settle, at most once a step. */
@@ -1274,6 +1502,9 @@ export class BoardRoom extends DurableObject<Env> {
 
 const ACCOUNT_BOARD_PREFIX = "board:";
 const ACCOUNT_WORKSPACE_PREFIX = "workspace:";
+const ACCOUNT_INBOX_PREFIX = "inbox:";
+// One key per board, holding the account's tasks there.
+const ACCOUNT_TASKS_PREFIX = "tasks:";
 
 /**
  * One account's list of its cloud boards, keyed by its Clerk user id. Only the Worker calls it,
@@ -1299,6 +1530,71 @@ export class BoardAccount extends DurableObject<Env> {
   async forget(shareId: string): Promise<void> {
     const before = await this.list();
     await this.keep(before, withoutAccountBoard(before, shareId));
+    await this.ctx.storage.delete(ACCOUNT_TASKS_PREFIX + shareId);
+  }
+
+  /** The inbox as kept: each item its own key, those past their days or the cap dropped here. */
+  private async inboxItems(incoming: ReadonlyArray<CloudInboxItem> = []) {
+    const stored = await this.ctx.storage.list<CloudInboxItem>({ prefix: ACCOUNT_INBOX_PREFIX });
+    const before = [...stored.values()];
+    const kept = inboxAfter(before, incoming, Date.now());
+    await this.keepInbox(before, kept);
+    return kept;
+  }
+
+  private async keepInbox(
+    before: ReadonlyArray<CloudInboxItem>,
+    after: ReadonlyArray<CloudInboxItem>,
+  ): Promise<void> {
+    const kept = new Set(after.map((item) => item.id));
+    const dropped = before
+      .filter((item) => !kept.has(item.id))
+      .map((item) => ACCOUNT_INBOX_PREFIX + item.id);
+    const changed = after.filter((item) => !before.includes(item));
+    for (let at = 0; at < changed.length; at += 128) {
+      await this.ctx.storage.put(
+        Object.fromEntries(
+          changed.slice(at, at + 128).map((item) => [ACCOUNT_INBOX_PREFIX + item.id, item]),
+        ),
+      );
+    }
+    for (let at = 0; at < dropped.length; at += 128) {
+      await this.ctx.storage.delete(dropped.slice(at, at + 128));
+    }
+  }
+
+  /** Called by a board, or a workspace, when something it took is for this account. */
+  async deliver(items: ReadonlyArray<CloudInboxItem>): Promise<void> {
+    if (items.length > 0) await this.inboxItems(items);
+  }
+
+  async inbox(): Promise<CloudInbox> {
+    const items = await this.inboxItems();
+    return { items, unread: inboxCountOf(items).unread };
+  }
+
+  async inboxCount(): Promise<CloudInboxCount> {
+    return inboxCountOf(await this.inboxItems());
+  }
+
+  async markRead(which: ReadonlyArray<string> | "all"): Promise<CloudInboxCount> {
+    const before = await this.inboxItems();
+    const after = inboxRead(before, which);
+    await this.keepInbox(before, after);
+    return inboxCountOf(after);
+  }
+
+  /** The account's tasks on one board, as that board says now; none forgets the board. */
+  async setTasks(shareId: string, tasks: ReadonlyArray<CloudMyTask>): Promise<void> {
+    if (tasks.length === 0) await this.ctx.storage.delete(ACCOUNT_TASKS_PREFIX + shareId);
+    else await this.ctx.storage.put(ACCOUNT_TASKS_PREFIX + shareId, tasks);
+  }
+
+  async tasks(): Promise<ReadonlyArray<CloudMyTask>> {
+    const stored = await this.ctx.storage.list<ReadonlyArray<CloudMyTask>>({
+      prefix: ACCOUNT_TASKS_PREFIX,
+    });
+    return [...stored.values()].flat();
   }
 
   async retitle(shareId: string, title: string): Promise<void> {

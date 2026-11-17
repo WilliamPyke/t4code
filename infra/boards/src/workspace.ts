@@ -2,6 +2,7 @@ import {
   CLOUD_WORKSPACE_MAX_BOARDS,
   CLOUD_WORKSPACE_MAX_MEMBERS,
   type CloudBoardAccountBoard,
+  type CloudInboxItem,
   type CloudWorkspace,
   type CloudWorkspaceBoard,
   type CloudWorkspacePreview,
@@ -194,6 +195,34 @@ export function setMemberRole(
     ...state,
     members: state.members.map((member) => (member === target ? { ...member, role } : member)),
   });
+}
+
+/** What the member whose role `by` changed finds in their inbox; null when nothing changed. */
+export function roleChangedItem(
+  before: WorkspaceState | null,
+  after: WorkspaceState,
+  input: {
+    readonly by: string;
+    readonly memberId: string;
+    readonly id: string;
+    readonly at: string;
+  },
+): { readonly account: string; readonly item: CloudInboxItem } | null {
+  const was = before?.members.find((member) => member.memberId === input.memberId);
+  const now = after.members.find((member) => member.memberId === input.memberId);
+  if (now === undefined || was?.role === now.role || now.account === input.by) return null;
+  return {
+    account: now.account,
+    item: {
+      id: input.id,
+      kind: "access-changed",
+      at: input.at,
+      by: memberOf(after, input.by)?.name ?? "An owner",
+      title: after.name,
+      workspaceId: after.id,
+      role: now.role,
+    },
+  };
 }
 
 export function renameWorkspace(

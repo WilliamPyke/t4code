@@ -155,10 +155,10 @@ export function CloudEnvironmentConnectRows({
         type: "success",
         title: savedWithoutRelay.has(environment.environmentId)
           ? "Tinkjam Connect route added"
-          : "Environment added",
+          : "Computer added",
         description: savedWithoutRelay.has(environment.environmentId)
           ? `${environment.label} falls back to Tinkjam Connect when its other routes are unreachable.`
-          : `Connecting to ${environment.label} through Tinkjam Connect.`,
+          : `Connecting to ${environment.label}.`,
       });
       return true;
     }

@@ -52,6 +52,8 @@ export interface CloudRoom {
   readonly editLink?: string;
   /** The view link, which shows the board to anyone who has it. Absent while it is off. */
   readonly viewLink?: { readonly credential: string; readonly hash: string };
+  /** Requests for edit access, open ones and the last few answered. */
+  readonly requests?: ReadonlyArray<AccessRequest>;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -74,6 +76,19 @@ export interface CloudGuest {
   readonly locked?: true;
   /** Can only look at the board, as the maker set them. Absent: they can change it. */
   readonly role?: "viewer";
+  /** When the board last put something in this person's account inbox. */
+  readonly inboxAt?: string;
+}
+
+/** Someone signed in who asked to edit the board. `account` is never sent to anyone. */
+export interface AccessRequest {
+  readonly id: string;
+  readonly account: string;
+  readonly name: string;
+  readonly message?: string;
+  readonly at: string;
+  readonly status: "open" | "approved" | "declined";
+  readonly answeredAt?: string;
 }
 
 export const DEFAULT_BOARD_TITLE = "Untitled board";
@@ -116,6 +131,7 @@ const FAILURES = {
     status: 409,
     message: "As many people are looking at this board as it holds. Try again in a while.",
   },
+  asked: { status: 409, message: "You already asked. The answer will come to your inbox." },
 } as const;
 
 export type RoomFailureReason = keyof typeof FAILURES;
@@ -308,13 +324,26 @@ export const guestBySession = (room: CloudRoom | null, sessionHash: string) =>
 export const renameRoom = (room: CloudRoom, title: string, now: string): CloudRoom =>
   room.title === title ? room : { ...room, title, updatedAt: now };
 
-export const roomScope = (room: CloudRoom): RoomBoardScope => ({
+const NO_MEMBERS: ReadonlySet<string> = new Set();
+
+/** `members`: the member ids of the board's workspace, read when a change mentions one. */
+export const roomScope = (
+  room: CloudRoom,
+  members: ReadonlySet<string> = NO_MEMBERS,
+): RoomBoardScope => ({
   hasCard: (cardId) =>
     room.guests.some(
       (guest) => cardId === roomBoardGuestCard(guest.id) || cardId === roomBoardAgentCard(guest.id),
     ),
   hasPerson: (guestId) => room.guests.some((guest) => guest.id === guestId),
+  hasMember: (memberId) => room.workspaceId !== undefined && members.has(memberId),
 });
+
+/** The workspace members a change names with `@`, which the board asks its workspace about. */
+export const mentionedMembers = (change: RoomBoardChange): ReadonlyArray<string> =>
+  change.type === "note.put" || change.type === "comment.reply"
+    ? (change.mentions ?? []).flatMap((mention) => mention.memberId ?? [])
+    : [];
 
 /** A guest's change, applied by the same rules a machine's room uses, authored by that guest. */
 export function changeBoard(
@@ -322,6 +351,7 @@ export function changeBoard(
   author: GuestId,
   change: RoomBoardChange,
   now: string,
+  members?: ReadonlySet<string>,
 ): Result.Result<CloudRoom, RoomFailure> {
   if (needsAnOwner(change)) return Result.fail(roomFailure("rejected", NEEDS_AN_OWNER));
   const cleaned =
@@ -329,7 +359,14 @@ export function changeBoard(
       ? // Characters nobody can see have no place in text the whole room reads.
         { ...change, text: sanitizeLinkedPrompt(change.text).text }
       : change;
-  const applied = roomBoardAfterChange(room, roomScope(room), author, cleaned, undefined, now);
+  const applied = roomBoardAfterChange(
+    room,
+    roomScope(room, members),
+    author,
+    cleaned,
+    undefined,
+    now,
+  );
   if (Result.isFailure(applied)) {
     return Result.fail(
       applied.failure === ROOM_BOARD_FULL
@@ -441,7 +478,23 @@ export function viewFor(
     ...(manages && guest !== null ? { manage: true } : {}),
     ...(Object.keys(links).length === 0 ? {} : { links }),
     model: CLOUD_MODEL,
+    ...(guest?.inboxAt === undefined ? {} : { inboxAt: guest.inboxAt }),
+    ...(guest === null ? grantedOf(room) : {}),
   };
+}
+
+// An approval shows to pages on the view link this long after the board last changed.
+const GRANT_SHOWN_MS = 10 * 60_000;
+
+/** The access requests approved lately, which the page that asked opens the board on. */
+function grantedOf(room: CloudRoom): { readonly granted?: ReadonlyArray<string> } {
+  const since = Date.parse(room.updatedAt) - GRANT_SHOWN_MS;
+  const granted = (room.requests ?? []).flatMap((request) =>
+    request.status === "approved" && Date.parse(request.answeredAt ?? "") > since
+      ? [request.id]
+      : [],
+  );
+  return granted.length === 0 ? {} : { granted };
 }
 
 /**

@@ -42,6 +42,7 @@ export * from "./orchestrationV2.ts";
 export * from "./guestShare.ts";
 export * from "./cloudBoardAccount.ts";
 export * from "./cloudBoardWorkspace.ts";
+export * from "./cloudBoardInbox.ts";
 export * from "./roomBoardSummary.ts";
 export * from "./guestStream.ts";
 export * from "./sharedThread.ts";

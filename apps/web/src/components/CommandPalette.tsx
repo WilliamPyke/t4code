@@ -64,6 +64,7 @@ import {
   FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
+  LaptopIcon,
   LayoutGridIcon,
   LayoutTemplateIcon,
   MegaphoneIcon,
@@ -83,6 +84,7 @@ import {
   TextSearchIcon,
   UserPlusIcon,
   UsersRoundIcon,
+  WrenchIcon,
 } from "lucide-react";
 import { openThreadFind } from "./chat/threadFindStore";
 import {
@@ -260,6 +262,9 @@ import { roomBoardLocation } from "./room/roomBoardNavigation";
 import { openBoardTemplates, useStartNewBoard } from "./boards/newBoard";
 import { openUseInAnotherApp } from "./mcp/UseInAnotherAppDialog";
 import { openNewTeamDialog } from "./teams/NewTeamDialog";
+import { openConnectComputer } from "./ConnectComputerDialog";
+import { setShellMode, useShellMode } from "../shellMode";
+import { paletteActionShows } from "../shellMode.logic";
 import { useTeams } from "../teams/teams";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { settingsForThisPlatform, SETTINGS_SECTION_LABELS } from "./settings/settingsSearch";
@@ -478,6 +483,7 @@ function OpenCommandPaletteDialog(props: {
   });
   const { environments } = useEnvironments();
   const guestOnly = useGuestOnly();
+  const shellMode = useShellMode();
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
@@ -1870,10 +1876,50 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
+  actionItems.push(
+    {
+      kind: "action",
+      value: "action:connect-computer",
+      searchTerms: [
+        "connect a computer",
+        "computer",
+        "agent",
+        "sync",
+        "claude",
+        "codex",
+        "my agent",
+      ],
+      title: "Connect a computer",
+      description: "Use your own agents on your boards",
+      icon: <LaptopIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        openConnectComputer();
+      },
+    },
+    {
+      kind: "action",
+      value: "action:switch-shell-mode",
+      searchTerms: ["advanced", "simple", "developer", "mode", "switch", "threads", "projects"],
+      title: shellMode === "simple" ? "Switch to Advanced" : "Switch to Simple",
+      description:
+        shellMode === "simple"
+          ? "Adds chats, projects, code changes and other developer tools"
+          : "Shows only your boards",
+      icon: <WrenchIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        setShellMode(shellMode === "simple" ? "advanced" : "simple");
+      },
+    },
+  );
+  const simpleShell = shellMode === "simple";
+  const shownActionItems = actionItems.filter((item) => paletteActionShows(item.value, shellMode));
   const rootGroups = [
     // The board on screen leads: its own commands are what someone on it wants first.
     ...(boardEntries.group === null ? [] : [boardEntries.group]),
-    ...buildRootGroups({ actionItems, recentThreadItems }),
+    ...buildRootGroups({
+      actionItems: shownActionItems,
+      recentThreadItems: simpleShell ? [] : recentThreadItems,
+    }),
   ];
   // Every setting goes to the palette's own matcher, so settings get the same
   // word starts and typo tolerance as threads.
@@ -1933,14 +1979,15 @@ function OpenCommandPaletteDialog(props: {
       ? {
           allOptions: {
             rootGroups,
-            nestedItems: buildNestedSearchItems(actionItems, deferredQuery),
+            nestedItems: buildNestedSearchItems(shownActionItems, deferredQuery),
           },
         }
       : {}),
-    projectSearchItems: projectSearchItems,
-    settingsSearchItems,
-    threadSearchItems:
-      isLinkedThreadSearch && linkedThreadSearch?.linkedThreads
+    projectSearchItems: simpleShell ? [] : projectSearchItems,
+    settingsSearchItems: simpleShell ? [] : settingsSearchItems,
+    threadSearchItems: simpleShell
+      ? []
+      : isLinkedThreadSearch && linkedThreadSearch?.linkedThreads
         ? buildLinkedThreadActionItems({
             ...linkedThreadSearch.linkedThreads,
             threads: visibleLinkedThreads(
@@ -1960,7 +2007,7 @@ function OpenCommandPaletteDialog(props: {
             },
           })
         : allThreadItems,
-    threadMessageItems: isLinkedThreadSearch ? [] : threadMessageItems,
+    threadMessageItems: simpleShell || isLinkedThreadSearch ? [] : threadMessageItems,
     boardSearchItems: boardEntries.finds,
     now: searchNow,
   });

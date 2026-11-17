@@ -17,6 +17,7 @@ import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
 import { readProjects, readThreadShell } from "../state/entities";
+import { isSimpleShell } from "../shellMode";
 import { readGuestOnly } from "../state/environments";
 import { environmentPresentations } from "../state/presentation";
 import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
@@ -103,11 +104,11 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
     });
   };
 
-  // A browser that only joined guest links has nowhere to start a thread.
+  // A browser that only joined guest links has nowhere to start a thread; Simple mode has no threads.
   const unlessGuestOnly =
     (handler: CommandHandler): CommandHandler =>
     (event) =>
-      readGuestOnly() ? false : handler(event);
+      readGuestOnly() || isSimpleShell() ? false : handler(event);
 
   const previewCommand =
     (action: PreviewAction): CommandHandler =>

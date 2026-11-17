@@ -2,14 +2,22 @@
 
 ## Using Tinkjam
 
+- [Start here: boards, agents, the Plan, sharing and Tinkjam Sync](./user/getting-started.md)
+- [Appearance and themes](./user/appearance.md)
+
+## Advanced: the developer tools
+
+Tinkjam's Advanced mode, the desktop app and a Tinkjam you run yourself include the full workbench
+for coding agents. These guides cover it.
+
 - [Install Tinkjam](./user/install.md)
+- [Welcome page](./user/welcome-page.md)
 - [Messages and context](./user/composer.md)
 - [Working with threads](./user/thread-sidebar.md)
 - [Permission modes](./user/permission-modes.md)
 - [Terminal history](./user/terminal.md)
 - [Source control](./user/source-control.md)
 - [Project settings](./user/project-settings.md)
-- [Appearance and themes](./user/appearance.md)
 - [Keyboard shortcuts](./user/keybindings.md)
 - [Voice input](./user/voice-input.md)
 - [Text generation models](./user/text-generation.md)

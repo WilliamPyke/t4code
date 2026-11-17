@@ -111,6 +111,30 @@ export function rememberGuestShare(share: JoinedGuestShare) {
   ]);
 }
 
+/** Boards being opened again under a new session, which show as opening meanwhile. */
+export const reopeningSharesAtom = Atom.make<ReadonlySet<string>>(new Set<string>()).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("guest-shares-reopening"),
+);
+// Long enough for the connection to the board to close before the new one opens.
+const REOPEN_GAP_MS = 300;
+
+/**
+ * Keeps `share` in place of the one with its id and connects to it again, so a session that
+ * could only look (a view link) becomes the account's seat without reloading the page.
+ */
+export function reopenGuestShare(share: JoinedGuestShare) {
+  appAtomRegistry.update(reopeningSharesAtom, (current) => new Set([...current, share.shareId]));
+  writeGuestShares(readGuestShares().filter((existing) => existing.shareId !== share.shareId));
+  setTimeout(() => {
+    rememberGuestShare(share);
+    appAtomRegistry.update(
+      reopeningSharesAtom,
+      (current) => new Set([...current].filter((shareId) => shareId !== share.shareId)),
+    );
+  }, REOPEN_GAP_MS);
+}
+
 // Opening a board again within this long does not count as a newer visit, so a reload writes nothing.
 const OPENED_STEP_MS = 10 * 60_000;
 

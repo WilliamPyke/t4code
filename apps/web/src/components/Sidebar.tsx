@@ -107,6 +107,7 @@ import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { isMacPlatform } from "~/lib/utils";
 import { readLocalApi } from "../localApi";
 import { configuredHostedAppUrl, isHostedStaticApp } from "../hostedPairing";
+import { useShellMode } from "../shellMode";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import {
   pickableProjectGroups,
@@ -1050,10 +1051,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const [searchHighlightKey, setSearchHighlightKey] = useState<string | null>(null);
   const connectedEnvironmentIds = useConnectedEnvironmentIds();
   const guestOnly = useGuestOnly();
-  // The hosted app with no machine of the person's own has nothing but boards to show.
+  const shellMode = useShellMode();
+  // Simple mode, or the hosted app with no machine of the person's own: nothing but boards.
   const boardsOnly =
-    (guestOnly || isHostedStaticApp()) &&
-    !projects.some((project) => !isGuestEnvironment(project.environmentId));
+    shellMode === "simple" ||
+    ((guestOnly || isHostedStaticApp()) &&
+      !projects.some((project) => !isGuestEnvironment(project.environmentId)));
   const queuePendingFileDrop = useSidebarPendingFileDropStore((s) => s.queuePendingFileDrop);
   const clearPendingFileDrop = useSidebarPendingFileDropStore((s) => s.clearPendingFileDrop);
   const [renamingThreadRef, setRenamingThreadRef] = useState<ScopedThreadRef | null>(null);

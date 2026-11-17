@@ -2,6 +2,7 @@ import {
   ArrowLeftIcon,
   ArrowRightIcon,
   ChartNoAxesColumnIcon,
+  LaptopIcon,
   MegaphoneIcon,
   SettingsIcon,
 } from "lucide-react";
@@ -19,7 +20,10 @@ import {
 } from "../../navigationHistory";
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { cn } from "../../lib/utils";
-import { usePullRequestsSupported } from "../../state/environments";
+import { isGuestEnvironment } from "@t3tools/client-runtime/environment";
+import { useShellMode } from "../../shellMode";
+import { useEnvironments, usePullRequestsSupported } from "../../state/environments";
+import { openConnectComputer } from "../ConnectComputerDialog";
 import { TinkjamMark, TinkjamWord } from "../TinkjamLogo";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -242,6 +246,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     select: (location) => isSidebarUtilityPage(location.pathname),
   });
   const pullRequestsSupported = usePullRequestsSupported();
+  const advanced = useShellMode() === "advanced";
   const closeMobileSidebar = () => {
     if (isMobile) {
       setOpenMobile(false);
@@ -292,18 +297,20 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             label="Settings"
             onClick={handleSettingsClick}
           />
-          {pullRequestsSupported ? (
+          {advanced && pullRequestsSupported ? (
             <SidebarUtilityItem
               icon={<PullRequestGlyph.pullRequest />}
               label="Pull requests"
               onClick={handlePullRequestsClick}
             />
           ) : null}
-          <SidebarUtilityItem
-            icon={<ChartNoAxesColumnIcon />}
-            label="Usage"
-            onClick={handleUsageClick}
-          />
+          {advanced ? (
+            <SidebarUtilityItem
+              icon={<ChartNoAxesColumnIcon />}
+              label="Usage"
+              onClick={handleUsageClick}
+            />
+          ) : null}
           <SidebarUtilityItem
             icon={<MegaphoneIcon />}
             label="What's new"
@@ -318,10 +325,36 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   );
 });
 
+/** Simple mode's one way to a person's own agents, until they have a computer here. */
+function SidebarConnectComputer() {
+  const { isMobile, setOpenMobile } = useSidebar();
+  const hasComputer = useEnvironments().environments.some(
+    (environment) => !isGuestEnvironment(environment.environmentId),
+  );
+  if (hasComputer) return null;
+  return (
+    <SidebarMenu>
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          onClick={() => {
+            if (isMobile) setOpenMobile(false);
+            openConnectComputer();
+          }}
+          data-sidebar-connect-computer
+        >
+          <LaptopIcon />
+          <span>Connect a computer</span>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    </SidebarMenu>
+  );
+}
+
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
+  const simple = useShellMode() === "simple";
   return (
     <SidebarFooter>
-      <SidebarProviderUpdatePill />
+      {simple ? <SidebarConnectComputer /> : <SidebarProviderUpdatePill />}
       <SidebarUpdateArchitectureWarning />
       <SidebarUtilityMenu />
     </SidebarFooter>

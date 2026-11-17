@@ -540,6 +540,26 @@ export const ROOM_BOARD_MAX_REPLIES = 30;
 /** How much of an agent's answer a comment thread keeps, longer than a person's reply. */
 export const ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH = 1_200;
 
+/** People one note, task, comment or reply names with `@`. */
+const ROOM_BOARD_MAX_MENTIONS = 10;
+
+/**
+ * Someone a card or reply names with `@Name`, which its text keeps: a person on the board
+ * (`guestId`), or a member of the board's workspace who has not opened it yet (`memberId`). Exactly
+ * one of the two. Never an email or an account id. It only tells that person; it never reaches an
+ * agent's prompt as anything but the text.
+ */
+export const RoomBoardMention = Schema.Struct({
+  guestId: Schema.optional(GuestId),
+  memberId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
+  /** The name as it was picked, which follows the `@` in the text. */
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(GUEST_NAME_MAX_LENGTH)),
+});
+export type RoomBoardMention = typeof RoomBoardMention.Type;
+const RoomBoardMentions = Schema.Array(RoomBoardMention).check(
+  Schema.isMaxLength(ROOM_BOARD_MAX_MENTIONS),
+);
+
 /** A reply in a comment thread on the board. */
 export const RoomBoardReply = Schema.Struct({
   /** The client that adds the reply names it, or the owner's server for an agent's. */
@@ -548,6 +568,8 @@ export const RoomBoardReply = Schema.Struct({
   text: Schema.String.check(Schema.isMaxLength(ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH)),
   /** The guest who wrote it, or whose agent did. Absent on the owner's and their agent's. */
   guestId: Schema.optional(GuestId),
+  /** People it names with `@`. */
+  mentions: Schema.optional(RoomBoardMentions),
   /** When the server that holds the board took it; never the client's word. */
   at: IsoDateTime,
   /**
@@ -633,6 +655,8 @@ export const RoomBoardNote = Schema.Struct({
   /** How much a task matters. Absent: no priority. */
   priority: Schema.optional(RoomTaskPriority),
   assignee: Schema.optional(RoomBoardAssignee),
+  /** People a note, task or comment names with `@`, each while its text still does. */
+  mentions: Schema.optional(RoomBoardMentions),
   /**
    * A link card's address, which clients read and the server never fetches, or a pull request
    * window's GitHub pull request URL as `roomPullRequestOf` writes it.
@@ -957,6 +981,8 @@ export const RoomBoardChange = Schema.Union([
     assignee: Schema.optional(Schema.NullOr(RoomBoardAssignee)),
     color: RoomBoardNote.fields.color,
     section: RoomBoardNote.fields.section,
+    /** Absent keeps those it had whose `@Name` the text still has. */
+    mentions: RoomBoardNote.fields.mentions,
   }),
   /** Removes the note and its arrows. */
   Schema.Struct({ type: Schema.Literal("note.remove"), noteId: RoomBoardNote.fields.id }),
@@ -994,6 +1020,7 @@ export const RoomBoardChange = Schema.Union([
     noteId: RoomBoardNote.fields.id,
     replyId: RoomBoardReply.fields.id,
     text: Schema.String.check(Schema.isMaxLength(ROOM_BOARD_NOTE_MAX_LENGTH)),
+    mentions: RoomBoardReply.fields.mentions,
   }),
   Schema.Struct({
     type: Schema.Literal("comment.reply.remove"),

@@ -85,6 +85,16 @@ export const GuestShareView = Schema.Struct({
     }),
   ),
   model: GuestThreadModel,
+  /**
+   * With `cloud`: when this board last put something in this person's account inbox, so their
+   * open page reads its inbox again at once.
+   */
+  inboxAt: Schema.optional(IsoDateTime),
+  /**
+   * With `cloud`, for someone looking on from the view link: the edit access requests approved in
+   * the last few minutes. The page that asked finds its own and opens the board as its account.
+   */
+  granted: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
 });
 export type GuestShareView = typeof GuestShareView.Type;
 

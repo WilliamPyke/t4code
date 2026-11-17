@@ -22,6 +22,10 @@ import { NewTeamDialogHost } from "../components/teams/NewTeamDialog";
 import { NewBoardDialogHost } from "../components/boards/newBoard";
 import { AddProjectToMachineDialogHost } from "../components/AddProjectToMachineDialog";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
+import { ConnectComputerDialogHost } from "../components/ConnectComputerDialog";
+import { AdvancedOnlyPage } from "../components/shell/AdvancedOnlyPage";
+import { DocumentTitleSync } from "../components/shell/DocumentTitleSync";
+import { OfflineNote } from "../components/shell/OfflineNote";
 import { DevReplayHost } from "../components/DevReplayHost";
 import { FirstRunGate } from "../components/onboarding/FirstRunGate";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
@@ -38,6 +42,7 @@ import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { Button } from "../components/ui/button";
 import { MorphIcon } from "~/components/MorphIcon";
+import { TinkjamMark } from "../components/TinkjamLogo";
 import { StandalonePage, StandalonePageHeader } from "../components/ui/standalone-page";
 import { AnchoredToastProvider, ToastProvider } from "../components/ui/toast";
 import { isElectron } from "../env";
@@ -59,6 +64,8 @@ import { isLocalEnvironmentDisabled } from "../localEnvironment";
 import { useAtomValue } from "@effect/atom-react";
 import { primaryServerConfigAtom, primaryServerWelcomeAtom } from "../state/server";
 import { readProject } from "../state/entities";
+import { useShellMode } from "../shellMode";
+import { advancedOnlyPageName } from "../shellMode.logic";
 
 import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
 import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
@@ -131,12 +138,13 @@ function RootRouteNotFoundView() {
   return (
     <main className="flex min-h-0 min-w-0 flex-1 items-center justify-center p-6">
       <div className="flex max-w-sm flex-col items-center gap-4 text-center">
-        <h1 className="text-lg font-medium text-foreground">Page not found</h1>
+        <TinkjamMark aria-hidden className="size-10" />
+        <h1 className="text-lg font-medium text-foreground">Nothing here</h1>
         <p className="text-sm text-muted-foreground">
-          This link doesn't point to a page in {APP_DISPLAY_NAME}. Go home to choose a project or
-          start a thread.
+          This link does not lead to anything in Tinkjam. The board may have been deleted, or the
+          link may be cut short.
         </p>
-        <Button render={<Link to="/" replace />}>Go home</Button>
+        <Button render={<Link to="/" replace />}>Go to your boards</Button>
       </div>
     </main>
   );
@@ -163,6 +171,7 @@ function RootRouteBranch() {
   const hostedPromptLinkLanding = useHostedPromptLinkLanding(
     authGateState.status === "hosted-static",
   );
+  const advancedOnlyPage = useShellMode() === "simple" ? advancedOnlyPageName(pathname) : null;
 
   if (isGuestEntryPath(pathname)) return <Outlet />;
 
@@ -205,6 +214,9 @@ function RootRouteBranch() {
       <UseInAnotherAppDialogHost />
       <NewTeamDialogHost />
       <NewBoardDialogHost />
+      <ConnectComputerDialogHost />
+      <DocumentTitleSync />
+      <OfflineNote />
       {import.meta.env.DEV && primaryEnvironmentAuthenticated ? <DevReplayHost /> : null}
     </>
   );
@@ -212,7 +224,7 @@ function RootRouteBranch() {
     <CommandPalette>
       {/* Setup starts with an empty workspace, so the Welcome page has no thread list. */}
       <AppSidebarLayout showSidebar={!isWelcome}>
-        <Outlet />
+        {advancedOnlyPage === null ? <Outlet /> : <AdvancedOnlyPage name={advancedOnlyPage} />}
       </AppSidebarLayout>
     </CommandPalette>
   );
@@ -250,24 +262,40 @@ function RootRouteErrorView({ error }: ErrorComponentProps) {
 
   return (
     <StandalonePage>
-      <StandalonePageHeader title="Something went wrong." description={message} />
+      <TinkjamMark aria-hidden className="mb-4 size-10" />
+      <StandalonePageHeader
+        title="Something went wrong"
+        description="Tinkjam could not show this page. Your boards are safe. Try again, or go back to your boards."
+      />
 
       <div className="mt-5 flex flex-wrap gap-2">
         <Button size="sm" onClick={() => void router.invalidate()}>
           Try again
         </Button>
-        <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
-          Reload app
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => void router.navigate({ to: "/" }).then(() => router.invalidate())}
+        >
+          Go to your boards
         </Button>
-        <CopyErrorButton report={report} />
+        <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
+          Reload the page
+        </Button>
       </div>
 
-      <div className="mt-5 overflow-hidden rounded-lg border border-border/70 bg-background/55">
-        <p className="px-3 py-1.5 text-xs font-medium text-muted-foreground">Error report</p>
-        <pre className="max-h-64 overflow-auto border-t border-border/70 bg-background/80 px-3 py-2 text-xs whitespace-pre-wrap text-foreground/85">
-          {report}
-        </pre>
-      </div>
+      <details className="mt-6 text-sm">
+        <summary className="cursor-pointer text-muted-foreground">Details for support</summary>
+        <p className="mt-2 text-muted-foreground">{message}</p>
+        <div className="mt-2">
+          <CopyErrorButton report={report} />
+        </div>
+        <div className="mt-3 overflow-hidden rounded-lg border border-border/70 bg-background/55">
+          <pre className="max-h-64 overflow-auto bg-background/80 px-3 py-2 text-xs whitespace-pre-wrap text-foreground/85">
+            {report}
+          </pre>
+        </div>
+      </details>
     </StandalonePage>
   );
 }

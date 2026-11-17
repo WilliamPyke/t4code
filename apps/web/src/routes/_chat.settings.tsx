@@ -1,13 +1,16 @@
 import { workspaceAreaProps } from "../lib/workspaceFocus";
-import { Outlet, createFileRoute, redirect, useLocation } from "@tanstack/react-router";
+import { Link, Outlet, createFileRoute, redirect, useLocation } from "@tanstack/react-router";
 import { useState, type ReactNode } from "react";
-import { RotateCcwIcon } from "lucide-react";
+import { ArrowLeftIcon, RotateCcwIcon } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { useSettingsRestore } from "../components/settings/SettingsPanels";
 
 import { AppRouteModal, AppRouteModalClose } from "../components/AppRouteModal";
 import { SettingsBreadcrumb } from "../components/settings/SettingsBreadcrumb";
 import { SettingsSidebarNav } from "../components/settings/SettingsSidebarNav";
+import { SimpleSettingsPage } from "../components/settings/SimpleSettingsPage";
+import { readShellMode, useShellMode } from "../shellMode";
+import { settingsLandingPath } from "../shellMode.logic";
 import {
   SettingsScopeProvider,
   useSettingsScope,
@@ -115,6 +118,16 @@ function SettingsContentLayout() {
       ? environment?.environmentId
       : JSON.stringify(search);
   const [restoreSignal, setRestoreSignal] = useState(0);
+  const simple = useShellMode() === "simple";
+
+  // Only Simple mode lands on the bare path; Advanced is redirected to its first page.
+  if (location.pathname === "/settings") {
+    return (
+      <AppRouteModal label="Settings">
+        <SimpleSettingsPage />
+      </AppRouteModal>
+    );
+  }
 
   return (
     <AppRouteModal label="Settings">
@@ -124,6 +137,12 @@ function SettingsContentLayout() {
           <header className="flex h-12 shrink-0 items-center gap-3 border-b ps-5 pe-2">
             <SettingsBreadcrumb pathname={location.pathname} />
             <div className="ms-auto flex shrink-0 items-center gap-1">
+              {simple ? (
+                <Button size="xs" variant="ghost" render={<Link to="/settings" />}>
+                  <ArrowLeftIcon className="mx-1 size-3.5" />
+                  <span className="max-sm:sr-only">Basic settings</span>
+                </Button>
+              ) : null}
               {location.pathname === "/settings/general" ? (
                 <RestoreDeviceDefaultsButton
                   onRestored={() => setRestoreSignal((value) => value + 1)}
@@ -174,7 +193,7 @@ export const Route = createFileRoute("/_chat/settings")({
   validateSearch: validateSettingsRouteSearch,
   search: { middlewares: [retainSettingsScope] },
   beforeLoad: async ({ location }) => {
-    if (location.pathname === "/settings") {
+    if (location.pathname === "/settings" && settingsLandingPath(readShellMode()) !== "/settings") {
       throw redirect({ to: "/settings/general", replace: true });
     }
     const moved = movedSettingsPath(location.pathname, location.hash);

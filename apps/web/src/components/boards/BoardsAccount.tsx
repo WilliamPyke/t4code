@@ -2,12 +2,20 @@ import { useClerk, useUser } from "@clerk/react";
 import { GUEST_NAME_MAX_LENGTH } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
-import { LogInIcon, LogOutIcon, SettingsIcon, UserRoundIcon, XIcon } from "lucide-react";
+import {
+  LogInIcon,
+  LogOutIcon,
+  SettingsIcon,
+  UserRoundIcon,
+  WrenchIcon,
+  XIcon,
+} from "lucide-react";
 import { type FormEvent, useState } from "react";
 
 import { boardAccountsEnabled, saveBoardAccountName, useBoardAccount } from "~/guest/boardAccount";
 import { useAccountNameSeed } from "~/guest/browserIdentity";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
+import { setShellMode, useShellMode } from "~/shellMode";
 
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { Button } from "../ui/button";
@@ -73,6 +81,7 @@ function AccountMenu({ name }: { readonly name: string | null }) {
   const clerk = useClerk();
   const { user } = useUser();
   const email = user?.primaryEmailAddress?.emailAddress ?? null;
+  const shellMode = useShellMode();
   const initial = Array.from((name ?? email ?? "?").trim())[0]?.toUpperCase() ?? "?";
   return (
     <Menu>
@@ -111,6 +120,13 @@ function AccountMenu({ name }: { readonly name: string | null }) {
         <MenuItem onClick={() => clerk.openUserProfile()}>
           <SettingsIcon />
           Sign-in and security
+        </MenuItem>
+        <MenuItem
+          onClick={() => setShellMode(shellMode === "simple" ? "advanced" : "simple")}
+          data-account-shell-mode
+        >
+          <WrenchIcon />
+          {shellMode === "simple" ? "Switch to Advanced" : "Switch to Simple"}
         </MenuItem>
         <MenuSeparator />
         <MenuItem onClick={() => void clerk.signOut()}>

@@ -360,7 +360,7 @@ const detectOs = (): Os =>
   typeof navigator !== "undefined" && /win/i.test(navigator.userAgent) ? "windows" : "unix";
 
 /** The two ways to connect a computer, side by side: Tinkjam Sync now, the desktop app later. */
-function ConnectComputerRoutes({
+export function ConnectComputerRoutes({
   withAccount,
   signedIn,
 }: {

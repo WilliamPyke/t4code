@@ -1,11 +1,12 @@
 import {
   ROOM_BOARD_MAX_REPLIES,
   ROOM_BOARD_NOTE_MAX_LENGTH,
+  type RoomBoardMention,
   type RoomBoardNote,
   type RoomBoardReply,
 } from "@t3tools/contracts";
 import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
-import { isRoomCardOwnedBy } from "@t3tools/shared/roomBoard";
+import { isRoomCardOwnedBy, roomMentionsIn } from "@t3tools/shared/roomBoard";
 import {
   ArrowUpIcon,
   BotIcon,
@@ -32,6 +33,7 @@ import { useInlineActionConfirm } from "../pullRequest/useInlineActionConfirm";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Textarea } from "../ui/textarea";
+import { MentionText, useMentionPicker } from "./BoardMentions";
 import {
   type BoardPeople,
   type BoardRect,
@@ -238,6 +240,7 @@ function CommentEntry({
   guestId,
   agent,
   text,
+  mentions,
   at,
   now,
   confirm,
@@ -250,6 +253,7 @@ function CommentEntry({
   /** Set on an agent's answer: `guestId` is then whose agent. */
   readonly agent?: RoomBoardReply["agent"];
   readonly text: string;
+  readonly mentions: ReadonlyArray<RoomBoardMention> | undefined;
   readonly at: string | undefined;
   readonly now: number;
   readonly confirm: InlineConfirm;
@@ -284,7 +288,9 @@ function CommentEntry({
         )}
       </div>
       {agent === undefined ? (
-        <p className="ps-6.5 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</p>
+        <p className="ps-6.5 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">
+          <MentionText text={text} mentions={mentions} />
+        </p>
       ) : (
         // An agent's answer is markdown from someone's machine, so without raw HTML.
         <div className="min-w-0 ps-6.5 text-sm [overflow-wrap:anywhere]">
@@ -348,7 +354,7 @@ export function CommentThreadPanel({
   readonly pin: BoardRect;
   readonly askBoxes: ReadonlyArray<{ readonly id: string; readonly label: string }>;
   /** Sends the first comment of a draft, or else a reply, and says whether it was taken. */
-  readonly onSend: (text: string) => Promise<boolean>;
+  readonly onSend: (text: string, mentions: ReadonlyArray<RoomBoardMention>) => Promise<boolean>;
   /**
    * Posts `text` as a reply, when there is any, then asks a box's agent to answer the thread.
    * Says whether the field can be cleared.
@@ -370,6 +376,12 @@ export function CommentThreadPanel({
   }, []);
   const now = Math.max(boardNow, openNow);
   const [text, setText] = useState("");
+  // People picked with `@` for what the field says; kept while the text still names them.
+  const [picked, setPicked] = useState<ReadonlyArray<RoomBoardMention>>([]);
+  const mention = useMentionPicker((pick) => {
+    setText(pick.text.slice(0, ROOM_BOARD_NOTE_MAX_LENGTH));
+    setPicked((current) => [...current, pick.mention]);
+  });
   const [sending, setSending] = useState(false);
   const replies = note.replies ?? [];
   const full = replies.length >= ROOM_BOARD_MAX_REPLIES;
@@ -396,9 +408,12 @@ export function CommentThreadPanel({
     const body = text.trim();
     if (body === "" || sending) return;
     setSending(true);
-    const taken = await onSend(body);
+    const taken = await onSend(body, roomMentionsIn(picked, body));
     setSending(false);
-    if (taken) setText("");
+    if (taken) {
+      setText("");
+      setPicked([]);
+    }
   };
   const ask = async (boxId: string) => {
     if (sending) return;
@@ -471,6 +486,7 @@ export function CommentThreadPanel({
             people={people}
             guestId={note.guestId}
             text={note.text}
+            mentions={note.mentions}
             at={note.createdAt}
             now={now}
             confirm={confirm}
@@ -484,6 +500,7 @@ export function CommentThreadPanel({
               guestId={reply.guestId}
               agent={reply.agent}
               text={reply.text}
+              mentions={reply.mentions}
               at={reply.at}
               now={now}
               confirm={confirm}
@@ -520,13 +537,19 @@ export function CommentThreadPanel({
             value={text}
             readOnly={sending}
             maxLength={ROOM_BOARD_NOTE_MAX_LENGTH}
-            onChange={(event) => setText(event.target.value)}
+            onChange={(event) => {
+              setText(event.target.value);
+              mention.track(event.currentTarget);
+            }}
             onKeyDown={(event) => {
+              if (mention.keyDown(event)) return;
               if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
               event.preventDefault();
               void send();
             }}
+            onBlur={mention.close}
           />
+          {mention.popup}
           {text.length < ROOM_BOARD_NOTE_MAX_LENGTH - 40 ? null : (
             <span className="shrink-0 pb-1.5 text-2xs text-muted-foreground tabular-nums">
               {text.length}/{ROOM_BOARD_NOTE_MAX_LENGTH}
