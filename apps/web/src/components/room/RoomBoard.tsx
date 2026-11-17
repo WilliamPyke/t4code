@@ -389,6 +389,16 @@ import {
 import { useBoardPinch } from "./roomBoardPinch";
 import { BoardSection } from "./RoomBoardSection";
 import {
+  BOARD_SNAP_SCREEN_PX,
+  type BoardSnapTargets,
+  boardRectsBounds,
+  boardSnapMove,
+  boardSnapResize,
+  boardSnapTargets,
+  NO_SNAP_DRAWN,
+} from "./boardSnap.logic";
+import { BoardSnapGuides, createBoardSnapStore } from "./RoomBoardSnapGuides";
+import {
   AddedBy,
   BOARD_HOVER_CHROME_CLASS,
   BOARD_ICON_BUTTON_CLASS,
@@ -1536,6 +1546,23 @@ export function RoomBoard({
   const landedFrames = useRef<Array<HTMLElement>>([]);
   // Something is being dragged, resized or nudged.
   const [moving, setMoving] = useState(false);
+  // This person's own drag or resize: what it moves from where, how far the pointer went in board
+  // pixels, and what it snaps to (gathered once as it starts; null when it does not snap).
+  const gesture = useRef<{
+    readonly key: string;
+    readonly items: ReadonlyArray<BoardSelected>;
+    readonly box: BoardRect | null;
+    readonly targets: BoardSnapTargets | null;
+    dx: number;
+    dy: number;
+  } | null>(null);
+  const [snapStore] = useState(createBoardSnapStore);
+  // Ctrl or Cmd held as the pointer moves: this drag goes where it is put, as in FigJam.
+  const snapOff = useRef(false);
+  const endSnap = () => {
+    gesture.current = null;
+    snapStore.set(NO_SNAP_DRAWN);
+  };
   const paintFrames = () => {
     const rects = new Map<string, BoardOwnRect>();
     const put = (ref: string, rect: BoardOwnRect) => rects.set(ref, { ...rects.get(ref), ...rect });
@@ -1808,6 +1835,7 @@ export function RoomBoard({
   };
   const release = (go: () => void) => {
     const dragged = boardDragItems(held.current, gestureFrom.current);
+    endSnap();
     go();
     if (!pointing || dragged.length === 0) return;
     const still = boardDragItems(held.current, gestureFrom.current);
@@ -1827,6 +1855,8 @@ export function RoomBoard({
   // The copies an Alt-drag carries, and how far it has gone in board pixels, until it lands.
   const altCopies = useRef<{
     readonly notes: ReadonlyArray<RoomBoardNote>;
+    readonly box: BoardRect | null;
+    readonly targets: BoardSnapTargets | null;
     dx: number;
     dy: number;
   } | null>(null);
@@ -1835,6 +1865,7 @@ export function RoomBoard({
   const cancelGesture = () => {
     const keys = new Set(held.current.keys());
     altCopies.current = null;
+    endSnap();
     held.current.clear();
     gestureFrom.current.clear();
     for (const key of keys) letFrameGo(key);
@@ -1878,22 +1909,74 @@ export function RoomBoard({
   const isSectionRef = (ref: string) =>
     shown.notes.some((note) => note.section === true && noteRef(note.id) === ref);
   const groupOf = (target: BoardTarget) => (inGroup(target) ? selectedItems : sectionGroup(target));
-  const dragBy = (target: BoardTarget, from: BoardPoint, dx: number, dy: number) => {
+  // What a gesture snaps to: the cards in sight, less what it moves and what others drag now.
+  const snapTargetsFor = (moving: ReadonlySet<string>, box: BoardRect | null) => {
+    const surface = surfaceRef.current;
+    const area = boardAreaOf(surface);
+    if (box === null || surface === null || area === null) return null;
+    const items = [
+      ...surface.querySelectorAll<HTMLElement>("[data-board-item]:not([data-board-pin])"),
+    ].flatMap((element) => {
+      const ref = element.dataset.boardItem ?? "";
+      const live = liveStore.drag(ref);
+      if (moving.has(ref) || (live !== undefined && live.own !== true)) return [];
+      return [{ rect: drawnRect(element), section: element.hasAttribute("data-board-section") }];
+    });
+    return boardSnapTargets(items, box, visibleBoardRect(view, area));
+  };
+  // The gesture going on for this edit key, or a new one when it is not held yet.
+  const gestureFor = (key: string, start: () => NonNullable<typeof gesture.current>) => {
+    const now = gesture.current;
+    if (now !== null && now.key === key && held.current.has(key)) return now;
+    gesture.current = start();
+    return gesture.current;
+  };
+  const snapThreshold = () => BOARD_SNAP_SCREEN_PX / view.zoom;
+  // How far a drag moves its box: as far as the pointer went, snapped unless Ctrl or Cmd is held.
+  const snappedShift = (now: {
+    readonly box: BoardRect | null;
+    readonly targets: BoardSnapTargets | null;
+    readonly dx: number;
+    readonly dy: number;
+  }) => {
+    if (now.box === null || now.targets === null || snapOff.current) {
+      snapStore.set(NO_SNAP_DRAWN);
+      return { dx: now.dx, dy: now.dy };
+    }
+    const box = { ...now.box, x: now.box.x + now.dx, y: now.box.y + now.dy };
+    const snapped = boardSnapMove(box, now.targets, snapThreshold());
+    snapStore.set(snapped);
+    return { dx: now.dx + snapped.dx, dy: now.dy + snapped.dy };
+  };
+  // The drawn box of the cards a drag takes, by their refs.
+  const drawnBounds = (refs: Iterable<string>) =>
+    boardRectsBounds(
+      [...refs].flatMap((ref) => {
+        const element = drawnItem(ref);
+        return element === null ? [] : [drawnRect(element)];
+      }),
+    );
+  // A drag moves what it took from where it was by how far the pointer went, snapped by its box.
+  const dragBy = (target: BoardTarget, from: BoardPoint, dx: number, dy: number, snap = true) => {
     if (!canEdit) return;
-    const group = groupOf(target);
-    if (group !== null) {
-      const now = group.map((item) => {
+    const key = boardEditKey(target);
+    const now = gestureFor(key, () => {
+      const group = groupOf(target);
+      const items = (group ?? [{ target, value: from }]).map((item) => {
         const last = held.current.get(boardEditKey(item.target));
         return last !== undefined && "x" in last ? { ...item, value: last } : item;
       });
-      for (const item of boardGroupMove(now, dx / view.zoom, dy / view.zoom)) {
-        hold(item.target, item.value, true);
-      }
-      return sendDrag();
+      const moving = new Set(items.map((item) => boardEditKey(item.target)));
+      // A section carrying what sits over it snaps by its own frame.
+      const box = drawnBounds(group !== null && !inGroup(target) ? [key] : moving);
+      return { key, items, box, targets: snap ? snapTargetsFor(moving, box) : null, dx: 0, dy: 0 };
+    });
+    now.dx += dx / view.zoom;
+    now.dy += dy / view.zoom;
+    const shift = snappedShift(now);
+    for (const item of boardGroupMove(now.items, shift.dx, shift.dy)) {
+      hold(item.target, item.value, true);
     }
-    const last = held.current.get(boardEditKey(target));
-    const at = last !== undefined && "x" in last ? last : from;
-    hold(target, { ...at, x: at.x + dx / view.zoom, y: at.y + dy / view.zoom }, true);
     sendDrag();
   };
   // Arrow keys move the selection as a drag does, and it lands once they stop.
@@ -1934,16 +2017,46 @@ export function RoomBoard({
     const last = held.current.get(noteRef(note.id));
     return last !== undefined && "text" in last ? last : note;
   };
-  const sizedBy = (from: BoardRect, dx: number, dy: number) =>
-    clampBoardSize({ w: from.width + dx / view.zoom, h: from.height + dy / view.zoom });
+  // Where a resize from a bottom corner takes a card (`ref`, held as `key`): the pointer's way,
+  // its moving edges snapped unless Ctrl or Cmd is held. The left corner keeps the right edge.
+  const resized = (
+    key: string,
+    ref: string,
+    corner: BoardCorner,
+    from: BoardRect,
+    dx: number,
+    dy: number,
+  ) => {
+    const x = dx / view.zoom;
+    const y = dy / view.zoom;
+    const pointed =
+      corner === "right"
+        ? { ...from, width: from.width + x, height: from.height + y }
+        : { ...from, x: from.x + x, width: from.width - x, height: from.height + y };
+    const now = gestureFor(key, () => ({
+      key,
+      items: [],
+      box: from,
+      targets: snapTargetsFor(new Set([ref]), from),
+      dx: 0,
+      dy: 0,
+    }));
+    let rect = pointed;
+    if (now.targets !== null && !snapOff.current) {
+      const edge = corner === "right" ? "end" : "start";
+      const snapped = boardSnapResize(pointed, { x: edge, y: "end" }, now.targets, snapThreshold());
+      snapStore.set(snapped);
+      rect = snapped.rect;
+    } else snapStore.set(NO_SNAP_DRAWN);
+    return corner === "right"
+      ? { x: from.x, size: clampBoardSize({ w: rect.width, h: rect.height }) }
+      : resizeBoardFromLeft(from, rect.x - from.x, rect.height - from.height);
+  };
   const resizeCard = (id: string, corner: BoardCorner, from: BoardRect, dx: number, dy: number) => {
     if (!canEdit) return;
-    if (corner === "right") hold({ kind: "size", id }, sizedBy(from, dx, dy), true);
-    else {
-      const next = resizeBoardFromLeft(from, dx / view.zoom, dy / view.zoom);
-      hold({ kind: "size", id }, next.size, true);
-      hold({ kind: "card", id }, { x: next.x, y: next.y }, true);
-    }
+    const next = resized(boardEditKey({ kind: "size", id }), cardRef(id), corner, from, dx, dy);
+    hold({ kind: "size", id }, next.size, true);
+    if (corner === "left") hold({ kind: "card", id }, { x: next.x, y: from.y }, true);
     sendDrag();
   };
   // A card's size and place are two changes; one queue sends them in order.
@@ -1962,12 +2075,13 @@ export function RoomBoard({
   ) => {
     if (!canEdit) return;
     const now = noteNow(note);
-    if (corner === "right") {
-      hold({ kind: "note", id: note.id }, { ...now, size: sizedBy(from, dx, dy) }, true);
-    } else {
-      const next = resizeBoardFromLeft(from, dx / view.zoom, dy / view.zoom);
-      hold({ kind: "note", id: note.id }, { ...now, x: next.x, size: next.size }, true);
-    }
+    const ref = noteRef(note.id);
+    const next = resized(ref, ref, corner, from, dx, dy);
+    hold(
+      { kind: "note", id: note.id },
+      corner === "right" ? { ...now, size: next.size } : { ...now, x: next.x, size: next.size },
+      true,
+    );
     sendDrag();
   };
   const dragNote = (
@@ -1990,17 +2104,27 @@ export function RoomBoard({
         viewer,
         randomUUID,
       ).slice(0, Math.max(0, ROOM_BOARD_MAX_NOTES - shown.notes.length));
-      if (copies.length > 0)
-        altCopies.current = { notes: copies.map(({ note }) => note), dx: 0, dy: 0 };
+      if (copies.length > 0) {
+        // The copies start over their originals, which stay behind to snap to.
+        const box = drawnBounds(copies.map(({ from }) => noteRef(from)));
+        altCopies.current = {
+          notes: copies.map(({ note }) => note),
+          box,
+          targets: snapTargetsFor(new Set(), box),
+          dx: 0,
+          dy: 0,
+        };
+      }
     }
     const copying = altCopies.current;
     if (copying !== null) {
       copying.dx += dx / view.zoom;
       copying.dy += dy / view.zoom;
+      const shift = snappedShift(copying);
       for (const copy of copying.notes) {
         hold(
           { kind: "note", id: copy.id },
-          { ...copy, x: copy.x + copying.dx, y: copy.y + copying.dy },
+          { ...copy, x: copy.x + shift.dx, y: copy.y + shift.dy },
           true,
         );
       }
@@ -2079,6 +2203,7 @@ export function RoomBoard({
       dropTarget === null || inGroup(target) ? undefined : handOf(note, dropTarget.on)?.run;
     setDropTarget(null);
     if (hand === undefined) return dropItem(target);
+    endSnap();
     const value = held.current.get(boardEditKey(target));
     held.current.delete(boardEditKey(target));
     gestureFrom.current.delete(boardEditKey(target));
@@ -3493,7 +3618,7 @@ export function RoomBoard({
     setOpenComment(id);
   };
   const dragPin = (note: RoomBoardNote, dx: number, dy: number) =>
-    dragBy({ kind: "note", id: note.id }, note, dx, dy);
+    dragBy({ kind: "note", id: note.id }, note, dx, dy, false);
   const dropPin = (note: RoomBoardNote) => release(() => letGo({ kind: "note", id: note.id }));
   const togglePin = (note: RoomBoardNote) => {
     setDraftComment(null);
@@ -5148,6 +5273,7 @@ export function RoomBoard({
             }
           }}
           onPointerMoveCapture={(event) => {
+            snapOff.current = event.ctrlKey || event.metaKey;
             const held = press.current;
             if (held === null || held.moved) return;
             const distance = Math.hypot(event.clientX - held.x, event.clientY - held.y);
@@ -5578,6 +5704,7 @@ export function RoomBoard({
                   )}
                 </g>
               </svg>
+              <BoardSnapGuides store={snapStore} zoom={view.zoom} />
               {cards?.map((card) => (
                 <BoardCard
                   key={card.id}

@@ -31,7 +31,7 @@ export const TINKJAM_SYNC_COMMAND = "npx -y https://trellium.org/sync.tgz --inst
 export const TINKJAM_SYNC_UNINSTALL_COMMAND = "npx -y https://trellium.org/sync.tgz --uninstall";
 // What someone sends their own coding agent, which then runs Tinkjam Sync for them.
 export const TINKJAM_AGENT_PROMPT =
-  "Connect this computer to my Tinkjam account. Read https://trellium.org/agent.md and follow it.";
+  "Connect this computer to my Tinkjam account. Read https://trellium.org/agent.md and do it for me. You have my permission to run its setup command outside your sandbox.";
 // The homepage's section on bringing your agent with Tinkjam Sync.
 export const TINKJAM_SYNC_URL = "https://trellium.org/#agents";
 // Redirects to the App Store or Google Play to match the phone that opens it.

@@ -225,7 +225,7 @@ const TASK_GAP = 24;
 const TASK_STEP_X = ROOM_BOARD_TASK_SIZE.w + TASK_GAP;
 const TASK_STEP_Y = ROOM_BOARD_TASK_SIZE.h + TASK_GAP;
 /** Where a section's first card sits from its corner, as the templates lay them out. */
-const SECTION_INSET = { x: 24, y: 56 };
+export const SECTION_INSET = { x: 24, y: 56 };
 // Rows a free-standing pile of tasks is laid out in, at the least.
 const FREE_ROW_TASKS = 4;
 const MAX_ROWS = 200;

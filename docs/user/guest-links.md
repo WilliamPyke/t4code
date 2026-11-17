@@ -89,7 +89,9 @@ GitHub pull request, issue or file shows as its repository and number or path, a
 opens it in a new tab; Tinkjam does not load the page. To draw an arrow, drag the dot on a card's
 edge onto another card; click an arrow to delete it. Drag a card's bottom corners to resize it;
 everyone sees the new size. Press Escape while dragging, resizing or drawing an arrow to put
-everything back as it was; nothing is sent.
+everything back as it was; nothing is sent. As you drag or resize a card it snaps into line with
+the cards near it, to even gaps between them, and to a section's padding, and a thin line shows
+what it lines up with. Hold Ctrl (Cmd on a Mac) while dragging to put it exactly where you let go.
 
 A note can be one of six colours: choose the palette on it. Anyone can recolour a note, and your
 next notes take the colour you picked last. React to a note, task, link, artifact or thread box
@@ -515,7 +517,7 @@ Your agents, such as Claude Code or Codex, are programs on your computer, so a b
 The easiest way is to let your agent set it up. Open Claude Code, Codex or another coding agent on your computer, copy the prompt from **Bring your agent**, and send it:
 
 ```
-Connect this computer to my Tinkjam account. Read https://trellium.org/agent.md and follow it.
+Connect this computer to my Tinkjam account. Read https://trellium.org/agent.md and do it for me. You have my permission to run its setup command outside your sandbox.
 ```
 
 Your agent asks you once for the permissions it needs, sets up Tinkjam Sync and gives you a link. Open it, sign in if asked, and choose **Connect**. If your agent's sandbox will not let it finish, it gives you one line to paste into a terminal instead.

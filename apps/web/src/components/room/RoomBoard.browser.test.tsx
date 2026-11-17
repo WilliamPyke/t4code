@@ -198,10 +198,13 @@ describe("RoomBoard sections", () => {
     const corner = middleOf(
       section.querySelectorAll("div[data-board-grip]:not([data-board-frame-edge])")[1]!,
     );
+    // Ctrl held: the edges go where the pointer puts them, not to the thread card's.
     await commands.mouse([
       { type: "down", ...corner },
+      { type: "keydown", key: "Control" },
       { type: "move", x: corner.x + 100, y: corner.y + 60 },
       { type: "up", x: corner.x + 100, y: corner.y + 60 },
+      { type: "keyup", key: "Control" },
     ]);
     await vi.waitFor(() =>
       expect(onChange).toHaveBeenCalledWith(

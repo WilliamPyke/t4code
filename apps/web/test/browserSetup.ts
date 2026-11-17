@@ -9,7 +9,7 @@ declare module "vite-plus/test/browser" {
     mouse: (
       steps: ReadonlyArray<
         | { readonly type: "down" | "up" | "move"; readonly x: number; readonly y: number }
-        | { readonly type: "key"; readonly key: string }
+        | { readonly type: "key" | "keydown" | "keyup"; readonly key: string }
       >,
     ) => Promise<void>;
   }

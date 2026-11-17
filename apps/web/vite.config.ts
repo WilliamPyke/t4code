@@ -154,7 +154,7 @@ const browserTestProject = {
           { page, frame },
           steps: ReadonlyArray<
             | { readonly type: "down" | "up" | "move"; readonly x: number; readonly y: number }
-            | { readonly type: "key"; readonly key: string }
+            | { readonly type: "key" | "keydown" | "keyup"; readonly key: string }
           >,
         ) => {
           const element = await (await frame()).frameElement();
@@ -165,8 +165,10 @@ const browserTestProject = {
           if (box === null || width === 0) throw new Error("The test frame is not on screen");
           const scale = box.width / width;
           for (const step of steps) {
-            if (step.type === "key") {
-              await page.keyboard.press(step.key);
+            if ("key" in step) {
+              if (step.type === "keydown") await page.keyboard.down(step.key);
+              else if (step.type === "keyup") await page.keyboard.up(step.key);
+              else await page.keyboard.press(step.key);
               continue;
             }
             await page.mouse.move(box.x + step.x * scale, box.y + step.y * scale, { steps: 4 });

@@ -387,9 +387,9 @@ export function ConnectComputerRoutes({
             <CopyLine text={TINKJAM_AGENT_PROMPT} />
           </Step>
           <Step number={2}>
-            Press Connect on the link it gives you. That is all: Tinkjam Sync then runs in the
-            background and starts by itself when you log in. The same prompt updates or repairs it
-            later.
+            If your agent asks for permission, say yes (in Codex, choose Full access). Then press
+            Connect on the link it gives you. That is all: Tinkjam Sync runs in the background from
+            then on, and the same prompt updates or repairs it later.
           </Step>
           {withAccount && !signedIn ? (
             <Step number={3}>

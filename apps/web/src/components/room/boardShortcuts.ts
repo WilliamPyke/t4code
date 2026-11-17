@@ -129,6 +129,7 @@ export const BOARD_SHORTCUTS: ReadonlyArray<BoardShortcutGroup> = [
         label: "Move a little, move more",
         keys: [{ key: "Arrows" }, { key: "Arrows", shift: true }],
       },
+      { label: "Drag without snapping: hold while dragging", keys: [{ key: "Drag", mod: true }] },
       { label: "Delete", keys: [{ key: "Delete" }] },
       {
         label: "Undo, redo",
