@@ -13,7 +13,6 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 import { vi } from "vite-plus/test";
 
@@ -21,6 +20,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ConnectReachability from "./ConnectReachability.ts";
 import { classifyReachability, type ReachabilityFacts } from "./ConnectReachability.ts";
 import * as ManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
+import * as TunnelEndpointProbe from "./tunnelEndpointProbe.ts";
 
 vi.mock("node:net", { spy: true });
 
@@ -109,17 +109,15 @@ interface ServedResponse {
   readonly body: string | ReadableStream<Uint8Array> | { readonly cloudflareError: number };
 }
 
-// What Cloudflare serves for its 530 page: HTML unless the client accepts JSON.
-const cloudflareErrorPage = (request: HttpClientRequest.HttpClientRequest, code: number) =>
-  request.headers.accept === "application/json"
-    ? JSON.stringify({ status: 530, error_code: code, error_name: "tunnel_error" })
-    : `<!doctype html><h1><span>Error</span> <span>${code}</span></h1>`;
+// What Cloudflare serves for its 530 page to a client that accepts JSON, as the probe does.
+const cloudflareErrorPage = (code: number) =>
+  JSON.stringify({ status: 530, error_code: code, error_name: "tunnel_error" });
 
 const reachabilityLayer = (
   respond: Effect.Effect<ServedResponse>,
   restartConnector: (pid: number, stillDead: Effect.Effect<boolean>) => Effect.Effect<boolean>,
 ) =>
-  ConnectReachability.layer.pipe(
+  ConnectReachability.layerWithoutTunnelEndpoint.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ManagedEndpointRuntime.CloudManagedEndpointRuntime)({
@@ -131,22 +129,20 @@ const reachabilityLayer = (
           get: () => Effect.succeedSome(new Uint8Array()),
         }),
         Layer.succeed(
-          HttpClient.HttpClient,
-          HttpClient.make((request) =>
-            respond.pipe(
-              Effect.map(({ status, body }) =>
-                HttpClientResponse.fromWeb(
-                  request,
-                  new Response(
+          TunnelEndpointProbe.TunnelEndpoint,
+          TunnelEndpointProbe.TunnelEndpoint.of({
+            get: () =>
+              respond.pipe(
+                Effect.map(({ status, body }) => ({
+                  kind: "status" as const,
+                  status,
+                  text:
                     typeof body === "object" && "cloudflareError" in body
-                      ? cloudflareErrorPage(request, body.cloudflareError)
-                      : body,
-                    { status },
-                  ),
-                ),
+                      ? Effect.succeed(cloudflareErrorPage(body.cloudflareError))
+                      : Effect.promise(() => new Response(body).text()),
+                })),
               ),
-            ),
-          ),
+          }),
         ),
         Layer.succeed(
           ChildProcessSpawner.ChildProcessSpawner,

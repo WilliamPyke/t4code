@@ -1,12 +1,41 @@
+const escapeHtml = (value: string) =>
+  value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
 /** The page the browser lands on once it approved this computer; the terminal says the rest. */
 export function renderLoopbackAuthorizationCompleteHtml(): string {
+  return renderPage(
+    "Connected to Tinkjam",
+    `<h1>This computer is connected</h1>
+      <p class="description">You can close this window. Tinkjam Sync finishes setting up on this computer.</p>`,
+  );
+}
+
+/**
+ * The first page a person opens from Tinkjam Sync: what connecting does, in plain words, before
+ * any sign-in form.
+ */
+export function renderLoopbackAuthorizationStartHtml(input: {
+  readonly computerName: string;
+  readonly continueUrl: string;
+}): string {
+  const computer = escapeHtml(input.computerName);
+  return renderPage(
+    `Connect ${computer} to Tinkjam`,
+    `<h1>Connect ${computer} to Tinkjam</h1>
+      <p class="description">This links ${computer} to your Tinkjam account, so your boards can use the agents on it, such as Claude Code or Codex. They run here, on your own sign-in, and only when you send them something.</p>
+      <p class="description">Next, sign in to Tinkjam to approve it.</p>
+      <a class="button" href="${escapeHtml(input.continueUrl)}">Continue</a>`,
+  );
+}
+
+function renderPage(title: string, body: string): string {
   return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <title>Connected to Tinkjam</title>
+    <title>${title}</title>
     <style>
       :root {
         --bg: #fff7ec;
@@ -54,13 +83,22 @@ export function renderLoopbackAuthorizationCompleteHtml(): string {
       }
       h1 { margin: 0; font-size: clamp(24px, 5vw, 30px); line-height: 1.15; letter-spacing: -0.02em; }
       p.description { margin: 12px 0 0; color: var(--muted); font-size: 15px; line-height: 1.6; }
+      a.button {
+        display: inline-block;
+        margin-top: 22px;
+        border-radius: 10px;
+        background: var(--jam);
+        color: #fff;
+        padding: 10px 18px;
+        font-weight: 600;
+        text-decoration: none;
+      }
     </style>
   </head>
   <body>
     <main>
       <p class="brand">Tinkjam</p>
-      <h1>This computer is connected</h1>
-      <p class="description">You can close this window. Keep the terminal running while you work.</p>
+      ${body}
     </main>
   </body>
 </html>`;

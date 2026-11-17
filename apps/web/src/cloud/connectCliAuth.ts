@@ -46,10 +46,20 @@ export function buildConnectCliClerkAuthorizeUrl(request: ConnectAuthorizeReques
   });
 }
 
-/** Force a new document: fragment revisits do not reload, and Clerk suppresses post-sign-in session updates. */
-export function connectCliSignInRedirectUrl(
-  request: ConnectAuthorizeRequest,
-  currentHref: string,
-): string {
-  return buildConnectCliClerkAuthorizeUrl(request) ?? currentHref;
+const CONTINUE_PARAM = "continue";
+
+/**
+ * Back to /connect after sign-in, marked to continue. The query forces a new document (Clerk
+ * suppresses post-sign-in updates on a fragment-only change), and leaving for Clerk's authorize
+ * page from a signed-in page carries the session there instead of asking for it twice.
+ */
+export function connectCliSignInRedirectUrl(currentHref: string): string {
+  const url = new URL(currentHref);
+  url.searchParams.set(CONTINUE_PARAM, "1");
+  return url.toString();
+}
+
+/** Whether this page was reached by signing in to approve, so it continues by itself. */
+export function connectCliContinueRequested(href: string): boolean {
+  return new URL(href).searchParams.get(CONTINUE_PARAM) === "1";
 }

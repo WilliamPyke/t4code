@@ -520,7 +520,7 @@ The easiest way is to let your agent set it up. Open Claude Code, Codex or anoth
 Connect this computer to my Tinkjam account. Read https://trellium.org/agent.md and do it for me. You have my permission to run its setup command outside your sandbox.
 ```
 
-Your agent asks you once for the permissions it needs, sets up Tinkjam Sync and gives you a link. Open it, sign in if asked, and choose **Connect**. If your agent's sandbox will not let it finish, it gives you one line to paste into a terminal instead.
+Your agent asks you once for the permissions it needs, sets up Tinkjam Sync and gives you a link. Open it: it says what connecting does, then asks you to sign in to approve this computer. If your agent's sandbox will not let it finish, it gives you one line to paste into a terminal instead.
 
 To run it yourself, open Terminal (on Windows, PowerShell), paste this, and press Enter:
 
@@ -528,9 +528,9 @@ To run it yourself, open Terminal (on Windows, PowerShell), paste this, and pres
 npx -y https://trellium.org/sync.tgz --install
 ```
 
-It prints the same link. Once you choose **Connect**, Tinkjam Sync runs in the background with no window, and starts by itself whenever you log in; you can close the terminal. Either way, the computer shows under **Your computers** on every board you open signed in with the same account, without reloading. To update Tinkjam Sync, run the same command again; when a newer one is out, the command says so and prints the one to run.
+It prints the same link. Once you approve, Tinkjam Sync runs in the background with no window, and starts by itself whenever you log in; you can close the terminal. Either way, the computer shows under **Your computers** on every board you open signed in with the same account, without reloading. To update Tinkjam Sync, run the same command again; when a newer one is out, the command says so and prints the one to run.
 
-To stop it running in the background and starting at log-in, run the command with `--uninstall` instead of `--install`; the computer stays connected. `--status` shows whether it runs. Without `--install`, it runs only while that terminal window stays open.
+To stop it running in the background and starting at log-in, run the command with `--uninstall` instead of `--install`; the computer stays connected. `--status` shows whether it runs and lists its processes; one computer runs one Tinkjam Sync, and installing again replaces the old one and any startup entries left from earlier attempts. Without `--install`, it runs only while that terminal window stays open.
 
 Tinkjam Sync runs agents on your computer under your own Claude or Codex sign-in, and they can use what those agents can there. Nothing anyone else writes reaches your agent unless you press **Send**. To disconnect the computer from your account, run the command with `--disconnect` instead; that also stops it running in the background. Tinkjam for desktop, an app that does the same without a terminal, is coming.
 

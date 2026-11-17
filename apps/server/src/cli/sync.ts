@@ -1,8 +1,14 @@
+// @effect-diagnostics nodeBuiltinImport:off - Joins the background log path.
+import * as NodePath from "node:path";
+
 import * as RelayClient from "@t3tools/shared/relayClient";
+import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
 import * as Digest from "effect/crypto/Digest";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { Command, Flag } from "effect/cli";
 import * as CliError from "effect/cli/CliError";
@@ -16,7 +22,6 @@ import * as ServerConfig from "../config.ts";
 import { resolveServerEnvironmentLabel } from "../environment/ServerEnvironmentLabel.ts";
 import * as ExternalLauncher from "../process/externalLauncher.ts";
 import * as ProcessRunner from "../processRunner.ts";
-import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { projectLocationFlags } from "./config.ts";
 import {
   acquireRelayClientForLink,
@@ -25,6 +30,20 @@ import {
   runCloudCommand,
 } from "./connect.ts";
 import { runServerCommand } from "./server.ts";
+import {
+  describeProcesses,
+  endSyncTree,
+  fileConsole,
+  readStarts,
+  readSyncHolder,
+  restartDecision,
+  RESTART_LIMIT,
+  stopLegacySupervisor,
+  syncProcesses,
+  takeoverDecision,
+  writeOwnerRecord,
+  writeStarts,
+} from "./syncProcesses.ts";
 
 /**
  * Whether this computer must be approved in the browser before Tinkjam Sync serves it: it has no
@@ -76,15 +95,6 @@ const approveIfNeeded = Effect.fn("cli.sync.approve_if_needed")(function* (input
   readonly openBrowser: (url: string) => Effect.Effect<void>;
   readonly background: boolean;
 }) {
-  const config = yield* ServerConfig.ServerConfig;
-  const running = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
-  if (
-    Option.isSome(running) &&
-    running.value.pid !== process.pid &&
-    isProcessAlive(running.value.pid)
-  ) {
-    return yield* new SyncAlreadyRunningError({ cause: running.value.pid });
-  }
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const tokens = yield* CliTokenManager.CloudCliTokenManager;
   const signedIn = yield* tokens.getExisting.pipe(
@@ -117,7 +127,7 @@ const approveIfNeeded = Effect.fn("cli.sync.approve_if_needed")(function* (input
     computerName: input.computerName,
     present: (url) =>
       Console.log(
-        `\nTo connect ${input.computerName} to Tinkjam, open this link and press Connect:\n\n  ${url}\n`,
+        `\nTo connect ${input.computerName} to Tinkjam, open this link. It says what connecting does, then asks you to sign in to approve it:\n\n  ${url}\n`,
       ).pipe(Effect.andThen(input.openBrowser(url))),
   });
   yield* tokens.store(token);
@@ -133,6 +143,9 @@ const disconnect = Effect.fn("cli.sync.disconnect")(function* () {
   );
   yield* Console.log("This computer is no longer connected to Tinkjam.");
 });
+
+const ALREADY_IN_BACKGROUND_MESSAGE =
+  "Tinkjam Sync is already running in the background on this computer. To stop it, run the Tinkjam Sync command with --uninstall.";
 
 export const syncCommand = Command.make("sync", {
   ...projectLocationFlags,
@@ -150,69 +163,158 @@ export const syncCommand = Command.make("sync", {
     Flag.withDescription("Run without asking to connect; exit if this computer is not connected."),
     Flag.withDefault(false),
   ),
+  stopRunning: Flag.Boolean("stop-running").pipe(
+    Flag.withDescription("End any Tinkjam Sync of this home and everything it started."),
+    Flag.withDefault(false),
+  ),
+  processes: Flag.Boolean("processes").pipe(
+    Flag.withDescription("List the processes of the Tinkjam Sync of this home."),
+    Flag.withDefault(false),
+  ),
 }).pipe(
   Command.withDescription(
     "Connect this computer's agents to Tinkjam and keep them available while this runs.",
   ),
   Command.unlisted,
   Command.withHandler(
-    Effect.fn("cli.sync")(function* (flags) {
-      if (!hasCloudPublicConfig) {
-        return yield* new CliError.UserError({
-          cause: "sync",
-          userMessage: "This build cannot connect to Tinkjam: it has no sign-in configuration.",
+    Effect.fn("cli.sync")(
+      function* (flags) {
+        if (!hasCloudPublicConfig) {
+          return yield* new CliError.UserError({
+            cause: "sync",
+            userMessage: "This build cannot connect to Tinkjam: it has no sign-in configuration.",
+          });
+        }
+        if (flags.disconnect) {
+          return yield* runCloudCommand(flags, disconnect(), { quietLogs: true });
+        }
+        const home = yield* runCloudCommand(
+          flags,
+          Effect.map(ServerConfig.ServerConfig, (config) => ({
+            baseDir: config.baseDir,
+            stateDir: config.stateDir,
+            statePath: config.serverRuntimeStatePath,
+          })),
+          { quietLogs: true },
+        );
+        if (flags.processes) {
+          const holder = yield* readSyncHolder(home.statePath);
+          return yield* Console.log(
+            holder === undefined
+              ? "Tinkjam Sync: not running"
+              : `Tinkjam Sync: ${describeProcesses(yield* syncProcesses(holder))}`,
+          );
+        }
+        if (flags.stopRunning) {
+          const legacy = yield* stopLegacySupervisor(home.baseDir);
+          const holder = yield* readSyncHolder(home.statePath);
+          if (holder !== undefined) {
+            yield* Console.log(
+              `Stopped Tinkjam Sync: ${describeProcesses(yield* endSyncTree(holder))}`,
+            );
+          } else if (legacy) {
+            yield* Console.log("Stopped Tinkjam Sync.");
+          }
+          return;
+        }
+
+        const run = Effect.gen(function* () {
+          let starts: ReadonlyArray<number> | undefined;
+          if (flags.background) {
+            const decision = restartDecision(
+              readStarts(home.baseDir),
+              yield* Clock.currentTimeMillis,
+            );
+            if (decision.kind === "give-up") {
+              return yield* Console.log(
+                `Tinkjam Sync did not start: it stopped ${RESTART_LIMIT} times in 10 minutes. It tries again when you log in; to try now, run the Tinkjam Sync command with --install.`,
+              );
+            }
+            starts = decision.starts;
+            if (decision.delayMs > 0) {
+              yield* Console.log(`Starting again in ${decision.delayMs / 1000} seconds.`);
+              yield* Effect.sleep(Duration.millis(decision.delayMs));
+            }
+          }
+          const holder = yield* readSyncHolder(home.statePath);
+          if (holder !== undefined && !flags.background) {
+            if (holder.mode === "background")
+              return yield* Console.log(ALREADY_IN_BACKGROUND_MESSAGE);
+            return yield* new SyncAlreadyRunningError({ cause: holder.pid });
+          }
+          const takeover = takeoverDecision(holder);
+          if (holder !== undefined && takeover === "yield") {
+            return yield* Console.log(
+              `Tinkjam Sync is already running in the background (pid ${holder.pid}).`,
+            );
+          }
+          // Only a start that goes ahead counts toward the restart limit.
+          if (starts !== undefined) writeStarts(home.baseDir, starts);
+          if (holder !== undefined && takeover === "take-over") {
+            yield* Console.log(
+              `Ended an older Tinkjam Sync of this home: ${describeProcesses(yield* endSyncTree(holder))}`,
+            );
+          }
+
+          yield* Console.log("Tinkjam Sync");
+          const computerName = yield* resolveServerEnvironmentLabel({ cwdBaseName: "" }).pipe(
+            Effect.map((label) => (label === "T3 environment" ? FALLBACK_COMPUTER_NAME : label)),
+            Effect.orElseSucceed(() => FALLBACK_COMPUTER_NAME),
+          );
+          const launcher = yield* ExternalLauncher.ExternalLauncher;
+          const openBrowser =
+            !flags.background && (yield* canOpenBrowser)
+              ? (url: string) => launcher.launchBrowser(url).pipe(Effect.ignore)
+              : () => Effect.void;
+          const digest = yield* Digest.Digest;
+          const connected = yield* runCloudCommand(
+            flags,
+            approveIfNeeded({ computerName, openBrowser, background: flags.background }).pipe(
+              Effect.provideService(Digest.Digest, digest),
+            ),
+            { quietLogs: true },
+          );
+          if (!connected) return;
+          if (flags.connectOnly) {
+            return yield* Console.log("This computer is connected to your Tinkjam account.");
+          }
+          yield* writeOwnerRecord(home.stateDir, flags.background ? "background" : "foreground");
+          // Loopback only: the account's tunnel is the one way in, and no pairing code is printed.
+          return yield* runServerCommand(
+            {
+              mode: Option.some("web"),
+              port: Option.none(),
+              host: Option.some("127.0.0.1"),
+              baseDir: flags.baseDir,
+              cwd: Option.none(),
+              devUrl: Option.none(),
+              noBrowser: Option.some(true),
+              bootstrapFd: Option.none(),
+              autoBootstrapProjectFromCwd: Option.some(false),
+              logWebSocketEvents: Option.none(),
+              tailscaleServeEnabled: Option.some(false),
+              tailscaleServePort: Option.none(),
+              lan: Option.some(false),
+            },
+            {
+              startupPresentation: "sync",
+              forceAutoBootstrapProjectFromCwd: false,
+              rejectRunningServer: true,
+              logLevel: "Error",
+            },
+          );
         });
-      }
-      if (flags.disconnect) {
-        return yield* runCloudCommand(flags, disconnect(), { quietLogs: true });
-      }
-      yield* Console.log("Tinkjam Sync");
-      const computerName = yield* resolveServerEnvironmentLabel({ cwdBaseName: "" }).pipe(
-        Effect.map((label) => (label === "T3 environment" ? FALLBACK_COMPUTER_NAME : label)),
-        Effect.orElseSucceed(() => FALLBACK_COMPUTER_NAME),
-        Effect.provide(ProcessRunner.layer),
-      );
-      const launcher = yield* ExternalLauncher.ExternalLauncher;
-      const openBrowser =
-        !flags.background && (yield* canOpenBrowser)
-          ? (url: string) => launcher.launchBrowser(url).pipe(Effect.ignore)
-          : () => Effect.void;
-      const digest = yield* Digest.Digest;
-      const connected = yield* runCloudCommand(
-        flags,
-        approveIfNeeded({ computerName, openBrowser, background: flags.background }).pipe(
-          Effect.provideService(Digest.Digest, digest),
-        ),
-        { quietLogs: true },
-      );
-      if (!connected) return;
-      if (flags.connectOnly) {
-        return yield* Console.log("This computer is connected to your Tinkjam account.");
-      }
-      // Loopback only: the account's tunnel is the one way in, and no pairing code is printed.
-      return yield* runServerCommand(
-        {
-          mode: Option.some("web"),
-          port: Option.none(),
-          host: Option.some("127.0.0.1"),
-          baseDir: flags.baseDir,
-          cwd: Option.none(),
-          devUrl: Option.none(),
-          noBrowser: Option.some(true),
-          bootstrapFd: Option.none(),
-          autoBootstrapProjectFromCwd: Option.some(false),
-          logWebSocketEvents: Option.none(),
-          tailscaleServeEnabled: Option.some(false),
-          tailscaleServePort: Option.none(),
-          lan: Option.some(false),
-        },
-        {
-          startupPresentation: "sync",
-          forceAutoBootstrapProjectFromCwd: false,
-          rejectRunningServer: true,
-          logLevel: "Error",
-        },
-      );
-    }, Effect.provide(ExternalLauncher.layer)),
+        // In the background there is no terminal; its words go to <base>/logs/sync.log.
+        return yield* flags.background
+          ? run.pipe(
+              Effect.provideService(
+                Console.Console,
+                fileConsole(NodePath.join(home.baseDir, "logs", "sync.log")),
+              ),
+            )
+          : run;
+      },
+      Effect.provide(Layer.merge(ExternalLauncher.layer, ProcessRunner.layer)),
+    ),
   ),
 );

@@ -35,7 +35,7 @@ const notRoutedYet: EnvironmentConnectReachability = {
 };
 
 describe("announceWhenReachable", () => {
-  it.effect("says Connected once the link is reachable, and the slow notice only once", () =>
+  it.effect("says Connected once reachable, the slow notice once, and then what it waits on", () =>
     Effect.gen(function* () {
       const said: Array<string> = [];
       let latest: EnvironmentConnectReachability = notLinked;
@@ -45,12 +45,21 @@ describe("announceWhenReachable", () => {
       }).pipe(Effect.forkChild);
 
       yield* TestClock.adjust(Duration.minutes(5));
-      expect(said).toEqual([SYNC_CONNECTING_MESSAGE, SYNC_SLOW_MESSAGE]);
+      const waitingOnLink = "  Waiting on: Not linked yet. (not_linked) Wait.";
+      expect(said).toEqual([SYNC_CONNECTING_MESSAGE, SYNC_SLOW_MESSAGE, waitingOnLink]);
 
+      latest = notRoutedYet;
+      yield* TestClock.adjust(Duration.seconds(10));
       latest = reachable;
       yield* TestClock.adjust(Duration.seconds(2));
       yield* Fiber.join(fiber);
-      expect(said).toEqual([SYNC_CONNECTING_MESSAGE, SYNC_SLOW_MESSAGE, SYNC_CONNECTED_MESSAGE]);
+      expect(said).toEqual([
+        SYNC_CONNECTING_MESSAGE,
+        SYNC_SLOW_MESSAGE,
+        waitingOnLink,
+        "  Waiting on: No live connection yet. (no_connector) Wait.",
+        SYNC_CONNECTED_MESSAGE,
+      ]);
     }),
   );
 

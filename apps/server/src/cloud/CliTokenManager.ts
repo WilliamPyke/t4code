@@ -35,7 +35,10 @@ import {
   hostedAppUrlConfig,
   type CloudCliOAuthConfig,
 } from "./publicConfig.ts";
-import { renderLoopbackAuthorizationCompleteHtml } from "./cliAuthHtml.ts";
+import {
+  renderLoopbackAuthorizationCompleteHtml,
+  renderLoopbackAuthorizationStartHtml,
+} from "./cliAuthHtml.ts";
 
 const CLOUD_CLI_OAUTH_TOKEN_SECRET = "cloud-cli-oauth-token";
 const CLOUD_CLI_OAUTH_CALLBACK_TIMEOUT = Duration.minutes(10);
@@ -470,13 +473,13 @@ export const deviceAuthorizationLogin = Effect.fn("cloud.cli_token.device_author
 
 /**
  * Serves the loopback OAuth callback for this sign-in until the scope closes. With `start`, the
- * bare address forwards there too, so a person is given a short local address to open.
+ * bare address is a short local page saying what connecting does, which continues there.
  */
 const serveLoopbackCallback = Effect.fn("cloud.cli_token.serve_loopback_callback")(
   function* (input: {
     readonly metadata: CloudCliOAuthConfig;
     readonly state: string;
-    readonly start?: string;
+    readonly start?: { readonly url: string; readonly computerName: string };
   }) {
     const { metadata, state } = input;
     const callback = yield* Deferred.make<string>();
@@ -501,7 +504,18 @@ const serveLoopbackCallback = Effect.fn("cloud.cli_token.serve_loopback_callback
         ? layerCallbackRoute
         : Layer.merge(
             layerCallbackRoute,
-            HttpRouter.add("GET", "/", Effect.succeed(HttpServerResponse.redirect(input.start))),
+            HttpRouter.add(
+              "GET",
+              "/",
+              Effect.succeed(
+                HttpServerResponse.html(
+                  renderLoopbackAuthorizationStartHtml({
+                    computerName: input.start.computerName,
+                    continueUrl: input.start.url,
+                  }),
+                ),
+              ),
+            ),
           );
     yield* HttpRouter.serve(layerRoutes, {
       disableListenLog: true,
@@ -540,13 +554,16 @@ export const approveComputerLogin = Effect.fn("cloud.cli_token.approve_computer_
   const callback = yield* serveLoopbackCallback({
     metadata,
     state,
-    start: buildConnectAuthorizeRequestUrl({
-      hostedAppUrl,
-      state,
-      challenge,
-      loopbackPort: metadata.loopbackPort,
+    start: {
+      url: buildConnectAuthorizeRequestUrl({
+        hostedAppUrl,
+        state,
+        challenge,
+        loopbackPort: metadata.loopbackPort,
+        computerName: input.computerName,
+      }),
       computerName: input.computerName,
-    }),
+    },
   });
   yield* input.present(`http://127.0.0.1:${metadata.loopbackPort}`);
   const code = yield* Deferred.await(callback).pipe(

@@ -1,13 +1,14 @@
 // @effect-diagnostics nodeBuiltinImport:off globalConsole:off globalDate:off globalTimers:off - Plain Node beside the launcher, before any server code runs.
-// Tinkjam Sync in the background: a copy of the package under the base dir, started at log-in with
-// no window, by launchd (macOS), systemd or XDG autostart (Linux), or the Run key (Windows).
+// Tinkjam Sync in the background: a copy of the package under the base dir whose server is the
+// login item itself, started with no window by launchd (macOS), systemd or XDG autostart (Linux),
+// or the Run key (Windows). The server keeps one Sync per home (apps/server/src/cli/syncProcesses.ts).
 // Node built-ins only: the build strips its types into bin/service.mjs, beside the launcher.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-export type SyncAction = "run" | "install" | "uninstall" | "status" | "service";
+export type SyncAction = "run" | "install" | "uninstall" | "status";
 
 export interface SyncArgs {
   readonly action: SyncAction;
@@ -20,7 +21,6 @@ const ACTION_FLAGS: Readonly<Record<string, SyncAction>> = {
   "--install": "install",
   "--uninstall": "uninstall",
   "--status": "status",
-  "--service": "service",
 };
 
 /** The launcher's own flags, taken out of what the server sees. Throws a message for a person. */
@@ -53,22 +53,26 @@ export function parseSyncArgs(args: ReadonlyArray<string>): SyncArgs {
   return { action, baseDir, serverArgs };
 }
 
+export const defaultBaseDir = () => NodePath.join(NodeOS.homedir(), ".tinkjam");
+
 export function resolveBaseDir(flag: string | undefined, envHome: string | undefined): string {
-  const chosen = flag?.trim() || envHome?.trim() || NodePath.join(NodeOS.homedir(), ".tinkjam");
+  const chosen = flag?.trim() || envHome?.trim() || defaultBaseDir();
   const expanded =
     chosen === "~" || /^~[\\/]/.test(chosen) ? NodeOS.homedir() + chosen.slice(1) : chosen;
   return NodePath.resolve(expanded);
 }
 
+const samePath = (a: string, b: string) =>
+  NodePath.resolve(a).toLowerCase() === NodePath.resolve(b).toLowerCase();
+
 /** Login item names. A home other than the default gets its own, so two homes never share one. */
-export function serviceNames(baseDir: string, defaultBaseDir: string) {
-  const suffix =
-    NodePath.resolve(baseDir).toLowerCase() === NodePath.resolve(defaultBaseDir).toLowerCase()
-      ? ""
-      : NodePath.basename(baseDir)
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-|-$/g, "") || "custom";
+export function serviceNames(baseDir: string, defaultDir: string) {
+  const suffix = samePath(baseDir, defaultDir)
+    ? ""
+    : NodePath.basename(baseDir)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "") || "custom";
   return {
     launchdLabel: suffix ? `org.trellium.tinkjam-sync.${suffix}` : "org.trellium.tinkjam-sync",
     linuxName: suffix ? `tinkjam-sync-${suffix}` : "tinkjam-sync",
@@ -76,31 +80,46 @@ export function serviceNames(baseDir: string, defaultBaseDir: string) {
   };
 }
 
+export type ServiceNames = ReturnType<typeof serviceNames>;
+
 export function servicePaths(baseDir: string) {
   const app = NodePath.join(baseDir, "app");
   const packageDir = NodePath.join(app, "node_modules", "tinkjam-sync");
   return {
     baseDir,
     app,
-    launcher: NodePath.join(packageDir, "bin", "tinkjam-sync.mjs"),
     serverEntry: NodePath.join(packageDir, "dist", "bin.mjs"),
-    settings: NodePath.join(baseDir, "sync-service.json"),
-    pid: NodePath.join(baseDir, "sync-service.pid"),
-    stop: NodePath.join(baseDir, "sync-service.stop"),
     log: NodePath.join(baseDir, "logs", "sync.log"),
+    status: NodePath.join(baseDir, "userdata", "sync-status.json"),
+    starts: NodePath.join(baseDir, "sync-starts.json"),
     windowsScript: NodePath.join(baseDir, "start-sync.js"),
+    // The first background Sync kept these; nothing reads them now.
+    legacy: ["sync-service.json", "sync-service.pid", "sync-service.stop"].map((name) =>
+      NodePath.join(baseDir, name),
+    ),
   };
 }
 
 export type ServicePaths = ReturnType<typeof servicePaths>;
 
+/** What the login item runs: the server itself, so one process is the whole background Sync. */
+export interface LoginCommand {
+  readonly programArguments: ReadonlyArray<string>;
+  readonly environment: Readonly<Record<string, string>>;
+}
+
 const xmlText = (value: string) =>
   value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-/** A LaunchAgent that starts at log-in and again if it crashes, but not after a clean exit. */
+/**
+ * A LaunchAgent that launchd starts at log-in and again whenever it exits with an error, which
+ * includes a stray `kill` (the server exits 130 on SIGTERM). A clean exit (not connected, or the
+ * server's restart limit) stays down; `--uninstall` boots it out first. ThrottleInterval keeps
+ * launchd to one start per 10 seconds.
+ */
 export function launchAgentPlist(input: {
   readonly label: string;
-  readonly programArguments: ReadonlyArray<string>;
+  readonly command: LoginCommand;
   readonly logPath: string;
 }): string {
   return [
@@ -112,8 +131,15 @@ export function launchAgentPlist(input: {
     `  <string>${xmlText(input.label)}</string>`,
     "  <key>ProgramArguments</key>",
     "  <array>",
-    ...input.programArguments.map((arg) => `    <string>${xmlText(arg)}</string>`),
+    ...input.command.programArguments.map((arg) => `    <string>${xmlText(arg)}</string>`),
     "  </array>",
+    "  <key>EnvironmentVariables</key>",
+    "  <dict>",
+    ...Object.entries(input.command.environment).flatMap(([key, value]) => [
+      `    <key>${xmlText(key)}</key>`,
+      `    <string>${xmlText(value)}</string>`,
+    ]),
+    "  </dict>",
     "  <key>RunAtLoad</key>",
     "  <true/>",
     "  <key>KeepAlive</key>",
@@ -121,6 +147,8 @@ export function launchAgentPlist(input: {
     "    <key>SuccessfulExit</key>",
     "    <false/>",
     "  </dict>",
+    "  <key>ThrottleInterval</key>",
+    "  <integer>10</integer>",
     "  <key>StandardOutPath</key>",
     `  <string>${xmlText(input.logPath)}</string>`,
     "  <key>StandardErrorPath</key>",
@@ -132,16 +160,22 @@ export function launchAgentPlist(input: {
 }
 
 // systemd unquotes C-style escapes, expands % specifiers and $ variables.
-const systemdArg = (value: string) =>
+const systemdQuote = (value: string) =>
   `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/%/g, "%%").replace(/\$/g, "$$$$")}"`;
 
-export function systemdUnit(programArguments: ReadonlyArray<string>): string {
+/** Restarts after a failure every 10 seconds, at most 6 times in 10 minutes. */
+export function systemdUnit(command: LoginCommand): string {
   return [
     "[Unit]",
     "Description=Tinkjam Sync: connects this computer's agents to Tinkjam",
+    "StartLimitIntervalSec=600",
+    "StartLimitBurst=6",
     "",
     "[Service]",
-    `ExecStart=${programArguments.map(systemdArg).join(" ")}`,
+    ...Object.entries(command.environment).map(
+      ([key, value]) => `Environment=${systemdQuote(`${key}=${value}`)}`,
+    ),
+    `ExecStart=${command.programArguments.map(systemdQuote).join(" ")}`,
     "Restart=on-failure",
     "RestartSec=10",
     "",
@@ -158,13 +192,19 @@ const desktopArg = (value: string) =>
     .replace(/\\/g, "\\\\")
     .replace(/%/g, "%%");
 
-export function autostartEntry(programArguments: ReadonlyArray<string>): string {
+/** Autostart cannot set variables itself; `env` sets them and then becomes the server. */
+export function autostartEntry(command: LoginCommand): string {
+  const args = [
+    "/usr/bin/env",
+    ...Object.entries(command.environment).map(([key, value]) => `${key}=${value}`),
+    ...command.programArguments,
+  ];
   return [
     "[Desktop Entry]",
     "Type=Application",
     "Name=Tinkjam Sync",
     "Comment=Connects this computer's agents to Tinkjam",
-    `Exec=${programArguments.map(desktopArg).join(" ")}`,
+    `Exec=${args.map(desktopArg).join(" ")}`,
     "Terminal=false",
     "NoDisplay=true",
     "X-GNOME-Autostart-enabled=true",
@@ -180,27 +220,88 @@ export const windowsArg = (value: string) =>
 
 export const windowsCommandLine = (args: ReadonlyArray<string>) => args.map(windowsArg).join(" ");
 
-/**
- * Run by wscript, which has no console, so node starts with its window hidden (style 0). JScript,
- * not VBScript, which Windows is phasing out. Non-ASCII is escaped: WSH reads scripts as ANSI.
- */
-export function windowsStartScript(commandLine: string): string {
-  const literal = JSON.stringify(commandLine).replace(
+// WSH reads scripts in the ANSI code page, so every literal is kept ASCII.
+const jscriptString = (value: string) =>
+  JSON.stringify(value).replace(
     /[\u007f-\uffff]/g,
     (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
+
+/** Most restarts the Windows script host makes in one log-in before it leaves Sync stopped. */
+export const WINDOWS_RESTART_LIMIT = 5;
+
+/**
+ * Run by wscript, which has no console, so the server starts with its window hidden (style 0).
+ * wscript waits for it and starts it again after a failure (a growing pause, at most
+ * WINDOWS_RESTART_LIMIT times); a clean exit ends it. JScript, not VBScript, which Windows is
+ * phasing out.
+ */
+export function windowsStartScript(command: LoginCommand): string {
   return [
     "// Starts Tinkjam Sync with no window at log-in. `--install` writes it; `--uninstall` removes it.",
-    `new ActiveXObject("WScript.Shell").Run(${literal}, 0, false);`,
+    'var shell = new ActiveXObject("WScript.Shell");',
+    'var env = shell.Environment("PROCESS");',
+    ...Object.entries(command.environment).map(
+      ([key, value]) => `env(${jscriptString(key)}) = ${jscriptString(value)};`,
+    ),
+    `var command = ${jscriptString(windowsCommandLine(command.programArguments))};`,
+    `for (var attempt = 0; attempt <= ${WINDOWS_RESTART_LIMIT}; attempt++) {`,
+    "  if (shell.Run(command, 0, true) === 0) break;",
+    "  WScript.Sleep(Math.min(2000 * Math.pow(2, attempt), 60000));",
+    "}",
     "",
   ].join("\r\n");
+}
+
+/** A login item found on this computer. `content` is what it runs, or its whole file. */
+export interface FoundLoginItem {
+  readonly name: string;
+  readonly location: string;
+  readonly content: string;
+}
+
+const OUR_NAME_PATTERNS = [
+  /^org\.trellium\.tinkjam-sync(\.[a-z0-9-]+)?$/i,
+  /^tinkjam-sync(-[a-z0-9-]+)?(\.service|\.desktop)?$/i,
+  /^Tinkjam Sync( \([a-z0-9-]+\))?$/i,
+];
+
+/** Text that only a login item for Tinkjam Sync (or for this home) would contain. */
+export function leftoverMarkers(baseDir: string, isDefaultHome: boolean): ReadonlyArray<string> {
+  return [
+    "trellium.org/sync.tgz",
+    "tinkjam-sync",
+    baseDir,
+    baseDir.replaceAll("\\", "/"),
+    ...(isDefaultHome
+      ? ["~/.tinkjam", "$HOME/.tinkjam", "${HOME}/.tinkjam", "%USERPROFILE%\\.tinkjam"]
+      : []),
+  ];
+}
+
+/**
+ * Ours (this home's own item, replaced on install), another home's (left alone), a leftover that
+ * runs Tinkjam Sync but is not ours (removed), or unrelated (never touched).
+ */
+export function classifyLoginItem(
+  item: Pick<FoundLoginItem, "name" | "content">,
+  ours: { readonly names: ReadonlyArray<string>; readonly markers: ReadonlyArray<string> },
+): "ours" | "other-home" | "leftover" | "unrelated" {
+  const name = item.name.replace(/\.(plist|lnk)$/i, "");
+  if (ours.names.some((candidate) => candidate.toLowerCase() === name.toLowerCase())) return "ours";
+  if (OUR_NAME_PATTERNS.some((pattern) => pattern.test(name))) return "other-home";
+  const content = item.content.toLowerCase();
+  return ours.markers.some((marker) => content.includes(marker.toLowerCase()))
+    ? "leftover"
+    : "unrelated";
 }
 
 const run = (command: string, args: ReadonlyArray<string>) =>
   NodeChildProcess.spawnSync(command, args, {
     encoding: "utf8",
     windowsHide: true,
-    timeout: 30_000,
+    timeout: 60_000,
+    maxBuffer: 16 * 1024 * 1024,
   });
 
 type RunResult = ReturnType<typeof run>;
@@ -221,40 +322,35 @@ const writeFile = (path: string, contents: string) => {
   NodeFS.writeFileSync(path, contents);
 };
 
-/** Whether a process is alive. EPERM means it is, but belongs to someone else or a sandbox hides it. */
-const isAlive = (pid: number) => {
+/** File text as both single-byte and UTF-16, so paths inside Windows shortcuts match too. */
+const readLoose = (path: string) => {
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error instanceof Error && "code" in error && error.code === "EPERM";
+    const bytes = NodeFS.readFileSync(path);
+    return `${bytes.toString("latin1")}\n${bytes.toString("utf16le")}`;
+  } catch {
+    return "";
   }
 };
 
-/** The background copy's process, if it is running. */
-export function backgroundPid(paths: ServicePaths): number | undefined {
+const listDir = (dir: string, extensions: ReadonlyArray<string>) => {
   try {
-    const pid = Number(NodeFS.readFileSync(paths.pid, "utf8").trim());
-    return Number.isInteger(pid) && pid > 0 && pid !== process.pid && isAlive(pid)
-      ? pid
-      : undefined;
+    return NodeFS.readdirSync(dir)
+      .filter((name) => extensions.some((extension) => name.toLowerCase().endsWith(extension)))
+      .map((name) => NodePath.join(dir, name));
   } catch {
-    return undefined;
+    return [];
   }
+};
+
+/** Every kind of login item Tinkjam Sync uses or an agent might have made on one system. */
+interface LoginItems {
+  readonly find: () => ReadonlyArray<FoundLoginItem>;
+  readonly remove: (item: FoundLoginItem) => boolean;
+  /** Writes this home's item and starts it now. */
+  readonly register: (command: LoginCommand) => string;
+  readonly ourNames: ReadonlyArray<string>;
 }
 
-interface LoginItem {
-  /** Where the person can find it. */
-  readonly location: string;
-  readonly installed: () => boolean;
-  /** Writes the login item and starts the background copy now. */
-  readonly register: (programArguments: ReadonlyArray<string>) => void;
-  /** Stops the background copy where a service manager runs it. */
-  readonly stop: () => void;
-  readonly unregister: () => void;
-}
-
-/** Starts the background copy outside this process's session, for login items with no manager. */
 const startDetached = (command: string, args: ReadonlyArray<string>) =>
   NodeChildProcess.spawn(command, args, {
     detached: true,
@@ -262,104 +358,180 @@ const startDetached = (command: string, args: ReadonlyArray<string>) =>
     windowsHide: true,
   }).unref();
 
-function macosLoginItem(names: ReturnType<typeof serviceNames>, paths: ServicePaths): LoginItem {
-  const plist = NodePath.join(
-    NodeOS.homedir(),
-    "Library",
-    "LaunchAgents",
-    `${names.launchdLabel}.plist`,
-  );
+function macosLoginItems(names: ServiceNames, paths: ServicePaths): LoginItems {
+  const agents = NodePath.join(NodeOS.homedir(), "Library", "LaunchAgents");
+  const plist = NodePath.join(agents, `${names.launchdLabel}.plist`);
   const domain = `gui/${process.getuid?.() ?? 0}`;
-  const target = `${domain}/${names.launchdLabel}`;
-  const stop = () => {
-    if (!succeeded(run("launchctl", ["bootout", target]))) run("launchctl", ["unload", plist]);
+  // Both ways a job may have been loaded: `bootstrap`, and the older `load -w`.
+  const unload = (label: string, path: string) => {
+    run("launchctl", ["bootout", `${domain}/${label}`]);
+    run("launchctl", ["unload", "-w", path]);
   };
   return {
-    location: plist,
-    installed: () => NodeFS.existsSync(plist),
-    register: (programArguments) => {
+    ourNames: [names.launchdLabel],
+    find: () =>
+      listDir(agents, [".plist"]).map((path) => ({
+        name: NodePath.basename(path, ".plist"),
+        location: path,
+        content: readLoose(path),
+      })),
+    remove: (item) => {
+      // A plist's Label usually matches its file name; this one's own label is what launchd knows.
+      const label = /<key>Label<\/key>\s*<string>([^<]+)<\/string>/.exec(item.content)?.[1];
+      unload(label ?? item.name, item.location);
+      remove(item.location);
+      return !NodeFS.existsSync(item.location);
+    },
+    register: (command) => {
       writeFile(
         plist,
-        launchAgentPlist({ label: names.launchdLabel, programArguments, logPath: paths.log }),
+        launchAgentPlist({ label: names.launchdLabel, command, logPath: paths.log }),
       );
-      run("launchctl", ["bootout", target]);
-      run("launchctl", ["enable", target]);
+      unload(names.launchdLabel, plist);
+      run("launchctl", ["enable", `${domain}/${names.launchdLabel}`]);
       let result = run("launchctl", ["bootstrap", domain, plist]);
       // Right after a bootout, launchd can still be tearing the old job down.
       if (!succeeded(result)) {
         sleepSync(1000);
         result = run("launchctl", ["bootstrap", domain, plist]);
       }
-      if (!succeeded(result)) {
-        run("launchctl", ["unload", plist]);
-        result = run("launchctl", ["load", "-w", plist]);
-      }
+      if (!succeeded(result)) result = run("launchctl", ["load", "-w", plist]);
       if (!succeeded(result)) throw failure("launchctl could not start it", result);
-    },
-    stop,
-    unregister: () => {
-      stop();
-      remove(plist);
+      return plist;
     },
   };
 }
 
-function linuxLoginItem(names: ReturnType<typeof serviceNames>): LoginItem {
+function linuxLoginItems(names: ServiceNames): LoginItems {
   const configHome =
     process.env.XDG_CONFIG_HOME?.trim() || NodePath.join(NodeOS.homedir(), ".config");
+  const units = NodePath.join(configHome, "systemd", "user");
+  const autostart = NodePath.join(configHome, "autostart");
   const unitName = `${names.linuxName}.service`;
-  const unit = NodePath.join(configHome, "systemd", "user", unitName);
-  const desktop = NodePath.join(configHome, "autostart", `${names.linuxName}.desktop`);
+  const unit = NodePath.join(units, unitName);
+  const desktop = NodePath.join(autostart, `${names.linuxName}.desktop`);
   const systemctl = (...args: ReadonlyArray<string>) => run("systemctl", ["--user", ...args]);
-  const removeUnit = () => {
-    if (!NodeFS.existsSync(unit)) return;
-    systemctl("disable", "--now", unitName);
-    remove(unit);
-    systemctl("daemon-reload");
-  };
   return {
-    location: NodeFS.existsSync(desktop) ? desktop : unit,
-    installed: () => NodeFS.existsSync(unit) || NodeFS.existsSync(desktop),
-    register: (programArguments) => {
-      // A user manager answers only when systemd runs this session; otherwise use autostart.
+    ourNames: [names.linuxName, unitName, `${names.linuxName}.desktop`],
+    find: () =>
+      [...listDir(units, [".service"]), ...listDir(autostart, [".desktop"])].map((path) => ({
+        name: NodePath.basename(path),
+        location: path,
+        content: readLoose(path),
+      })),
+    remove: (item) => {
+      if (item.location.endsWith(".service")) {
+        systemctl("disable", "--now", NodePath.basename(item.location));
+        remove(item.location);
+        systemctl("daemon-reload");
+      } else {
+        remove(item.location);
+      }
+      return !NodeFS.existsSync(item.location);
+    },
+    // Exactly one of the two: a systemd unit when a user manager runs, else autostart.
+    register: (command) => {
       if (succeeded(systemctl("show-environment"))) {
-        writeFile(unit, systemdUnit(programArguments));
+        writeFile(unit, systemdUnit(command));
         if (
           succeeded(systemctl("daemon-reload")) &&
           succeeded(systemctl("enable", unitName)) &&
           succeeded(systemctl("restart", unitName))
         ) {
-          remove(desktop);
-          return;
+          return unit;
         }
-        removeUnit();
+        systemctl("disable", "--now", unitName);
+        remove(unit);
+        systemctl("daemon-reload");
       }
-      writeFile(desktop, autostartEntry(programArguments));
-      startDetached(programArguments[0]!, programArguments.slice(1));
-    },
-    stop: () => {
-      if (NodeFS.existsSync(unit)) systemctl("stop", unitName);
-    },
-    unregister: () => {
-      removeUnit();
-      remove(desktop);
+      writeFile(desktop, autostartEntry(command));
+      startDetached("/usr/bin/env", [
+        ...Object.entries(command.environment).map(([key, value]) => `${key}=${value}`),
+        ...command.programArguments,
+      ]);
+      return desktop;
     },
   };
 }
 
-function windowsLoginItem(names: ReturnType<typeof serviceNames>, paths: ServicePaths): LoginItem {
+function windowsLoginItems(names: ServiceNames, paths: ServicePaths): LoginItems {
   const system32 = NodePath.join(process.env.SystemRoot || "C:\\Windows", "System32");
   const reg = NodePath.join(system32, "reg.exe");
   const wscript = NodePath.join(system32, "wscript.exe");
   // The per-user Run key needs no administrator, unlike a log-on scheduled task, and shows in
   // Task Manager's Startup apps, where the person can turn it off.
   const key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+  const startup = NodePath.join(
+    process.env.APPDATA || NodePath.join(NodeOS.homedir(), "AppData", "Roaming"),
+    "Microsoft",
+    "Windows",
+    "Start Menu",
+    "Programs",
+    "Startup",
+  );
   const wscriptArgs = ["//B", "//Nologo", "//E:JScript", paths.windowsScript];
+  const runValues = (): ReadonlyArray<FoundLoginItem> => {
+    const result = run(reg, ["query", key]);
+    if (!succeeded(result)) return [];
+    return result.stdout.split(/\r?\n/).flatMap((line) => {
+      const match = /^ {4}(.+?) {4}REG_(?:EXPAND_)?SZ {4}(.*)$/.exec(line);
+      return match
+        ? [{ name: match[1]!, location: `${key}\\${match[1]!}`, content: match[2]! }]
+        : [];
+    });
+  };
+  // Agents make tasks too. Listing them takes PowerShell a moment, so only names and actions.
+  const tasks = (): ReadonlyArray<FoundLoginItem> => {
+    const result = run("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "Get-ScheduledTask | ForEach-Object { $_.TaskPath + $_.TaskName + [char]9 + (($_.Actions | ForEach-Object { $_.Execute + ' ' + $_.Arguments }) -join ' ; ') }",
+    ]);
+    if (!succeeded(result)) return [];
+    return result.stdout.split(/\r?\n/).flatMap((line) => {
+      const [path, actions] = line.split("\t");
+      return path && actions !== undefined
+        ? [
+            {
+              name: NodePath.win32.basename(path),
+              location: `Task Scheduler ${path}`,
+              content: actions,
+            },
+          ]
+        : [];
+    });
+  };
   return {
-    location: `${key}\\${names.windowsName}`,
-    installed: () => succeeded(run(reg, ["query", key, "/v", names.windowsName])),
-    register: (programArguments) => {
-      writeFile(paths.windowsScript, windowsStartScript(windowsCommandLine(programArguments)));
+    ourNames: [names.windowsName],
+    find: () => [
+      ...runValues(),
+      ...listDir(startup, [".lnk", ".cmd", ".bat", ".vbs", ".js", ".ps1", ".url"]).map((path) => ({
+        name: NodePath.basename(path),
+        location: path,
+        content: readLoose(path),
+      })),
+      ...tasks(),
+    ],
+    remove: (item) => {
+      if (item.location.startsWith(`${key}\\`)) {
+        return succeeded(run(reg, ["delete", key, "/v", item.name, "/f"]));
+      }
+      if (item.location.startsWith("Task Scheduler ")) {
+        return succeeded(
+          run("schtasks.exe", [
+            "/Delete",
+            "/TN",
+            item.location.slice("Task Scheduler ".length),
+            "/F",
+          ]),
+        );
+      }
+      remove(item.location);
+      return !NodeFS.existsSync(item.location);
+    },
+    register: (command) => {
+      writeFile(paths.windowsScript, windowsStartScript(command));
       const result = run(reg, [
         "add",
         key,
@@ -373,51 +545,56 @@ function windowsLoginItem(names: ReturnType<typeof serviceNames>, paths: Service
       ]);
       if (!succeeded(result)) throw failure("Windows could not add it to the startup apps", result);
       startDetached(wscript, wscriptArgs);
-    },
-    // No service manager runs it here; the stop file asks it to stop.
-    stop: () => {},
-    unregister: () => {
-      run(reg, ["delete", key, "/v", names.windowsName, "/f"]);
-      remove(paths.windowsScript);
+      return `${key}\\${names.windowsName}`;
     },
   };
 }
 
 export function syncService(baseDir: string, platform: NodeJS.Platform) {
   const paths = servicePaths(baseDir);
-  const names = serviceNames(baseDir, NodePath.join(NodeOS.homedir(), ".tinkjam"));
-  const loginItem =
+  const isDefaultHome = samePath(baseDir, defaultBaseDir());
+  const names = serviceNames(baseDir, defaultBaseDir());
+  const items =
     platform === "darwin"
-      ? macosLoginItem(names, paths)
+      ? macosLoginItems(names, paths)
       : platform === "linux"
-        ? linuxLoginItem(names)
+        ? linuxLoginItems(names)
         : platform === "win32"
-          ? windowsLoginItem(names, paths)
+          ? windowsLoginItems(names, paths)
           : undefined;
-
-  /** Stops the background copy, if it runs, and waits until it has. False if it would not stop. */
-  const stop = (): boolean => {
-    loginItem?.stop();
-    if (backgroundPid(paths) === undefined) return true;
-    writeFile(paths.stop, "");
-    for (let waited = 0; waited < 20_000 && backgroundPid(paths) !== undefined; waited += 250) {
-      sleepSync(250);
-    }
-    remove(paths.stop);
-    return backgroundPid(paths) === undefined;
-  };
+  const classify = (item: FoundLoginItem) =>
+    classifyLoginItem(item, {
+      names: items?.ourNames ?? [],
+      markers: leftoverMarkers(baseDir, isDefaultHome),
+    });
 
   return {
     paths,
-    supported: loginItem !== undefined,
-    location: loginItem?.location,
-    installed: () => loginItem?.installed() ?? false,
-    running: () => backgroundPid(paths) !== undefined,
-    stop,
+    supported: items !== undefined,
+    /** This home's login items now. */
+    installed: () => (items?.find() ?? []).filter((item) => classify(item) === "ours"),
+
+    /**
+     * Removes this home's login items and any leftover that runs Tinkjam Sync but is not ours,
+     * on every mechanism, before anything is set up or after it is taken down. Returns one line
+     * per item, for the person.
+     */
+    sweep: (): ReadonlyArray<string> =>
+      (items?.find() ?? []).flatMap((item) => {
+        const kind = classify(item);
+        if (kind !== "ours" && kind !== "leftover") return [];
+        const removed = items!.remove(item);
+        const what = kind === "ours" ? "Tinkjam Sync login item" : "Leftover login item";
+        return [
+          removed
+            ? `${what} ${item.name} (${item.location})`
+            : `Could not remove ${what.toLowerCase()} ${item.name} (${item.location})`,
+        ];
+      }),
 
     /**
      * Copies this package and the packages npm installed beside it, so the background copy
-     * needs neither npx's cache nor this terminal. `packageDir` is the running package's root.
+     * needs neither npx's cache nor this terminal. Older copies and half-finished ones go first.
      */
     copyPackage: (packageDir: string) => {
       const staging = `${paths.app}.new`;
@@ -435,35 +612,41 @@ export function syncService(baseDir: string, platform: NodeJS.Platform) {
     },
 
     /**
-     * A login item does not get the shell's PATH, and the agents Sync starts (claude, codex) are
-     * found on PATH, so the PATH and node of this install are recorded for the background copy.
+     * Writes the login item and starts it. A login item does not get the shell's PATH, and the
+     * agents Sync starts (claude, codex) are found on PATH, so this install's PATH and node go in.
      */
-    writeSettings: () =>
-      writeFile(
-        paths.settings,
-        `${JSON.stringify({ node: process.execPath, path: process.env.PATH ?? "" }, null, 2)}\n`,
-      ),
-
-    start: () => {
-      if (loginItem === undefined) throw new Error("this system has no supported login items");
-      loginItem.register([process.execPath, paths.launcher, "--service", "--base-dir", baseDir]);
+    start: (hostedAppUrl: string) => {
+      if (items === undefined) throw new Error("this system has no supported login items");
+      for (const path of [paths.starts, paths.status]) remove(path);
+      return items.register({
+        programArguments: [
+          process.execPath,
+          paths.serverEntry,
+          "sync",
+          "--background",
+          "--base-dir",
+          baseDir,
+        ],
+        environment: {
+          PATH: [NodePath.dirname(process.execPath), process.env.PATH ?? ""].join(
+            NodePath.delimiter,
+          ),
+          T3CODE_HOME: baseDir,
+          T3CODE_HOSTED_APP_URL: hostedAppUrl,
+        },
+      });
     },
 
-    /** Removes the login item and stops the background copy. Keeps the account connection. */
-    uninstall: () => {
-      loginItem?.unregister();
-      const stopped = stop();
-      remove(paths.app);
-      remove(paths.settings);
-      return stopped;
-    },
-
-    /** Log bytes so far, to read only what the background copy writes from now on. */
-    logSize: () => {
-      try {
-        return NodeFS.statSync(paths.log).size;
-      } catch {
-        return 0;
+    /** Removes the installed copy and the files of older background setups. Keeps the account. */
+    removeFiles: () => {
+      for (const path of [
+        paths.app,
+        `${paths.app}.new`,
+        paths.windowsScript,
+        paths.starts,
+        ...paths.legacy,
+      ]) {
+        remove(path);
       }
     },
   };
@@ -471,167 +654,52 @@ export function syncService(baseDir: string, platform: NodeJS.Platform) {
 
 export type SyncService = ReturnType<typeof syncService>;
 
-export type WaitOutcome = "connected" | "not-connected" | "timed-out";
+export type ConnectionState =
+  | { readonly kind: "connected" }
+  | { readonly kind: "waiting"; readonly reason: string | undefined };
 
-/**
- * Follows the background copy's log from `from` until it says it connected. Lines worth a
- * person's attention go to `say`. Matches the server's words in apps/server/src/cloud/syncAnnounce.ts
- * and cli/sync.ts.
- */
-export async function waitForConnected(input: {
-  readonly paths: ServicePaths;
-  readonly from: number;
-  readonly timeoutMs: number;
-  readonly say: (line: string) => void;
-}): Promise<WaitOutcome> {
-  let offset = input.from;
-  let pending = "";
-  const deadline = Date.now() + input.timeoutMs;
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    let text = "";
-    try {
-      const size = NodeFS.statSync(input.paths.log).size;
-      // The background copy starts a fresh log once the old one grows large.
-      if (size < offset) offset = 0;
-      if (size > offset) {
-        const handle = NodeFS.openSync(input.paths.log, "r");
-        const buffer = Buffer.alloc(size - offset);
-        NodeFS.readSync(handle, buffer, 0, buffer.length, offset);
-        NodeFS.closeSync(handle);
-        offset = size;
-        text = buffer.toString("utf8");
-      }
-    } catch {
-      continue;
-    }
-    const lines = (pending + text).split(/\r?\n/);
-    pending = lines.pop() ?? "";
-    for (const line of lines) {
-      if (line.startsWith("Connected.")) return "connected";
-      if (line.includes("not connected to Tinkjam")) return "not-connected";
-      if (line.startsWith("Still connecting") || line.includes("stopped unexpectedly")) {
-        input.say(line.replace(/^\[[^\]]*\] /, ""));
-      }
-    }
+/** The background Sync's own answer, from `sync-status.json`, if written since `since`. */
+export function readConnectionState(
+  paths: ServicePaths,
+  since: number,
+): ConnectionState | undefined {
+  try {
+    if (NodeFS.statSync(paths.status).mtimeMs < since) return undefined;
+    const status: unknown = JSON.parse(NodeFS.readFileSync(paths.status, "utf8"));
+    if (typeof status !== "object" || status === null || !("status" in status)) return undefined;
+    if (status.status === "reachable") return { kind: "connected" };
+    // The server shares these words with T3 Code, whose suggested fixes name T3 commands.
+    const cause = "cause" in status && typeof status.cause === "string" ? ` (${status.cause})` : "";
+    const reason =
+      "reason" in status && typeof status.reason === "string"
+        ? `${status.reason.replaceAll("T3 Connect", "Tinkjam").replaceAll("T3 Code", "Tinkjam Sync")}${cause}`
+        : undefined;
+    return { kind: "waiting", reason };
+  } catch {
+    return undefined;
   }
-  return "timed-out";
 }
 
-/** The last lines of the background copy's log, to show when something went wrong. */
-export function logTail(paths: ServicePaths, lines = 15): string {
+/** Waits for the background Sync to say it connected, or returns where it got to. */
+export async function waitForConnected(
+  paths: ServicePaths,
+  since: number,
+  timeoutMs: number,
+): Promise<ConnectionState | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  let state = readConnectionState(paths, since);
+  while (state?.kind !== "connected" && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    state = readConnectionState(paths, since) ?? state;
+  }
+  return state;
+}
+
+/** The last lines of the background Sync's log, to show when something went wrong. */
+export function logTail(paths: ServicePaths, lines = 12): string {
   try {
     return NodeFS.readFileSync(paths.log, "utf8").trimEnd().split(/\r?\n/).slice(-lines).join("\n");
   } catch {
     return "";
   }
-}
-
-const MAX_LOG_BYTES = 5 * 1024 * 1024;
-
-/**
- * Runs as the login item: starts the server, writes its output to the log, starts it again after
- * a crash (with a growing pause), and stops on a signal or when the stop file appears. A clean
- * exit, such as a computer that is no longer connected, ends it.
- */
-export async function runService(input: {
-  readonly paths: ServicePaths;
-  readonly platform: NodeJS.Platform;
-  readonly startServer: (output: number) => NodeChildProcess.ChildProcess;
-}): Promise<never> {
-  const { paths } = input;
-  try {
-    const settings: unknown = JSON.parse(NodeFS.readFileSync(paths.settings, "utf8"));
-    if (
-      typeof settings === "object" &&
-      settings !== null &&
-      "path" in settings &&
-      typeof settings.path === "string" &&
-      settings.path !== ""
-    ) {
-      process.env.PATH = [NodePath.dirname(process.execPath), settings.path].join(
-        NodePath.delimiter,
-      );
-    }
-  } catch {
-    // Without settings, keep the PATH the login item gave.
-  }
-  NodeFS.mkdirSync(NodePath.dirname(paths.log), { recursive: true });
-  try {
-    if (NodeFS.statSync(paths.log).size > MAX_LOG_BYTES) {
-      NodeFS.renameSync(paths.log, `${paths.log}.1`);
-    }
-  } catch {
-    // No log yet.
-  }
-  const log = NodeFS.openSync(paths.log, "a");
-  const say = (line: string) => NodeFS.writeSync(log, `[${new Date().toISOString()}] ${line}\n`);
-  remove(paths.stop);
-  NodeFS.writeFileSync(paths.pid, String(process.pid));
-
-  let child: NodeChildProcess.ChildProcess | undefined;
-  let stopping = false;
-  let wake: (() => void) | undefined;
-  const stop = () => {
-    stopping = true;
-    wake?.();
-    const current = child;
-    if (current?.pid === undefined || current.exitCode !== null) return;
-    // On Windows a killed process leaves its children running; end the whole tree this started.
-    if (input.platform === "win32") {
-      const system32 = NodePath.join(process.env.SystemRoot || "C:\\Windows", "System32");
-      run(NodePath.join(system32, "taskkill.exe"), ["/PID", String(current.pid), "/T", "/F"]);
-    } else current.kill("SIGTERM");
-  };
-  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(signal, stop);
-  const watchStop = setInterval(() => {
-    if (NodeFS.existsSync(paths.stop)) {
-      remove(paths.stop);
-      stop();
-    }
-  }, 2000);
-
-  let delayMs = 5000;
-  for (;;) {
-    if (stopping) break;
-    const startedAt = Date.now();
-    say("Starting Tinkjam Sync.");
-    const started = input.startServer(log);
-    child = started;
-    const code = await new Promise<number>((resolve) => {
-      started.once("exit", (exitCode) => resolve(exitCode ?? 1));
-      started.once("error", (error) => {
-        say(`Tinkjam Sync could not start: ${error.message}`);
-        resolve(1);
-      });
-    });
-    if (stopping) break;
-    if (code === 0) {
-      say("Tinkjam Sync stopped.");
-      break;
-    }
-    if (Date.now() - startedAt > 60_000) delayMs = 5000;
-    say(
-      `Tinkjam Sync stopped unexpectedly (exit code ${code}). Starting it again in ${delayMs / 1000} seconds.`,
-    );
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, delayMs);
-      wake = () => {
-        clearTimeout(timer);
-        resolve();
-      };
-    });
-    wake = undefined;
-    delayMs = Math.min(delayMs * 2, 60_000);
-  }
-
-  clearInterval(watchStop);
-  try {
-    if (NodeFS.readFileSync(paths.pid, "utf8").trim() === String(process.pid)) remove(paths.pid);
-  } catch {
-    // Already gone.
-  }
-  say("Tinkjam Sync is no longer running in the background.");
-  NodeFS.closeSync(log);
-  process.exit(0);
 }

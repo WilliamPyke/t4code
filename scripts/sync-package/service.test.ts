@@ -7,9 +7,11 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   autostartEntry,
-  backgroundPid,
+  classifyLoginItem,
   launchAgentPlist,
+  leftoverMarkers,
   parseSyncArgs,
+  readConnectionState,
   serviceNames,
   servicePaths,
   syncService,
@@ -40,13 +42,15 @@ describe("Tinkjam Sync's arguments", () => {
 });
 
 describe("Tinkjam Sync's login items", () => {
-  const programArguments = [
-    "/Users/a b/.nvm/node",
-    "/Users/a b/.tinkjam/app/node_modules/tinkjam-sync/bin/tinkjam-sync.mjs",
-    "--service",
-    "--base-dir",
-    "/Users/a b/.tinkjam",
-  ];
+  const command = {
+    programArguments: [
+      "/Users/a b/.nvm/node",
+      "/Users/a b/.tinkjam/app/node_modules/tinkjam-sync/dist/bin.mjs",
+      "sync",
+      "--background",
+    ],
+    environment: { PATH: "/opt/homebrew/bin:/usr/bin", T3CODE_HOME: "/Users/a b/.tinkjam" },
+  };
 
   it("gives a home other than the default its own names", () => {
     const home = NodeOS.homedir();
@@ -60,39 +64,92 @@ describe("Tinkjam Sync's login items", () => {
     ).toBe("Tinkjam Sync (test-home)");
   });
 
-  it("writes a LaunchAgent that restarts only after a crash, with every argument escaped", () => {
+  it("writes a LaunchAgent that runs the server itself and restarts it after a crash or kill", () => {
     const plist = launchAgentPlist({
       label: "org.trellium.tinkjam-sync",
-      programArguments: [...programArguments, "R&D <1>"],
+      command: { ...command, programArguments: [...command.programArguments, "R&D <1>"] },
       logPath: "/Users/a b/.tinkjam/logs/sync.log",
     });
     expect(plist).toContain("<string>/Users/a b/.nvm/node</string>");
     expect(plist).toContain("<string>R&amp;D &lt;1&gt;</string>");
+    expect(plist).toMatch(/<key>PATH<\/key>\s*<string>\/opt\/homebrew\/bin:\/usr\/bin<\/string>/);
     expect(plist).toMatch(
       /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>/,
     );
-    expect(plist).toMatch(/<key>RunAtLoad<\/key>\s*<true\/>/);
+    expect(plist).toMatch(/<key>ThrottleInterval<\/key>\s*<integer>10<\/integer>/);
   });
 
   it("quotes systemd and autostart arguments so spaces, % and $ stay literal", () => {
-    expect(systemdUnit(["/opt/n o/node", "50%$HOME"])).toContain(
-      'ExecStart="/opt/n o/node" "50%%$$HOME"',
-    );
-    expect(autostartEntry(["/opt/n o/node", 'say "hi" 50%', "a\\b"])).toContain(
-      'Exec="/opt/n o/node" "say \\\\"hi\\\\" 50%%" "a\\\\\\\\b"',
-    );
+    const unit = systemdUnit({
+      programArguments: ["/opt/n o/node", "50%$HOME"],
+      environment: { A: "x y" },
+    });
+    expect(unit).toContain('ExecStart="/opt/n o/node" "50%%$$HOME"');
+    expect(unit).toContain('Environment="A=x y"');
+    expect(unit).toContain("StartLimitBurst=6");
+    expect(
+      autostartEntry({
+        programArguments: ["/opt/n o/node", 'say "hi" 50%', "a\\b"],
+        environment: {},
+      }),
+    ).toContain('Exec="/usr/bin/env" "/opt/n o/node" "say \\\\"hi\\\\" 50%%" "a\\\\\\\\b"');
   });
 
-  it("builds a Windows command line that survives spaces and trailing backslashes", () => {
+  it("builds a Windows script that sets the environment and restarts a few times at most", () => {
     expect(
-      windowsCommandLine(["C:\\Program Files\\nodejs\\node.exe", "--service", "C:\\a b\\"]),
-    ).toBe('"C:\\Program Files\\nodejs\\node.exe" --service "C:\\a b\\\\"');
-    const script = windowsStartScript(
-      windowsCommandLine(["C:\\Users\\Zoë\\node.exe", "--service"]),
-    );
+      windowsCommandLine(["C:\\Program Files\\nodejs\\node.exe", "--background", "C:\\a b\\"]),
+    ).toBe('"C:\\Program Files\\nodejs\\node.exe" --background "C:\\a b\\\\"');
+    const script = windowsStartScript({
+      programArguments: ["C:\\Users\\Zoë\\node.exe", "sync"],
+      environment: { T3CODE_HOME: "C:\\Users\\Zoë\\.tinkjam" },
+    });
+    expect(script).toContain('env("T3CODE_HOME") = "C:\\\\Users\\\\Zo\\u00eb\\\\.tinkjam";');
+    expect(script).toContain('var command = "C:\\\\Users\\\\Zo\\u00eb\\\\node.exe sync";');
+    expect(script).toContain("for (var attempt = 0; attempt <= 5; attempt++)");
     // WSH reads scripts in the ANSI code page, so the script itself stays ASCII.
-    expect(script).toContain('Run("C:\\\\Users\\\\Zo\\u00eb\\\\node.exe --service", 0, false)');
     expect([...script].every((char) => char.charCodeAt(0) < 128)).toBe(true);
+  });
+
+  it("removes this home's items and leftovers that run Sync, and nothing else", () => {
+    const base = "/Users/a/.tinkjam";
+    const ours = { names: ["Tinkjam Sync"], markers: leftoverMarkers(base, true) };
+    const cases = [
+      [{ name: "Tinkjam Sync", content: "wscript.exe start-sync.js" }, "ours"],
+      // A Scheduled Task or Startup shortcut by our name counts as ours too.
+      [{ name: "Tinkjam Sync.lnk", content: "" }, "ours"],
+      [{ name: "Tinkjam Sync (test-home)", content: "/tmp/test-home" }, "other-home"],
+      [{ name: "org.trellium.tinkjam-sync.work", content: "tinkjam-sync" }, "other-home"],
+      // What agents made when the first flow failed.
+      [{ name: "com.codex.tinkjam", content: "npx -y https://trellium.org/sync.tgz" }, "leftover"],
+      [
+        {
+          name: "Start Tinkjam",
+          content: "/Users/a/Documents/Start Tinkjam Sync.command ~/.tinkjam",
+        },
+        "leftover",
+      ],
+      [
+        { name: "sync-helper", content: "node /Users/a/.tinkjam/app/node_modules/x.js" },
+        "leftover",
+      ],
+      [
+        { name: "OneDrive", content: "C:\\Program Files\\OneDrive\\OneDrive.exe /background" },
+        "unrelated",
+      ],
+      [{ name: "com.apple.something", content: "tinkjam" }, "unrelated"],
+    ] as const;
+    for (const [item, expected] of cases)
+      expect([item.name, classifyLoginItem(item, ours)]).toEqual([item.name, expected]);
+    // Another home's path is not this home's leftover.
+    expect(
+      classifyLoginItem(
+        { name: "x", content: "/Users/a/.tinkjam" },
+        {
+          names: [],
+          markers: leftoverMarkers("/tmp/other", false).filter((m) => m !== "tinkjam-sync"),
+        },
+      ),
+    ).toBe("unrelated");
   });
 });
 
@@ -102,31 +159,45 @@ describe("Tinkjam Sync's background copy", () => {
   it("copies npm's install with its dependencies, and replaces the copy when installed again", () => {
     const npx = tempDir();
     const packageDir = NodePath.join(npx, "node_modules", "tinkjam-sync");
-    NodeFS.mkdirSync(NodePath.join(packageDir, "bin"), { recursive: true });
-    NodeFS.writeFileSync(NodePath.join(packageDir, "bin", "tinkjam-sync.mjs"), "v1");
+    NodeFS.mkdirSync(NodePath.join(packageDir, "dist"), { recursive: true });
+    NodeFS.writeFileSync(NodePath.join(packageDir, "dist", "bin.mjs"), "v1");
     NodeFS.mkdirSync(NodePath.join(npx, "node_modules", "dependency"), { recursive: true });
     const home = tempDir();
     const service = syncService(home, "linux");
+    // A copy that failed half way last time.
+    NodeFS.mkdirSync(`${service.paths.app}.new`, { recursive: true });
 
     service.copyPackage(packageDir);
-    NodeFS.writeFileSync(NodePath.join(packageDir, "bin", "tinkjam-sync.mjs"), "v2");
+    NodeFS.writeFileSync(NodePath.join(packageDir, "dist", "bin.mjs"), "v2");
     NodeFS.rmSync(NodePath.join(npx, "node_modules", "dependency"), { recursive: true });
     service.copyPackage(packageDir);
 
-    expect(NodeFS.readFileSync(service.paths.launcher, "utf8")).toBe("v2");
+    expect(NodeFS.readFileSync(service.paths.serverEntry, "utf8")).toBe("v2");
     expect(NodeFS.existsSync(NodePath.join(service.paths.app, "node_modules", "dependency"))).toBe(
       false,
     );
     expect(NodeFS.existsSync(`${service.paths.app}.new`)).toBe(false);
   });
 
-  it("counts a background copy as running only while its process lives", () => {
+  it("trusts only a status the running Sync wrote since it started", () => {
     const paths = servicePaths(tempDir());
-    expect(backgroundPid(paths)).toBeUndefined();
-    // A pid file left by a copy that is gone, here a number no process has.
-    NodeFS.writeFileSync(paths.pid, "2147483646");
-    expect(backgroundPid(paths)).toBeUndefined();
-    NodeFS.writeFileSync(paths.pid, "not a pid");
-    expect(backgroundPid(paths)).toBeUndefined();
+    NodeFS.mkdirSync(NodePath.dirname(paths.status), { recursive: true });
+    const write = (value: unknown) => NodeFS.writeFileSync(paths.status, JSON.stringify(value));
+    write({
+      status: "unreachable",
+      cause: "not_linked",
+      reason: "The server has not set up a T3 Connect tunnel.",
+      fix: "Run `t3 connect`.",
+    });
+    // Written before this start: an earlier run's word, not this one's.
+    expect(
+      readConnectionState(paths, NodeFS.statSync(paths.status).mtimeMs + 60_000),
+    ).toBeUndefined();
+    expect(readConnectionState(paths, 0)).toEqual({
+      kind: "waiting",
+      reason: "The server has not set up a Tinkjam tunnel. (not_linked)",
+    });
+    write({ status: "reachable" });
+    expect(readConnectionState(paths, 0)).toEqual({ kind: "connected" });
   });
 });

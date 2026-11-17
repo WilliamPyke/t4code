@@ -17,13 +17,13 @@ import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import { HttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import { CLOUD_ENDPOINT_RUNTIME_CONFIG } from "./config.ts";
 import * as ManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
+import * as TunnelEndpointProbe from "./tunnelEndpointProbe.ts";
 
 // cloudflared finds the edge through the SRV record `_v2-origintunneld._tcp.argotunnel.com`,
 // which names these two hosts on port 7844. QUIC and HTTP/2 both use that port.
@@ -44,7 +44,8 @@ const DEAD_CONNECTOR_RESTART_AFTER_MAX = Duration.hours(1);
 
 export type EndpointProbe =
   | { readonly kind: "status"; readonly status: number; readonly cloudflareError?: string }
-  | { readonly kind: "dns_failed" | "timeout" | "network_error" };
+  | { readonly kind: "dns_failed"; readonly detail?: string }
+  | { readonly kind: "timeout" | "network_error" };
 
 /** Everything one check learned. `null` means that step did not run. */
 export interface ReachabilityFacts {
@@ -128,7 +129,7 @@ export function classifyReachability(
   if (endpoint === null || connector.readyConnections === 0) {
     return fail(
       "connector_not_ready",
-      "cloudflared has not connected to Cloudflare yet.",
+      "The tunnel is not up yet: cloudflared has not connected to Cloudflare.",
       "Wait a minute. If it stays, check the network and the server log.",
     );
   }
@@ -146,20 +147,20 @@ export function classifyReachability(
     const code = cloudflareError === undefined ? "" : ` (Cloudflare error ${cloudflareError})`;
     return fail(
       "unexpected_response",
-      `The T3 Connect address answered with HTTP ${status}${code}.`,
+      `The tunnel is up, but its public address answered HTTP ${status}${code}.`,
       restart,
     );
   }
   return endpoint.kind === "dns_failed"
     ? fail(
         "dns_failed",
-        "The T3 Connect address does not resolve from this machine.",
-        "Check the DNS settings on this machine or its VPN.",
+        `The tunnel is up, but its address does not resolve on this machine yet${endpoint.detail ? `: ${endpoint.detail}.` : "."}`,
+        "A new address can take a few minutes to appear; the check keeps trying. If it stays, check the DNS settings on this machine or its VPN.",
         exitNodeHint(exitNode),
       )
     : fail(
         "timeout",
-        "The T3 Connect address did not answer from this machine.",
+        "The tunnel is up, but its public address did not answer from this machine.",
         "Check the network, VPN, or proxy on this machine.",
         exitNodeHint(exitNode),
       );
@@ -175,19 +176,6 @@ export function formatReachabilityFailure(result: Unreachable): string {
     `  More info: ${connectReachabilityHelpUrl(result.cause)}`,
   ].join("\n");
 }
-
-function hasErrorCode(error: unknown, codes: ReadonlySet<string>): boolean {
-  let current = error;
-  for (let depth = 0; depth < 6 && typeof current === "object" && current !== null; depth++) {
-    if ("code" in current && typeof current.code === "string" && codes.has(current.code)) {
-      return true;
-    }
-    current = "cause" in current ? current.cause : undefined;
-  }
-  return false;
-}
-
-const DNS_ERROR_CODES = new Set(["ENOTFOUND", "EAI_AGAIN", "EAI_NONAME"]);
 
 const canOpenTcp = (host: string, port: number) =>
   Effect.callback<boolean>((resume) => {
@@ -214,7 +202,7 @@ export class ConnectReachability extends Context.Service<
 const make = Effect.gen(function* () {
   const runtime = yield* ManagedEndpointRuntime.CloudManagedEndpointRuntime;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
-  const httpClient = yield* HttpClient.HttpClient;
+  const tunnelEndpoint = yield* TunnelEndpointProbe.TunnelEndpoint;
   // `order` ranks checks by start, so a slow older one cannot replace a newer result.
   const latestRef = yield* Ref.make(
     Option.none<{ readonly order: number; readonly result: EnvironmentConnectReachability }>(),
@@ -248,34 +236,31 @@ const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => null),
   );
 
-  const probeEndpoint = Effect.fn("ConnectReachability.probeEndpoint")(
-    function* (hostname: string) {
-      const response = yield* httpClient
-        .get(`https://${hostname}/.well-known/t3/environment`, { acceptJson: true })
-        .pipe(Effect.timeoutOption(ENDPOINT_REQUEST_TIMEOUT));
-      if (Option.isNone(response)) return { kind: "timeout" } satisfies EndpointProbe;
-      const { status } = response.value;
-      if (status !== 530) return { kind: "status", status } satisfies EndpointProbe;
-      // Cloudflare's error page is HTML unless the client accepts JSON, which carries
-      // `"error_code":1033`. Clients that send no User-Agent get `error code: 1033`.
-      const body = yield* response.value.text.pipe(
-        Effect.timeoutOption(ERROR_BODY_READ_TIMEOUT),
-        Effect.orElseSucceed(() => Option.none<string>()),
-      );
-      const code = /error[_ ]code"?:\s*(\d{4})/i.exec(Option.getOrElse(body, () => ""))?.[1];
-      return (
-        code === undefined
-          ? { kind: "status", status }
-          : { kind: "status", status, cloudflareError: code }
-      ) satisfies EndpointProbe;
-    },
-    Effect.scoped,
-    Effect.catch((error) =>
-      Effect.succeed<EndpointProbe>({
-        kind: hasErrorCode(error, DNS_ERROR_CODES) ? "dns_failed" : "network_error",
-      }),
-    ),
-  );
+  // Resolved directly and pinned, never through the OS resolver: see tunnelEndpointProbe.ts.
+  const probeEndpoint = Effect.fn("ConnectReachability.probeEndpoint")(function* (
+    hostname: string,
+  ) {
+    const response = yield* tunnelEndpoint.get({
+      hostname,
+      path: "/.well-known/t3/environment",
+      timeoutMs: Duration.toMillis(ENDPOINT_REQUEST_TIMEOUT),
+    });
+    if (response.kind === "unresolved") {
+      return { kind: "dns_failed", detail: response.reason } satisfies EndpointProbe;
+    }
+    if (response.kind !== "status") return { kind: response.kind } satisfies EndpointProbe;
+    const { status } = response;
+    if (status !== 530) return { kind: "status", status } satisfies EndpointProbe;
+    // Cloudflare's error page is HTML unless the client accepts JSON, which carries
+    // `"error_code":1033`. Clients that send no User-Agent get `error code: 1033`.
+    const body = yield* response.text.pipe(Effect.timeoutOption(ERROR_BODY_READ_TIMEOUT));
+    const code = /error[_ ]code"?:\s*(\d{4})/i.exec(Option.getOrElse(body, () => ""))?.[1];
+    return (
+      code === undefined
+        ? { kind: "status", status }
+        : { kind: "status", status, cloudflareError: code }
+    ) satisfies EndpointProbe;
+  });
 
   const gatherFacts = Effect.gen(function* () {
     const managedTunnelConfigured = Option.isSome(
@@ -436,4 +421,7 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(ConnectReachability, make);
+/** Needs a TunnelEndpoint; tests give it a fake one. */
+export const layerWithoutTunnelEndpoint = Layer.effect(ConnectReachability, make);
+
+export const layer = layerWithoutTunnelEndpoint.pipe(Layer.provide(TunnelEndpointProbe.layer));

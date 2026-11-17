@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Tinkjam Sync: runs this computer's agents for Tinkjam, connected to the person's own account.
 // The server's CLI runs only as its own entry point, so it starts as a child that owns the terminal.
+// In the background the login item runs the server directly; this launcher only sets that up.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeOS from "node:os";
 import * as NodeURL from "node:url";
@@ -9,7 +10,6 @@ import {
   logTail,
   parseSyncArgs,
   resolveBaseDir,
-  runService,
   syncService,
   waitForConnected,
 } from "./service.mjs";
@@ -22,7 +22,8 @@ const SYNC_URL = "__TINKJAM_SYNC_URL__";
 // Long enough for a slow connection, short enough that nobody waits on it.
 const UPDATE_CHECK_TIMEOUT_MS = 1500;
 // The tunnel can take a minute or two to route; the server says so itself after 90 seconds.
-const CONNECT_TIMEOUT_MS = 3 * 60 * 1000;
+// The environment variable shortens it for tests.
+const CONNECT_TIMEOUT_MS = Number(process.env.TINKJAM_SYNC_CONNECT_TIMEOUT_MS) || 3 * 60 * 1000;
 
 const [major = 0, minor = 0] = process.versions.node.split(".").map(Number);
 const supported =
@@ -53,7 +54,7 @@ if (args.includes("--help") || args.includes("-h")) {
       "  --install         Run Tinkjam Sync in the background, with no window, and start it",
       "                    again whenever you log in. Connects this computer first if needed.",
       "  --uninstall       Stop running it in the background. This computer stays connected.",
-      "  --status          Show whether Tinkjam Sync runs in the background.",
+      "  --status          Show whether Tinkjam Sync runs, and its processes.",
       "  --disconnect      Disconnect this computer from your Tinkjam account and sign out.",
       "  --base-dir <dir>  Where Tinkjam Sync keeps its data on this computer.",
       `                    Default: ${resolveBaseDir(undefined, undefined)}`,
@@ -79,21 +80,21 @@ try {
 }
 const baseDir = resolveBaseDir(parsed.baseDir, process.env.T3CODE_HOME);
 // oxlint-disable-next-line t3code/no-global-process-runtime -- The plain-Node launcher has no Effect runtime to inject it.
-const platform = process.platform;
-const service = syncService(baseDir, platform);
+const service = syncService(baseDir, process.platform);
 const packageDir = NodeURL.fileURLToPath(new URL("..", import.meta.url));
 const ownEntry = NodeURL.fileURLToPath(new URL("../dist/bin.mjs", import.meta.url));
+const hostedAppUrl = process.env.T3CODE_HOSTED_APP_URL || HOSTED_APP_URL;
 const serverEnv = {
   ...process.env,
   // Its own home, apart from any other copy of this server on the computer.
   T3CODE_HOME: baseDir,
-  T3CODE_HOSTED_APP_URL: process.env.T3CODE_HOSTED_APP_URL || HOSTED_APP_URL,
+  T3CODE_HOSTED_APP_URL: hostedAppUrl,
 };
 const exitCodeOf = (code, signal) =>
   code ?? (signal === null ? 1 : 128 + (NodeOS.constants.signals[signal] ?? 0));
 
 /** Runs the server's `sync` command in this terminal and resolves with its exit code. */
-const runInTerminal = (entry, syncArgs) =>
+const runSync = (entry, syncArgs) =>
   new Promise((resolve) => {
     const child = NodeChildProcess.spawn(
       process.execPath,
@@ -113,6 +114,18 @@ const runInTerminal = (entry, syncArgs) =>
     });
   });
 
+const homeArgs = ["--base-dir", baseDir];
+
+/**
+ * Takes down every Tinkjam Sync of this home: its login items on every mechanism, leftovers an
+ * agent made, and running processes (the server ends them by its lock records, whole trees).
+ */
+const takeDown = async () => {
+  const removed = service.sweep();
+  await runSync(ownEntry, ["--stop-running", ...homeArgs]);
+  if (removed.length > 0) console.log(`Removed:\n${removed.map((line) => `  ${line}`).join("\n")}`);
+};
+
 const printUpdateNotice = async (options) => {
   const notice = syncUpdateNotice(
     SYNC_VERSION,
@@ -124,45 +137,22 @@ const printUpdateNotice = async (options) => {
 
 const uninstallCommand = `npx -y ${SYNC_URL} --uninstall`;
 
-if (parsed.action === "service") {
-  await runService({
-    paths: service.paths,
-    platform,
-    startServer: (output) =>
-      NodeChildProcess.spawn(
-        process.execPath,
-        [ownEntry, "sync", "--background", "--base-dir", baseDir],
-        { stdio: ["ignore", output, output], env: serverEnv, windowsHide: true },
-      ),
-  });
-}
-
 if (parsed.action === "status") {
-  if (!service.installed()) {
-    console.log("Tinkjam Sync is not set up to run in the background on this computer.");
-  } else {
-    console.log(
-      service.running()
-        ? "Tinkjam Sync is running in the background and starts when you log in."
-        : "Tinkjam Sync starts when you log in, but is not running now.",
-    );
-    console.log(`Login item: ${service.location}`);
-  }
+  const items = service.installed();
+  console.log(
+    items.length === 0
+      ? "Tinkjam Sync is not set up to start when you log in."
+      : `Tinkjam Sync starts when you log in: ${items.map((item) => item.location).join(", ")}`,
+  );
+  await runSync(ownEntry, ["--processes", ...homeArgs]);
   console.log(`Log: ${service.paths.log}`);
   process.exit(0);
 }
 
 if (parsed.action === "uninstall" || parsed.serverArgs.includes("--disconnect")) {
-  if (service.installed() || service.running()) {
-    if (!service.uninstall()) {
-      console.error(
-        "Tinkjam Sync in the background did not stop. Restart the computer to stop it.",
-      );
-    }
-    console.log("Tinkjam Sync no longer runs in the background or starts when you log in.");
-  } else if (parsed.action === "uninstall") {
-    console.log("Tinkjam Sync is not set up to run in the background on this computer.");
-  }
+  await takeDown();
+  service.removeFiles();
+  console.log("Tinkjam Sync no longer runs in the background or starts when you log in.");
   if (parsed.action === "uninstall") {
     console.log(
       `This computer is still connected to your Tinkjam account. To remove it, run:\n\n  npx -y ${SYNC_URL} --disconnect`,
@@ -179,67 +169,55 @@ if (parsed.action === "install") {
     );
     process.exit(1);
   }
+  // Clean up before setting up, every time, so one Sync is all that is left.
+  await takeDown();
   try {
-    // A copy already running in the background holds the files this replaces.
-    if (!service.stop()) throw new Error("the copy already running in the background did not stop");
+    service.removeFiles();
     service.copyPackage(packageDir);
-    service.writeSettings();
   } catch (error) {
     console.error(`Tinkjam Sync could not be set up to run in the background: ${error.message}`);
     process.exit(1);
   }
   // Only a person at this computer can press Connect, so connecting happens here, in the open.
-  const connected = await runInTerminal(service.paths.serverEntry, [
+  const connected = await runSync(service.paths.serverEntry, [
     "--connect-only",
     ...parsed.serverArgs,
   ]);
   if (connected !== 0) process.exit(connected);
-  const from = service.logSize();
+  const startedAt = Date.now();
+  let location;
   try {
-    service.start();
+    location = service.start(hostedAppUrl);
   } catch (error) {
     console.error(`Tinkjam Sync could not start in the background: ${error.message}`);
     process.exit(1);
   }
-  console.log("Starting Tinkjam Sync in the background...");
-  const outcome = await waitForConnected({
-    paths: service.paths,
-    from,
-    timeoutMs: CONNECT_TIMEOUT_MS,
-    say: (line) => console.log(line),
-  });
-  if (outcome !== "connected") {
-    console.error(
+  console.log(`Starting Tinkjam Sync in the background (login item: ${location})...`);
+  const state = await waitForConnected(service.paths, startedAt, CONNECT_TIMEOUT_MS);
+  await runSync(service.paths.serverEntry, ["--processes", ...homeArgs]);
+  if (state?.kind === "connected") {
+    console.log(
       [
-        outcome === "not-connected"
-          ? "Tinkjam Sync in the background found this computer not connected."
-          : "Tinkjam Sync started in the background but has not connected yet.",
-        `The end of its log (${service.paths.log}):`,
+        "Connected.",
         "",
-        logTail(service.paths),
+        `To stop it from starting when you log in, run: ${uninstallCommand}`,
+        "Tinkjam Sync is running in the background and will start when you log in.",
       ].join("\n"),
     );
-    process.exit(1);
+    process.exit(0);
   }
-  console.log(
+  console.error(
     [
-      "Connected.",
+      `The end of its log (${service.paths.log}):`,
+      logTail(service.paths),
       "",
-      `To stop it from starting when you log in, run: ${uninstallCommand}`,
-      "Tinkjam Sync is running in the background and will start when you log in.",
+      state === undefined
+        ? "Tinkjam Sync is installed and starts when you log in, but it has not reported since it started. Check the log above."
+        : `Tinkjam Sync is installed, starts when you log in and keeps trying, but it is not connected yet. It is waiting on: ${state.reason ?? "the tunnel to Tinkjam"}`,
     ].join("\n"),
   );
-  process.exit(0);
-}
-
-// Only one Sync per computer: the background copy already holds this home.
-if (!parsed.serverArgs.includes("--disconnect") && service.running()) {
-  console.log(
-    `Tinkjam Sync is already running in the background on this computer. To stop it, run: ${uninstallCommand}`,
-  );
-  await printUpdateNotice({ install: true });
-  process.exit(0);
+  process.exit(1);
 }
 
 await printUpdateNotice();
-process.exit(await runInTerminal(ownEntry, parsed.serverArgs));
+process.exit(await runSync(ownEntry, parsed.serverArgs));
