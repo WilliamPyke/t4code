@@ -1,6 +1,7 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import type * as LogLevel from "effect/LogLevel";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Command, GlobalFlag } from "effect/cli";
@@ -22,17 +23,24 @@ function ignoreClosedLauncherPipe(error: NodeJS.ErrnoException): void {
   if (error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") throw error;
 }
 
-const runServerCommand = Effect.fn("server.runServerCommand")(function* (
+export const runServerCommand = Effect.fn("server.runServerCommand")(function* (
   flags: CliServerFlags,
   options?: {
     readonly startupPresentation?: ServerConfig.StartupPresentation;
     readonly forceAutoBootstrapProjectFromCwd?: boolean;
     readonly rejectRunningServer?: boolean;
+    /** Used when no --log-level is given, over T3CODE_LOG_LEVEL. */
+    readonly logLevel?: LogLevel.LogLevel;
   },
 ) {
   // Before config resolution, which claims a port and creates directories.
   const { runServer } = yield* Effect.promise(() => import("../server.ts"));
-  const logLevel = yield* GlobalFlag.LogLevel;
+  const fallbackLogLevel = options?.logLevel;
+  const flagLogLevel = yield* GlobalFlag.LogLevel;
+  const logLevel =
+    fallbackLogLevel === undefined
+      ? flagLogLevel
+      : Option.orElse(flagLogLevel, () => Option.some(fallbackLogLevel));
   const selectAutomaticPort = yield* AutomaticPort.make.pipe(Effect.provide(ProcessRunner.layer));
   const config = yield* resolveServerConfig(flags, logLevel, { ...options, selectAutomaticPort });
   const run = runServer.pipe(

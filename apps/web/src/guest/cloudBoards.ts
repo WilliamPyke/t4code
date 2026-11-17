@@ -12,16 +12,21 @@ import {
   type RoomBoardChange,
 } from "@t3tools/contracts";
 import { buildGuestLink } from "@t3tools/shared/guestLinks";
+import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { Atom } from "effect/reactivity";
 
 import { isElectron } from "../env";
 import { getLocalStorageItem, setLocalStorageItem } from "../hooks/useLocalStorage";
 import { configuredHostedAppUrl } from "../hostedPairing";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { toastManager } from "../components/ui/toast";
 import { boardAccountAuth, readBoardAccountName, refreshAccountBoards } from "./boardAccount";
 import { friendlyName } from "./boardAccount.logic";
 import { cloudBoardsHost, cloudBoardsOrigin } from "./cloudBoardsHost";
 import { type JoinedGuestShare, guestShareEndpointOf, isCloudShare } from "./guestShares";
+import { placeNewBoard } from "./workspaces";
 
 const decodeCreated = Schema.decodeUnknownOption(CloudBoardCreateResult);
 const decodeHandoff = Schema.decodeUnknownOption(GuestHandoff);
@@ -30,13 +35,24 @@ const decodeHandoff = Schema.decodeUnknownOption(GuestHandoff);
 const BOARD_NAME_KEY = "t3code:board-name:v1";
 const BoardName = Schema.String;
 
-function readBoardName(): string | null {
+function readStoredBoardName(): string | null {
   try {
     return getLocalStorageItem(BOARD_NAME_KEY, BoardName)?.trim() || null;
   } catch {
     return null;
   }
 }
+
+// Kept in an atom too, so the account's name follows it the moment the person sets it.
+const boardNameAtom = Atom.make<string | null>(readStoredBoardName()).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("board-name"),
+);
+
+const readBoardName = () => appAtomRegistry.get(boardNameAtom);
+
+/** The name this browser joins boards under, or null before the person typed one. */
+export const useRememberedBoardName = () => useAtomValue(boardNameAtom);
 
 /** The name to join a board under without asking: the account's, else the one this browser keeps. */
 export const knownBoardName = (): string | null => readBoardAccountName() ?? readBoardName();
@@ -46,8 +62,11 @@ export const suggestedBoardName = (): string =>
   knownBoardName() ?? friendlyName((count) => Math.floor(Math.random() * count));
 
 export function rememberBoardName(name: string) {
+  const kept = name.trim().slice(0, GUEST_NAME_MAX_LENGTH).trim();
+  if (kept === "") return;
+  appAtomRegistry.set(boardNameAtom, kept);
   try {
-    setLocalStorageItem(BOARD_NAME_KEY, name.trim().slice(0, GUEST_NAME_MAX_LENGTH), BoardName);
+    setLocalStorageItem(BOARD_NAME_KEY, kept, BoardName);
   } catch {
     // Blocked storage only means asking again next time.
   }
@@ -84,7 +103,19 @@ export async function createCloudBoard(input: {
       ? Option.getOrNull(decodeCreated(await response.json().catch(() => null)))
       : null;
     if (created === null) return "Could not reach the board service.";
-    if (account !== null) void refreshAccountBoards();
+    if (account !== null) {
+      // Made while the home shows a workspace, it is that workspace's board from the start. Not
+      // waited for: the person is already on the board by then.
+      void placeNewBoard(created.shareId).then((unplaced) => {
+        if (unplaced === null) return;
+        toastManager.add({
+          type: "error",
+          title: "The board stayed in My boards",
+          description: unplaced,
+        });
+      });
+      void refreshAccountBoards();
+    }
     return {
       host,
       shareId: created.shareId,

@@ -140,14 +140,21 @@ const listed = (shareId: string, addedAt: string, extra: Partial<CloudBoardAccou
   }) satisfies CloudBoardAccountBoard;
 
 describe("an account's list of boards", () => {
-  it("lists a board once, keeping when it was added and its invite", () => {
-    const first = withAccountBoard([], listed("share-a-0000", NOW, { credential: "invite" }));
+  it("lists a board once, keeping when it was added, its invite and its preview", () => {
+    const first = withAccountBoard(
+      [],
+      listed("share-a-0000", NOW, { credential: "invite", preview: "1:n00000101y" }),
+    );
     const again = withAccountBoard(
       first,
       listed("share-a-0000", "2026-11-18T00:00:00.000Z", { title: "Renamed" }),
     );
     expect(again).toEqual([
-      listed("share-a-0000", NOW, { title: "Renamed", credential: "invite" }),
+      listed("share-a-0000", NOW, {
+        title: "Renamed",
+        credential: "invite",
+        preview: "1:n00000101y",
+      }),
     ]);
   });
 

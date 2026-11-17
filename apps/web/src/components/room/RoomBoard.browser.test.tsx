@@ -478,9 +478,12 @@ describe("RoomBoard drags", () => {
     ]);
     expect(note.style.width).toBe("");
 
-    const grip = middleOf(note.querySelector('button[aria-label="Draw a line"]')!);
+    // A side's grip takes presses once its card is hovered.
+    const grip = middleOf(note.querySelector("button[data-board-link]")!);
     const other = middleOf(itemIn(screen.container, "note:b"));
     await commands.mouse([
+      { type: "move", ...middleOf(note) },
+      { type: "move", ...grip },
       { type: "down", ...grip },
       { type: "move", ...other },
       { type: "key", key: "Escape" },
@@ -795,11 +798,10 @@ describe("RoomBoard lines", () => {
     const surface = screen.getByRole("application", { name: "Room board" });
     const under = surface.element().getBoundingClientRect();
     const a = rectOf("a");
-    const zoom = a.width / 192;
     await userEvent.click(surface, {
       position: {
         x: (a.right + rectOf("b").left) / 2 - under.left,
-        y: a.top + 12 * zoom - under.top,
+        y: (a.top + a.bottom) / 2 - under.top,
       },
     });
     await expect.element(screen.getByRole("button", { name: "Delete line" })).toBeVisible();

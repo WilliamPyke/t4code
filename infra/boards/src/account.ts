@@ -93,7 +93,9 @@ export function withAccountSession(
   sessionHash: string,
 ): Result.Result<{ readonly room: CloudRoom; readonly guest: CloudGuest }, RoomFailure> {
   const guest = accountGuestOf(room, account);
-  if (room === null || guest === undefined) return Result.fail(roomFailure("ended"));
+  if (room === null || guest === undefined || guest.locked === true) {
+    return Result.fail(roomFailure("ended"));
+  }
   const sessions = [
     ...(guest.accountSessions ?? []).slice(-(SESSIONS_PER_ACCOUNT - 1)),
     sessionHash,
@@ -126,10 +128,12 @@ export function withAccountBoard(
 ): ReadonlyArray<CloudBoardAccountBoard> {
   const listed = boards.find((existing) => existing.shareId === board.shareId);
   const credential = board.credential ?? listed?.credential;
+  const preview = board.preview ?? listed?.preview;
   const kept: CloudBoardAccountBoard = {
     ...board,
     addedAt: listed?.addedAt ?? board.addedAt,
     ...(credential === undefined ? {} : { credential }),
+    ...(preview === undefined ? {} : { preview }),
   };
   const others = boards.filter((existing) => existing.shareId !== board.shareId);
   return [...others, kept]

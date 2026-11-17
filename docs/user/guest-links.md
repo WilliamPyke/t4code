@@ -378,10 +378,13 @@ room thread's own card; use **Take it to my agent** for that.
 **Plan** in the board's header shows the board's tasks as columns: **To do**, **In progress** and
 **Done**. They are the same tasks as on the board, so ticking a task on the board moves it to Done,
 and moving it here changes it there, for everyone. Drag a card to another column or place, or use
-its menu's **Move to**. **Add a task** at the bottom of a column adds it there and on the board,
-beside the other tasks. Click a card to change its text, status, assignee or due day; **Show on
-board** goes to its card, and **Run with an agent** runs it as on the board. The address keeps
-which view is open, so a link to the Plan opens the Plan.
+its menu's **Move to**. **Add a task** at the bottom of a column, or press **C**, adds it there and
+on the board, in rows with the other tasks; in a section, the section grows to hold it. Click a card
+to change its text, status, assignee, priority or due day; **Show on board** goes to its card, and
+**Run with an agent** runs it as on the board. Search, **Only mine**, a person and **Hide done**
+narrow what shows, and each column sorts by its own order, priority or due date. Shift-click or
+Ctrl-click cards to pick several, then **Move to** moves them together. **List** shows the same
+tasks as rows. The address keeps which view is open, so a link to the Plan opens the Plan.
 
 ### See where everyone's code is
 
@@ -434,7 +437,29 @@ Everyone on a cloud board can edit it, rename it and copy its invite link from t
 
 Without signing in, your cloud boards live in this browser only. **Sign in** on the boards home keeps them with your account instead: the boards you make or join while signed in, and the ones this browser already had, show on every device where you sign in, and open there as the same person on the board. Signing out takes the boards you made, joined or opened while signed in off that browser; they stay with your account.
 
-A cloud board has no agent of its own. Each person brings theirs. When you make a cloud board and this browser has one computer connected, your agent comes along by itself, so **Thread** and **Ask an agent** work at once. Otherwise, or on a board someone invited you to, choose **Thread**, **Ask an agent** or **Attach my agent**, then **Continue on my machine** to add the board to Tinkjam on your computer. Your thread boxes then run on your computer, and only you can prompt them. If this browser has no computer connected, connect one under **Settings → Environments** first. A box whose person is not on the board shows **Offline**.
+Signed in, the menu under your picture has **Your account**: the name everyone on your boards sees, your picture and sign-in details, and **Sign out**. Boards you are already on keep the name you joined them with. Deleting all your data in one step is not there yet; delete the boards you made, and leave the others, from each board's menu on the home.
+
+### Workspaces
+
+Signed in, a workspace keeps a team's cloud boards together. Choose **New workspace** in the menu at the top of the boards home, name it and pick a colour. That menu also switches the home and the sidebar between **All boards**, **My boards** and each workspace. **New board** while a workspace is shown puts the board in it; **Move to workspace** in a board's menu moves one you made.
+
+Everyone in a workspace sees its boards and opens them as themselves, without the board's invite link. To bring people in, choose **People**, then **Copy invite link**, and send the link yourself: Tinkjam does not send emails. Whoever opens it signs in, if they have not, and chooses **Join**. An owner can make a **New link**, which stops the old one, or **Turn off link**.
+
+An owner can make someone else an owner, remove someone, or delete the workspace; anyone can leave it. Someone removed, or who left, can no longer open its boards, and their cards on them stay. The last owner must make someone else an owner, or delete the workspace, before leaving. Deleting a workspace does not delete its boards: they stay with everyone already on them. A workspace holds up to 50 people and 500 boards.
+
+A cloud board has no agent of its own. Each person brings theirs. When you make a cloud board and this browser has one computer connected, your agent comes along by itself, so **Thread** and **Ask an agent** work at once. Otherwise, or on a board someone invited you to, choose **Thread**, **Ask an agent** or **Attach my agent**. **Bring your agent** lists your computers with whether each is online; choose **Bring my agent** on one and its agent joins the board, in no project or the project you pick. Your thread boxes then run on that computer, and only you can prompt them. A box whose person is not on the board shows **Offline**.
+
+### Connect your computer with Tinkjam Sync
+
+Your agents, such as Claude Code or Codex, are programs on your computer, so a browser cannot run them by itself. Tinkjam Sync is a small helper that connects them to your account. It needs [Node.js](https://nodejs.org) 22 or newer. Open Terminal (on Windows, PowerShell), paste the command from **Bring your agent**, and press Enter:
+
+```
+npx -y https://trellium.org/sync.tgz
+```
+
+It prints a link. Open it, sign in if asked, and choose **Connect**. The terminal then says **Connected**; keep that window open while you work, and press Ctrl+C to stop. The computer shows under **Your computers** on every board you open signed in with the same account. Next time, the same command connects without asking.
+
+Tinkjam Sync runs agents on your computer under your own Claude or Codex sign-in, and they can use what those agents can there. Nothing anyone else writes reaches your agent unless you press **Send**. To disconnect the computer from your account, run the command with `--disconnect` at the end. Tinkjam for desktop, an app that does the same without a terminal, is coming.
 
 Templates that use the board's own thread, code windows and pull request windows are only on boards kept on a computer.
 

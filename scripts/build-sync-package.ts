@@ -1,0 +1,130 @@
+#!/usr/bin/env node
+// @effect-diagnostics nodeBuiltinImport:off globalConsole:off - A plain build step: bundle, stage and tar.
+/**
+ * `pnpm run build:sync` writes dist-sync/sync.tgz, run as `npx <its url>`: the server bundle with
+ * .env's sign-in, relay and hosted app baked in (no web client), and a launcher for `t3 sync`.
+ * npm installs the native runtime packages the bundle leaves out.
+ */
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
+
+import serverPackageJson from "../apps/server/package.json" with { type: "json" };
+import { selectCliRuntimeExternalDependencies } from "./lib/cli-external-packages.ts";
+import { loadRepoEnv } from "./lib/public-config.ts";
+import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import { windowsSystemTar } from "./lib/windows-tar.ts";
+
+const SYNC_PACKAGE_NAME = "tinkjam-sync";
+// Cloudflare Workers static assets refuse larger files.
+const MAX_TARBALL_BYTES = 25 * 1024 * 1024;
+const DEFAULT_HOSTED_APP_URL = "https://app.trellium.org";
+
+const repoRoot = NodePath.resolve(NodeURL.fileURLToPath(import.meta.url), "../..");
+const serverDir = NodePath.join(repoRoot, "apps/server");
+const outputDir = NodePath.join(repoRoot, "dist-sync");
+
+/** The `catalog:` block of pnpm-workspace.yaml, read as flat `name: version` lines. */
+export function readWorkspaceCatalog(workspaceYaml: string): Record<string, string> {
+  const catalog: Record<string, string> = {};
+  let inCatalog = false;
+  for (const line of workspaceYaml.split(/\r?\n/)) {
+    if (/^\S/.test(line)) inCatalog = line.trim() === "catalog:";
+    else if (inCatalog) {
+      const entry = /^\s+["']?([^"':\s]+)["']?:\s*["']?([^"'\s#]+)["']?/.exec(line);
+      if (entry?.[1] && entry[2]) catalog[entry[1]] = entry[2];
+    }
+  }
+  return catalog;
+}
+
+/** package.json of the tarball: one bin, and only the packages the bundle loads from disk. */
+function syncPackageManifest(input: {
+  readonly version: string;
+  readonly dependencies: Readonly<Record<string, string>>;
+  readonly nodeEngine: string;
+}) {
+  return {
+    name: SYNC_PACKAGE_NAME,
+    version: input.version,
+    description: "Tinkjam Sync: connect the agents on this computer to Tinkjam.",
+    license: serverPackageJson.license,
+    type: "module",
+    bin: { [SYNC_PACKAGE_NAME]: "./bin/tinkjam-sync.mjs" },
+    files: ["bin", "dist"],
+    engines: { node: input.nodeEngine },
+    dependencies: input.dependencies,
+  };
+}
+
+function run(command: string, args: ReadonlyArray<string>, cwd: string) {
+  const result = NodeChildProcess.spawnSync(command, args, { cwd, stdio: "inherit" });
+  if (result.status !== 0) {
+    throw new Error(`${command} ${args.join(" ")} exited with ${result.status ?? result.signal}.`);
+  }
+}
+
+function main() {
+  const skipBundle = process.argv.includes("--skip-bundle");
+  if (!skipBundle) run(process.execPath, ["--run", "build:bundle"], serverDir);
+  const serverDist = NodePath.join(serverDir, "dist");
+  if (!NodeFS.existsSync(NodePath.join(serverDist, "bin.mjs"))) {
+    throw new Error(`Missing ${serverDist}/bin.mjs. Run without --skip-bundle.`);
+  }
+
+  const catalog = readWorkspaceCatalog(
+    NodeFS.readFileSync(NodePath.join(repoRoot, "pnpm-workspace.yaml"), "utf8"),
+  );
+  const dependencies = selectCliRuntimeExternalDependencies(
+    resolveCatalogDependencies(serverPackageJson.dependencies, catalog, serverPackageJson.name),
+  );
+  const hostedAppUrl = loadRepoEnv().T3CODE_HOSTED_APP_URL?.trim() || DEFAULT_HOSTED_APP_URL;
+
+  const stageRoot = NodePath.join(outputDir, ".stage");
+  const stage = NodePath.join(stageRoot, "package");
+  NodeFS.rmSync(stageRoot, { recursive: true, force: true });
+  NodeFS.mkdirSync(NodePath.join(stage, "bin"), { recursive: true });
+  // Source maps would double the download for nobody.
+  NodeFS.cpSync(serverDist, NodePath.join(stage, "dist"), {
+    recursive: true,
+    filter: (source) => !source.endsWith(".map"),
+  });
+  const launcher = NodeFS.readFileSync(
+    NodePath.join(repoRoot, "scripts/sync-package/tinkjam-sync.mjs"),
+    "utf8",
+  ).replace("__TINKJAM_HOSTED_APP_URL__", hostedAppUrl);
+  NodeFS.writeFileSync(NodePath.join(stage, "bin/tinkjam-sync.mjs"), launcher, { mode: 0o755 });
+  NodeFS.writeFileSync(
+    NodePath.join(stage, "package.json"),
+    `${JSON.stringify(
+      syncPackageManifest({
+        version: serverPackageJson.version,
+        dependencies,
+        nodeEngine: serverPackageJson.engines.node,
+      }),
+      null,
+      2,
+    )}\n`,
+  );
+
+  const tarball = NodePath.join(outputDir, "sync.tgz");
+  NodeFS.rmSync(tarball, { force: true });
+  // npm tarballs root everything under `package/`. Windows' own tar, not Git's, takes C:\ paths.
+  run(
+    NodeFS.existsSync(windowsSystemTar()) ? windowsSystemTar() : "tar",
+    ["-czf", tarball, "-C", stageRoot, "package"],
+    repoRoot,
+  );
+  NodeFS.rmSync(stageRoot, { recursive: true, force: true });
+
+  const bytes = NodeFS.statSync(tarball).size;
+  console.log(`[sync] Wrote ${tarball} (${(bytes / 1024 / 1024).toFixed(1)} MiB)`);
+  console.log(`[sync] Hosted app: ${hostedAppUrl}`);
+  console.log(`[sync] Installs from npm: ${Object.keys(dependencies).join(", ")}`);
+  if (bytes > MAX_TARBALL_BYTES) {
+    throw new Error("sync.tgz is over the 25 MiB a static asset may be.");
+  }
+}
+
+if (import.meta.main) main();

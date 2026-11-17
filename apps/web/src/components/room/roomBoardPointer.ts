@@ -110,7 +110,8 @@ function panInstead(card: HTMLElement, event: PointerEvent<HTMLElement>, press: 
 /**
  * Pointer handlers reporting how far a held pointer moved past a click's slop, its release, or a
  * tap (`onTap`). Text and controls are left alone. A finger on a card pans the board unless it
- * rests first, which lifts the card for the drag; resting and letting go opens the board's menu.
+ * rests first, which lifts the card for the drag, or the card is selected (`data-board-selected`);
+ * resting and letting go opens the board's menu.
  */
 export function dragHandlers(
   onMove: (dx: number, dy: number, event: PointerEvent<HTMLElement>) => void,
@@ -199,7 +200,11 @@ export function dragHandlers(
         const decision = boardTouchPress(event.timeStamp - press.touch.at, distance);
         if (decision === "wait") return;
         if (decision === "hold") hold(event.currentTarget, event.pointerId);
-        else if (boardOf(event.currentTarget) !== event.currentTarget) {
+        else if (
+          boardOf(event.currentTarget) !== event.currentTarget &&
+          // A finger on a card already selected moves it at once, as a mouse does.
+          !event.currentTarget.hasAttribute("data-board-selected")
+        ) {
           return panInstead(event.currentTarget, event, press);
         } else endTouch(event.currentTarget, press);
       }

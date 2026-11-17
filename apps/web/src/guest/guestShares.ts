@@ -17,6 +17,7 @@ import {
   type RoomViewport,
   ThreadId,
 } from "@t3tools/contracts";
+import { encodeBoardPreview } from "@t3tools/shared/boardPreview";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -129,10 +130,78 @@ export const accountBoardsAtom = Atom.make<ReadonlyArray<CloudBoardAccountBoard>
   Atom.withLabel("account-boards"),
 );
 
+// Per browser: the last preview of each board this browser had open, for its tile on the home
+// when the board host has none to give (signed out, or before it sent one). Apart from the shares
+// so an open board's changes never re-render what reads them.
+const PREVIEWS_KEY = "t3code:board-previews:v1";
+const PREVIEWS_KEPT = 200;
+const PREVIEW_STEP_MS = 10_000;
+const decodePreviews = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
+);
+
+function readStoredPreviews(): Readonly<Record<string, string>> {
+  try {
+    return Option.getOrElse(
+      decodePreviews(window.localStorage.getItem(PREVIEWS_KEY) ?? "{}"),
+      () => ({}),
+    );
+  } catch {
+    return {};
+  }
+}
+
+export const localBoardPreviewsAtom = Atom.make<Readonly<Record<string, string>>>(
+  readStoredPreviews(),
+).pipe(Atom.keepAlive, Atom.withLabel("board-previews"));
+
+const previewWrittenAt = new Map<string, number>();
+const previewTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function writePreviews(next: Readonly<Record<string, string>>) {
+  appAtomRegistry.set(localBoardPreviewsAtom, next);
+  try {
+    window.localStorage.setItem(PREVIEWS_KEY, JSON.stringify(next));
+  } catch {}
+}
+
+/** Keeps the open board's preview for its tile, at most once every few seconds, the last too. */
+function noteBoardPreview(shareId: string, view: GuestShareView) {
+  const now = Date.now();
+  const wait = (previewWrittenAt.get(shareId) ?? 0) + PREVIEW_STEP_MS - now;
+  if (wait > 0) {
+    if (!previewTimers.has(shareId)) {
+      previewTimers.set(
+        shareId,
+        setTimeout(() => {
+          previewTimers.delete(shareId);
+          const latest = appAtomRegistry.get(guestRoomAtom(shareId)).view;
+          if (latest !== null && findGuestShare(shareId) !== null) {
+            noteBoardPreview(shareId, latest);
+          }
+        }, wait),
+      );
+    }
+    return;
+  }
+  const previews = appAtomRegistry.get(localBoardPreviewsAtom);
+  const preview = encodeBoardPreview(view.board);
+  if (previews[shareId] === preview) return;
+  previewWrittenAt.set(shareId, now);
+  const { [shareId]: _old, ...others } = previews;
+  const kept = Object.entries(others).slice(-(PREVIEWS_KEPT - 1));
+  writePreviews({ ...Object.fromEntries(kept), [shareId]: preview });
+}
+
 export function forgetGuestShare(shareId: string) {
   const shares = readGuestShares();
   if (shares.some((share) => share.shareId === shareId)) {
     writeGuestShares(shares.filter((share) => share.shareId !== shareId));
+  }
+  const previews = appAtomRegistry.get(localBoardPreviewsAtom);
+  if (previews[shareId] !== undefined) {
+    const { [shareId]: _gone, ...others } = previews;
+    writePreviews(others);
   }
   // Left, removed or deleted: the host took it off the account's list too.
   const listed = appAtomRegistry.get(accountBoardsAtom);
@@ -235,6 +304,7 @@ export const layerGuestShareAccess = Layer.succeed(
       return Effect.sync(() => {
         appAtomRegistry.update(guestRoomAtom(shareId), (room) => ({ ...room, view }));
         const share = findGuestShare(shareId);
+        if (share !== null) noteBoardPreview(shareId, view);
         if (
           share !== null &&
           (share.title !== view.title ||

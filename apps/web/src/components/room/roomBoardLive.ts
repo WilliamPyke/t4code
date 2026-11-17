@@ -29,6 +29,16 @@ export interface BoardLiveDrag {
   /** Let go: held where it landed until `until`, or until the stored board has it there. */
   readonly landed: boolean;
   readonly until?: number;
+  /** This person's own drag, which needs no outline or smoothing. */
+  readonly own?: true;
+}
+
+/** Where this person drags or sizes a card now, in board pixels, by board ref. */
+export interface BoardOwnRect {
+  readonly x?: number | undefined;
+  readonly y?: number | undefined;
+  readonly w?: number | undefined;
+  readonly h?: number | undefined;
 }
 
 /** Someone on the board and what they drag now, if anything. */
@@ -96,7 +106,7 @@ interface StoredRect {
 export function boardLiveRect(
   stored: StoredRect,
   live: BoardLiveDrag | undefined,
-): (StoredRect & { readonly color: string }) | null {
+): (StoredRect & { readonly color: string; readonly own?: true }) | null {
   if (live === undefined) return null;
   const rect = {
     x: live.x ?? stored.x,
@@ -106,7 +116,10 @@ export function boardLiveRect(
   };
   const arrived =
     rect.x === stored.x && rect.y === stored.y && rect.w === stored.w && rect.h === stored.h;
-  return live.landed && arrived ? null : { ...rect, color: live.color };
+  if (live.landed && arrived) return null;
+  return live.own === true
+    ? { ...rect, color: live.color, own: true }
+    : { ...rect, color: live.color };
 }
 
 /**
@@ -127,7 +140,8 @@ export const boardLiveStyle = (
   live: ReturnType<typeof boardLiveRect>,
   scale?: number,
 ): CSSProperties | undefined =>
-  live === null
+  // This person's own drag moves the card itself; see `RoomLiveStore.setOwnDrags`.
+  live === null || live.own === true
     ? undefined
     : {
         transform: `translate(${live.x - stored.x}px, ${live.y - stored.y}px)${scale === undefined || scale === 1 ? "" : ` scale(${scale})`}`,
@@ -157,6 +171,13 @@ export interface RoomLiveStore {
   readonly setDraggers: (draggers: ReadonlyArray<BoardDragger>) => void;
   readonly subscribeDrags: (listener: () => void) => () => void;
   readonly drag: (ref: string) => BoardLiveDrag | undefined;
+  /**
+   * What this person drags or sizes now. A card moved this way is moved on the page by whoever
+   * drags it, so it never renders for that; only a size it changes, and the lines on it, do.
+   */
+  readonly setOwnDrags: (rects: ReadonlyMap<string, BoardOwnRect>) => void;
+  /** Where a line's end is now: as this person drags its card, else as someone else does. */
+  readonly lineEnd: (ref: string) => BoardLiveDrag | undefined;
   /** Everyone else's pointers; listeners hear of them at most every `POINTER_STEP_MS`. */
   readonly setPointers: (pointers: ReadonlyArray<BoardPointer>) => void;
   readonly subscribePointers: (listener: () => void) => () => void;
@@ -179,6 +200,8 @@ export function createRoomLiveStore(): RoomLiveStore {
   let draggers: ReadonlyArray<BoardDragger> = [];
   let drags: ReadonlyMap<string, BoardLiveDrag> = new Map();
   let landingTimer: ReturnType<typeof setTimeout> | null = null;
+  let own: ReadonlyMap<string, BoardLiveDrag> = new Map();
+  let ownSizes: ReadonlyMap<string, BoardLiveDrag> = new Map();
   const pointerListeners = new Set<() => void>();
   let pointers = NO_POINTERS;
   let pendingPointers: ReadonlyArray<BoardPointer> | null = null;
@@ -285,7 +308,32 @@ export function createRoomLiveStore(): RoomLiveStore {
       dragListeners.add(listener);
       return () => dragListeners.delete(listener);
     },
-    drag: (ref) => drags.get(ref),
+    drag: (ref) => ownSizes.get(ref) ?? drags.get(ref),
+    setOwnDrags: (rects) => {
+      if (rects.size === 0 && own.size === 0) return;
+      const entry = (rect: BoardOwnRect): BoardLiveDrag => ({
+        ...rect,
+        color: "",
+        landed: false,
+        own: true,
+      });
+      own = new Map([...rects].map(([ref, rect]) => [ref, entry(rect)]));
+      // A size that did not change keeps its entry, so a moved card does not render again.
+      const sizes = new Map<string, BoardLiveDrag>();
+      for (const [ref, rect] of rects) {
+        if (rect.w === undefined && rect.h === undefined) continue;
+        const before = ownSizes.get(ref);
+        sizes.set(
+          ref,
+          before !== undefined && before.w === rect.w && before.h === rect.h
+            ? before
+            : entry({ w: rect.w, h: rect.h }),
+        );
+      }
+      ownSizes = sizes;
+      for (const listener of dragListeners) listener();
+    },
+    lineEnd: (ref) => own.get(ref) ?? drags.get(ref),
     setPointers: (next) => {
       pendingPointers = next;
       if (pointerTimer === null) flushPointers();
@@ -330,10 +378,16 @@ export function useCommentProgress(commentId: string): RoomBoxProgress | undefin
   return useSyncExternalStore(store.subscribe, () => store.comment(commentId));
 }
 
-/** Where someone else drags this card or note now, if anyone does. */
+/** Where someone else drags this card or note now, if anyone does, or how big this person sizes it. */
 export function useBoardLiveDrag(ref: string): BoardLiveDrag | undefined {
   const store = use(RoomLiveContext);
   return useSyncExternalStore(store.subscribeDrags, () => store.drag(ref));
+}
+
+/** Where a line's end is now, as anyone, this person included, drags its card. */
+export function useBoardLineEnd(ref: string): BoardLiveDrag | undefined {
+  const store = use(RoomLiveContext);
+  return useSyncExternalStore(store.subscribeDrags, () => store.lineEnd(ref));
 }
 
 /** Everyone else's pointers, for the minimap's dots. */

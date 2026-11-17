@@ -31,7 +31,8 @@ export const DEFAULT_PORT = 3773;
 export const RuntimeMode = Schema.Literals(["web", "desktop"]);
 export type RuntimeMode = typeof RuntimeMode.Type;
 
-export const StartupPresentation = Schema.Literals(["browser", "headless"]);
+// "sync" is headless and prints no access details: Tinkjam Sync is reached only through its account.
+export const StartupPresentation = Schema.Literals(["browser", "headless", "sync"]);
 export type StartupPresentation = typeof StartupPresentation.Type;
 
 export interface ServerDerivedPaths {

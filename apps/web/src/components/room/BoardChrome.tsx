@@ -4,6 +4,7 @@ import { type ComponentProps, type ReactNode, useState } from "react";
 import { cn } from "~/lib/utils";
 
 import { Button } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 /**
  * The board's shared looks. Chrome is quiet (the theme's card, a hairline, a soft shadow) so the
@@ -26,8 +27,9 @@ export const BOARD_TITLE_BAR_CLASS =
 export const BOARD_HOVER_CHROME_CLASS =
   "transition-opacity [@media(hover:hover)]:opacity-0 group-hover/item:opacity-100 group-focus-within/item:opacity-100 has-[[data-popup-open]]:opacity-100";
 
-/** On a selected card or section: its resize grips show without a hover. */
-export const BOARD_SELECTED_CHROME_CLASS = "[&_[data-board-grip]]:opacity-100";
+/** On a selected card or section: its resize and line grips show, and work, without a hover. */
+export const BOARD_SELECTED_CHROME_CLASS =
+  "[&_[data-board-grip]]:opacity-100 [&_[data-board-link]]:pointer-events-auto";
 
 /** A small icon button in a card's header; it takes the card's text colour, paint or window. */
 export const BOARD_ICON_BUTTON_CLASS =
@@ -140,6 +142,42 @@ export function PersonDot({
     >
       {children}
     </span>
+  );
+}
+
+/**
+ * Who put a card on the board: their initial in their colour, named on hover, or beside it in a
+ * card's footer (`named`).
+ */
+export function AddedBy({
+  name,
+  color,
+  named = false,
+}: {
+  readonly name: string;
+  readonly color: string;
+  readonly named?: boolean;
+}) {
+  const dot = (
+    <PersonDot color={color} className="size-4 text-3xs leading-none font-semibold">
+      {name.trim().charAt(0).toUpperCase()}
+    </PersonDot>
+  );
+  if (named) {
+    return (
+      <span className="flex min-w-0 items-center gap-1.5">
+        {dot}
+        <span className="truncate">Added by {name}</span>
+      </span>
+    );
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span aria-label={`Added by ${name}`} className="flex shrink-0" />}>
+        {dot}
+      </TooltipTrigger>
+      <TooltipPopup side="top">Added by {name}</TooltipPopup>
+    </Tooltip>
   );
 }
 

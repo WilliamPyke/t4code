@@ -149,6 +149,7 @@ function putNote(
   const plans =
     change.status !== undefined ||
     (change.due !== undefined && change.due !== null) ||
+    (change.priority !== undefined && change.priority !== null) ||
     change.order !== undefined;
   if (kind !== "task" && (change.done !== undefined || assigns || plans)) {
     return Result.fail("Only a task can be done, assigned or planned.");
@@ -198,6 +199,7 @@ function putNote(
     status: _status,
     due: _due,
     order: _order,
+    priority: _priority,
     assignee: _assignee,
     size: _size,
     color: _color,
@@ -213,6 +215,7 @@ function putNote(
         : roomTaskStatus(base));
   const due = change.due === undefined ? base.due : change.due;
   const order = change.order ?? base.order;
+  const priority = change.priority === undefined ? base.priority : change.priority;
   const assignee = change.assignee === undefined ? base.assignee : change.assignee;
   const size = change.size ?? base.size;
   const color = change.color ?? base.color;
@@ -230,6 +233,7 @@ function putNote(
     ...(status === "doing" ? { status } : {}),
     ...(due === undefined || due === null ? {} : { due }),
     ...(order === undefined ? {} : { order }),
+    ...(priority === undefined || priority === null ? {} : { priority }),
     ...(assignee === undefined || assignee === null ? {} : { assignee }),
     ...(size === undefined ? {} : { size }),
     ...(color === undefined ? {} : { color }),
@@ -250,6 +254,7 @@ const sameContent = (left: RoomBoardNote, right: RoomBoardNote) =>
   left.done === right.done &&
   left.status === right.status &&
   left.due === right.due &&
+  left.priority === right.priority &&
   left.assignee?.guestId === right.assignee?.guestId &&
   (left.assignee === undefined) === (right.assignee === undefined) &&
   left.color === right.color;
@@ -448,6 +453,7 @@ export function roomBoardAfterAgentTurn(
         (step.before === undefined &&
           (note.reactions !== undefined ||
             note.assignee !== undefined ||
+            note.priority !== undefined ||
             note.color !== undefined ||
             next.edges?.some((edge) => edge.from === ref || edge.to === ref) === true));
       if (kept) left.push(note.id);

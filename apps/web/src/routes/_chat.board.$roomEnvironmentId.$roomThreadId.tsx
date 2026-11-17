@@ -19,7 +19,7 @@ function RoomBoardRoute() {
     void navigate({
       search: {
         ...(next.chat === null ? {} : { chat: next.chat }),
-        ...(next.view === "plan" ? { view: next.view } : {}),
+        ...(next.view === "board" ? {} : { view: next.view }),
       },
       replace: true,
     });
@@ -40,10 +40,15 @@ function RoomBoardRoute() {
 
 export const Route = createFileRoute("/_chat/board/$roomEnvironmentId/$roomThreadId")({
   // Which thread box's conversation shows beside the board ("thread" for the room thread's own),
-  // and whether the board shows its tasks as a Plan.
-  validateSearch: (raw: Record<string, unknown>): { chat?: string; view?: "plan" } => ({
-    ...(typeof raw.chat === "string" && raw.chat.trim() !== "" ? { chat: raw.chat } : {}),
-    ...(boardViewModeOf(raw.view) === "plan" ? { view: "plan" as const } : {}),
-  }),
+  // and whether the board shows its tasks as a Plan or a List.
+  validateSearch: (
+    raw: Record<string, unknown>,
+  ): { chat?: string; view?: Exclude<BoardViewMode, "board"> } => {
+    const view = boardViewModeOf(raw.view);
+    return {
+      ...(typeof raw.chat === "string" && raw.chat.trim() !== "" ? { chat: raw.chat } : {}),
+      ...(view === "board" ? {} : { view }),
+    };
+  },
   component: RoomBoardRoute,
 });

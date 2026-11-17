@@ -295,6 +295,10 @@ export const RoomTaskStatus = Schema.Literals(ROOM_TASK_STATUSES);
 export type RoomTaskStatus = typeof RoomTaskStatus.Type;
 /** The day a task is due, as `YYYY-MM-DD`, with no time or zone. */
 const RoomTaskDue = Schema.String.check(Schema.isPattern(/^\d{4}-(?:0[1-9]|1[0-2])-\d{2}$/));
+/** How much a task matters, lowest first. A task with none has no priority. */
+const ROOM_TASK_PRIORITIES = ["low", "medium", "high", "urgent"] as const;
+export const RoomTaskPriority = Schema.Literals(ROOM_TASK_PRIORITIES);
+export type RoomTaskPriority = typeof RoomTaskPriority.Type;
 /** Where a task sits in its Plan column: lower first. */
 const RoomTaskOrder = Schema.Finite.check(Schema.isBetween({ minimum: -1e12, maximum: 1e12 }));
 
@@ -626,6 +630,8 @@ export const RoomBoardNote = Schema.Struct({
   due: Schema.optional(RoomTaskDue),
   /** Where a task sits in its Plan column. Absent: after the ones that have one. */
   order: Schema.optional(RoomTaskOrder),
+  /** How much a task matters. Absent: no priority. */
+  priority: Schema.optional(RoomTaskPriority),
   assignee: Schema.optional(RoomBoardAssignee),
   /**
    * A link card's address, which clients read and the server never fetches, or a pull request
@@ -887,9 +893,9 @@ export const RoomBoardChange = Schema.Union([
   }),
   /**
    * Adds the note, or replaces the one with this id; `kind`, `url`, `pinnedTo`, `quote` and
-   * `section` stay as added. Absent `size`, `done`, `status`, `due`, `order`, `assignee` and `color`
-   * stay as they were, so an older client's edit keeps them; a null `assignee` or `due` clears it.
-   * `status` sets `done` too, and the two must agree when both are sent.
+   * `section` stay as added. Absent `size`, `done`, `status`, `due`, `order`, `priority`, `assignee`
+   * and `color` stay as they were, so an older client's edit keeps them; a null `assignee`, `due` or
+   * `priority` clears it. `status` sets `done` too, and the two must agree when both are sent.
    */
   Schema.Struct({
     type: Schema.Literal("note.put"),
@@ -905,6 +911,7 @@ export const RoomBoardChange = Schema.Union([
     status: Schema.optional(RoomTaskStatus),
     due: Schema.optional(Schema.NullOr(RoomTaskDue)),
     order: RoomBoardNote.fields.order,
+    priority: Schema.optional(Schema.NullOr(RoomTaskPriority)),
     assignee: Schema.optional(Schema.NullOr(RoomBoardAssignee)),
     color: RoomBoardNote.fields.color,
     section: RoomBoardNote.fields.section,

@@ -23,6 +23,7 @@
     "icons:export:android": "node scripts/export-android-icons.ts",
     "build": "vp run --filter './apps/*' build",
     "build:marketing": "vp run --filter @t3tools/marketing build",
+    "build:sync": "node scripts/build-sync-package.ts",
     "build:desktop": "vp run --filter @t3tools/desktop --filter t3 build",
     "build:desktop:bundle": "vp run --filter @t3tools/desktop build:bundle",
     "build:resource-monitor": "cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml",

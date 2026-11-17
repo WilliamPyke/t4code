@@ -141,6 +141,30 @@ describe("mergeBoardDrags", () => {
   });
 });
 
+describe("this person's own drags", () => {
+  it("move a card's lines every step, but render the card only for a size it changes", () => {
+    const live = createRoomLiveStore();
+    live.setDraggers([{ color: "red", drag: { items: [{ ref: "note:b", x: 5, y: 5 }] } }]);
+    live.setOwnDrags(
+      new Map([
+        ["note:a", { x: 10, y: 20 }],
+        ["card:c", { w: 300, h: 200 }],
+      ]),
+    );
+    expect(live.drag("note:a")).toBeUndefined();
+    expect(live.lineEnd("note:a")).toMatchObject({ x: 10, y: 20, own: true });
+    expect(live.drag("card:c")).toMatchObject({ w: 300, h: 200, own: true });
+    expect(live.lineEnd("note:b")).toMatchObject({ x: 5, color: "red" });
+    // The same size again keeps its entry, so the card does not render for a move.
+    const sized = live.drag("card:c");
+    live.setOwnDrags(new Map([["card:c", { x: 1, y: 1, w: 300, h: 200 }]]));
+    expect(live.drag("card:c")).toBe(sized);
+    live.setOwnDrags(new Map());
+    expect(live.drag("card:c")).toBeUndefined();
+    expect(live.lineEnd("note:a")).toBeUndefined();
+  });
+});
+
 describe("boardLiveRect", () => {
   const stored = { x: 0, y: 0, w: 200, h: 150 };
   it.each([

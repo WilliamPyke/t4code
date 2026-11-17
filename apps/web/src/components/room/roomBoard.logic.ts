@@ -296,6 +296,24 @@ const containsPoint = (rect: BoardRect, at: BoardPoint) =>
   at.x >= rect.x && at.x <= rect.x + rect.width && at.y >= rect.y && at.y <= rect.y + rect.height;
 
 /**
+ * Where something pasted or dropped goes: centred on where the pointer is when that is in `view`
+ * (the part of the board people see), else on the middle of the view; clear of what is `taken`,
+ * and inside the view wherever it has a clear spot.
+ */
+export function boardPointedSpot(
+  size: RoomBoardSize,
+  pointer: BoardPoint | null,
+  view: BoardRect,
+  taken: ReadonlyArray<BoardRect>,
+): BoardPoint {
+  const around =
+    pointer !== null && containsPoint(view, pointer)
+      ? pointer
+      : { x: view.x + view.width / 2, y: view.y + view.height / 2 };
+  return placeBoardItem(size, around, taken, view);
+}
+
+/**
  * The section a card added from the toolbar goes into: the one selected alone, else the one the
  * pointer was last over, else the one holding the card this person last added or selected. A
  * section out of view does not count.
@@ -745,10 +763,10 @@ export function boardCommentLineTo(board: RoomBoard, under: string | null): stri
     : null;
 }
 
-/** Where a card or note is, how wide it is, and how far down the middle of its header is. */
+/** Where a card or note is and how big, in board pixels: what a line joins. */
 export interface BoardBox extends BoardPoint {
   readonly width: number;
-  readonly headerY: number;
+  readonly height: number;
 }
 
 /** How big an artifact card is until someone resizes it. */
@@ -816,11 +834,16 @@ export const boardNoteSize = (
               : BOARD_LINK_SIZE
             : undefined);
 
-export const boardCardBox = (at: BoardPoint, size?: RoomBoardSize): BoardBox => ({
+/** A card's box: at its given size, else its width and `drawnHeight`, or a row's height. */
+export const boardCardBox = (
+  at: BoardPoint,
+  size?: RoomBoardSize,
+  drawnHeight?: number,
+): BoardBox => ({
   x: at.x,
   y: at.y,
   width: size?.w ?? BOARD_CARD_WIDTH,
-  headerY: 18,
+  height: size?.h ?? drawnHeight ?? CARD_ROW_HEIGHT,
 });
 /** A comment thread's pin, in board pixels before `boardPinScale`. */
 export const BOARD_PIN_SIZE = 32;
@@ -832,16 +855,26 @@ export const boardPinScale = (zoom: number): number =>
   Math.min(PIN_MAX_ON_SCREEN, Math.max(PIN_MIN_ON_SCREEN, BOARD_PIN_SIZE * zoom)) /
   (BOARD_PIN_SIZE * zoom);
 
-/** Where a line meets a card or note. A comment pin's depends on the zoom it is drawn at. */
+/**
+ * Where a line meets a card or note: at its size, else at `drawnHeight` where the browser decides
+ * its height, else a guess. A comment pin's depends on the zoom it is drawn at.
+ */
 export function boardNoteBox(
   note: BoardPoint & Partial<Pick<RoomBoardNote, "kind" | "size" | "url">>,
   zoom = 1,
+  drawnHeight?: number,
 ): BoardBox {
   if (note.kind === "comment") {
     const size = BOARD_PIN_SIZE * boardPinScale(zoom);
-    return { x: note.x, y: note.y, width: size, headerY: size / 2 };
+    return { x: note.x, y: note.y, width: size, height: size };
   }
-  return { x: note.x, y: note.y, width: boardNoteSize(note)?.w ?? NOTE_WIDTH, headerY: 12 };
+  const size = boardNoteSize(note);
+  return {
+    x: note.x,
+    y: note.y,
+    width: size?.w ?? NOTE_WIDTH,
+    height: size?.h ?? drawnHeight ?? (note.kind === "task" ? ROOM_BOARD_TASK_SIZE.h : NOTE_HEIGHT),
+  };
 }
 
 const BOARD_COMMENT_PANEL_WIDTH = 288;
@@ -883,53 +916,71 @@ export function boardCommentPanelSpot(
   return { left, bottom, maxHeight: area.height - bottom - PANEL_GAP };
 }
 
-type BoardSide = "left" | "right";
-const sideX = (box: BoardBox, side: BoardSide) => box.x + (side === "right" ? box.width : 0);
-// The facing sides first, so a tie between two pairs keeps the line between the cards.
-const SIDE_PAIRS: ReadonlyArray<readonly [BoardSide, BoardSide]> = [
-  ["right", "left"],
-  ["left", "right"],
-  ["right", "right"],
-  ["left", "left"],
-];
+export type BoardSide = "left" | "right" | "top" | "bottom";
+
+const SIDE_OUT: Readonly<Record<BoardSide, BoardPoint>> = {
+  left: { x: -1, y: 0 },
+  right: { x: 1, y: 0 },
+  top: { x: 0, y: -1 },
+  bottom: { x: 0, y: 1 },
+};
+
+/** The middle of one side of a box, where a line attaches. */
+export function boardSidePoint(box: BoardBox, side: BoardSide): BoardPoint {
+  const out = SIDE_OUT[side];
+  return {
+    x: box.x + (box.width * (out.x + 1)) / 2,
+    y: box.y + (box.height * (out.y + 1)) / 2,
+  };
+}
 
 /**
- * A curve from the header of one box to the header of another, leaving and arriving level from
- * the sides of each that are nearest the other, and the point halfway along it. `sway` pulls its
- * belly off its resting course while it springs back.
+ * The sides a line between two boxes leaves and arrives by: the facing pair across the wider gap
+ * between them, left and right on a tie, so a line never cuts through either box.
+ */
+export function boardConnectorSides(from: BoardBox, to: BoardBox): readonly [BoardSide, BoardSide] {
+  const gapX = Math.max(to.x - (from.x + from.width), from.x - (to.x + to.width));
+  const gapY = Math.max(to.y - (from.y + from.height), from.y - (to.y + to.height));
+  if (gapX >= gapY) {
+    return from.x + from.width / 2 <= to.x + to.width / 2 ? ["right", "left"] : ["left", "right"];
+  }
+  return from.y + from.height / 2 <= to.y + to.height / 2 ? ["bottom", "top"] : ["top", "bottom"];
+}
+
+const MIN_BEND = 40;
+
+/**
+ * A curve from the middle of one box's side to the middle of another's, leaving and arriving
+ * square to the sides `boardConnectorSides` picks, and the point halfway along it. `sway` pulls
+ * its belly off its resting course while it springs back.
  */
 export function boardConnector(
   from: BoardBox,
   to: BoardBox,
   sway?: BoardPoint,
 ): { readonly path: string; readonly middle: BoardPoint } {
-  const toRight = from.x + from.width / 2 <= to.x + to.width / 2;
-  const pairs = toRight ? SIDE_PAIRS : SIDE_PAIRS.map(([a, b]) => [b, a] as const);
-  let best = pairs[0]!;
-  for (const pair of pairs) {
-    const gap = Math.abs(sideX(to, pair[1]) - sideX(from, pair[0]));
-    if (gap < Math.abs(sideX(to, best[1]) - sideX(from, best[0]))) best = pair;
-  }
-  const [fromSide, toSide] = best;
-  const start = { x: sideX(from, fromSide), y: from.y + from.headerY };
-  const end = { x: sideX(to, toSide), y: to.y + to.headerY };
-  // Each end leaves its card outward, away from the side it sits on.
-  const bend = Math.max(40, Math.abs(end.x - start.x) / 2);
-  const c1 = start.x + (fromSide === "right" ? bend : -bend);
-  const c2 = end.x + (toSide === "right" ? bend : -bend);
-  const middle = { x: (start.x + 3 * c1 + 3 * c2 + end.x) / 8, y: (start.y + end.y) / 2 };
-  if (sway === undefined) {
-    return {
-      path: `M${start.x} ${start.y} C${c1} ${start.y}, ${c2} ${end.y}, ${end.x} ${end.y}`,
-      middle,
-    };
-  }
+  const [fromSide, toSide] = boardConnectorSides(from, to);
+  const start = boardSidePoint(from, fromSide);
+  const end = boardSidePoint(to, toSide);
+  const across = SIDE_OUT[fromSide].x === 0 ? Math.abs(end.y - start.y) : Math.abs(end.x - start.x);
+  // Each end leaves its box square to its side; a short line bends no further than it reaches.
+  const bend = Math.max(Math.min(MIN_BEND, across), across / 2);
+  const c1 = { x: start.x + SIDE_OUT[fromSide].x * bend, y: start.y + SIDE_OUT[fromSide].y * bend };
+  const c2 = { x: end.x + SIDE_OUT[toSide].x * bend, y: end.y + SIDE_OUT[toSide].y * bend };
+  const middle = {
+    x: (start.x + 3 * c1.x + 3 * c2.x + end.x) / 8,
+    y: (start.y + 3 * c1.y + 3 * c2.y + end.y) / 8,
+  };
   const round = (value: number) => Math.round(value * 10) / 10;
+  const off = sway ?? { x: 0, y: 0 };
   return {
-    path: `M${start.x} ${start.y} C${round(c1 + sway.x)} ${round(start.y + sway.y)}, ${round(c2 + sway.x)} ${round(end.y + sway.y)}, ${end.x} ${end.y}`,
+    path: `M${round(start.x)} ${round(start.y)} C${round(c1.x + off.x)} ${round(c1.y + off.y)}, ${round(c2.x + off.x)} ${round(c2.y + off.y)}, ${round(end.x)} ${round(end.y)}`,
     middle,
   };
 }
+
+/** Lines stay thick enough to follow when zoomed out: drawn this much thicker, up to 4 times. */
+export const boardLineScale = (zoom: number): number => Math.min(4, Math.max(1, 1 / zoom));
 
 /** A card, a note or an arrow on the board, or how big a card is (`size`, by card id). */
 export interface BoardTarget {
@@ -991,6 +1042,7 @@ const valueKey = (value: BoardValue | undefined): string => {
     value.status ?? null,
     value.due ?? null,
     value.order ?? null,
+    value.priority ?? null,
   ]);
 };
 
@@ -1211,6 +1263,7 @@ export function boardChangeOf(target: BoardTarget, value: BoardValue): RoomBoard
           status: roomTaskStatus(value),
           due: value.due ?? null,
           ...(value.order === undefined ? {} : { order: value.order }),
+          priority: value.priority ?? null,
           assignee: value.assignee ?? null,
         }
       : {}),

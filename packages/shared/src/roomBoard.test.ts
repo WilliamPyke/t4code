@@ -809,6 +809,19 @@ describe("applyRoomBoardChange", () => {
     expect(applied(due, put("t", { text: "Ship", due: null })).notes[0]?.due).toBeUndefined();
     expect(isRoomBoard(due)).toBe(true);
 
+    // A priority is what a task says, kept until changed, and cleared by null.
+    const urgent = applied(old, put("t", { text: "Ship", priority: "urgent" }));
+    expect(urgent.notes[0]).toMatchObject({ priority: "urgent", changed: { at, guestId: sam } });
+    expect(applied(urgent, put("t", { text: "Ship" })).notes[0]?.priority).toBe("urgent");
+    expect(
+      applied(urgent, put("t", { text: "Ship", priority: null })).notes[0]?.priority,
+    ).toBeUndefined();
+    expect(isRoomBoard(urgent)).toBe(true);
+    expect(
+      isRoomBoard({ ...old, notes: [{ ...old.notes[0]!, priority: "someday" }] }),
+      "a priority is one of the four",
+    ).toBe(false);
+
     const refused: ReadonlyArray<Partial<Extract<RoomBoardChange, { type: "note.put" }>>> = [
       { status: "done", done: false },
       { status: "doing", done: true },
@@ -816,7 +829,12 @@ describe("applyRoomBoardChange", () => {
     for (const fields of refused) {
       expect(Result.isFailure(apply(old, put("t", { text: "Ship", ...fields })))).toBe(true);
     }
-    for (const fields of [{ status: "doing" }, { due: "2026-12-01" }, { order: 1 }] as const) {
+    for (const fields of [
+      { status: "doing" },
+      { due: "2026-12-01" },
+      { order: 1 },
+      { priority: "high" },
+    ] as const) {
       expect(Result.isFailure(apply(old, put("n", { text: "A note", ...fields })))).toBe(true);
     }
     expect(applied(old, put("n", { text: "A note", due: null }))).toBe(old);

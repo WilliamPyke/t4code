@@ -4,16 +4,23 @@ import {
   isGuestEnvironment,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import { EnvironmentId, ROOM_BOARD_NOTE_COLORS, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { Link, useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import { LayoutGridIcon, PlusIcon } from "lucide-react";
 
-import { openAccountBoard } from "~/guest/boardAccount";
 import { accountBoardsAtom, guestSharesAtom, isCloudShare } from "~/guest/guestShares";
+import { openListedBoard, useWorkspaceScope, useWorkspaces } from "~/guest/workspaces";
 import { cn } from "~/lib/utils";
 import { useThreadShells } from "~/state/entities";
 
-import { joinedBoardSources, listHomeBoards } from "../boards/boardsHome.logic";
+import {
+  boardPaint,
+  boardsInScope,
+  joinedBoardSources,
+  listHomeBoards,
+  sortHomeBoards,
+  withWorkspaceBoards,
+} from "../boards/boardsHome.logic";
 import { useNewBoardWaiting, useStartNewBoard } from "../boards/newBoard";
 import { JoinedBoardMenu } from "../boards/removeJoinedBoard";
 import { roomBoardLocation } from "../room/roomBoardNavigation";
@@ -26,13 +33,6 @@ import { toastManager } from "../ui/toast";
 // Kept short: the section sits above the thread list, which keeps the rest of the height.
 const RECENT_BOARDS = 3;
 
-/** A paint each board keeps, so recent boards are told apart at a glance. */
-const boardPaint = (key: string) => {
-  let hash = 0;
-  for (const char of key) hash = (hash * 31 + char.charCodeAt(0)) | 0;
-  return ROOM_BOARD_NOTE_COLORS[Math.abs(hash) % ROOM_BOARD_NOTE_COLORS.length];
-};
-
 /**
  * Boards first: the way home to every board, the few most recently active, and a new one. Threads
  * follow under their own heading.
@@ -41,6 +41,8 @@ export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
   const threads = useThreadShells();
   const joined = useAtomValue(guestSharesAtom);
   const accountBoards = useAtomValue(accountBoardsAtom);
+  const workspaces = useWorkspaces();
+  const scope = useWorkspaceScope();
   const navigate = useNavigate();
   const startNewBoard = useStartNewBoard();
   const waiting = useNewBoardWaiting();
@@ -52,20 +54,36 @@ export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
       (isGuestEnvironment(params.environmentId) ? params.threadId : null) ??
       null,
   });
-  const recent = listHomeBoards({
-    threads,
-    // Signed in, the account's boards too, so a new device lists them before any is opened here.
-    joined: joinedBoardSources({
-      local: joined.map((share) => ({
-        ...share,
-        cloud: isCloudShare(share),
-        maker: share.made === true,
-      })),
-      listed: accountBoards,
-    }),
-    teams: [],
-    isOwnEnvironment: (environmentId) => !isGuestEnvironment(environmentId),
-  }).slice(0, RECENT_BOARDS);
+  // The home's workspace decides which boards these are.
+  const recent = sortHomeBoards(
+    boardsInScope(
+      listHomeBoards({
+        threads,
+        // Signed in, the account's and its workspaces' boards too, before any is opened here.
+        joined: withWorkspaceBoards(
+          joinedBoardSources({
+            local: joined.map((share) => ({
+              ...share,
+              cloud: isCloudShare(share),
+              maker: share.made === true,
+            })),
+            listed: accountBoards,
+          }),
+          workspaces,
+        ),
+        teams: [],
+        isOwnEnvironment: (environmentId) => !isGuestEnvironment(environmentId),
+      }),
+      scope,
+    ),
+    "recent",
+  ).slice(0, RECENT_BOARDS);
+  const scopeName =
+    scope === "all"
+      ? "All boards"
+      : scope === "personal"
+        ? "My boards"
+        : (workspaces?.find((workspace) => workspace.id === scope)?.name ?? "All boards");
   return (
     <div aria-label="Boards" role="group" className="pb-1" data-sidebar-boards>
       <div className="flex items-center justify-between px-2 pb-1">
@@ -87,7 +105,7 @@ export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
         <SidebarMenuItem>
           <SidebarMenuButton size="sm" isActive={atHome} render={<Link to="/" />}>
             <LayoutGridIcon aria-hidden />
-            <span className="min-w-0 truncate">All boards</span>
+            <span className="min-w-0 truncate">{scopeName}</span>
           </SidebarMenuButton>
         </SidebarMenuItem>
         {recent.map((board) =>
@@ -118,7 +136,7 @@ export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
                             // Only the account lists it: a session here first, as the same person.
                             onClick: (event) => {
                               event.preventDefault();
-                              void openAccountBoard(board.shareId).then((opened) => {
+                              void openListedBoard(board).then((opened) => {
                                 if (typeof opened === "string") {
                                   toastManager.add({ type: "error", title: opened });
                                   return;
@@ -142,7 +160,9 @@ export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
                   aria-hidden
                   className={cn(
                     "mx-0.5 size-3 shrink-0 rounded-xs ring-1 ring-foreground/10",
-                    paintSwatchClassName(boardPaint(board.key)),
+                    paintSwatchClassName(
+                      boardPaint(board.kind === "joined" ? board : { key: board.key }),
+                    ),
                   )}
                 />
                 <span className="min-w-0 truncate">{board.title}</span>

@@ -23,7 +23,9 @@ import { Route as ChatUsageRouteImport } from './routes/_chat.usage'
 import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatNewRouteImport } from './routes/_chat.new'
+import { Route as ChatJoinWorkspaceRouteImport } from './routes/_chat.join-workspace'
 import { Route as ChatJoinRouteImport } from './routes/_chat.join'
+import { Route as ChatAccountRouteImport } from './routes/_chat.account'
 import { Route as ThreadsEnvironmentIdThreadIdRouteImport } from './routes/threads.$environmentId.$threadId'
 import { Route as ChatTeamsTeamIdRouteImport } from './routes/_chat.teams.$teamId'
 import { Route as ChatTNameRouteImport } from './routes/_chat.t.$name'
@@ -127,9 +129,19 @@ const ChatNewRoute = ChatNewRouteImport.update({
   path: '/new',
   getParentRoute: () => ChatRoute,
 } as any)
+const ChatJoinWorkspaceRoute = ChatJoinWorkspaceRouteImport.update({
+  id: '/join-workspace',
+  path: '/join-workspace',
+  getParentRoute: () => ChatRoute,
+} as any)
 const ChatJoinRoute = ChatJoinRouteImport.update({
   id: '/join',
   path: '/join',
+  getParentRoute: () => ChatRoute,
+} as any)
+const ChatAccountRoute = ChatAccountRouteImport.update({
+  id: '/account',
+  path: '/account',
   getParentRoute: () => ChatRoute,
 } as any)
 const ThreadsEnvironmentIdThreadIdRoute =
@@ -312,7 +324,9 @@ export interface FileRoutesByFullPath {
   '/guest': typeof GuestRoute
   '/pair': typeof PairRoute
   '/welcome': typeof WelcomeRoute
+  '/account': typeof ChatAccountRoute
   '/join': typeof ChatJoinRoute
+  '/join-workspace': typeof ChatJoinWorkspaceRoute
   '/new': typeof ChatNewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/settings': typeof ChatSettingsRouteWithChildren
@@ -360,7 +374,9 @@ export interface FileRoutesByTo {
   '/guest': typeof GuestRoute
   '/pair': typeof PairRoute
   '/welcome': typeof WelcomeRoute
+  '/account': typeof ChatAccountRoute
   '/join': typeof ChatJoinRoute
+  '/join-workspace': typeof ChatJoinWorkspaceRoute
   '/new': typeof ChatNewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/settings': typeof ChatSettingsRouteWithChildren
@@ -411,7 +427,9 @@ export interface FileRoutesById {
   '/guest': typeof GuestRoute
   '/pair': typeof PairRoute
   '/welcome': typeof WelcomeRoute
+  '/_chat/account': typeof ChatAccountRoute
   '/_chat/join': typeof ChatJoinRoute
+  '/_chat/join-workspace': typeof ChatJoinWorkspaceRoute
   '/_chat/new': typeof ChatNewRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/_chat/settings': typeof ChatSettingsRouteWithChildren
@@ -463,7 +481,9 @@ export interface FileRouteTypes {
     | '/guest'
     | '/pair'
     | '/welcome'
+    | '/account'
     | '/join'
+    | '/join-workspace'
     | '/new'
     | '/pull-requests'
     | '/settings'
@@ -511,7 +531,9 @@ export interface FileRouteTypes {
     | '/guest'
     | '/pair'
     | '/welcome'
+    | '/account'
     | '/join'
+    | '/join-workspace'
     | '/new'
     | '/pull-requests'
     | '/settings'
@@ -561,7 +583,9 @@ export interface FileRouteTypes {
     | '/guest'
     | '/pair'
     | '/welcome'
+    | '/_chat/account'
     | '/_chat/join'
+    | '/_chat/join-workspace'
     | '/_chat/new'
     | '/_chat/pull-requests'
     | '/_chat/settings'
@@ -717,11 +741,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatNewRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/join-workspace': {
+      id: '/_chat/join-workspace'
+      path: '/join-workspace'
+      fullPath: '/join-workspace'
+      preLoaderRoute: typeof ChatJoinWorkspaceRouteImport
+      parentRoute: typeof ChatRoute
+    }
     '/_chat/join': {
       id: '/_chat/join'
       path: '/join'
       fullPath: '/join'
       preLoaderRoute: typeof ChatJoinRouteImport
+      parentRoute: typeof ChatRoute
+    }
+    '/_chat/account': {
+      id: '/_chat/account'
+      path: '/account'
+      fullPath: '/account'
+      preLoaderRoute: typeof ChatAccountRouteImport
       parentRoute: typeof ChatRoute
     }
     '/threads/$environmentId/$threadId': {
@@ -1023,7 +1061,9 @@ const ChatSettingsRouteWithChildren = ChatSettingsRoute._addFileChildren(
 )
 
 interface ChatRouteChildren {
+  ChatAccountRoute: typeof ChatAccountRoute
   ChatJoinRoute: typeof ChatJoinRoute
+  ChatJoinWorkspaceRoute: typeof ChatJoinWorkspaceRoute
   ChatNewRoute: typeof ChatNewRoute
   ChatPullRequestsRoute: typeof ChatPullRequestsRoute
   ChatSettingsRoute: typeof ChatSettingsRouteWithChildren
@@ -1038,7 +1078,9 @@ interface ChatRouteChildren {
 }
 
 const ChatRouteChildren: ChatRouteChildren = {
+  ChatAccountRoute: ChatAccountRoute,
   ChatJoinRoute: ChatJoinRoute,
+  ChatJoinWorkspaceRoute: ChatJoinWorkspaceRoute,
   ChatNewRoute: ChatNewRoute,
   ChatPullRequestsRoute: ChatPullRequestsRoute,
   ChatSettingsRoute: ChatSettingsRouteWithChildren,

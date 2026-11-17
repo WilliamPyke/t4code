@@ -59,6 +59,7 @@ import {
   PlayIcon,
   PlusIcon,
   ScanIcon,
+  SplineIcon,
   SquareDashedIcon,
   Trash2Icon,
   XIcon,
@@ -167,6 +168,9 @@ import {
   boardCommentAgentAuthor,
   boardCommentLineTo,
   boardConnector,
+  type BoardSide,
+  boardLineScale,
+  boardPointedSpot,
   boardCursorAt,
   clientRectToBoard,
   clientToBoard,
@@ -247,6 +251,8 @@ import {
   roomBoardFitAwaits,
 } from "./roomBoardNavigation";
 import { RoomArtifactLive } from "./RoomBoardArtifact";
+import { useBoardDrawnHeights } from "./roomBoardHeights";
+import { BoardFirstRunHint } from "./BoardFirstRunHint";
 import { BoardEmbedIcon, RoomEmbedBody, useBoardSurfaceSize } from "./RoomBoardEmbed";
 import { boardLiveEmbeds } from "./boardEmbed.logic";
 import { type ReadRoomCodePatch, RoomCodeWindow } from "./RoomBoardCode";
@@ -320,15 +326,20 @@ import {
 import { BoardPromptBox } from "./RoomBoardPrompt";
 import { BoardPlan, BoardViewSwitch, useBoardViewMode } from "./BoardPlan";
 import {
+  type BoardPlanSpot,
   type BoardViewMode,
   boardPlanAppendOrder,
   boardPlanAttachments,
   boardPlanColumns,
   boardPlanMove,
-  boardPlanTaskSpot,
+  boardPlanMoveAll,
+  boardPlanTaskPlace,
+  boardPlanToday,
+  boardPlanUntick,
   boardPlanWithStatus,
 } from "./boardPlan.logic";
-import { BoardEdgeLine } from "./RoomBoardEdge";
+import { BoardEdgeLine, boardStroke } from "./RoomBoardEdge";
+import { TaskDueChip, TaskPriorityMark } from "./BoardTaskMarks";
 import {
   CLICK_SLOP,
   boardPressKind,
@@ -344,6 +355,7 @@ import {
 import { useBoardPinch } from "./roomBoardPinch";
 import { BoardSection } from "./RoomBoardSection";
 import {
+  AddedBy,
   BOARD_HOVER_CHROME_CLASS,
   BOARD_ICON_BUTTON_CLASS,
   BOARD_SELECTED_CHROME_CLASS,
@@ -373,6 +385,7 @@ import {
   isBoardAgentsKey,
 } from "./boardAgents.logic";
 import {
+  type BoardOwnRect,
   RoomLiveContext,
   boardLiveRect,
   boardLiveText,
@@ -469,6 +482,31 @@ const EDGE_STROKE_WIDTHS: Readonly<Record<EdgeStroke, number>> = {
 const EDGE_STROKES = Object.entries(EDGE_STROKE_COLORS);
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
+
+/**
+ * Renders what `build` makes, or nothing for null. `build` runs as this renders, not as the board
+ * does: the menu it builds holds the board's handlers, which the board's render must not call.
+ */
+function Built<Parts>({
+  build,
+  children,
+}: {
+  readonly build: () => Parts | null;
+  readonly children: (parts: Parts) => ReactNode;
+}) {
+  const parts = build();
+  return parts === null ? null : children(parts);
+}
+
+/** Runs `run` with `flag` up, and puts it down after, even when `run` throws. */
+function withFlag(flag: { current: boolean }, run: () => void) {
+  flag.current = true;
+  try {
+    run();
+  } finally {
+    flag.current = false;
+  }
+}
 
 /** A tool on the board's toolbar: an icon, named on hover and to screen readers. */
 function BoardTool({
@@ -963,6 +1001,29 @@ export function RoomBoard({
     readonly canPaste: boolean;
   } | null>(null);
   const [linking, setLinking] = useState<Linking | null>(null);
+  // The Line tool: picking a card, then another, draws a line between them.
+  const [lineTool, setLineTool] = useState(false);
+  const linkPath = useRef<SVGPathElement | null>(null);
+  const linkTarget = useRef<HTMLElement | null>(null);
+  const drawnHeights = useBoardDrawnHeights(surfaceRef);
+  // The card a line being drawn would land on, outlined; set on the page, not in state, so a
+  // pointer moving over the board draws only the line.
+  const markLinkTarget = (element: HTMLElement | null) => {
+    const before = linkTarget.current;
+    if (before === element) return;
+    before?.style.removeProperty("outline");
+    before?.style.removeProperty("outline-offset");
+    linkTarget.current = element;
+    element?.style.setProperty("outline", "2px solid var(--color-primary)");
+    element?.style.setProperty("outline-offset", "4px");
+  };
+  const stopLinking = () => {
+    markLinkTarget(null);
+    setLinking(null);
+  };
+  const selectEdge = useStableCallback((id: string) =>
+    setSelectedEdge((current) => (current === id ? null : id)),
+  );
   const [linkDraft, setLinkDraft] = useState<string | null>(null);
   // The embeds this viewer clicked to show, newest last, and the one they are using now.
   const [embedsOpened, setEmbedsOpened] = useState<ReadonlyArray<string>>([]);
@@ -1262,11 +1323,18 @@ export function RoomBoard({
   const pinScale = boardPinScale(view.zoom);
   const boxes = new Map<string, BoardBox>([
     ...Object.entries(positions).map(
-      ([id, at]) => [cardRef(id), boardCardBox(at, sizes[id])] as const,
+      ([id, at]) =>
+        [cardRef(id), boardCardBox(at, sizes[id], drawnHeights.get(cardRef(id)))] as const,
     ),
     ...shown.notes
       .filter((note) => !hiddenComment(note))
-      .map((note) => [noteRef(note.id), boardNoteBox(note, view.zoom)] as const),
+      .map(
+        (note) =>
+          [
+            noteRef(note.id),
+            boardNoteBox(note, view.zoom, drawnHeights.get(noteRef(note.id))),
+          ] as const,
+      ),
   ]);
   const threadBoxes =
     cards === undefined && holds.agents ? boardThreadBoxes(shown, title, holds.room) : [];
@@ -1355,11 +1423,75 @@ export function RoomBoard({
           queueChange(noteRef(note.id), () =>
             onChange({ type: "artifact.write", noteId: note.id, body }),
           );
+  const liveStore = use(RoomLiveContext);
+  // What a drag moves on the page, by edit key: the element and where it was drawn as the drag
+  // began, found on its first step after that.
+  const framed = useRef(new Map<string, { el: HTMLElement; x: number; y: number } | null>());
+  // Elements a landed drag moved, put back once the board renders them where they landed.
+  const landedFrames = useRef<Array<HTMLElement>>([]);
+  // Something is being dragged, resized or nudged.
+  const [moving, setMoving] = useState(false);
+  const paintFrames = () => {
+    const rects = new Map<string, BoardOwnRect>();
+    const put = (ref: string, rect: BoardOwnRect) => rects.set(ref, { ...rects.get(ref), ...rect });
+    for (const [key, drawn] of framed.current) {
+      const value = held.current.get(key);
+      if (value === undefined || value === null) continue;
+      if ("w" in value) {
+        put(cardRef(key.slice(key.indexOf(":") + 1)), { w: value.w, h: value.h });
+        continue;
+      }
+      if (!("x" in value)) continue;
+      const was = gestureFrom.current.get(key);
+      const sized =
+        "size" in value &&
+        value.size !== undefined &&
+        (was === null ||
+          was === undefined ||
+          !("size" in was) ||
+          was.size?.w !== value.size.w ||
+          was.size?.h !== value.size.h);
+      put(key, {
+        x: value.x,
+        y: value.y,
+        ...(sized && "size" in value && value.size !== undefined
+          ? { w: value.size.w, h: value.size.h }
+          : {}),
+      });
+      let at = drawn;
+      if (at === null) {
+        const el =
+          surfaceRef.current?.querySelector<HTMLElement>(
+            `[data-board-item="${CSS.escape(key)}"]`,
+          ) ?? null;
+        if (el === null) continue;
+        at = { el, x: el.offsetLeft, y: el.offsetTop };
+        framed.current.set(key, at);
+      }
+      at.el.style.setProperty("translate", `${value.x - at.x}px ${value.y - at.y}px`);
+    }
+    liveStore.setOwnDrags(rects);
+  };
+  const letFrameGo = (key: string) => {
+    const drawn = framed.current.get(key);
+    if (drawn === undefined) return;
+    framed.current.delete(key);
+    if (drawn !== null) landedFrames.current.push(drawn.el);
+    if (framed.current.size === 0) setMoving(false);
+  };
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a landed drag's cards are moved back on the page in the same paint the board draws them where they landed
+  useLayoutEffect(() => {
+    if (landedFrames.current.length === 0) return;
+    for (const el of landedFrames.current) el.style.removeProperty("translate");
+    landedFrames.current = [];
+    paintFrames();
+  });
   // `after` names the queue a change waits in: a line to a new card goes once the card is there.
   const send = (target: BoardTarget, value: BoardValue, after?: string) => {
     if (onChange === undefined) return;
     const key = boardEditKey(target);
     held.current.delete(key);
+    letFrameGo(key);
     const before = boardStepBefore(gestureFrom.current, shown, target);
     gestureFrom.current.delete(key);
     // Deleting a card cannot be taken back: its content and lines are not kept here.
@@ -1374,10 +1506,18 @@ export function RoomBoard({
       if (!taken) setEdits((current) => dropBoardEdit(current, target, value));
     });
   };
-  const hold = (target: BoardTarget, value: NonNullable<BoardValue>) => {
+  // A drag, nudge or resize (`frame`) renders the board once as it starts; after that each step
+  // moves the cards on the page and tells the lines on them, and the board renders as it lands.
+  const hold = (target: BoardTarget, value: NonNullable<BoardValue>, frame = false) => {
     const key = boardEditKey(target);
-    if (!held.current.has(key)) gestureFrom.current.set(key, boardValueOf(shown, target));
+    const first = !held.current.has(key);
+    if (first) gestureFrom.current.set(key, boardValueOf(shown, target));
     held.current.set(key, value);
+    if (frame && !first && framed.current.has(key)) return paintFrames();
+    if (frame) {
+      framed.current.set(key, null);
+      setMoving(true);
+    }
     setEdits((current) => putBoardEdit(board, current, target, value, true));
   };
   // Everything sent in one go, as a drag of several cards, is one entry to take back.
@@ -1476,12 +1616,9 @@ export function RoomBoard({
       });
       return;
     }
-    unrecorded.current = true;
-    try {
+    withFlag(unrecorded, () => {
       for (const { target, value } of changes) send(target, value);
-    } finally {
-      unrecorded.current = false;
-    }
+    });
   };
   // Undo and redo reach the board while focus rests on a plain control outside it, such as the
   // sidebar's toggle; fields, dialogs, menus and other widgets keep their keys.
@@ -1563,11 +1700,12 @@ export function RoomBoard({
     altCopies.current = null;
     held.current.clear();
     gestureFrom.current.clear();
+    for (const key of keys) letFrameGo(key);
     carried.current.clear();
     press.current = null;
     setEdits((current) => dropHeldBoardEdits(current, keys));
     setDropTarget(null);
-    setLinking(null);
+    stopLinking();
     marquee.cancel();
     if (pointing) cursor.drag([]);
   };
@@ -1612,13 +1750,13 @@ export function RoomBoard({
         return last !== undefined && "x" in last ? { ...item, value: last } : item;
       });
       for (const item of boardGroupMove(now, dx / view.zoom, dy / view.zoom)) {
-        hold(item.target, item.value);
+        hold(item.target, item.value, true);
       }
       return sendDrag();
     }
     const last = held.current.get(boardEditKey(target));
     const at = last !== undefined && "x" in last ? last : from;
-    hold(target, { ...at, x: at.x + dx / view.zoom, y: at.y + dy / view.zoom });
+    hold(target, { ...at, x: at.x + dx / view.zoom, y: at.y + dy / view.zoom }, true);
     sendDrag();
   };
   // Arrow keys move the selection as a drag does, and it lands once they stop.
@@ -1640,7 +1778,7 @@ export function RoomBoard({
     });
     for (const item of boardGroupMove(now, dx, dy)) {
       nudged.current.set(boardEditKey(item.target), item.target);
-      hold(item.target, item.value);
+      hold(item.target, item.value, true);
     }
     sendDrag();
     if (nudgeTimer.current !== null) clearTimeout(nudgeTimer.current);
@@ -1663,11 +1801,11 @@ export function RoomBoard({
     clampBoardSize({ w: from.width + dx / view.zoom, h: from.height + dy / view.zoom });
   const resizeCard = (id: string, corner: BoardCorner, from: BoardRect, dx: number, dy: number) => {
     if (!canEdit) return;
-    if (corner === "right") hold({ kind: "size", id }, sizedBy(from, dx, dy));
+    if (corner === "right") hold({ kind: "size", id }, sizedBy(from, dx, dy), true);
     else {
       const next = resizeBoardFromLeft(from, dx / view.zoom, dy / view.zoom);
-      hold({ kind: "size", id }, next.size);
-      hold({ kind: "card", id }, { x: next.x, y: next.y });
+      hold({ kind: "size", id }, next.size, true);
+      hold({ kind: "card", id }, { x: next.x, y: next.y }, true);
     }
     sendDrag();
   };
@@ -1688,10 +1826,10 @@ export function RoomBoard({
     if (!canEdit) return;
     const now = noteNow(note);
     if (corner === "right") {
-      hold({ kind: "note", id: note.id }, { ...now, size: sizedBy(from, dx, dy) });
+      hold({ kind: "note", id: note.id }, { ...now, size: sizedBy(from, dx, dy) }, true);
     } else {
       const next = resizeBoardFromLeft(from, dx / view.zoom, dy / view.zoom);
-      hold({ kind: "note", id: note.id }, { ...now, x: next.x, size: next.size });
+      hold({ kind: "note", id: note.id }, { ...now, x: next.x, size: next.size }, true);
     }
     sendDrag();
   };
@@ -1726,6 +1864,7 @@ export function RoomBoard({
         hold(
           { kind: "note", id: copy.id },
           { ...copy, x: copy.x + copying.dx, y: copy.y + copying.dy },
+          true,
         );
       }
       return sendDrag();
@@ -1806,6 +1945,7 @@ export function RoomBoard({
     const value = held.current.get(boardEditKey(target));
     held.current.delete(boardEditKey(target));
     gestureFrom.current.delete(boardEditKey(target));
+    letFrameGo(boardEditKey(target));
     if (value !== undefined) setEdits((current) => dropBoardEdit(current, target, value));
     // It goes back where it was: nobody else is told it landed.
     sendDrag();
@@ -1826,6 +1966,21 @@ export function RoomBoard({
   };
   const changeNote: ChangeNote = (note, update) =>
     send({ kind: "note", id: note.id }, settleBoardValue(update(noteNow(note))));
+  // Where each task this person ticked was in the Plan before, for as long as this board is open.
+  const beforeDone = useRef(new Map<string, BoardPlanSpot>());
+  // Unticked, a task goes back to where it was before it was done, else to the bottom of To do.
+  const tickTask = (note: RoomBoardNote, done: boolean) => {
+    if (done) {
+      if (note.done !== true) {
+        beforeDone.current.set(note.id, { status: roomTaskStatus(note), order: note.order });
+      }
+      changeNote(note, (current) => ({ ...current, done: true }));
+      return;
+    }
+    const before = beforeDone.current.get(note.id);
+    beforeDone.current.delete(note.id);
+    placeTasks(boardPlanUntick(boardPlanColumns(shown.notes), note.id, before));
+  };
   // A team's relay may not keep a colour yet, so only a room's notes offer one.
   const pickColor =
     canEdit && cards === undefined
@@ -1869,6 +2024,12 @@ export function RoomBoard({
         : full
           ? `The board holds ${ROOM_BOARD_MAX_NOTES} cards at most. Delete one to add another.`
           : null;
+  const cannotAddLine =
+    room === null || !canEdit
+      ? cannotAdd
+      : edges.length >= ROOM_BOARD_MAX_EDGES
+        ? `The board holds ${ROOM_BOARD_MAX_EDGES} lines at most. Delete one to add another.`
+        : null;
   const cannotAddThread =
     cannotAdd ??
     (!holds.agents
@@ -2063,6 +2224,9 @@ export function RoomBoard({
   };
   // A card the right-click menu added, whose text takes the caret once the menu has closed.
   const typeInAfterMenu = useRef<string | null>(null);
+  const typeAfterMenu = useStableCallback((id: string | null) => {
+    typeInAfterMenu.current = id;
+  });
   /** Adds a section in view, or round the rects given, as one change of this viewer's. */
   const addSection = (around?: ReadonlyArray<BoardRect>, wanted?: BoardPoint) => {
     if (!canEdit || full) return null;
@@ -2189,14 +2353,43 @@ export function RoomBoard({
     event.preventDefault();
     event.clipboardData.setData("text/plain", text);
   };
-  /** Puts what was copied on the board near `at`, saying whether it took it. */
-  const pasteText = (text: string, at: BoardPoint): boolean => {
+  // The part of the board people see, clear of the header and toolbar floating over it.
+  const seenRect = (): BoardRect => {
+    const within = visibleBoardRect(
+      view,
+      boardAreaOf(surfaceRef.current) ?? { width: 0, height: 0 },
+    );
+    const cover = chromeCoverOf(surfaceRef.current);
+    const height = within.height - (cover.top + cover.bottom) / view.zoom;
+    return height < within.height / 2
+      ? within
+      : { ...within, y: within.y + cover.top / view.zoom, height };
+  };
+  /** Where something pasted or dropped lands: at the pointer when it points into view, else mid-view. */
+  const pointedSpot = (size: RoomBoardSize, pointer: BoardPoint | null) =>
+    boardPointedSpot(size, pointer, seenRect(), takenRects());
+  /** A card just pasted or dropped becomes the selection, so the person sees what came in. */
+  const selectAdded = (id: string | null) => {
+    if (id === null) return;
+    setSelection(new Set([noteRef(id)]));
+    lastCard.current = noteRef(id);
+  };
+  /**
+   * Puts what was copied on the board at `pointer` when it points into view, else mid-view, clear
+   * of every card, and selects it; says whether it took it.
+   */
+  const pasteText = (text: string, pointer: BoardPoint | null): boolean => {
     if (!canEdit) return false;
     const own = copied.current;
     if (own !== null && own.text === text) {
+      const bounds = boardBounds(own.copies.map(({ rect }) => rect));
+      const spot =
+        bounds === null ? null : pointedSpot({ w: bounds.width, h: bounds.height }, pointer);
       landCopies(
         own.copies.map(({ note, rect }) => ({ note: { ...note, id: randomUUID() }, rect })),
-        at,
+        spot === null || bounds === null
+          ? undefined
+          : { x: spot.x + bounds.width / 2, y: spot.y + bounds.height / 2 },
       );
       return true;
     }
@@ -2207,21 +2400,33 @@ export function RoomBoard({
         ? null
         : roomPullRequestOf(url);
     if (pullRequest !== null) {
-      addCard({ kind: "pull-request", url: pullRequest.url });
+      selectAdded(
+        addCard(
+          { kind: "pull-request", url: pullRequest.url },
+          pointedSpot(boardNewNoteSize("pull-request"), pointer),
+        ),
+      );
       return true;
     }
     if (url !== null) {
-      addLink(url, placeBoardItem(boardNewNoteSize("link", url), at, takenRects()));
+      selectAdded(addLink(url, pointedSpot(boardNewNoteSize("link", url), pointer)));
       return true;
     }
     if (text.trim() === "" || full) return false;
-    noteAt(at, text.slice(0, ROOM_BOARD_NOTE_MAX_LENGTH));
+    selectAdded(
+      newNote(
+        { text: text.slice(0, ROOM_BOARD_NOTE_MAX_LENGTH) },
+        pointedSpot(boardNewNoteSize(undefined), pointer),
+      ),
+    );
     return true;
   };
+  // Whether the pointer is over the board now: a paste after it left lands mid-view.
+  const pointerOver = useRef(false);
   const pasteOnBoard = (event: ClipboardEvent<HTMLDivElement>) => {
     if (!isBoardKey(event.target)) return;
     const text = event.clipboardData.getData("text/plain");
-    if (pasteText(text, lastPointer.current ?? viewCentre())) event.preventDefault();
+    if (pasteText(text, pointerOver.current ? lastPointer.current : null)) event.preventDefault();
   };
   // A link dragged in from a browser tab or another app lands as a card where it is dropped. A
   // drop on a text field is that field's.
@@ -2245,7 +2450,7 @@ export function RoomBoard({
     const at = pointerOnBoard(event);
     if (url === null || at === null) return;
     event.preventDefault();
-    addLink(url, placeBoardItem(boardNewNoteSize("link", url), at, takenRects()));
+    selectAdded(addLink(url, pointedSpot(boardNewNoteSize("link", url), at)));
   };
   /**
    * A plain note centred on `at`, in this viewer's last colour: exactly there when `exact`, as for
@@ -2530,8 +2735,7 @@ export function RoomBoard({
     );
     const lines = plan.add.map((line) => ({ id: randomUUID(), ...line }));
     // Part of asking, which undo does not take back: the lines are marked sent once it goes.
-    unrecorded.current = true;
-    try {
+    withFlag(unrecorded, () => {
       if (made) {
         const bounds = boardBounds(
           [...ask.refs].flatMap((ref) => {
@@ -2556,9 +2760,7 @@ export function RoomBoard({
         );
       }
       for (const line of lines) send({ kind: "edge", id: line.id }, line, queue);
-    } finally {
-      unrecorded.current = false;
-    }
+    });
     await queueChange(queue, () => Promise.resolve(true));
     const going = new Set(plan.going);
     // Else, as from the box's own prompt, the artifact the box already rewrites.
@@ -2569,13 +2771,10 @@ export function RoomBoard({
       artifactId: artifact?.id ?? null,
     }).catch(() => false);
     if (!sent) {
-      unrecorded.current = true;
-      try {
+      withFlag(unrecorded, () => {
         for (const line of lines) send({ kind: "edge", id: line.id }, null, queue);
         if (made) send({ kind: "note", id: boxId }, null, queue);
-      } finally {
-        unrecorded.current = false;
-      }
+      });
       return false;
     }
     rememberBoardAskTarget(askKey, boxId);
@@ -2661,8 +2860,7 @@ export function RoomBoard({
       ROOM_BOARD_MAX_EDGES,
     );
     const lines = plan.add.map((line) => ({ id: randomUUID(), ...line }));
-    unrecorded.current = true;
-    try {
+    withFlag(unrecorded, () => {
       if (group.at !== null) {
         send(
           { kind: "note", id: group.boxId },
@@ -2677,9 +2875,7 @@ export function RoomBoard({
         );
       }
       for (const line of lines) send({ kind: "edge", id: line.id }, line, queue);
-    } finally {
-      unrecorded.current = false;
-    }
+    });
     const mark = (task: RoomBoardNote, boxId: string | null) =>
       queueChange(queue, () => onChange({ type: "task.run", noteId: task.id, boxId }));
     const marked = await Promise.all(group.tasks.map((task) => mark(task, group.boxId)));
@@ -2694,13 +2890,10 @@ export function RoomBoard({
       }).catch(() => false));
     if (sent) return true;
     for (const task of group.tasks) void mark(task, null);
-    unrecorded.current = true;
-    try {
+    withFlag(unrecorded, () => {
       for (const line of lines) send({ kind: "edge", id: line.id }, null, queue);
       if (group.at !== null) send({ kind: "note", id: group.boxId }, null, queue);
-    } finally {
-      unrecorded.current = false;
-    }
+    });
     return false;
   };
   // It closes at once; boxes run one after another, and what did not go opens it again.
@@ -2897,6 +3090,39 @@ export function RoomBoard({
     surfaceRef.current?.focus({ preventScroll: true });
   };
 
+  /** The card or note under a point a line from `from` may end on, if any. */
+  const linkTargetAt = (x: number, y: number, from: string | null) => {
+    const element = document
+      .elementsFromPoint(x, y)
+      .find(
+        (each): each is HTMLElement =>
+          each instanceof HTMLElement && each.dataset.boardItem !== undefined,
+      );
+    const ref = element?.dataset.boardItem;
+    return element === undefined || ref === undefined || ref === from || isSectionRef(ref)
+      ? null
+      : { ref, element };
+  };
+  // While drawing, the line snaps to the card under the pointer, as it will land there.
+  const drawLinkTo = (event: { readonly clientX: number; readonly clientY: number }) => {
+    const at = pointerOnBoard(event);
+    if (linking === null || at === null) return;
+    const target = linkTargetAt(event.clientX, event.clientY, linking.from);
+    markLinkTarget(target?.element ?? null);
+    const box = (target === null ? undefined : boxes.get(target.ref)) ?? {
+      ...at,
+      width: 0,
+      height: 0,
+    };
+    linkPath.current?.setAttribute("d", boardConnector(linking.box, box).path);
+  };
+  /** Draws a line between two cards, unless one is there or the board holds no more. */
+  const addEdge = (from: string, to: string) => {
+    if (to === from || isSectionRef(to) || edges.length >= ROOM_BOARD_MAX_EDGES) return;
+    if (edges.some((edge) => edge.from === from && edge.to === to)) return;
+    const id = randomUUID();
+    send({ kind: "edge", id }, { id, from, to });
+  };
   const startLink = (from: string, event: PointerEvent<HTMLElement>) => {
     const box = boxes.get(from);
     const at = pointerOnBoard(event);
@@ -2907,15 +3133,14 @@ export function RoomBoard({
     setLinking({ from, box, to: at, press: { x: event.clientX, y: event.clientY } });
   };
   const moveLink = (event: PointerEvent<HTMLElement>) => {
-    const at = pointerOnBoard(event);
-    if (at === null || !event.currentTarget.hasPointerCapture(event.pointerId)) return;
-    setLinking((current) => (current === null ? null : { ...current, to: at }));
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+    drawLinkTo(event);
   };
   const endLink = (event: PointerEvent<HTMLElement>) => {
     if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
     event.currentTarget.releasePointerCapture(event.pointerId);
     const from = linking?.from;
-    setLinking(null);
+    stopLinking();
     // A grip sits on the end of any line drawn from it, so a click there is the line's.
     if (
       linking !== null &&
@@ -2924,19 +3149,35 @@ export function RoomBoard({
       setSelectedEdge(edgeAt(event.clientX, event.clientY));
       return;
     }
-    const to = dataAt(event.clientX, event.clientY, "boardItem");
-    if (
-      from === undefined ||
-      to === null ||
-      to === from ||
-      isSectionRef(to) ||
-      edges.length >= ROOM_BOARD_MAX_EDGES
-    ) {
+    const to = linkTargetAt(event.clientX, event.clientY, from ?? null);
+    if (from !== undefined && to !== null) addEdge(from, to.ref);
+  };
+  /** With the Line tool: a click picks the card a line starts from, the next the one it ends on. */
+  const pickLineEnd = (event: MouseEvent<HTMLElement>) => {
+    const target = linkTargetAt(event.clientX, event.clientY, linking?.from ?? null);
+    const at = pointerOnBoard(event);
+    if (target === null || at === null || !canEdit) {
+      stopLinking();
+      setLineTool(false);
       return;
     }
-    if (edges.some((edge) => edge.from === from && edge.to === to)) return;
-    const id = randomUUID();
-    send({ kind: "edge", id }, { id, from, to });
+    if (linking === null) {
+      const box = boxes.get(target.ref);
+      if (box === undefined) return;
+      markLinkTarget(null);
+      setLinking({ from: target.ref, box, to: at, press: { x: event.clientX, y: event.clientY } });
+      return;
+    }
+    addEdge(linking.from, target.ref);
+    stopLinking();
+    setLineTool(false);
+    surfaceRef.current?.focus({ preventScroll: true });
+  };
+  const startLineTool = () => {
+    stopLinking();
+    setPlacingComment(false);
+    setLineTool((on) => !on);
+    surfaceRef.current?.focus({ preventScroll: true });
   };
   const link = canEdit ? { onStart: startLink, onMove: moveLink, onEnd: endLink } : undefined;
 
@@ -2946,6 +3187,8 @@ export function RoomBoard({
   };
   const startComment = () => {
     closeComment();
+    setLineTool(false);
+    stopLinking();
     setPlacingComment((placing) => !placing);
     // Escape on the board stops placing.
     surfaceRef.current?.focus({ preventScroll: true });
@@ -2987,16 +3230,13 @@ export function RoomBoard({
     if (to !== null) {
       const line = randomUUID();
       // Part of starting the thread, which undo does not take back.
-      unrecorded.current = true;
-      try {
+      withFlag(unrecorded, () => {
         send(
           { kind: "edge", id: line },
           { id: line, from: noteRef(note.id), to },
           boardEditKey({ kind: "note", id: note.id }),
         );
-      } finally {
-        unrecorded.current = false;
-      }
+      });
     }
     setDraftComment(null);
     return Promise.resolve(true);
@@ -3241,26 +3481,24 @@ export function RoomBoard({
     );
     const near = (kind: RoomBoardNote["kind"]) =>
       placeBoardItem(boardNewNoteSize(kind), at, takenRects());
-    const addThenType = (add: () => string | null) => () => {
-      typeInAfterMenu.current = add();
-    };
     const runs: Record<BoardMenuEntry, { readonly label: string; readonly run: () => void }> = {
-      "add-note": { label: "Add note", run: addThenType(() => noteAt(at, "", true)) },
+      "add-note": { label: "Add note", run: () => typeAfterMenu(noteAt(at, "", true)) },
       "add-task": {
         label: "Add task",
-        run: addThenType(() => addCard({ kind: "task" }, near("task"))),
+        run: () => typeAfterMenu(addCard({ kind: "task" }, near("task"))),
       },
       "add-section": {
         label: "Add section",
-        run: addThenType(() => addSection(undefined, { x: Math.round(at.x), y: Math.round(at.y) })),
+        run: () =>
+          typeAfterMenu(addSection(undefined, { x: Math.round(at.x), y: Math.round(at.y) })),
       },
       "add-thread": {
         label: "Add thread box",
-        run: bringAgent ?? addThenType(() => addCard({ kind: "thread" }, near("thread"))),
+        run: bringAgent ?? (() => typeAfterMenu(addCard({ kind: "thread" }, near("thread")))),
       },
       "add-artifact": {
         label: "Add artifact",
-        run: addThenType(() => addCard({ kind: "artifact" }, near("artifact"))),
+        run: () => typeAfterMenu(addCard({ kind: "artifact" }, near("artifact"))),
       },
       paste: {
         label: "Paste",
@@ -3643,22 +3881,15 @@ export function RoomBoard({
     },
   );
 
-  // Something is being dragged, resized or nudged: each such step renders the board again.
-  // oxlint-disable-next-line react-hooks/refs -- held edits are what the drag has reached, and every step sets them in state too
-  const moving = boardDragItems(held.current, gestureFrom.current).some(
-    (item) => item.x !== undefined || item.w !== undefined,
-  );
   const edgeArea = drawingArea([...boxes.values()]);
   // Marker ids land in `url(#…)`, which takes no colons.
   // The person colour of whoever owns the card a line starts from: the agent that rewrites.
   const lineColor = (ref: string) =>
     boardCursorColor(guests, shown.notes.find((note) => noteRef(note.id) === ref)?.guestId);
   const markerId = `board-arrow${useId().replace(/[^\w-]/g, "")}`;
-  // oxlint-disable-next-line react-hooks/refs -- builds the open menu's entries; none runs until it is picked
-  const menuParts = contextMenuParts();
   // The Plan is the same tasks as the board's: a team's relay may not keep their status yet.
   const plannable = cards === undefined && room !== null;
-  const planShown = plannable && pickedView === "plan";
+  const planShown = plannable && pickedView !== "board";
   const planColumns = planShown ? boardPlanColumns(shown.notes) : null;
   const planAttachments = planShown ? boardPlanAttachments(shown) : null;
   const placeTasks = (
@@ -3673,14 +3904,39 @@ export function RoomBoard({
       }));
     }
   };
+  // Where each task this person moved to Done was before, so unticking it takes it back there.
+  const rememberUndone = (placements: ReadonlyArray<{ id: string; status: RoomTaskStatus }>) => {
+    for (const placement of placements) {
+      const note = shown.notes.find((candidate) => candidate.id === placement.id);
+      if (note === undefined || placement.status !== "done" || note.done === true) continue;
+      beforeDone.current.set(note.id, { status: roomTaskStatus(note), order: note.order });
+    }
+  };
   const movePlanTask = (taskId: string, to: RoomTaskStatus, index: number) => {
-    if (canEdit && planColumns !== null) placeTasks(boardPlanMove(planColumns, taskId, to, index));
+    if (!canEdit || planColumns === null) return;
+    const placements = boardPlanMove(planColumns, taskId, to, index);
+    rememberUndone(placements);
+    placeTasks(placements);
+  };
+  const movePlanTasks = (taskIds: ReadonlySet<string>, to: RoomTaskStatus) => {
+    if (!canEdit || planColumns === null) return;
+    const placements = boardPlanMoveAll(planColumns, taskIds, to);
+    rememberUndone(placements);
+    placeTasks(placements);
   };
   const addPlanTask = (status: RoomTaskStatus, text: string) => {
     if (!canEdit || full || planColumns === null) return;
     const { order, placements } = boardPlanAppendOrder(planColumns[status]);
     placeTasks(placements);
     const id = randomUUID();
+    const { grow, ...at } = boardPlanTaskPlace(shown, [...cardIds, ...upcomingCardIds], (note) =>
+      drawnHeights.get(noteRef(note.id)),
+    );
+    // The section it lands in grows first, so it never shows the task over its edge.
+    const frame = grow === undefined ? undefined : shown.notes.find((note) => note.id === grow.id);
+    if (frame !== undefined && grow !== undefined) {
+      changeNote(frame, (current) => ({ ...current, size: grow.size }));
+    }
     send(
       { kind: "note", id },
       settleBoardValue({
@@ -3688,7 +3944,7 @@ export function RoomBoard({
           {
             id,
             text: text.slice(0, ROOM_BOARD_NOTE_MAX_LENGTH),
-            ...boardPlanTaskSpot(shown, [...cardIds, ...upcomingCardIds]),
+            ...at,
             kind: "task",
             ...(viewer === null ? {} : { guestId: viewer }),
           },
@@ -3744,12 +4000,13 @@ export function RoomBoard({
         <header
           data-board-chrome="top"
           className={cn(
-            "pointer-events-none z-30 flex flex-wrap items-start gap-2",
+            // One row at every width: the title gives way first, then sharing folds into a menu.
+            "pointer-events-none z-30 flex items-start gap-2",
             planShown ? "relative mx-3 mt-3 mb-2" : "absolute inset-x-3 top-3",
             COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
           )}
         >
-          <BoardFloat className="pointer-events-auto max-w-full min-w-0 gap-0.5 p-1 pe-3">
+          <BoardFloat className="pointer-events-auto min-w-0 gap-0.5 p-1 pe-3">
             <Button size="sm" variant="ghost" onClick={onBack ?? onOpenThread}>
               <ArrowLeftIcon />
               <ToolLabel>{backLabel}</ToolLabel>
@@ -3765,11 +4022,12 @@ export function RoomBoard({
             </h1>
           </BoardFloat>
           {plannable ? (
-            <BoardFloat className="pointer-events-auto p-1">
-              <BoardViewSwitch view={planShown ? "plan" : "board"} onView={pickView} />
+            <BoardFloat className="pointer-events-auto shrink-0 p-1">
+              <BoardViewSwitch view={planShown ? pickedView : "board"} onView={pickView} />
             </BoardFloat>
           ) : null}
-          <div className="pointer-events-auto ms-auto flex max-w-full min-w-0 flex-wrap items-center justify-end gap-2">
+          {/* Passing states sit under the header's right end, never squeezing the title. */}
+          <div className="pointer-events-auto absolute end-0 top-full mt-2 flex flex-col items-end gap-2">
             {notice === null ? null : (
               <BoardFloat className="px-3 py-1.5">
                 <span role="status" className="text-xs text-muted-foreground">
@@ -3789,6 +4047,8 @@ export function RoomBoard({
                 </Button>
               </BoardFloat>
             )}
+          </div>
+          <div className="pointer-events-auto ms-auto flex shrink-0 items-center gap-2">
             {cards !== undefined || room === null ? null : (
               <BoardAgents
                 entries={agentEntries}
@@ -3825,7 +4085,25 @@ export function RoomBoard({
               />
             )}
             {sharing === undefined ? null : (
-              <BoardFloat className="min-w-0 gap-1.5 p-1 ps-2">{sharing}</BoardFloat>
+              <>
+                <BoardFloat className="min-w-0 gap-1.5 p-1 ps-2 @max-xl/board:hidden">
+                  {sharing}
+                </BoardFloat>
+                <BoardFloat className="p-1 @xl/board:hidden">
+                  <Popover>
+                    <PopoverTrigger
+                      render={
+                        <Button size="icon-sm" variant="ghost" aria-label="Share and people" />
+                      }
+                    >
+                      <EllipsisIcon />
+                    </PopoverTrigger>
+                    <PopoverPopup side="bottom" align="end" sideOffset={8}>
+                      <div className="flex flex-wrap items-center gap-1.5">{sharing}</div>
+                    </PopoverPopup>
+                  </Popover>
+                </BoardFloat>
+              </>
             )}
           </div>
         </header>
@@ -3966,6 +4244,18 @@ export function RoomBoard({
                   </span>
                 ) : null}
                 {cards !== undefined ? null : <BoardToolDivider />}
+                <WhyNot reason={cannotAddLine}>
+                  <BoardTool
+                    label="Line"
+                    hint="Draw a line: click a card, then another. Or drag from the dot on any side of a card."
+                    variant={lineTool ? "default" : "ghost"}
+                    aria-pressed={lineTool}
+                    disabled={cannotAddLine !== null}
+                    onClick={startLineTool}
+                  >
+                    <SplineIcon />
+                  </BoardTool>
+                </WhyNot>
                 {cards === undefined ? (
                   <WhyNot reason={cannotAdd}>
                     <BoardTool
@@ -4331,7 +4621,10 @@ export function RoomBoard({
             if (event.key === "Escape") {
               if (dropHeldPointer()) cancelGesture();
               else if (placingComment) setPlacingComment(false);
-              else if (openComment !== null) closeComment();
+              else if (lineTool) {
+                stopLinking();
+                setLineTool(false);
+              } else if (openComment !== null) closeComment();
               else if (selected.size > 0 && isBoardKey(event.target)) setSelection(NO_SELECTION);
               return;
             }
@@ -4433,7 +4726,7 @@ export function RoomBoard({
               boardKeyEditsNote(event)
             ) {
               const field = drawnItem(only)?.querySelector<HTMLTextAreaElement>(
-                "textarea[data-board-rest]:not([readonly])",
+                'textarea[data-board-rest=""]:not([readonly])',
               );
               if (field !== null && field !== undefined) {
                 if (event.key === "Enter") event.preventDefault();
@@ -4472,6 +4765,7 @@ export function RoomBoard({
           onPointerMove={(event) => {
             if (!marquee.move(event)) pan.onPointerMove(event);
             lastPointer.current = pointerOnBoard(event);
+            pointerOver.current = true;
             trackCursor(event);
           }}
           onDoubleClick={(event) => {
@@ -4524,7 +4818,10 @@ export function RoomBoard({
           onPointerCancel={(event) => {
             if (!marquee.end(event)) pan.onPointerCancel(event);
           }}
-          onPointerLeave={cursor.leave}
+          onPointerLeave={() => {
+            pointerOver.current = false;
+            cursor.leave();
+          }}
           onPaste={pasteOnBoard}
           onDragOver={dragOverBoard}
           onDrop={dropOnBoard}
@@ -4572,7 +4869,6 @@ export function RoomBoard({
                     handles={
                       <ItemHandles
                         from={noteRef(note.id)}
-                        on="note"
                         link={undefined}
                         onResize={
                           canEdit
@@ -4643,7 +4939,7 @@ export function RoomBoard({
                         fill="none"
                         stroke="var(--color-muted-foreground)"
                         strokeOpacity={0.6}
-                        strokeWidth="2"
+                        style={{ strokeWidth: boardStroke(2) }}
                         strokeDasharray="4 5"
                       />
                     );
@@ -4673,17 +4969,19 @@ export function RoomBoard({
                             : `url(#${markerId}-${state})`
                         }
                         selectable={canEdit}
-                        onSelect={() => setSelectedEdge(selected ? null : edge.id)}
+                        onSelect={selectEdge}
                         over={edgesOver}
                       />
                     );
                   })}
                   {linking === null ? null : (
+                    // Moved on the page as the pointer goes; see `drawLinkTo`.
                     <path
-                      d={boardConnector(linking.box, { ...linking.to, width: 0, headerY: 0 }).path}
+                      ref={linkPath}
+                      d={boardConnector(linking.box, { ...linking.to, width: 0, height: 0 }).path}
                       fill="none"
                       stroke="var(--color-primary)"
-                      strokeWidth="2.5"
+                      style={{ strokeWidth: boardStroke(2.5) }}
                       strokeDasharray="6 5"
                       markerEnd={`url(#${markerId}-selected)`}
                     />
@@ -4889,6 +5187,7 @@ export function RoomBoard({
                     onRevert={revertText}
                     onText={writeNote}
                     onChange={changeNote}
+                    onTick={tickTask}
                     onPasteLink={full ? undefined : pasteLinkInto}
                     onDelete={send}
                     onOpenReply={onOpenReply}
@@ -5110,6 +5409,34 @@ export function RoomBoard({
               onClick={placeComment}
             />
           ) : null}
+          {lineTool ? (
+            <div
+              aria-hidden
+              data-board-overlay
+              className="absolute inset-0 z-20 cursor-crosshair"
+              onPointerDown={stopPointer}
+              onPointerMove={(event) => {
+                if (linking !== null) return drawLinkTo(event);
+                const target = linkTargetAt(event.clientX, event.clientY, null);
+                markLinkTarget(target?.element ?? null);
+              }}
+              onPointerLeave={() => markLinkTarget(null)}
+              onClick={pickLineEnd}
+            />
+          ) : null}
+          {lineTool ? (
+            <p
+              role="status"
+              className="pointer-events-none absolute inset-x-0 bottom-20 z-30 flex justify-center px-4"
+            >
+              <span className="rounded-board border border-board-hairline bg-card px-3 py-1.5 text-center text-xs text-muted-foreground shadow-board">
+                {linking === null
+                  ? "Click the card the line starts from"
+                  : "Now click the card it points to"}
+                . Esc to stop.
+              </span>
+            </p>
+          ) : null}
           {commentPanel()}
           {room === null ? (
             <p className="pointer-events-none absolute inset-x-0 bottom-20 flex justify-center px-4">
@@ -5117,27 +5444,19 @@ export function RoomBoard({
                 Share this thread with guests and each person who joins gets a card here.
               </span>
             </p>
-          ) : canEdit &&
-            shown.notes.length === 0 &&
-            (cards?.length ?? 0) === 0 &&
-            messages.length === 0 ? (
-            // Above the toolbar, below the room thread's own card while it is new and short.
-            <div className="pointer-events-none absolute inset-x-0 bottom-20 flex justify-center px-4">
-              <div className="flex max-w-xs flex-col items-center gap-1 text-center">
-                <p className="text-sm font-semibold text-foreground">An empty board</p>
-                <p className="text-xs text-muted-foreground">
-                  Double-click anywhere for a sticky note, or pick a tool below.
-                </p>
-              </div>
-            </div>
+          ) : canEdit ? (
+            // Above the toolbar: once per person, on the first board they open as a board.
+            <BoardFirstRunHint bringAgent={bringAgent} hidden={planShown || lineTool} />
           ) : null}
         </div>
         {planColumns === null || planAttachments === null ? null : (
           <BoardPlan
+            layout={pickedView === "list" ? "list" : "columns"}
             columns={planColumns}
             attachments={planAttachments}
             people={people}
             guests={guests}
+            viewer={viewer}
             ownerAssignable={ownerAssignable}
             canEdit={canEdit}
             cannotAdd={cannotAdd}
@@ -5161,38 +5480,43 @@ export function RoomBoard({
             onAdd={addPlanTask}
             onChange={changeNote}
             onMove={movePlanTask}
+            onMoveAll={movePlanTasks}
             actionsOf={planActions}
           />
         )}
-        {contextMenu === null || menuParts === null ? null : (
-          // A right-click on the open menu, or the Menu key in it, opens no browser menu over it.
-          <div className="contents" onContextMenu={(event) => event.preventDefault()}>
-            <BoardContextMenu
-              key={`${contextMenu.x},${contextMenu.y}`}
-              at={contextMenu}
-              card={menuParts.card}
-              groups={menuParts.groups}
-              onClose={() => {
-                setContextMenu(null);
-                const added = typeInAfterMenu.current;
-                typeInAfterMenu.current = null;
-                if (added !== null) return typeIn(added);
-                if (askAfterMenu.current) {
-                  askAfterMenu.current = false;
-                  return openAsk();
-                }
-                if (runAfterMenu.current) {
-                  runAfterMenu.current = false;
-                  openRun(selectedNotes);
-                  return;
-                }
-                const surface = surfaceRef.current;
-                if (surface !== null && !surface.contains(document.activeElement)) {
-                  surface.focus({ preventScroll: true });
-                }
-              }}
-            />
-          </div>
+        {contextMenu === null ? null : (
+          <Built build={contextMenuParts}>
+            {(menuParts) => (
+              // A right-click on the open menu, or the Menu key in it, opens no browser menu over it.
+              <div className="contents" onContextMenu={(event) => event.preventDefault()}>
+                <BoardContextMenu
+                  key={`${contextMenu.x},${contextMenu.y}`}
+                  at={contextMenu}
+                  card={menuParts.card}
+                  groups={menuParts.groups}
+                  onClose={() => {
+                    setContextMenu(null);
+                    const added = typeInAfterMenu.current;
+                    typeInAfterMenu.current = null;
+                    if (added !== null) return typeIn(added);
+                    if (askAfterMenu.current) {
+                      askAfterMenu.current = false;
+                      return openAsk();
+                    }
+                    if (runAfterMenu.current) {
+                      runAfterMenu.current = false;
+                      openRun(selectedNotes);
+                      return;
+                    }
+                    const surface = surfaceRef.current;
+                    if (surface !== null && !surface.contains(document.activeElement)) {
+                      surface.focus({ preventScroll: true });
+                    }
+                  }}
+                />
+              </div>
+            )}
+          </Built>
         )}
         {asking === null || !canAsk ? null : (
           <BoardAskPopover
@@ -5270,7 +5594,7 @@ function roomSummary(room: BoardRoom, online: number): string {
 /** The part of the board the arrows are drawn in, so the browser finds a pointer over one. */
 function drawingArea(boxes: ReadonlyArray<BoardBox>) {
   const xs = boxes.flatMap((box) => [box.x, box.x + box.width]);
-  const ys = boxes.map((box) => box.y);
+  const ys = boxes.flatMap((box) => [box.y, box.y + box.height]);
   const x = Math.min(0, ...xs) - EDGE_MARGIN;
   const y = Math.min(0, ...ys) - EDGE_MARGIN;
   return {
@@ -5286,6 +5610,7 @@ const boardGridStyle = (view: BoardView) => ({
   backgroundSize: `${GRID * view.zoom}px ${GRID * view.zoom}px`,
   backgroundPosition: `${view.x}px ${view.y}px`,
   "--board-touch-scale": boardTouchScale(view.zoom),
+  "--board-line-scale": boardLineScale(view.zoom),
 });
 
 type DragBy = (target: BoardTarget, from: BoardPoint, dx: number, dy: number) => void;
@@ -5371,49 +5696,49 @@ function LineLegend() {
   );
 }
 
+/** Where each side's grip sits: 28px, mostly outside the side's middle, its dot just outside. */
+const LINK_HANDLE_SPOTS: Readonly<Record<BoardSide, string>> = {
+  top: "-top-5 left-1/2 -translate-x-1/2",
+  right: "-right-5 top-1/2 -translate-y-1/2",
+  bottom: "-bottom-5 left-1/2 -translate-x-1/2",
+  left: "-left-5 top-1/2 -translate-y-1/2",
+};
+const LINK_SIDES = Object.keys(LINK_HANDLE_SPOTS) as ReadonlyArray<BoardSide>;
+
 /**
- * A 24px grip centred on one side of a card, level with its header. Cards and notes keep 12px of
- * padding at each end of their header so it covers none of their buttons.
+ * A grip in the middle of one side of a card, shown while the card is hovered or selected: drag
+ * from it to another card to draw a line. Hidden, it takes no presses, so the board pans there.
  */
 function LinkHandle({
   from,
   link,
-  on,
   side,
+  pin = false,
 }: {
   readonly from: string;
   readonly link: LinkHandlers;
-  /**
-   * A card's header is taller than a note's; the grip sits level with its middle. A pin's sits
-   * just outside it, so the pin itself stays easy to press.
-   */
-  readonly on: "card" | "note" | "pin";
-  readonly side: BoardCorner;
+  readonly side: BoardSide;
+  /** A comment pin's sits further out, so the pin itself stays easy to press. */
+  readonly pin?: boolean;
 }) {
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <button
-            type="button"
-            data-board-grip
-            aria-label={side === "right" ? "Draw a line" : "Draw a line from the left"}
-            className={cn(
-              "group/link absolute z-10 grid size-6 cursor-crosshair touch-none place-items-center",
-              on === "pin" ? "-right-7" : side === "right" ? "-right-3" : "-left-3",
-              on === "card" ? "top-1.5" : on === "pin" ? "top-1" : "top-0",
-            )}
-            onPointerDown={(event) => link.onStart(from, event)}
-            onPointerMove={link.onMove}
-            onPointerUp={link.onEnd}
-            onPointerCancel={link.onEnd}
-          />
-        }
-      >
-        <span className="size-3.5 rounded-full border-2 border-primary bg-background opacity-0 transition-opacity group-hover/item:opacity-100 group-focus-visible/link:opacity-100" />
-      </TooltipTrigger>
-      <TooltipPopup side={side}>Drag to another card to draw a line</TooltipPopup>
-    </Tooltip>
+    <button
+      type="button"
+      data-board-grip
+      data-board-link
+      aria-label="Drag to another card to draw a line"
+      className={cn(
+        "group/link pointer-events-none absolute z-10 grid size-7 cursor-crosshair touch-none place-items-center opacity-0 transition-opacity group-hover/item:pointer-events-auto group-hover/item:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
+        // A pin's touches its right side, so the pointer reaches it without leaving the pin.
+        pin ? "-right-7 top-0.5" : LINK_HANDLE_SPOTS[side],
+      )}
+      onPointerDown={(event) => link.onStart(from, event)}
+      onPointerMove={link.onMove}
+      onPointerUp={link.onEnd}
+      onPointerCancel={link.onEnd}
+    >
+      <span className="size-3 rounded-full border-2 border-primary bg-background shadow-board transition-transform group-hover/link:scale-150 group-hover/link:bg-primary" />
+    </button>
   );
 }
 
@@ -5425,19 +5750,17 @@ function PinLinkHandle({
   readonly from: string;
   readonly link: LinkHandlers | undefined;
 }) {
-  return link === undefined ? null : <LinkHandle from={from} link={link} on="pin" side="right" />;
+  return link === undefined ? null : <LinkHandle from={from} link={link} side="right" pin />;
 }
 
-/** Both side grips and both bottom corners of a card or note, for whoever may edit the board. */
+/** The four side grips and both bottom corners of a card or note, for whoever may edit the board. */
 function ItemHandles({
   from,
-  on,
   link,
   onResize,
   onEnd,
 }: {
   readonly from: string;
-  readonly on: "card" | "note";
   readonly link: LinkHandlers | undefined;
   readonly onResize:
     | ((corner: BoardCorner, from: BoardRect, dx: number, dy: number) => void)
@@ -5446,12 +5769,9 @@ function ItemHandles({
 }) {
   return (
     <>
-      {link === undefined ? null : (
-        <>
-          <LinkHandle from={from} link={link} on={on} side="left" />
-          <LinkHandle from={from} link={link} on={on} side="right" />
-        </>
-      )}
+      {link === undefined
+        ? null
+        : LINK_SIDES.map((side) => <LinkHandle key={side} from={from} link={link} side={side} />)}
       {onResize === undefined ? null : (
         <>
           <ResizeHandle
@@ -5515,6 +5835,7 @@ function BoardNote({
   onRevert,
   onText,
   onChange,
+  onTick,
   onPasteLink,
   onDelete,
   onOpenReply,
@@ -5585,6 +5906,8 @@ function BoardNote({
   readonly onRevert: (target: BoardTarget) => void;
   readonly onText: (note: RoomBoardNote, text: string) => void;
   readonly onChange: ChangeNote;
+  /** Ticks a task done, or unticks it back to where it was in the Plan. */
+  readonly onTick: (note: RoomBoardNote, done: boolean) => void;
   /** Absent when a pasted link cannot become a card of its own, on a full board. */
   readonly onPasteLink: ((note: RoomBoardNote, url: string) => void) | undefined;
   readonly onDelete: (target: BoardTarget, value: null) => void;
@@ -5643,6 +5966,8 @@ function BoardNote({
   const canDelete = canEdit && mine;
   const size = boardNoteSize(note);
   const [quoteOpen, setQuoteOpen] = useState(false);
+  // The day the card was drawn on, which its due day is read against.
+  const [today] = useState(() => boardPlanToday(new Date()));
   const selected = useBoardSelected(noteRef(note.id));
   const liveDrag = useBoardLiveDrag(noteRef(note.id));
   const live = boardLiveRect({ x: note.x, y: note.y, w: size?.w, h: size?.h }, liveDrag);
@@ -5660,9 +5985,10 @@ function BoardNote({
     () => onDrop(note),
     (event, on) => {
       if (
-        paper &&
+        (paper || titled) &&
         event.currentTarget.hasAttribute("data-pressed-alone") &&
-        on instanceof HTMLTextAreaElement
+        on instanceof HTMLTextAreaElement &&
+        on.hasAttribute("data-board-rest")
       ) {
         focusTextAt(on, event.clientX, event.clientY);
       }
@@ -5697,6 +6023,7 @@ function BoardNote({
         ...boardLiveStyle(note, live),
       }}
       data-board-item={noteRef(note.id)}
+      data-board-selected={selected ? "" : undefined}
       {...drag}
       onPointerDown={(event) => {
         event.currentTarget.toggleAttribute("data-pressed-alone", alone);
@@ -5719,7 +6046,7 @@ function BoardNote({
               aria-label="Done"
               checked={note.done === true}
               disabled={!canEdit}
-              onCheckedChange={(done) => onChange(note, (current) => ({ ...current, done }))}
+              onCheckedChange={(done) => onTick(note, done)}
             />
             {roomTaskStatus(note) === "doing" ? (
               <BoardChip tone="primary" className="ms-1.5">
@@ -5742,30 +6069,38 @@ function BoardNote({
         ) : note.pinnedTo !== undefined ? (
           <MessageSquareTextIcon aria-hidden className="size-3 shrink-0 opacity-60" />
         ) : null}
+        {/* A window's bar says what it is; its own title is below, and who added it beside. */}
         <span
           className={cn(
             "min-w-0 flex-1 truncate",
-            box !== undefined || titled ? "font-semibold" : "text-2xs opacity-60",
+            box !== undefined
+              ? "font-semibold"
+              : titled
+                ? "font-medium text-muted-foreground"
+                : "text-2xs opacity-60",
           )}
         >
           {box !== undefined
             ? box.label
             : thread
-              ? `Thread from ${author}`
+              ? "Thread"
               : artifact
-                ? `Artifact from ${author}`
+                ? "Artifact"
                 : code
-                  ? `Code window from ${author}`
+                  ? "Code window"
                   : pullRequest
-                    ? `Pull request from ${author}`
+                    ? "Pull request"
                     : linked !== null
-                      ? `${linked.source === "web" ? "Link" : linked.name} from ${author}`
+                      ? linked.kind
                       : note.pinnedTo === undefined
                         ? paper
                           ? null
                           : author
                         : `${author} on a reply`}
         </span>
+        {box === undefined && titled && linked === null && !thread ? (
+          <AddedBy name={author} color={boardCursorColor(people.guests, note.guestId)} />
+        ) : null}
         <div className={cn("flex items-center gap-1", !selected && BOARD_HOVER_CHROME_CLASS)}>
           {compact ? <CardActionsMenu {...menuOf(note)} /> : null}
           {compact || onUse === undefined ? null : (
@@ -5903,9 +6238,15 @@ function BoardNote({
                 : size !== undefined && "min-h-0 flex-1",
               !canChange && "cursor-default",
               paper && "cursor-default focus:cursor-text",
+              titled && "cursor-grab focus:cursor-text",
+              // A link's title read from its address shows as its title until someone names it.
+              linked !== null &&
+                "placeholder:text-card-foreground focus:placeholder:text-placeholder",
             )}
-            data-board-rest={paper ? "" : undefined}
-            onPointerDown={paper ? undefined : stopPointer}
+            // A window's title, like a note's text, moves its card until a click on the card
+            // selected alone puts the caret in it.
+            data-board-rest={paper ? "" : titled ? "title" : undefined}
+            onPointerDown={paper || titled ? undefined : stopPointer}
             onChange={(event) => {
               setDrafting(true);
               onText(note, event.target.value);
@@ -5939,6 +6280,16 @@ function BoardNote({
           <TaskProgress note={note} people={people} worker={worker} boxName={boxName} />
         ) : null}
         {note.kind === "task" ? taskRun : null}
+        {note.kind === "task" && (note.priority !== undefined || note.due !== undefined) ? (
+          <div className="flex flex-wrap items-center gap-1 px-3 pb-1">
+            {note.priority === undefined ? null : (
+              <TaskPriorityMark priority={note.priority} iconOnly />
+            )}
+            {note.due === undefined ? null : (
+              <TaskDueChip due={note.due} today={today} done={note.done === true} />
+            )}
+          </div>
+        ) : null}
         {note.kind === "task" ? (
           <div className="flex flex-wrap items-center gap-1 px-2 pb-2">
             <AssigneeMenu
@@ -6022,6 +6373,9 @@ function BoardNote({
             live={embed?.live === true}
             active={embed?.active === true}
             onRelease={() => embed?.onRelease()}
+            addedBy={
+              <AddedBy name={author} color={boardCursorColor(people.guests, note.guestId)} named />
+            }
           />
         )}
         {box === undefined ? null : (
@@ -6046,7 +6400,6 @@ function BoardNote({
       />
       <ItemHandles
         from={noteRef(note.id)}
-        on="note"
         link={link}
         onResize={
           onResize === undefined
@@ -6269,6 +6622,7 @@ function BoardCard({
         BOARD_WINDOW_CLASS,
         dashed && "border-dashed border-foreground/20",
         (dropLabel !== undefined || selected) && "ring-2 ring-primary",
+        selected && BOARD_SELECTED_CHROME_CLASS,
       )}
       style={{
         left: at.x,
@@ -6279,6 +6633,7 @@ function BoardCard({
       }}
       data-board-drop={dropTarget}
       data-board-item={cardRef(id)}
+      data-board-selected={selected ? "" : undefined}
       {...dragHandlers(
         (dx, dy) => onMove(target, at, dx, dy),
         () => onDrop(target),
@@ -6305,7 +6660,6 @@ function BoardCard({
       )}
       <ItemHandles
         from={cardRef(id)}
-        on="card"
         link={link}
         onResize={
           resize === undefined

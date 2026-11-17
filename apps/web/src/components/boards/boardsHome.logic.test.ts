@@ -20,9 +20,15 @@ import {
   STARTER_BOARD_TEMPLATES,
 } from "./boardTemplates";
 import {
+  type HomeBoardSort,
   type NewBoardPlace,
   type OwnBoardSource,
+  boardPaint,
   boardThumbnail,
+  boardTimeLabel,
+  boardsInScope,
+  homeContent,
+  sortHomeBoards,
   joinedBoardSources,
   listHomeBoards,
   newBoardProject,
@@ -30,6 +36,7 @@ import {
   newBoardStart,
   newCloudBoardAgent,
   teamBoardShapes,
+  withWorkspaceBoards,
 } from "./boardsHome.logic";
 import { boardCardBox, boardConnector } from "../room/roomBoard.logic";
 
@@ -165,6 +172,130 @@ describe("listHomeBoards", () => {
       ["machine", false, false, false],
       ["elsewhere", false, true, true],
     ]);
+    // The host's preview shows everyone's changes, so it wins over this browser's own.
+    const previews = joinedBoardSources({
+      local: [
+        { ...local[0]!, preview: "1:here" },
+        { ...local[1]!, preview: "1:machine" },
+      ],
+      listed: [{ ...account("here", false), preview: "1:host" }, account("elsewhere", true)],
+    }).map((board) => [board.shareId, board.preview]);
+    expect(previews).toEqual([
+      ["here", "1:host"],
+      ["machine", "1:machine"],
+      ["elsewhere", undefined],
+    ]);
+  });
+
+  it("lists each workspace's boards, opened here or not, and shows one scope at a time", () => {
+    const joined = withWorkspaceBoards(
+      [
+        { shareId: "mine", threadId: "t-mine", title: "Mine", joinedAt: NOW_ISO, cloud: true },
+        { shareId: "team-here", threadId: "t-th", title: "Here", joinedAt: NOW_ISO, cloud: true },
+      ],
+      [
+        {
+          id: "ws-acme",
+          name: "Acme",
+          boards: [
+            { shareId: "team-here", threadId: "t-th", title: "Here", addedAt: NOW_ISO },
+            { shareId: "team-new", threadId: "t-tn", title: "Roadmap", addedAt: NOW_ISO },
+          ],
+        },
+      ],
+    );
+    const boards = listHomeBoards({
+      threads: [thread("On my computer")],
+      joined,
+      teams: [],
+      isOwnEnvironment: () => true,
+    });
+    const shown = (scope: string, query?: string) =>
+      boardsInScope(
+        query === undefined
+          ? boards
+          : listHomeBoards({ threads: [], joined, teams: [], isOwnEnvironment: () => true, query }),
+        scope,
+      ).map((board) =>
+        board.kind === "joined" ? [board.title, board.workspaceName, board.remote] : [board.title],
+      );
+    expect(shown("ws-acme")).toEqual([
+      ["Here", "Acme", false],
+      ["Roadmap", "Acme", true],
+    ]);
+    expect(shown("personal")).toEqual([["Mine", null, false], ["On my computer"]]);
+    expect(shown("all")).toHaveLength(4);
+    expect(shown("ws-other")).toEqual([]);
+    // Search finds boards by their workspace's name too.
+    expect(shown("all", "acme").map(([title]) => title)).toEqual(["Here", "Roadmap"]);
+  });
+});
+
+describe("the home's order and what it shows", () => {
+  const boards = listHomeBoards({
+    threads: [
+      thread("zeta", {
+        createdAt: "2026-10-01T00:00:00.000Z",
+        updatedAt: "2026-11-02T00:00:00.000Z",
+        // Opened most recently of all, though it changed long ago.
+        lastVisitedAt: "2026-11-16T00:00:00.000Z",
+      }),
+    ],
+    joined: [
+      {
+        shareId: "alpha",
+        threadId: "t-a",
+        title: "Alpha",
+        joinedAt: "2026-11-05T00:00:00.000Z",
+        openedAt: "2026-11-15T00:00:00.000Z",
+      },
+      { shareId: "beta", threadId: "t-b", title: "beta 10", joinedAt: "2026-11-10T00:00:00.000Z" },
+      { shareId: "gamma", threadId: "t-g", title: "Beta 9", joinedAt: "2026-11-10T00:00:00.000Z" },
+    ],
+    teams: [{ id: "team-1", name: "Design" }],
+    isOwnEnvironment: () => true,
+  });
+  const titles = (sort: HomeBoardSort) => sortHomeBoards(boards, sort).map((board) => board.title);
+
+  it("sorts by last opened, by name, or newest first, with untimed boards last", () => {
+    expect(titles("recent")).toEqual(["zeta", "Alpha", "Beta 9", "beta 10", "Design"]);
+    // Names compare without case, and numbers as numbers.
+    expect(titles("name")).toEqual(["Alpha", "Beta 9", "beta 10", "Design", "zeta"]);
+    expect(titles("created")).toEqual(["Beta 9", "beta 10", "Alpha", "zeta", "Design"]);
+  });
+
+  it("never shows the welcome while the person's boards may still be on their way", () => {
+    const shows = (boards: number, machinesLoaded: boolean, accountLoaded: boolean) =>
+      homeContent({ boards, workspaces: 0, machinesLoaded, accountLoaded });
+    expect(shows(0, true, false)).toBe("loading");
+    expect(shows(0, false, true)).toBe("loading");
+    expect(shows(0, true, true)).toBe("welcome");
+    // Boards this browser already has show at once; the account's join them as they arrive.
+    expect(shows(2, false, false)).toBe("boards");
+    expect(
+      homeContent({ boards: 0, workspaces: 1, machinesLoaded: true, accountLoaded: true }),
+    ).toBe("boards");
+  });
+
+  it("says when in words", () => {
+    const now = Date.parse("2026-11-17T15:00:00.000Z");
+    const label = (iso: string) => boardTimeLabel(iso, now);
+    expect(label("2026-11-17T14:59:30.000Z")).toBe("Just now");
+    expect(label("2026-11-17T14:59:00.000Z")).toBe("1 minute ago");
+    expect(label("2026-11-17T13:00:00.000Z")).toBe("2 hours ago");
+    expect(label("2026-11-16T09:00:00.000Z")).toBe("Yesterday");
+    expect(label("2026-11-12T09:00:00.000Z")).toBe("5 days ago");
+    expect(label("2026-10-27T09:00:00.000Z")).toBe("3 weeks ago");
+    expect(label("2026-03-04T09:00:00.000Z")).toBe("Mar 4");
+    expect(label("2025-03-04T09:00:00.000Z")).toBe("Mar 4, 2025");
+    expect(label("not a date")).toBeNull();
+  });
+
+  it("gives a workspace's boards its colour, and every other board a steady one of its own", () => {
+    expect(boardPaint({ key: "joined:a", workspaceColor: "pink" })).toBe("pink");
+    expect(boardPaint({ key: "joined:a" })).toBe(
+      boardPaint({ key: "joined:a", workspaceColor: null }),
+    );
   });
 });
 

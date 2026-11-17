@@ -47,21 +47,36 @@ interface AccountProfile {
   readonly firstName?: string | null | undefined;
   readonly lastName?: string | null | undefined;
   readonly username?: string | null | undefined;
-  readonly email?: string | null | undefined;
 }
 
 const fitName = (text: string | null | undefined) =>
   text?.trim().replace(/\s+/g, " ").slice(0, GUEST_NAME_MAX_LENGTH).trim() || null;
 
 /**
- * The name a signed-in account joins boards under: its full name, else its first and last name,
- * its username, or its email before the @. Null when the account has none of these.
+ * The name a signed-in account joins boards under, and whether the account itself has a real
+ * one: its full name, else its first and last name; else the name this browser already joined
+ * boards under, then its username. Never anything from its email, which others would see.
  */
-export const accountDisplayName = (profile: AccountProfile): string | null =>
-  fitName(profile.fullName) ??
-  fitName([profile.firstName, profile.lastName].filter(Boolean).join(" ")) ??
-  fitName(profile.username) ??
-  fitName(profile.email?.split("@")[0]);
+export function accountDisplayName(
+  profile: AccountProfile,
+  browserName: string | null = null,
+): { readonly name: string | null; readonly real: boolean } {
+  const real =
+    fitName(profile.fullName) ??
+    fitName([profile.firstName, profile.lastName].filter(Boolean).join(" "));
+  if (real !== null) return { name: real, real: true };
+  return { name: fitName(browserName) ?? fitName(profile.username), real: false };
+}
+
+/** A typed name as the account keeps it: the last word as the last name, the rest as the first. */
+export function accountNameParts(name: string): {
+  readonly firstName: string;
+  readonly lastName: string;
+} {
+  const words = (fitName(name) ?? "").split(" ").filter((word) => word !== "");
+  if (words.length < 2) return { firstName: words[0] ?? "", lastName: "" };
+  return { firstName: words.slice(0, -1).join(" "), lastName: words.at(-1)! };
+}
 
 const FRIENDLY_WORDS = [
   "Bright",

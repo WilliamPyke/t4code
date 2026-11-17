@@ -186,9 +186,19 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
   const lastActiveEnvironmentId = () => {
     let latest: (typeof threads)[number] | undefined;
     for (const thread of threads) {
+      if (isGuestEnvironment(thread.environmentId)) continue;
       if (latest === undefined || thread.updatedAt > latest.updatedAt) latest = thread;
     }
-    return latest?.environmentId ?? primaryEnvironmentId;
+    // A computer just connected with Tinkjam Sync has no threads yet.
+    return (
+      latest?.environmentId ??
+      primaryEnvironmentId ??
+      environments.find(
+        (entry) =>
+          !isGuestEnvironment(entry.environmentId) && entry.connection.phase === "connected",
+      )?.environmentId ??
+      null
+    );
   };
 
   const loadPreview = async () => {

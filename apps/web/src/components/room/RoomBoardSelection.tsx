@@ -195,7 +195,15 @@ export function SelectionBar({
     }
     const rects = [...refs].flatMap((ref) => {
       const item = board.querySelector(`[data-board-item="${CSS.escape(ref)}"]`);
-      return item === null ? [] : [item.getBoundingClientRect()];
+      if (item === null) return [];
+      const drawn = item.getBoundingClientRect();
+      // A section's title sits above its frame, and the bar keeps clear of it too.
+      const title = item.hasAttribute("data-board-section")
+        ? item.querySelector("input")?.getBoundingClientRect()
+        : undefined;
+      if (title === undefined) return [drawn];
+      const top = Math.min(drawn.top, title.top);
+      return [new DOMRect(drawn.left, top, drawn.width, drawn.bottom - top)];
     });
     if (rects.length === 0) return;
     const left = Math.min(...rects.map((rect) => rect.left));

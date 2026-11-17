@@ -9,7 +9,14 @@ const authFlowElements = {
 export const clerkAppearance = {
   // index.css orders this layer below components and utilities so the element classes below win.
   cssLayerName: "clerk",
-  options: { shimmer: false, logoImageUrl: "/tinkjam-mark.svg", logoPlacement: "inside" },
+  options: {
+    shimmer: false,
+    logoImageUrl: "/tinkjam-mark.svg",
+    logoPlacement: "inside",
+    // One clear button per way in reads better than a row of bare icons.
+    socialButtonsVariant: "blockButton",
+    showOptionalFields: false,
+  },
   variables: {
     borderRadius: "0.5rem",
     // Clerk reuses its primary color for filled buttons and bare links.
@@ -29,8 +36,12 @@ export const clerkAppearance = {
     colorRing: "var(--ring)",
   },
   elements: {
-    modalBackdrop: "dialog-backdrop z-50",
+    // The board's dotted canvas behind the sign-in, as on the welcome and join pages.
+    modalBackdrop:
+      "dialog-backdrop z-50 bg-[radial-gradient(var(--color-board-dot)_1px,transparent_1px)] bg-size-[24px_24px]",
     cardBox: "dialog-glass rounded-2xl border",
+    // "Last used" means nothing to someone on a new browser, or to two people sharing one.
+    lastAuthenticationStrategyBadge: "hidden",
     card: "border-0 bg-transparent shadow-none",
     footer: "bg-transparent bg-none",
     header: "items-start text-start",
@@ -48,6 +59,8 @@ export const clerkAppearance = {
 } satisfies NonNullable<ClerkProviderProps["appearance"]>;
 
 const TO_CONTINUE = "to continue to Tinkjam";
+// The one line of what Tinkjam is, under every first step.
+const VALUE = "Your team and your agents on one board, on every device.";
 
 /**
  * Clerk names the product with its dashboard's application name; every line that would show it
@@ -57,9 +70,9 @@ export const clerkLocalization = {
   signIn: {
     start: {
       title: "Sign in to Tinkjam",
-      subtitle: "Your boards, on every device.",
-      titleCombined: "Sign in or sign up for Tinkjam",
-      subtitleCombined: "Your boards, on every device.",
+      subtitle: VALUE,
+      titleCombined: "Continue to Tinkjam",
+      subtitleCombined: `${VALUE} New here? The same email makes your account.`,
       actionText: "New to Tinkjam?",
       actionLink: "Create an account",
     },
@@ -73,8 +86,8 @@ export const clerkLocalization = {
     start: {
       title: "Create your Tinkjam account",
       titleCombined: "Create your Tinkjam account",
-      subtitle: "Your boards, on every device.",
-      subtitleCombined: "Your boards, on every device.",
+      subtitle: VALUE,
+      subtitleCombined: VALUE,
       actionText: "Already use Tinkjam?",
       actionLink: "Sign in",
     },

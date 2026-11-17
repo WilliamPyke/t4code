@@ -41,6 +41,8 @@ export interface CloudRoom {
   readonly machines?: ReadonlyArray<CloudMachineToken>;
   /** Who made the board. Absent on boards made before it was kept, and once the maker left. */
   readonly maker?: GuestId;
+  /** The workspace whose members may open the board without its invite. */
+  readonly workspaceId?: string;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -56,6 +58,11 @@ export interface CloudGuest {
   readonly accountId?: string;
   /** Sessions the account opened on its other devices, each the same person as this one. */
   readonly accountSessions?: ReadonlyArray<string>;
+  /**
+   * Taken out of the board's workspace: their cards stay theirs, but nothing opens the board as
+   * them until the workspace has them back.
+   */
+  readonly locked?: true;
 }
 
 export const DEFAULT_BOARD_TITLE = "Untitled board";
@@ -81,6 +88,14 @@ const FAILURES = {
   unavailable: { status: 404, message: "Cloud boards do not have this yet." },
   empty: { status: 400, message: "Write something first." },
   artifact_gone: { status: 404, message: "This artifact is no longer on the board." },
+  not_member: { status: 403, message: "You are not in this workspace." },
+  not_owner: { status: 403, message: "Only an owner of this workspace can do this." },
+  last_owner: {
+    status: 409,
+    message: "Make someone else an owner first, or delete the workspace.",
+  },
+  limit: { status: 409, message: "This is as many as Tinkjam holds." },
+  not_in_workspace: { status: 404, message: "This board is no longer in this workspace." },
   not_on_board: {
     status: 404,
     message: "This thread is not on a board. Only one of its thread boxes can use it.",
@@ -123,7 +138,7 @@ export function needsAnOwner(change: RoomBoardChange): boolean {
   );
 }
 
-const freeGuestName = (guests: ReadonlyArray<CloudGuest>, wanted: string) => {
+export const freeGuestName = (guests: ReadonlyArray<CloudGuest>, wanted: string) => {
   const base = wanted.slice(0, GUEST_NAME_MAX_LENGTH - 3);
   const taken = new Set(guests.map((guest) => guest.name.toLowerCase()));
   let name = wanted;

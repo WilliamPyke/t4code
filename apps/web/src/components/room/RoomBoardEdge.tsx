@@ -1,16 +1,27 @@
-import { type PointerEvent, useLayoutEffect, useRef } from "react";
+import { type PointerEvent, memo, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
 import { type BoardBox, boardConnector } from "./roomBoard.logic";
-import { type BoardLiveDrag, useBoardLiveDrag } from "./roomBoardLive";
+import { type BoardLiveDrag, useBoardLineEnd } from "./roomBoardLive";
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
 
-/** A line's end where someone else is dragging its card now, or where the card is stored. */
+/** A line's end where someone, this person too, is dragging its card now, or where it is stored. */
 const liveEnd = (box: BoardBox, live: BoardLiveDrag | undefined): BoardBox =>
   live === undefined
     ? box
-    : { ...box, x: live.x ?? box.x, y: live.y ?? box.y, width: live.w ?? box.width };
+    : {
+        x: live.x ?? box.x,
+        y: live.y ?? box.y,
+        width: live.w ?? box.width,
+        height: live.h ?? box.height,
+      };
+
+/** A stroke width in board pixels, thickened as the board zooms out; see `boardLineScale`. */
+export const boardStroke = (width: number) => `calc(${width}px * var(--board-line-scale, 1))`;
+
+const sameBox = (a: BoardBox, b: BoardBox) =>
+  a === b || (a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height);
 
 // An underdamped spring: a line's belly trails its cards, swings past and settles in under a second.
 const STIFFNESS = 170;
@@ -34,12 +45,31 @@ interface Sway {
   at: number;
 }
 
+interface BoardEdgeLineProps {
+  readonly id: string;
+  readonly fromRef: string;
+  readonly toRef: string;
+  readonly from: BoardBox;
+  readonly to: BoardBox;
+  readonly color: string;
+  readonly width: number;
+  readonly marker: string;
+  readonly dashed?: boolean;
+  /** Whether a press on it selects it, for whoever may edit the board. */
+  readonly selectable: boolean;
+  /** Stable across renders: a line given a new one would draw again. */
+  readonly onSelect: (id: string) => void;
+  /** The layer above the cards. */
+  readonly over: SVGGElement | null;
+}
+
 /**
- * One line between two cards. Each reads where someone else drags its own two ends from the live
- * store, so a drag redraws only the lines on the card that moves, never the board. It also draws
- * a faint copy of itself into `over`, above the cards, so it can be followed behind one.
+ * One line between two cards. Each reads where anyone drags its own two ends from the live store,
+ * so a drag redraws only the lines on the card that moves, never the board. It also draws
+ * a faint copy of itself into `over`, above the cards, so it can be followed behind one. Its ends
+ * compare by value, so the board's other changes leave it alone.
  */
-export function BoardEdgeLine({
+export const BoardEdgeLine = memo(function BoardEdgeLine({
   id,
   fromRef,
   toRef,
@@ -52,24 +82,9 @@ export function BoardEdgeLine({
   selectable,
   onSelect,
   over,
-}: {
-  readonly id: string;
-  readonly fromRef: string;
-  readonly toRef: string;
-  readonly from: BoardBox;
-  readonly to: BoardBox;
-  readonly color: string;
-  readonly width: number;
-  readonly marker: string;
-  readonly dashed?: boolean;
-  /** Whether a press on it selects it, for whoever may edit the board. */
-  readonly selectable: boolean;
-  readonly onSelect: () => void;
-  /** The layer above the cards. */
-  readonly over: SVGGElement | null;
-}) {
-  const start = liveEnd(from, useBoardLiveDrag(fromRef));
-  const end = liveEnd(to, useBoardLiveDrag(toRef));
+}: BoardEdgeLineProps) {
+  const start = liveEnd(from, useBoardLineEnd(fromRef));
+  const end = liveEnd(to, useBoardLineEnd(toRef));
   const { path, middle } = boardConnector(start, end);
   const group = useRef<SVGGElement>(null);
   const ghost = useRef<SVGPathElement>(null);
@@ -77,17 +92,10 @@ export function BoardEdgeLine({
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the spring writes paths to the DOM between renders, and stops once settled
   useLayoutEffect(() => {
-    const state = (sway.current ??= {
-      x: 0,
-      y: 0,
-      vx: 0,
-      vy: 0,
-      from: start,
-      to: end,
-      middle,
-      frame: 0,
-      at: 0,
-    });
+    if (sway.current === null) {
+      sway.current = { x: 0, y: 0, vx: 0, vy: 0, from: start, to: end, middle, frame: 0, at: 0 };
+    }
+    const state = sway.current;
     const dx = middle.x - state.middle.x;
     const dy = middle.y - state.middle.y;
     state.from = start;
@@ -147,26 +155,26 @@ export function BoardEdgeLine({
           d={path}
           fill="none"
           stroke="transparent"
-          strokeWidth="16"
+          style={{ strokeWidth: boardStroke(16) }}
           pointerEvents="stroke"
           data-board-edge={id}
           className="cursor-pointer"
           onPointerDown={stopPointer}
-          onClick={onSelect}
+          onClick={() => onSelect(id)}
         />
       ) : null}
       <path
         d={path}
         fill="none"
         stroke="var(--color-background)"
-        strokeWidth={width + 3}
+        style={{ strokeWidth: boardStroke(width + 3) }}
         strokeLinecap="round"
       />
       <path
         d={path}
         fill="none"
         stroke={color}
-        strokeWidth={width}
+        style={{ strokeWidth: boardStroke(width) }}
         strokeLinecap="round"
         strokeDasharray={dashed ? "7 6" : undefined}
         markerEnd={marker}
@@ -180,7 +188,7 @@ export function BoardEdgeLine({
               fill="none"
               stroke={color}
               strokeOpacity={0.35}
-              strokeWidth={width}
+              style={{ strokeWidth: boardStroke(width) }}
               strokeLinecap="round"
               strokeDasharray="2 7"
             />,
@@ -188,4 +196,13 @@ export function BoardEdgeLine({
           )}
     </g>
   );
+}, sameEdgeProps);
+
+function sameEdgeProps(before: BoardEdgeLineProps, after: BoardEdgeLineProps): boolean {
+  for (const key of Object.keys(after) as Array<keyof BoardEdgeLineProps>) {
+    if (key === "from" || key === "to") {
+      if (!sameBox(before[key], after[key])) return false;
+    } else if (before[key] !== after[key]) return false;
+  }
+  return true;
 }

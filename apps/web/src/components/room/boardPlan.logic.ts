@@ -3,6 +3,8 @@ import {
   ROOM_BOARD_THREAD_CARD,
   type RoomBoard,
   type RoomBoardNote,
+  type RoomBoardSize,
+  type RoomTaskPriority,
   type RoomTaskStatus,
   roomBoardCardRef,
   roomBoardNoteRef,
@@ -11,21 +13,23 @@ import { ROOM_BOARD_TASK_SIZE, roomTaskStatus } from "@t3tools/shared/roomBoard"
 
 import {
   type BoardPoint,
+  type BoardRect,
   boardBounds,
   boardItemRects,
   boardNextNoteSpot,
   boardNoteRect,
+  clampBoardSize,
   placeBoardItem,
 } from "./roomBoard.logic";
 
-/** What a board shows: its cards on the canvas, or its tasks as a Plan. */
-export type BoardViewMode = "board" | "plan";
+/** What a board shows: its cards on the canvas, or its tasks as a Plan in columns or a list. */
+export type BoardViewMode = "board" | "plan" | "list";
 
 /** The URL search parameter that keeps which view a board shows. */
 export const BOARD_VIEW_PARAM = "view";
 
 export const boardViewModeOf = (value: unknown): BoardViewMode =>
-  value === "plan" ? "plan" : "board";
+  value === "plan" || value === "list" ? value : "board";
 
 export const BOARD_PLAN_COLUMNS: ReadonlyArray<{
   readonly status: RoomTaskStatus;
@@ -132,6 +136,28 @@ export function boardPlanAppendOrder(column: ReadonlyArray<RoomBoardNote>): {
   };
 }
 
+/**
+ * What moving several tasks to the bottom of the `to` column changes, in the order they show in
+ * the Plan. Tasks already there move too, so they stay together.
+ */
+export function boardPlanMoveAll(
+  columns: BoardPlanColumns,
+  taskIds: ReadonlySet<string>,
+  to: RoomTaskStatus,
+): ReadonlyArray<BoardPlanPlacement> {
+  const moving = BOARD_PLAN_COLUMNS.flatMap(({ status }) =>
+    columns[status].filter((task) => taskIds.has(task.id)),
+  );
+  if (moving.length === 0) return [];
+  const { order, placements } = boardPlanAppendOrder(
+    columns[to].filter((task) => !taskIds.has(task.id)),
+  );
+  return [
+    ...placements,
+    ...moving.map((task, index) => ({ id: task.id, status: to, order: order + index })),
+  ];
+}
+
 /** A task as it reads in another column; ticking or unticking it on the board agrees. */
 export function boardPlanWithStatus(task: RoomBoardNote, status: RoomTaskStatus): RoomBoardNote {
   const { done: _done, status: _status, ...rest } = task;
@@ -183,28 +209,129 @@ export function boardPlanAttachments(board: RoomBoard): ReadonlyMap<string, Boar
   return attached;
 }
 
-/**
- * Where a task added from the Plan goes on the board: beside the newest task, as the next sticky
- * goes, clear of every card; with no task yet, right of everything on the board.
- */
-export function boardPlanTaskSpot(board: RoomBoard, cardIds: ReadonlyArray<string>): BoardPoint {
-  const taken = boardItemRects(
-    { ...board, notes: board.notes.filter((note) => note.section !== true) },
-    cardIds,
+const TASK_GAP = 24;
+const TASK_STEP_X = ROOM_BOARD_TASK_SIZE.w + TASK_GAP;
+const TASK_STEP_Y = ROOM_BOARD_TASK_SIZE.h + TASK_GAP;
+/** Where a section's first card sits from its corner, as the templates lay them out. */
+const SECTION_INSET = { x: 24, y: 56 };
+// Rows a free-standing pile of tasks is laid out in, at the least.
+const FREE_ROW_TASKS = 4;
+const MAX_ROWS = 200;
+
+const centreIn = (rect: BoardRect, inner: BoardRect) => {
+  const x = inner.x + inner.width / 2;
+  const y = inner.y + inner.height / 2;
+  return x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
+};
+
+const clearOf = (taken: ReadonlyArray<BoardRect>, at: BoardPoint) =>
+  !taken.some(
+    (rect) =>
+      at.x < rect.x + rect.width + TASK_GAP / 2 &&
+      at.x + ROOM_BOARD_TASK_SIZE.w + TASK_GAP / 2 > rect.x &&
+      at.y < rect.y + rect.height + TASK_GAP / 2 &&
+      at.y + ROOM_BOARD_TASK_SIZE.h + TASK_GAP / 2 > rect.y,
   );
-  const newest = board.notes.findLast((note) => note.kind === "task");
-  if (newest !== undefined) {
-    return boardNextNoteSpot(boardNoteRect(newest), ROOM_BOARD_TASK_SIZE, taken);
+
+/** The first clear slot of a grid `columns` wide from `origin`, row by row, or null. */
+function firstClearSlot(
+  origin: BoardPoint,
+  columns: number,
+  taken: ReadonlyArray<BoardRect>,
+): BoardPoint | null {
+  for (let row = 0; row < MAX_ROWS; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      const at = {
+        x: Math.round(origin.x + column * TASK_STEP_X),
+        y: Math.round(origin.y + row * TASK_STEP_Y),
+      };
+      if (clearOf(taken, at)) return at;
+    }
   }
-  const bounds = boardBounds(taken);
-  if (bounds === null) return { x: 80, y: 72 };
-  return placeBoardItem(
-    ROOM_BOARD_TASK_SIZE,
-    {
-      x: bounds.x + bounds.width + 48 + ROOM_BOARD_TASK_SIZE.w / 2,
-      y: bounds.y + ROOM_BOARD_TASK_SIZE.h / 2,
-    },
-    taken,
+  return null;
+}
+
+/** Where a task added from the Plan goes, and the section it goes in grown to hold it. */
+export interface BoardPlanTaskPlace extends BoardPoint {
+  /** The section it goes in, at the size that holds it, when that has to grow. */
+  readonly grow?: { readonly id: string; readonly size: RoomBoardSize };
+}
+
+/**
+ * Where a task added from the Plan goes on the board: in rows with the newest task, never over
+ * another card. In a section it wraps to the section's width, and the section grows down to hold
+ * it; outside one, rows keep clear of sections. With no task yet, right of everything.
+ * `heightOf` gives a card's drawn height where the board measured it.
+ */
+export function boardPlanTaskPlace(
+  board: RoomBoard,
+  cardIds: ReadonlyArray<string>,
+  heightOf: (note: RoomBoardNote) => number | undefined = () => undefined,
+): BoardPlanTaskPlace {
+  const rectOf = (note: RoomBoardNote): BoardRect => {
+    const rect = boardNoteRect(note);
+    return { ...rect, height: heightOf(note) ?? rect.height };
+  };
+  const sections = board.notes.filter((note) => note.section === true);
+  const cards = boardItemRects({ ...board, notes: [] }, cardIds);
+  const others = board.notes.filter((note) => note.section !== true).map(rectOf);
+  const taken = [...cards, ...others];
+  const tasks = board.notes.filter((note) => note.kind === "task" && note.section !== true);
+  const newest = tasks.at(-1);
+  if (newest === undefined) {
+    const bounds = boardBounds(taken);
+    if (bounds === null) return { x: 80, y: 72 };
+    return placeBoardItem(
+      ROOM_BOARD_TASK_SIZE,
+      {
+        x: bounds.x + bounds.width + 48 + ROOM_BOARD_TASK_SIZE.w / 2,
+        y: bounds.y + ROOM_BOARD_TASK_SIZE.h / 2,
+      },
+      taken,
+    );
+  }
+  const newestRect = rectOf(newest);
+  const section = sections.findLast((candidate) => centreIn(boardNoteRect(candidate), newestRect));
+  if (section !== undefined) {
+    const frame = boardNoteRect(section);
+    const inside = tasks.map(rectOf).filter((rect) => centreIn(frame, rect));
+    const origin = {
+      x: Math.min(...inside.map((rect) => rect.x), frame.x + SECTION_INSET.x),
+      y: Math.min(...inside.map((rect) => rect.y), frame.y + SECTION_INSET.y),
+    };
+    const right = frame.x + frame.width - SECTION_INSET.x;
+    const columns = Math.max(
+      1,
+      Math.floor((right - origin.x - ROOM_BOARD_TASK_SIZE.w) / TASK_STEP_X) + 1,
+    );
+    const at = firstClearSlot(origin, columns, taken);
+    if (at !== null) {
+      // Grown only past an edge the task would cross, with the margin a template gives its cards.
+      const slotRight = at.x + ROOM_BOARD_TASK_SIZE.w;
+      const slotBottom = at.y + ROOM_BOARD_TASK_SIZE.h;
+      const size = {
+        w: slotRight > frame.x + frame.width ? slotRight + SECTION_INSET.x - frame.x : frame.width,
+        h: slotBottom > frame.y + frame.height ? slotBottom + TASK_GAP - frame.y : frame.height,
+      };
+      const fits = clampBoardSize(size);
+      if (fits.w === size.w && fits.h === size.h) {
+        return size.w === frame.width && size.h === frame.height
+          ? at
+          : { ...at, grow: { id: section.id, size } };
+      }
+    }
+  }
+  // Rows with the newest task, from the leftmost task of its row, kept clear of every section.
+  const free = tasks
+    .map(rectOf)
+    .filter((rect) => !sections.some((candidate) => centreIn(boardNoteRect(candidate), rect)));
+  const row = free.filter((rect) => Math.abs(rect.y - newestRect.y) < TASK_STEP_Y / 2);
+  const left = Math.min(newestRect.x, ...row.map((rect) => rect.x));
+  const columns = Math.max(FREE_ROW_TASKS, Math.round((newestRect.x - left) / TASK_STEP_X) + 1);
+  const blocked = [...taken, ...sections.map(boardNoteRect)];
+  return (
+    firstClearSlot({ x: left, y: newestRect.y }, columns, blocked) ??
+    boardNextNoteSpot(newestRect, ROOM_BOARD_TASK_SIZE, blocked)
   );
 }
 
@@ -246,4 +373,128 @@ export function boardPlanAttachedLine(attached: BoardPlanAttached | undefined): 
     ...count(attached.links, "link", "links"),
     ...count(attached.artifacts, "artifact", "artifacts"),
   ].join(" · ");
+}
+
+/** The priorities a task can have, most pressing first, as people read them. */
+export const BOARD_PLAN_PRIORITIES: ReadonlyArray<{
+  readonly priority: RoomTaskPriority;
+  readonly title: string;
+}> = [
+  { priority: "urgent", title: "Urgent" },
+  { priority: "high", title: "High" },
+  { priority: "medium", title: "Medium" },
+  { priority: "low", title: "Low" },
+];
+
+const PRIORITY_RANK: Readonly<Record<RoomTaskPriority, number>> = {
+  urgent: 0,
+  high: 1,
+  medium: 2,
+  low: 3,
+};
+
+/** How a Plan column is sorted: as people ordered it, most pressing first, or soonest due. */
+export type BoardPlanSort = "manual" | "priority" | "due";
+
+/**
+ * A column's tasks in `sort`'s order. Tasks with no priority or no due day go last; ties keep the
+ * column's own order.
+ */
+export function boardPlanSorted(
+  tasks: ReadonlyArray<RoomBoardNote>,
+  sort: BoardPlanSort,
+): ReadonlyArray<RoomBoardNote> {
+  if (sort === "manual") return tasks;
+  // A due day is `YYYY-MM-DD`, so it sorts as text; none sorts after every day.
+  const key = (task: RoomBoardNote): string =>
+    sort === "priority"
+      ? String(task.priority === undefined ? 9 : PRIORITY_RANK[task.priority])
+      : (task.due ?? "9999");
+  const rank = new Map(tasks.map((task, index) => [task.id, index]));
+  return tasks.toSorted((left, right) => {
+    const a = key(left);
+    const b = key(right);
+    return a < b ? -1 : a > b ? 1 : rank.get(left.id)! - rank.get(right.id)!;
+  });
+}
+
+/** Who a Plan filter keeps tasks for: one person (null for the owner), or tasks for no one. */
+export type BoardPlanPerson = { readonly guestId: string | null } | "nobody";
+
+/** What the Plan shows of its tasks. */
+export interface BoardPlanFilter {
+  readonly text: string;
+  readonly person: BoardPlanPerson | null;
+  readonly hideDone: boolean;
+}
+
+export const NO_PLAN_FILTER: BoardPlanFilter = { text: "", person: null, hideDone: false };
+
+export const isPlanFiltered = (filter: BoardPlanFilter) =>
+  filter.text.trim() !== "" || filter.person !== null || filter.hideDone;
+
+/** Whether a task shows under a Plan filter: its text holds every word typed, and it is theirs. */
+export function boardPlanShows(task: RoomBoardNote, filter: BoardPlanFilter): boolean {
+  if (filter.hideDone && task.done === true) return false;
+  const person = filter.person;
+  if (person === "nobody" && task.assignee !== undefined) return false;
+  if (
+    person !== null &&
+    person !== "nobody" &&
+    (task.assignee === undefined || (task.assignee.guestId ?? null) !== person.guestId)
+  ) {
+    return false;
+  }
+  const text = task.text.toLowerCase();
+  return filter.text
+    .toLowerCase()
+    .split(/\s+/)
+    .every((word) => word === "" || text.includes(word));
+}
+
+/**
+ * Where a task dropped at `index` among a column's shown tasks goes among all of the column's
+ * other tasks: before the shown task it was dropped above, else after the last one shown.
+ */
+export function boardPlanIndexAmong(
+  column: ReadonlyArray<RoomBoardNote>,
+  shown: ReadonlyArray<RoomBoardNote>,
+  taskId: string,
+  index: number,
+): number {
+  const others = column.filter((task) => task.id !== taskId);
+  const visible = shown.filter((task) => task.id !== taskId);
+  const before = visible[index];
+  if (before !== undefined) return others.findIndex((task) => task.id === before.id);
+  const last = visible.at(-1);
+  return last === undefined ? others.length : others.findIndex((task) => task.id === last.id) + 1;
+}
+
+/** Where a task was in the Plan before it was done. */
+export interface BoardPlanSpot {
+  readonly status: RoomTaskStatus;
+  readonly order: number | undefined;
+}
+
+/**
+ * What unticking a done task changes: it goes back to the column and place it had before it was
+ * done when that is known, among the tasks there now, else to the bottom of To do.
+ */
+export function boardPlanUntick(
+  columns: BoardPlanColumns,
+  taskId: string,
+  before: BoardPlanSpot | undefined,
+): ReadonlyArray<BoardPlanPlacement> {
+  const to = before?.status === "doing" ? "doing" : "todo";
+  const others = columns[to].filter((task) => task.id !== taskId);
+  const order = before?.order;
+  const index =
+    order === undefined
+      ? others.length
+      : others.filter((task) => task.order !== undefined && task.order < order).length;
+  const placements = boardPlanMove(columns, taskId, to, index);
+  // Dropped where it already reads, it still has to leave Done.
+  return placements.length > 0
+    ? placements
+    : [{ id: taskId, status: to, order: order ?? others.length }];
 }

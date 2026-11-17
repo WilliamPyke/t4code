@@ -3,6 +3,7 @@ import {
   CLOUD_BOARD_ACCOUNT_CLAIM_ROUTE,
   CLOUD_BOARD_ACCOUNT_OPEN_ROUTE,
   CLOUD_BOARD_ACCOUNT_ROUTE,
+  CLOUD_WORKSPACES_ROUTE,
   CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
   CLOUD_BOARD_ROUTE,
   CloudBoardAccountClaimRequest,
@@ -10,6 +11,7 @@ import {
   GuestRedeemResult,
   type CloudBoardAccountBoard,
   type CloudBoardAccountOpenResult,
+  type CloudWorkspaceBoard,
   CLOUD_BOARD_TITLE_ROUTE,
   CloudBoardCreateRequest,
   CloudBoardRemovePersonRequest,
@@ -36,6 +38,7 @@ import {
   RoomBoardChange,
   ThreadId,
 } from "@t3tools/contracts";
+import { encodeBoardPreview } from "@t3tools/shared/boardPreview";
 import { DurableObject } from "cloudflare:workers";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
@@ -100,11 +103,23 @@ import {
 } from "./account.ts";
 import { clerkKeys, verifyClerkSession, type ClerkKeyLookup } from "./clerk.ts";
 import { hashSecret, isShareId, makeSecret, shareOfSecret } from "./secrets.ts";
+import {
+  lockOutAccount,
+  placeBoard,
+  seatMember,
+  workspaceBoardOf,
+  type BoardPlacement,
+} from "./workspace.ts";
+import { BoardWorkspace } from "./workspaceObject.ts";
+import { workspaceOf, workspaceRoute, type Answer } from "./workspaceRoutes.ts";
+
+export { BoardWorkspace };
 
 interface Env {
   readonly BOARDS: DurableObjectNamespace<BoardRoom>;
   readonly CREATE_LIMITS: DurableObjectNamespace<CreateLimit>;
   readonly ACCOUNTS: DurableObjectNamespace<BoardAccount>;
+  readonly WORKSPACES: DurableObjectNamespace<BoardWorkspace>;
   /** Pages that may call this host from a browser, separated by commas. */
   readonly ALLOWED_ORIGINS: string;
   /**
@@ -332,6 +347,12 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === CLOUD_BOARD_ACCOUNT_ROUTE || path.startsWith(`${CLOUD_BOARD_ACCOUNT_ROUTE}/`)) {
     return accountRoute(request, env, url);
   }
+  if (path === CLOUD_WORKSPACES_ROUTE || path.startsWith(`${CLOUD_WORKSPACES_ROUTE}/`)) {
+    return workspaceRoute(request, env, url, {
+      account: () => accountOf(request, env),
+      readBody: (maxBytes) => readBody(request, maxBytes),
+    });
+  }
   if (path === CLOUD_BOARD_ROUTE && request.method === "POST") {
     const account = await optionalAccountOf(request, env);
     if (account !== null && typeof account !== "string") return failureResponse(account);
@@ -442,6 +463,12 @@ interface OpenStream {
 // The room as it was kept before it was kept in pieces.
 const ROOM_KEY = "room";
 const CHUNK_COUNT_KEY = "room:chunks";
+// The board's preview, kept apart from the room so writing it shows nobody a new view.
+const PREVIEW_KEY = "preview";
+// A preview goes to the board's lists at most this often, and a burst of changes (a template
+// filling in) settles first; the last one goes as soon as nobody has the board open.
+const PREVIEW_STEP_MS = 30_000;
+const PREVIEW_SETTLE_MS = 5_000;
 const chunkKey = (index: number) => `room:${index}`;
 // Per person, per minute, as a machine's room allows.
 const TURN_RATE_LIMIT = 6;
@@ -470,11 +497,16 @@ export class BoardRoom extends DurableObject<Env> {
   private alarmAt: number | null = null;
   /** Deleted while this object lived: nothing may keep it again. */
   private deleted = false;
+  /** The preview the board's lists were last given; empty before the board changed. */
+  private preview = "";
+  private previewSentAt = 0;
+  private previewTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     void ctx.blockConcurrencyWhile(async () => {
       this.alarmAt = await ctx.storage.getAlarm();
+      this.preview = (await ctx.storage.get<string>(PREVIEW_KEY)) ?? "";
       const count = await ctx.storage.get<number>(CHUNK_COUNT_KEY);
       if (count === undefined) {
         this.room = (await ctx.storage.get<CloudRoom>(ROOM_KEY)) ?? null;
@@ -510,8 +542,11 @@ export class BoardRoom extends DurableObject<Env> {
   private async end(): Promise<void> {
     const accounts = accountsOn(this.room);
     const shareId = this.room?.shareId;
+    const workspaceId = this.room?.workspaceId;
     this.deleted = true;
     this.room = null;
+    if (this.previewTimer !== null) clearTimeout(this.previewTimer);
+    this.previewTimer = null;
     for (const stream of this.streams) this.drop(stream, true);
     this.live = EMPTY_LIVE;
     this.agents = EMPTY_AGENTS;
@@ -519,6 +554,11 @@ export class BoardRoom extends DurableObject<Env> {
     await this.ctx.storage.deleteAll();
     if (shareId !== undefined) {
       await this.tellAccounts(accounts, (index) => index.forget(shareId));
+      if (workspaceId !== undefined) {
+        await workspaceOf(this.env, workspaceId)
+          .forgetBoard(shareId)
+          .catch(() => undefined);
+      }
     }
   }
 
@@ -571,6 +611,11 @@ export class BoardRoom extends DurableObject<Env> {
           await this.tellAccounts(accountsOn(renamed), (index) =>
             index.retitle(renamed.shareId, renamed.title),
           );
+          if (renamed.workspaceId !== undefined) {
+            await workspaceOf(this.env, renamed.workspaceId)
+              .retitleBoard(renamed.shareId, renamed.title)
+              .catch(() => undefined);
+          }
         }
         return noContent();
       }
@@ -824,7 +869,7 @@ export class BoardRoom extends DurableObject<Env> {
     });
     if (Result.isFailure(linked)) return null;
     await this.save(linked.success.room);
-    return linked.success.board;
+    return this.withPreview(linked.success.board);
   }
 
   /** Called by the Worker once it verified `account`: a new session as the account's person here. */
@@ -838,7 +883,9 @@ export class BoardRoom extends DurableObject<Env> {
     await this.save(opened.success.room);
     return {
       token,
-      board: accountBoardOf(opened.success.room, opened.success.guest, { addedAt: nowIso() }),
+      board: this.withPreview(
+        accountBoardOf(opened.success.room, opened.success.guest, { addedAt: nowIso() }),
+      ),
     };
   }
 
@@ -846,6 +893,65 @@ export class BoardRoom extends DurableObject<Env> {
   async leaveAsAccount(account: string): Promise<void> {
     const guest = accountGuestOf(this.room, account);
     if (guest !== undefined) await this.remove(guest.id, guest.id);
+  }
+
+  /**
+   * Called by the Worker once it verified the account: puts the board in a workspace or takes it
+   * out. What the workspace lists of it, and the workspace it was in.
+   */
+  async placeInWorkspace(
+    placement: BoardPlacement,
+  ): Promise<Answer<{ readonly board: CloudWorkspaceBoard; readonly previous: string | null }>> {
+    const placed = placeBoard(this.room, placement);
+    if (Result.isFailure(placed)) return { failure: placed.failure };
+    await this.save(placed.success.room);
+    return {
+      value: {
+        board: this.withPreview(workspaceBoardOf(placed.success.room, { addedAt: nowIso() })),
+        previous: placed.success.previous ?? null,
+      },
+    };
+  }
+
+  /** Called by the Worker once the workspace said the account is in it: a session as them here. */
+  async openAsMember(
+    account: string,
+    workspaceId: string,
+    name: string,
+  ): Promise<Answer<CloudBoardAccountOpenResult>> {
+    const shareId = this.room?.shareId;
+    if (shareId === undefined) return { failure: roomFailure("ended") };
+    const token = makeSecret(shareId);
+    const seated = seatMember(this.room, {
+      account,
+      workspaceId,
+      sessionHash: await hashSecret(token),
+      guestId: GuestId.make(crypto.randomUUID()),
+      name,
+      now: nowIso(),
+    });
+    if (Result.isFailure(seated)) return { failure: seated.failure };
+    await this.save(seated.success.room);
+    return { value: { token, board: this.withPreview(seated.success.board) } };
+  }
+
+  /** Called by a workspace that no longer has `account`: their way in goes, their cards stay. */
+  async lockOut(account: string, workspaceId: string): Promise<void> {
+    const locked = lockOutAccount(this.room, account, workspaceId);
+    if (locked === null) return;
+    for (const stream of this.streams) {
+      if (stream.guestId === locked.guestId) this.drop(stream, true);
+    }
+    this.setAgents(agentsWithoutPerson(this.agents, locked.guestId), Date.now());
+    await this.save(locked.room);
+    await this.tellAccounts([account], (index) => index.forget(locked.room.shareId));
+  }
+
+  /** Called by a deleted workspace: the board stays, with everyone on it, in no workspace. */
+  async leaveWorkspace(workspaceId: string): Promise<void> {
+    if (this.room?.workspaceId !== workspaceId) return;
+    const { workspaceId: _gone, ...rest } = this.room;
+    await this.save(rest);
   }
 
   /** Keeps what people's agents are doing, and shows everyone when that changed. */
@@ -866,7 +972,9 @@ export class BoardRoom extends DurableObject<Env> {
     // Every limit of a room keeps it far below this; see the worst case in the tests.
     if (chunks.length > ROOM_MAX_CHUNKS) throw new Error("A board grew past what it can keep.");
     const before = (await this.ctx.storage.get<number>(CHUNK_COUNT_KEY)) ?? 0;
+    const boardChanged = room.board !== this.room?.board;
     this.room = room;
+    if (boardChanged) this.previewLater();
     await this.ctx.storage.put({
       [CHUNK_COUNT_KEY]: chunks.length,
       ...Object.fromEntries(chunks.map((chunk, index) => [chunkKey(index), chunk])),
@@ -880,6 +988,40 @@ export class BoardRoom extends DurableObject<Env> {
       if (guest !== undefined)
         this.send(stream, sseFrame({ type: "view", view: viewFor(room, guest) }));
     }
+  }
+
+  /** Sends the board's preview to its lists once changes settle, at most once a step. */
+  private previewLater() {
+    if (this.previewTimer !== null) return;
+    const wait = Math.max(PREVIEW_SETTLE_MS, this.previewSentAt + PREVIEW_STEP_MS - Date.now());
+    this.previewTimer = setTimeout(() => void this.sendPreview(), wait);
+  }
+
+  /**
+   * Gives every account on the board and its workspace the board's preview, when it changed.
+   * Only the cards' kinds, places, sizes and paints; never their text.
+   */
+  private async sendPreview(): Promise<void> {
+    if (this.previewTimer !== null) clearTimeout(this.previewTimer);
+    this.previewTimer = null;
+    const room = this.room;
+    if (room === null || this.deleted) return;
+    const preview = encodeBoardPreview(room.board);
+    if (preview === this.preview) return;
+    this.preview = preview;
+    this.previewSentAt = Date.now();
+    await this.ctx.storage.put(PREVIEW_KEY, preview);
+    await this.tellAccounts(accountsOn(room), (index) => index.setPreview(room.shareId, preview));
+    if (room.workspaceId !== undefined) {
+      await workspaceOf(this.env, room.workspaceId)
+        .setBoardPreview(room.shareId, preview)
+        .catch(() => undefined);
+    }
+  }
+
+  /** What a list keeps of the board, with its preview once it has one. */
+  private withPreview<T extends object>(listed: T): T & { readonly preview?: string } {
+    return this.preview === "" ? listed : { ...listed, preview: this.preview };
   }
 
   private isOnline(guestId: GuestId) {
@@ -964,6 +1106,8 @@ export class BoardRoom extends DurableObject<Env> {
       clearInterval(this.heartbeat);
       this.heartbeat = null;
     }
+    // Everyone left: the home they go back to shows the board as they left it.
+    if (this.streams.size === 0 && this.previewTimer !== null) void this.sendPreview();
     if (this.isOnline(stream.guestId)) return;
     this.live = withoutPerson(this.live, stream.guestId);
     this.broadcast({ type: "presence", online: this.online() });
@@ -975,6 +1119,7 @@ export class BoardRoom extends DurableObject<Env> {
 }
 
 const ACCOUNT_BOARD_PREFIX = "board:";
+const ACCOUNT_WORKSPACE_PREFIX = "workspace:";
 
 /**
  * One account's list of its cloud boards, keyed by its Clerk user id. Only the Worker calls it,
@@ -1005,6 +1150,28 @@ export class BoardAccount extends DurableObject<Env> {
   async retitle(shareId: string, title: string): Promise<void> {
     const before = await this.list();
     await this.keep(before, retitledAccountBoard(before, shareId, title));
+  }
+
+  /** The board's new preview, on its one key: the rest of the list is not read. */
+  async setPreview(shareId: string, preview: string): Promise<void> {
+    const key = ACCOUNT_BOARD_PREFIX + shareId;
+    const listed = await this.ctx.storage.get<CloudBoardAccountBoard>(key);
+    if (listed === undefined || listed.preview === preview) return;
+    await this.ctx.storage.put(key, { ...listed, preview });
+  }
+
+  /** The workspaces the account is in; each workspace itself says whether it still has them. */
+  async workspaces(): Promise<ReadonlyArray<string>> {
+    const stored = await this.ctx.storage.list({ prefix: ACCOUNT_WORKSPACE_PREFIX });
+    return [...stored.keys()].map((key) => key.slice(ACCOUNT_WORKSPACE_PREFIX.length));
+  }
+
+  async addWorkspace(id: string): Promise<void> {
+    await this.ctx.storage.put(ACCOUNT_WORKSPACE_PREFIX + id, true);
+  }
+
+  async forgetWorkspaces(ids: ReadonlyArray<string>): Promise<void> {
+    await this.ctx.storage.delete(ids.map((id) => ACCOUNT_WORKSPACE_PREFIX + id));
   }
 
   /** Writes only what changed between the two lists; each board is its own key. */

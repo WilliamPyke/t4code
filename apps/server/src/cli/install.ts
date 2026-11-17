@@ -315,7 +315,8 @@ export const offerCliInstall = Effect.fn("cli.install.offer")(function* <E, R, E
   // `--json=true` and `-y=true` are the same flags.
   if (input.args.some((arg) => SKIPPED_ARGUMENTS.has(arg.split("=")[0]!))) return true;
   const command = topLevelCommand(input.args);
-  if (command === "install" || command === "uninstall") return true;
+  // Tinkjam Sync runs from npx on purpose and offers no install.
+  if (command === "install" || command === "uninstall" || command === "sync") return true;
   if (detectCliRunner(yield* resolveEntryPath) === null) return true;
   const runtime = yield* standaloneRuntime;
   if (Option.isNone(runtime)) return true;

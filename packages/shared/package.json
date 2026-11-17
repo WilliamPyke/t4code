@@ -231,6 +231,10 @@
       "types": "./src/roomBoardAgent.ts",
       "import": "./src/roomBoardAgent.ts"
     },
+    "./boardPreview": {
+      "types": "./src/boardPreview.ts",
+      "import": "./src/boardPreview.ts"
+    },
     "./oauthScope": {
       "types": "./src/oauthScope.ts",
       "import": "./src/oauthScope.ts"

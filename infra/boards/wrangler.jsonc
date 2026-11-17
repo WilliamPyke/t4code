@@ -20,11 +20,13 @@
       { "name": "BOARDS", "class_name": "BoardRoom" },
       { "name": "CREATE_LIMITS", "class_name": "CreateLimit" },
       { "name": "ACCOUNTS", "class_name": "BoardAccount" },
+      { "name": "WORKSPACES", "class_name": "BoardWorkspace" },
     ],
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["BoardRoom", "CreateLimit"] },
     { "tag": "v2", "new_sqlite_classes": ["BoardAccount"] },
+    { "tag": "v3", "new_sqlite_classes": ["BoardWorkspace"] },
   ],
   "observability": { "enabled": true },
 }

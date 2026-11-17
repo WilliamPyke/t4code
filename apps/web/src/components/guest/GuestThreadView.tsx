@@ -3,6 +3,7 @@ import { guestEnvironmentId, scopeThreadRef } from "@t3tools/client-runtime/envi
 import { type GuestShareEndpoint, guestShareRequest } from "@t3tools/client-runtime/rpc";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -15,6 +16,7 @@ import {
 import { createQuestionHistoryProjector } from "@t3tools/client-runtime/state/thread-requests";
 import { shouldShowLoadEarlierControl } from "@t3tools/client-runtime/state/threads";
 import {
+  type EnvironmentId,
   GUEST_ATTACHMENT_ROUTE,
   GUEST_BOARD_CODE_ROUTE,
   GUEST_BOARD_CURSOR_ROUTE,
@@ -150,7 +152,6 @@ import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { BoardTitle } from "../boards/BoardTitle";
-import { BoardCoach } from "./BoardCoach";
 import { BringAgentDialog } from "./BringAgentDialog";
 import { CloudBoardSharing } from "./CloudBoardSharing";
 import { GuestHtmlRender } from "./GuestHtmlRender";
@@ -158,7 +159,13 @@ import { openGuestFile, useGuestFiles } from "./guestFiles";
 import { linkEndsLabel } from "../chat/guestLinkTiming";
 import { guestFilesProblem, nextAwaitingRowIds, unplacedGuestMessages } from "./guestStream.logic";
 import { guestTurnItemSource } from "./guestTurnItemSource";
-import { type OwnRoomMachine, OwnBoxModelPicker, useOwnRoomMachine } from "./ownRoomMachine";
+import { useJoinBoardOnComputer } from "./joinBoardOnComputer";
+import {
+  announceRoomMachineJoined,
+  type OwnRoomMachine,
+  OwnBoxModelPicker,
+  useOwnRoomMachine,
+} from "./ownRoomMachine";
 
 // A reload keeps the tab's session, so it keeps which messages still wait for a row too.
 const AWAITING_ROWS_KEY = "t3:guest-awaiting-rows";
@@ -397,6 +404,27 @@ function GuestThreadSession({
   const navigate = useNavigate();
   // The guest's own machine in this room, whose agent runs their thread boxes.
   const { machine, setBoxThread } = useOwnRoomMachine(share);
+  const joinBoardOnComputer = useJoinBoardOnComputer();
+  // The person's agent joins from one of their computers, without leaving this page.
+  const bringAgentFrom = async (
+    environmentId: EnvironmentId,
+    project: EnvironmentProject | null,
+  ): Promise<string | null> => {
+    const handoff = await postGuestAction(
+      endpoint,
+      GUEST_HANDOFF_ROUTE,
+      decodeHandoff,
+      "Could not start the handoff. Try again.",
+    );
+    if (typeof handoff === "string") return handoff;
+    const failed = await joinBoardOnComputer({
+      environmentId,
+      project,
+      source: { host: share.host, token: handoff.token },
+    });
+    if (failed === null) announceRoomMachineJoined(share.shareId);
+    return failed;
+  };
   const ownProviders = useEnvironmentProviders();
   const promptOwnBox = useAtomCommand(serverEnvironment.promptSharedRoomBox, {
     reportFailure: false,
@@ -904,16 +932,8 @@ function GuestThreadSession({
       <BringAgentDialog
         open={bringingAgent}
         onOpenChange={setBringingAgent}
-        onContinue={() => openOnMyMachine(endpoint, share.host, { board: true })}
+        onBring={bringAgentFrom}
       />
-      {cloud ? (
-        <BoardCoach
-          accountId={share.accountId}
-          onBringAgent={
-            roomCloud?.agents === true && machine == null ? () => setBringingAgent(true) : undefined
-          }
-        />
-      ) : null}
       {machine == null || addingAt === null ? null : (
         <BoardThreadPicker
           environmentId={machine.environmentId}

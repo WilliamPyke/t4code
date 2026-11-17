@@ -1,0 +1,73 @@
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+import {
+  CommandId,
+  DEFAULT_PROVIDER_INTERACTION_MODE,
+  type EnvironmentId,
+} from "@t3tools/contracts";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+
+import { useScratchProject } from "~/hooks/useScratchProject";
+import { randomUUID } from "~/lib/utils";
+import { resolveProjectDefaultProviderModelSelection } from "~/providerInstances";
+import { useEnvironmentProviders, useEnvironments } from "~/state/environments";
+import { serverEnvironment } from "~/state/server";
+import { useAtomCommand } from "~/state/use-atom-command";
+
+/**
+ * Joins a cloud board from one of the person's own computers, as the join page does, without
+ * leaving the board: the agent's thread is made there, on that computer's own provider sign-in,
+ * in `project` or in no project.
+ */
+export function useJoinBoardOnComputer() {
+  const { environments } = useEnvironments();
+  const providersByEnvironment = useEnvironmentProviders();
+  const { openScratchProject } = useScratchProject();
+  const joinSharedThread = useAtomCommand(serverEnvironment.joinSharedThread, {
+    reportFailure: false,
+  });
+  /** Resolves to what went wrong, or null. */
+  return async (input: {
+    readonly environmentId: EnvironmentId;
+    readonly project: EnvironmentProject | null;
+    readonly source: { readonly host: string; readonly token: string };
+  }): Promise<string | null> => {
+    const project =
+      input.project ??
+      (await openScratchProject(input.environmentId, "Could not start your agent"));
+    if (project === null) return "Your computer could not start your agent. Try again.";
+    const settings = environments.find((entry) => entry.environmentId === input.environmentId)
+      ?.serverConfig?.settings;
+    const providers = providersByEnvironment.get(input.environmentId) ?? [];
+    const projectSettings =
+      settings === undefined ? null : resolveProjectSettings(settings, project.id, project);
+    const modelSelection =
+      settings === undefined || projectSettings === null
+        ? null
+        : (projectSettings.settings.defaultModelSelection ??
+          resolveProjectDefaultProviderModelSelection(providers, settings, project.id));
+    if (projectSettings === null || modelSelection === null) {
+      return "Sign in to Claude Code or Codex on that computer first, then try again.";
+    }
+    const result = await joinSharedThread({
+      environmentId: input.environmentId,
+      input: {
+        commandId: CommandId.make(randomUUID()),
+        source: input.source,
+        projectId: project.id,
+        modelSelection,
+        // The person's own defaults: a board never brings permissions along.
+        runtimeMode: projectSettings.settings.defaultRuntimeMode,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        checkout: false,
+      },
+    });
+    if (result._tag === "Success") return null;
+    if (isAtomCommandInterrupted(result)) return "Stopped before your agent joined.";
+    const cause = squashAtomCommandFailure(result);
+    return cause instanceof Error && cause.message ? cause.message : "Could not bring your agent.";
+  };
+}

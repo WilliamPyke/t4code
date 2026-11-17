@@ -468,6 +468,102 @@ export const deviceAuthorizationLogin = Effect.fn("cloud.cli_token.device_author
   },
 );
 
+/**
+ * Serves the loopback OAuth callback for this sign-in until the scope closes. With `start`, the
+ * bare address forwards there too, so a person is given a short local address to open.
+ */
+const serveLoopbackCallback = Effect.fn("cloud.cli_token.serve_loopback_callback")(
+  function* (input: {
+    readonly metadata: CloudCliOAuthConfig;
+    readonly state: string;
+    readonly start?: string;
+  }) {
+    const { metadata, state } = input;
+    const callback = yield* Deferred.make<string>();
+    const layerCallbackRoute = HttpRouter.add(
+      "GET",
+      "/callback",
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        const url = new URL(request.originalUrl, metadata.redirectUri);
+        const code = url.searchParams.get("code");
+        if (url.searchParams.get("state") !== state || !code) {
+          return HttpServerResponse.text("This sign-in link is no longer valid. Start again.", {
+            status: 400,
+          });
+        }
+        yield* Deferred.succeed(callback, code);
+        return HttpServerResponse.html(renderLoopbackAuthorizationCompleteHtml());
+      }),
+    );
+    const layerRoutes =
+      input.start === undefined
+        ? layerCallbackRoute
+        : Layer.merge(
+            layerCallbackRoute,
+            HttpRouter.add("GET", "/", Effect.succeed(HttpServerResponse.redirect(input.start))),
+          );
+    yield* HttpRouter.serve(layerRoutes, {
+      disableListenLog: true,
+      disableLogger: true,
+    }).pipe(
+      Layer.provide(
+        NodeHttpServer.layer(NodeHttp.createServer, {
+          host: "127.0.0.1",
+          port: metadata.loopbackPort,
+          disablePreemptiveShutdown: true,
+        }),
+      ),
+      Layer.build,
+    );
+    return callback;
+  },
+);
+
+// Long enough to sign up for an account on the approval page first.
+const COMPUTER_APPROVAL_TIMEOUT = Duration.minutes(30);
+
+/**
+ * Tinkjam Sync's sign-in: the loopback grant `t3 connect` uses, opened from a short local address
+ * that forwards to the hosted page asking to connect this computer. Reads nothing from a terminal.
+ */
+export const approveComputerLogin = Effect.fn("cloud.cli_token.approve_computer_login")(function* <
+  E,
+  R,
+>(input: {
+  readonly computerName: string;
+  readonly present: (localUrl: string) => Effect.Effect<void, E, R>;
+}) {
+  const metadata = yield* cloudCliOAuthConfig;
+  const hostedAppUrl = yield* hostedAppUrlConfig;
+  const { verifier, challenge, state } = yield* makePkceRequest;
+  const callback = yield* serveLoopbackCallback({
+    metadata,
+    state,
+    start: buildConnectAuthorizeRequestUrl({
+      hostedAppUrl,
+      state,
+      challenge,
+      loopbackPort: metadata.loopbackPort,
+      computerName: input.computerName,
+    }),
+  });
+  yield* input.present(`http://127.0.0.1:${metadata.loopbackPort}`);
+  const code = yield* Deferred.await(callback).pipe(
+    Effect.timeout(COMPUTER_APPROVAL_TIMEOUT),
+    Effect.catchTags({
+      TimeoutError: (cause) => Effect.fail(new CloudCliAuthorizationTimeoutError({ cause })),
+    }),
+  );
+  return yield* exchangeToken(metadata, {
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: metadata.redirectUri,
+    client_id: metadata.clientId,
+    code_verifier: verifier,
+  });
+}, Effect.scoped);
+
 /** @public */
 export const make = Effect.gen(function* () {
   const random = yield* SecureRandom.SecureRandom;
@@ -513,36 +609,7 @@ export const make = Effect.gen(function* () {
     const metadata = yield* cloudCliOAuthConfig;
     const hostedAppUrl = yield* hostedAppUrlConfig;
     const { verifier, challenge, state } = yield* makePkceRequest;
-    const callback = yield* Deferred.make<string>();
-    const layerCallbackRoute = HttpRouter.add(
-      "GET",
-      "/callback",
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        const url = new URL(request.originalUrl, metadata.redirectUri);
-        const code = url.searchParams.get("code");
-        if (url.searchParams.get("state") !== state || !code) {
-          return HttpServerResponse.text("Invalid T3 Connect authorization callback.", {
-            status: 400,
-          });
-        }
-        yield* Deferred.succeed(callback, code);
-        return HttpServerResponse.html(renderLoopbackAuthorizationCompleteHtml());
-      }),
-    );
-    yield* HttpRouter.serve(layerCallbackRoute, {
-      disableListenLog: true,
-      disableLogger: true,
-    }).pipe(
-      Layer.provide(
-        NodeHttpServer.layer(NodeHttp.createServer, {
-          host: "127.0.0.1",
-          port: metadata.loopbackPort,
-          disablePreemptiveShutdown: true,
-        }),
-      ),
-      Layer.build,
-    );
+    const callback = yield* serveLoopbackCallback({ metadata, state });
     // /connect establishes a Clerk session first; /oauth/authorize loses parameters across sign-in.
     const authorizationUrl = buildConnectAuthorizeRequestUrl({
       hostedAppUrl,

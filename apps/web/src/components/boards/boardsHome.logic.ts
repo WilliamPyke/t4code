@@ -1,7 +1,9 @@
 import {
   type CloudBoardAccountBoard,
+  ROOM_BOARD_NOTE_COLORS,
   ROOM_BOARD_SUMMARY_MAX_SHAPES,
   type RoomBoard,
+  type RoomBoardNoteColor,
   type RoomBoardSize,
   type RoomBoardSummaryShape,
 } from "@t3tools/contracts";
@@ -20,6 +22,9 @@ export interface OwnBoardSource {
   readonly deletedAt: string | null;
   readonly guestShared?: boolean;
   readonly hasRoomBoard?: boolean;
+  readonly createdAt?: string;
+  /** When this person last opened the thread, on any of their devices. */
+  readonly lastVisitedAt?: string | null | undefined;
 }
 
 /** A board someone shared that this browser joined. */
@@ -31,7 +36,7 @@ export interface JoinedBoardSource {
   readonly joinedAt: string;
   /** On the cloud board host, on nobody's machine. */
   readonly cloud?: boolean;
-  /** A cloud board the signed-in account joined from someone else's link. */
+  /** A cloud board someone else made: joined from their link, or in a workspace. */
   readonly shared?: boolean;
   /** Listed by the signed-in account, with no session on this browser yet. */
   readonly remote?: boolean;
@@ -39,6 +44,12 @@ export interface JoinedBoardSource {
   readonly maker?: boolean;
   /** When this browser last opened it. */
   readonly openedAt?: string | undefined;
+  /** The workspace it is in, whose members open it without an invite. */
+  readonly workspaceId?: string | undefined;
+  readonly workspaceName?: string | undefined;
+  readonly workspaceColor?: RoomBoardNoteColor | undefined;
+  /** A small map of its cards (`@t3tools/shared/boardPreview`), when there is one. */
+  readonly preview?: string | undefined;
 }
 
 /**
@@ -53,11 +64,17 @@ export function joinedBoardSources(input: {
   const listed = new Map<string, CloudBoardAccountBoard>(
     input.listed.map((board) => [board.shareId, board]),
   );
+  // The host's preview first: it shows everyone's changes, this browser's only its own visits.
   const local = input.local.map((share) => {
     const board = listed.get(share.shareId);
     return board === undefined
       ? share
-      : { ...share, shared: !board.maker, maker: board.maker || share.maker === true };
+      : {
+          ...share,
+          shared: !board.maker,
+          maker: board.maker || share.maker === true,
+          preview: board.preview || share.preview,
+        };
   });
   const here = new Set(input.local.map((share) => share.shareId));
   const remote = input.listed
@@ -71,8 +88,88 @@ export function joinedBoardSources(input: {
       shared: !board.maker,
       maker: board.maker,
       remote: true,
+      preview: board.preview,
     }));
   return [...local, ...remote];
+}
+
+export interface WorkspaceBoardsSource {
+  readonly id: string;
+  readonly name: string;
+  readonly color?: RoomBoardNoteColor;
+  readonly boards: ReadonlyArray<{
+    readonly shareId: string;
+    readonly threadId: string;
+    readonly title: string;
+    readonly addedAt: string;
+    readonly preview?: string | undefined;
+  }>;
+}
+
+/**
+ * The joined boards with every workspace's: one already listed says which workspace it is in, and
+ * one not yet opened here is listed to open as a member. `workspaces` is null without accounts.
+ */
+export function withWorkspaceBoards(
+  joined: ReadonlyArray<JoinedBoardSource>,
+  workspaces: ReadonlyArray<WorkspaceBoardsSource> | null,
+): ReadonlyArray<JoinedBoardSource> {
+  if (workspaces === null || workspaces.length === 0) return joined;
+  const inWorkspace = new Map<
+    string,
+    { readonly workspace: WorkspaceBoardsSource; readonly preview: string | undefined }
+  >();
+  for (const workspace of workspaces) {
+    for (const board of workspace.boards) {
+      inWorkspace.set(board.shareId, { workspace, preview: board.preview });
+    }
+  }
+  const tagged = joined.map((share) => {
+    const listed = inWorkspace.get(share.shareId);
+    return listed === undefined
+      ? share
+      : {
+          ...share,
+          workspaceId: listed.workspace.id,
+          workspaceName: listed.workspace.name,
+          workspaceColor: listed.workspace.color,
+          preview: listed.preview || share.preview,
+        };
+  });
+  const listed = new Set(joined.map((share) => share.shareId));
+  const unopened = workspaces.flatMap((workspace) =>
+    workspace.boards
+      .filter((board) => !listed.has(board.shareId))
+      .map((board): JoinedBoardSource => ({
+        shareId: board.shareId,
+        threadId: board.threadId,
+        title: board.title,
+        joinedAt: board.addedAt,
+        cloud: true,
+        shared: true,
+        remote: true,
+        workspaceId: workspace.id,
+        workspaceName: workspace.name,
+        workspaceColor: workspace.color,
+        preview: board.preview,
+      })),
+  );
+  return [...tagged, ...unopened];
+}
+
+/**
+ * The boards in a scope: every one, the person's own (in no workspace, their computers' boards
+ * among them), or one workspace's.
+ */
+export function boardsInScope(
+  boards: ReadonlyArray<HomeBoard>,
+  scope: string,
+): ReadonlyArray<HomeBoard> {
+  if (scope === "all") return boards;
+  if (scope === "personal") {
+    return boards.filter((board) => board.kind !== "joined" || board.workspaceId === null);
+  }
+  return boards.filter((board) => board.kind === "joined" && board.workspaceId === scope);
 }
 
 export interface TeamBoardSource {
@@ -89,6 +186,10 @@ export type HomeBoard =
       readonly projectId: string;
       readonly title: string;
       readonly activityAt: string;
+      /** When it was made, if known. */
+      readonly createdAt: string | null;
+      /** When this person last opened it, else when it last changed. */
+      readonly openedAt: string;
     }
   | {
       readonly kind: "joined";
@@ -101,7 +202,14 @@ export type HomeBoard =
       readonly shared: boolean;
       readonly remote: boolean;
       readonly maker: boolean;
+      readonly workspaceId: string | null;
+      readonly workspaceName: string | null;
+      readonly workspaceColor: RoomBoardNoteColor | null;
+      readonly preview: string | null;
       readonly activityAt: string;
+      /** When this person made or joined it. */
+      readonly createdAt: string | null;
+      readonly openedAt: string;
     }
   | {
       readonly kind: "team";
@@ -109,6 +217,8 @@ export type HomeBoard =
       readonly teamId: string;
       readonly title: string;
       readonly activityAt: null;
+      readonly createdAt: null;
+      readonly openedAt: null;
     };
 
 export const UNTITLED_BOARD = "Untitled board";
@@ -150,6 +260,11 @@ export function listHomeBoards(input: {
       projectId: thread.projectId,
       title: thread.title.trim() || UNTITLED_BOARD,
       activityAt: latest(thread.updatedAt, thread.latestUserMessageAt),
+      createdAt: thread.createdAt ?? null,
+      openedAt: latest(
+        latest(thread.updatedAt, thread.latestUserMessageAt),
+        thread.lastVisitedAt ?? null,
+      ),
     }));
   const joined: Array<HomeBoard> = input.joined.map((share) => ({
     kind: "joined",
@@ -162,7 +277,13 @@ export function listHomeBoards(input: {
     shared: share.shared === true,
     remote: share.remote === true,
     maker: share.maker === true,
+    workspaceId: share.workspaceId ?? null,
+    workspaceName: share.workspaceName ?? null,
+    workspaceColor: share.workspaceColor ?? null,
+    preview: share.preview || null,
     activityAt: latest(share.joinedAt, share.openedAt ?? null),
+    createdAt: share.joinedAt,
+    openedAt: latest(share.joinedAt, share.openedAt ?? null),
   }));
   const dated = [...own, ...joined].toSorted((left, right) =>
     (right.activityAt ?? "").localeCompare(left.activityAt ?? ""),
@@ -173,6 +294,8 @@ export function listHomeBoards(input: {
     teamId: team.id,
     title: team.name,
     activityAt: null,
+    createdAt: null,
+    openedAt: null,
   }));
   const query = input.query?.trim().toLowerCase() ?? "";
   const all = [...dated, ...teams];
@@ -182,8 +305,94 @@ export function listHomeBoards(input: {
       board.title,
       board.kind === "own" ? input.projectName?.(board.environmentId, board.projectId) : undefined,
       board.kind === "joined" ? board.owner : undefined,
+      board.kind === "joined" ? board.workspaceName : undefined,
     ].some((text) => typeof text === "string" && text.toLowerCase().includes(query)),
   );
+}
+
+/** How the home orders boards: most recently opened, by name, or newest made or joined first. */
+export type HomeBoardSort = "recent" | "name" | "created";
+export const HOME_BOARD_SORTS: ReadonlyArray<HomeBoardSort> = ["recent", "name", "created"];
+
+const newestFirst = (left: string | null, right: string | null) =>
+  (right ?? "").localeCompare(left ?? "");
+const byName = (left: HomeBoard, right: HomeBoard) =>
+  left.title.localeCompare(right.title, undefined, { sensitivity: "base", numeric: true });
+
+/**
+ * The boards in the chosen order. Ties, and boards with no time (team boards), go by name; a
+ * board with no time sorts after every board with one.
+ */
+export function sortHomeBoards(
+  boards: ReadonlyArray<HomeBoard>,
+  sort: HomeBoardSort,
+): ReadonlyArray<HomeBoard> {
+  if (sort === "name") return boards.toSorted((left, right) => byName(left, right));
+  const timeOf = (board: HomeBoard) => (sort === "recent" ? board.openedAt : board.createdAt);
+  return boards.toSorted(
+    (left, right) => newestFirst(timeOf(left), timeOf(right)) || byName(left, right),
+  );
+}
+
+/** Past this many boards, the home leads with the few most recently opened. */
+export const HOME_RECENT_AFTER = 8;
+export const HOME_RECENT_COUNT = 4;
+
+/** A paint each board keeps, so boards are told apart at a glance: its workspace's, or its own. */
+export function boardPaint(
+  board: Pick<HomeBoard, "key"> & {
+    readonly workspaceColor?: RoomBoardNoteColor | null;
+  },
+): RoomBoardNoteColor {
+  if (board.workspaceColor != null) return board.workspaceColor;
+  let hash = 0;
+  for (const char of board.key) hash = (hash * 31 + char.charCodeAt(0)) | 0;
+  return ROOM_BOARD_NOTE_COLORS[Math.abs(hash) % ROOM_BOARD_NOTE_COLORS.length]!;
+}
+
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+const plural = (count: number, unit: string) => `${count} ${unit}${count === 1 ? "" : "s"} ago`;
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * When something happened, in words: "Just now", "5 minutes ago", "2 hours ago", "Yesterday",
+ * "3 days ago", "2 weeks ago", then the date ("Mar 4", with the year when it is not this one).
+ * Days count in UTC, so the same time reads the same everywhere it is tested.
+ */
+export function boardTimeLabel(iso: string, nowMs: number): string | null {
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) return null;
+  const elapsed = Math.max(0, nowMs - at);
+  if (elapsed < MINUTE_MS) return "Just now";
+  if (elapsed < HOUR_MS) return plural(Math.floor(elapsed / MINUTE_MS), "minute");
+  if (elapsed < DAY_MS) return plural(Math.floor(elapsed / HOUR_MS), "hour");
+  const days = Math.floor(nowMs / DAY_MS) - Math.floor(at / DAY_MS);
+  if (days <= 1) return "Yesterday";
+  if (days < 14) return `${days} days ago`;
+  if (days < 35) return plural(Math.floor(days / 7), "week");
+  const date = new Date(at);
+  const year =
+    date.getUTCFullYear() === new Date(nowMs).getUTCFullYear() ? "" : `, ${date.getUTCFullYear()}`;
+  return `${MONTHS[date.getUTCMonth()]} ${date.getUTCDate()}${year}`;
+}
+
+/**
+ * What the home shows: placeholders while it cannot yet know whether the person has boards (the
+ * account's list or this device's machines still loading), the welcome when they have none, and
+ * their boards otherwise. Never the welcome to someone whose boards are on their way.
+ */
+export function homeContent(input: {
+  readonly boards: number;
+  readonly workspaces: number;
+  /** This device's machines have said which boards they keep. */
+  readonly machinesLoaded: boolean;
+  /** Sign-in has said who this is and, signed in, their boards arrived (or could not). */
+  readonly accountLoaded: boolean;
+}): "boards" | "loading" | "welcome" {
+  if (input.boards > 0 || input.workspaces > 0) return "boards";
+  return input.machinesLoaded && input.accountLoaded ? "welcome" : "loading";
 }
 
 // A team board's thread and member cards, at about the size the board draws them.

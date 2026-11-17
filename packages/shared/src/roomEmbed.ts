@@ -25,6 +25,8 @@ export interface RoomEmbed {
   readonly name: string;
   /** A title read from the address, for a card nobody named. */
   readonly title: string;
+  /** What it is, as a card's subtitle says: "GitHub issue", "Figma design", or a site's host. */
+  readonly kind: string;
   /** The address as people read it: host and path, without the scheme. */
   readonly address: string;
   /**
@@ -72,12 +74,29 @@ const decodeSegment = (segment: string) => {
   }
 };
 
-/** "Checkout-flow_v2" as "Checkout flow v2". */
-const slugTitle = (slug: string | undefined) =>
-  (slug ?? "")
+/** "checkout-flow_v2" as "Checkout flow v2": a slug all in lower case starts with a capital. */
+const slugTitle = (slug: string | undefined) => {
+  const words = (slug ?? "")
     .replace(/[-_+]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+  return words === words.toLowerCase() ? words.charAt(0).toUpperCase() + words.slice(1) : words;
+};
+
+/** A path segment that is an id, not a name: digits, a long hex run, or a UUID. */
+const ID_SEGMENT =
+  /^(?:\d+|[0-9a-f]{12,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+const PAGE_FILE = /\.(?:html?|php|aspx?|md)$/i;
+
+/** Any other site's page as its address names it: its last segment that is a name, else none. */
+function webTitle(parts: ReadonlyArray<string>): string {
+  for (const part of [...parts].reverse()) {
+    const name = part.replace(PAGE_FILE, "");
+    if (name === "" || name === "index" || ID_SEGMENT.test(name)) continue;
+    return slugTitle(name);
+  }
+  return "";
+}
 
 const FIGMA_KINDS: Readonly<Record<string, { readonly type: string; readonly title: string }>> = {
   file: { type: "design", title: "Figma design" },
@@ -119,7 +138,11 @@ const GOOGLE_KINDS: Readonly<
   },
 };
 
-const GITHUB_KINDS: Readonly<Record<string, string>> = { pull: "Pull request", issues: "Issue" };
+const GITHUB_KINDS: Readonly<Record<string, string>> = {
+  pull: "GitHub pull request",
+  issues: "GitHub issue",
+  discussions: "GitHub discussion",
+};
 
 type Known = Omit<RoomEmbed, "address">;
 
@@ -134,6 +157,7 @@ function figma(raw: ReadonlyArray<string>, parts: ReadonlyArray<string>, url: UR
   return {
     source: "figma",
     name: kind.type === "board" ? "FigJam" : "Figma",
+    kind: kind.title,
     title: slugTitle(parts[branch ? 4 : 2]) || kind.title,
     embedUrl: `https://embed.figma.com/${kind.type}/${key}?embed-host=tinkjam${at}`,
   };
@@ -143,21 +167,17 @@ function google(raw: ReadonlyArray<string>): Known | null {
   const kind = GOOGLE_KINDS[raw[0] ?? ""];
   if (kind === undefined || raw[1] !== "d") return null;
   const { source, name, title } = kind;
+  const known = { source, name, title, kind: title };
   // A copy published to the web has its own id after "e".
   if (raw[2] === "e") {
     const id = raw[3];
     if (id === undefined || !ID.test(id)) return null;
-    return {
-      source,
-      name,
-      title,
-      embedUrl: `https://docs.google.com/${raw[0]}/d/e/${id}/${kind.published}`,
-    };
+    return { ...known, embedUrl: `https://docs.google.com/${raw[0]}/d/e/${id}/${kind.published}` };
   }
   const id = raw[2];
   if (id === undefined || !ID.test(id)) return null;
   // Shows only to someone the document is shared with, signed in to Google in this browser.
-  return { source, name, title, embedUrl: `https://docs.google.com/${raw[0]}/d/${id}/preview` };
+  return { ...known, embedUrl: `https://docs.google.com/${raw[0]}/d/${id}/preview` };
 }
 
 function youtube(host: string, raw: ReadonlyArray<string>, url: URL): Known | null {
@@ -177,6 +197,7 @@ function youtube(host: string, raw: ReadonlyArray<string>, url: URL): Known | nu
     source: "youtube",
     name: "YouTube",
     title: "YouTube video",
+    kind: "YouTube video",
     embedUrl: `https://www.youtube-nocookie.com/embed/${id}${start === null ? "" : `?start=${start[1]}`}`,
   };
 }
@@ -188,6 +209,7 @@ function loom(raw: ReadonlyArray<string>): Known | null {
   return {
     source: "loom",
     name: "Loom",
+    kind: "Loom video",
     title: slugTitle(decodeSegment(match[1] ?? "")) || "Loom video",
     embedUrl: `https://www.loom.com/embed/${match[2]}`,
   };
@@ -204,6 +226,7 @@ function vimeo(host: string, raw: ReadonlyArray<string>, url: URL): Known | null
     source: "vimeo",
     name: "Vimeo",
     title: "Vimeo video",
+    kind: "Vimeo video",
     embedUrl: `https://player.vimeo.com/video/${id}${keep}`,
   };
 }
@@ -219,17 +242,61 @@ const codaTitle = (segment: string | undefined) =>
 function github(parts: ReadonlyArray<string>): Known {
   const [owner, repo, section, ...rest] = parts;
   const known = { source: "github", name: "GitHub" } as const;
-  if (owner === undefined || repo === undefined) return { ...known, title: "GitHub" };
+  if (owner === undefined || repo === undefined) {
+    return { ...known, title: owner ?? "GitHub", kind: "GitHub" };
+  }
   const repository = `${owner}/${repo}`;
   const kind = section === undefined ? undefined : GITHUB_KINDS[section];
   if (kind !== undefined && /^\d+$/.test(rest[0] ?? "")) {
-    return { ...known, title: `${kind} ${repository}#${rest[0]}` };
+    return { ...known, title: `${repository} #${rest[0]}`, kind };
   }
   if ((section === "blob" || section === "tree") && rest.length >= 2) {
-    return { ...known, title: `${rest.slice(1).join("/")} in ${repository}` };
+    return {
+      ...known,
+      title: rest.slice(1).join("/"),
+      kind: `${section === "blob" ? "File" : "Folder"} in ${repository}`,
+    };
   }
-  return { ...known, title: repository };
+  if (section === "commit" && /^[0-9a-f]{7,40}$/.test(rest[0] ?? "")) {
+    return { ...known, title: `${repository} @ ${rest[0]!.slice(0, 7)}`, kind: "GitHub commit" };
+  }
+  return { ...known, title: repository, kind: "GitHub repository" };
 }
+
+/** A Linear issue as "ENG-123 · Fix login"; a project or document by its name, without its id. */
+function linear(raw: ReadonlyArray<string>, parts: ReadonlyArray<string>): Known {
+  const known = { source: "linear", name: "Linear" } as const;
+  const name = slugTitle((parts[3] ?? "").replace(/-[0-9a-f]{8,}$/i, ""));
+  if (raw[1] === "issue" && parts[2] !== undefined) {
+    return {
+      ...known,
+      title: [parts[2].toUpperCase(), name].filter(Boolean).join(" · "),
+      kind: "Linear issue",
+    };
+  }
+  const page = slugTitle((parts[2] ?? "").replace(/-[0-9a-f]{8,}$/i, ""));
+  if (raw[1] === "project") {
+    return { ...known, title: page || "Linear project", kind: "Linear project" };
+  }
+  if (raw[1] === "document") {
+    return { ...known, title: page || "Linear document", kind: "Linear document" };
+  }
+  return { ...known, title: "Linear", kind: "Linear" };
+}
+
+const CLAUDE_ARTIFACT: Known = {
+  source: "claude-artifact",
+  name: "Claude",
+  title: "Claude artifact",
+  kind: "Claude artifact",
+};
+
+const NOTION = (parts: ReadonlyArray<string>): Known => ({
+  source: "notion",
+  name: "Notion",
+  title: notionTitle(parts.at(-1)),
+  kind: "Notion page",
+});
 
 function known(
   host: string,
@@ -253,24 +320,12 @@ function known(
       return vimeo(host, raw, url);
     case "claude.ai":
       return raw[0] === "public" && raw[1] === "artifacts" && ID.test(raw[2] ?? "")
-        ? { source: "claude-artifact", name: "Claude", title: "Claude artifact" }
+        ? CLAUDE_ARTIFACT
         : null;
     case "claude.site":
-      return raw.includes("artifacts")
-        ? { source: "claude-artifact", name: "Claude", title: "Claude artifact" }
-        : null;
-    case "linear.app": {
-      const issue = raw[1] === "issue" ? parts[2] : undefined;
-      const title =
-        issue === undefined
-          ? raw[1] === "project"
-            ? "Linear project"
-            : raw[1] === "document"
-              ? "Linear document"
-              : "Linear"
-          : [issue, slugTitle(parts[3])].filter(Boolean).join(" ");
-      return { source: "linear", name: "Linear", title };
-    }
+      return raw.includes("artifacts") ? CLAUDE_ARTIFACT : null;
+    case "linear.app":
+      return linear(raw, parts);
     case "github.com":
       return github(parts);
     case "docs.superhuman.com":
@@ -278,22 +333,26 @@ function known(
         source: "superhuman",
         name: "Superhuman Docs",
         title: codaTitle(parts.at(-1)) || "Superhuman doc",
+        kind: "Superhuman doc",
       };
     case "coda.io":
-      return { source: "coda", name: "Coda", title: codaTitle(parts.at(-1)) || "Coda doc" };
+      return {
+        source: "coda",
+        name: "Coda",
+        title: codaTitle(parts.at(-1)) || "Coda doc",
+        kind: "Coda doc",
+      };
     case "notion.so":
-      return { source: "notion", name: "Notion", title: notionTitle(parts.at(-1)) };
+      return NOTION(parts);
     case "app.asana.com":
-      return { source: "asana", name: "Asana", title: "Asana task" };
+      return { source: "asana", name: "Asana", title: "Asana task", kind: "Asana task" };
     case "miro.com":
-      return { source: "miro", name: "Miro", title: "Miro board" };
+      return { source: "miro", name: "Miro", title: "Miro board", kind: "Miro board" };
   }
-  if (host.endsWith(".notion.site")) {
-    return { source: "notion", name: "Notion", title: notionTitle(parts.at(-1)) };
-  }
+  if (host.endsWith(".notion.site")) return NOTION(parts);
   if (host.endsWith(".atlassian.net")) {
     const key = raw[0] === "browse" ? parts[1] : undefined;
-    return { source: "jira", name: "Jira", title: key ?? "Jira issue" };
+    return { source: "jira", name: "Jira", title: key ?? "Jira issue", kind: "Jira issue" };
   }
   return null;
 }
@@ -316,7 +375,13 @@ export function roomEmbedOf(value: string): RoomEmbed | null {
   const raw = url.pathname.split("/").filter((part) => part !== "");
   const parts = raw.map(decodeSegment);
   const address = `${host}${parts.length === 0 ? "" : `/${parts.join("/")}`}${url.search}`;
-  const site: RoomEmbed = { source: "web", name: host, title: host, address };
+  const site: RoomEmbed = {
+    source: "web",
+    name: host,
+    title: webTitle(parts) || host,
+    kind: host,
+    address,
+  };
   if (url.protocol !== "https:" || url.username !== "" || url.password !== "" || url.port !== "") {
     return site;
   }

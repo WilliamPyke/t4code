@@ -27,6 +27,26 @@ describe("connectAuth", () => {
     expect(connectLoopbackRedirectUri(34338)).toBe("http://127.0.0.1:34338/callback");
   });
 
+  it("carries the computer Tinkjam Sync asks to connect as one short line", () => {
+    const request = {
+      hostedAppUrl: "https://app.t3.codes",
+      state: "state-1",
+      challenge: "challenge-1",
+      loopbackPort: 34338,
+    };
+    const named = (computerName: string) =>
+      readConnectAuthorizeRequest(
+        new URL(buildConnectAuthorizeRequestUrl({ ...request, computerName })),
+      )?.computerName;
+    expect(named("Ada's MacBook Pro")).toBe("Ada's MacBook Pro");
+    expect(named("  two\nlines\u0007 ")).toBe("two lines");
+    expect(named(" \n ")).toBeUndefined();
+    expect(named("x".repeat(200))).toHaveLength(64);
+    expect(
+      readConnectAuthorizeRequest(new URL(buildConnectAuthorizeRequestUrl(request))),
+    ).not.toHaveProperty("computerName");
+  });
+
   it("rejects authorize requests missing state, challenge, or port", () => {
     expect(readConnectAuthorizeRequest(new URL("https://app.t3.codes/connect"))).toBeNull();
     expect(

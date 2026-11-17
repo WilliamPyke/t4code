@@ -65,6 +65,7 @@ import {
   boardCommentLineTo,
   boardCommentPanelSpot,
   boardConnector,
+  boardConnectorSides,
   boardCursorAt,
   boardCursorColor,
   boardDraftIsPage,
@@ -102,6 +103,8 @@ import {
   boardNewestReplyAt,
   boardNoteBox,
   boardOwnBoxFor,
+  boardPointedSpot,
+  boardSidePoint,
   boardPeopleOf,
   boardPersonName,
   boardPanelMaxWidth,
@@ -366,6 +369,25 @@ describe("placeBoardItem", () => {
 
   it("centres a new item on the spot asked for when nothing is there", () => {
     expect(placeBoardItem({ w: 200, h: 100 }, { x: 500, y: 300 }, [])).toEqual({ x: 400, y: 250 });
+  });
+
+  it("lands a pasted link where the pointer is in view, else mid-view, never on a card", () => {
+    const view = { x: 1_000, y: 2_000, width: 1_200, height: 800 };
+    const link = boardNewNoteSize("link", "https://linear.app/acme/issue/ENG-1/x");
+    // Pointing in view at a clear spot: centred on the pointer.
+    expect(boardPointedSpot(link, { x: 1_300, y: 2_300 }, view, [])).toEqual({
+      x: 1_300 - link.w / 2,
+      y: 2_300 - link.h / 2,
+    });
+    // The pointer last seen somewhere the view has since panned away from: mid-view instead.
+    const middle = boardPointedSpot(link, { x: 0, y: -150 }, view, []);
+    expect(middle).toEqual({ x: 1_600 - link.w / 2, y: 2_400 - link.h / 2 });
+    expect(boardPointedSpot(link, null, view, [])).toEqual(middle);
+    // A card under the pointer: the nearest clear spot, still in view.
+    const card = { x: 1_150, y: 2_150, width: 320, height: 300 };
+    const beside = boardPointedSpot(link, { x: 1_300, y: 2_300 }, view, [card]);
+    expect(covers(beside, link, card)).toBe(false);
+    expect(inside(beside, link, view)).toBe(true);
   });
 
   it("lands a new artifact fully in view, clear of every card and note at its real size", () => {
@@ -868,6 +890,7 @@ describe("resolveBoard", () => {
       done: true,
       status: "done",
       due: null,
+      priority: null,
       assignee: null,
     });
     // Ticked on the board while in progress, its status says done with it.
@@ -916,39 +939,59 @@ describe("boardChangeQueue", () => {
 });
 
 describe("boardConnector", () => {
-  it("joins the facing sides of two headers and finds the middle of the curve", () => {
-    const card = boardCardBox({ x: 0, y: 0 });
-    const note = boardNoteBox({ x: 500, y: 100 });
-    const ahead = boardConnector(card, note);
-    expect(ahead.path.startsWith("M320 18 ")).toBe(true);
-    expect(ahead.path.endsWith(" 500 112")).toBe(true);
-    expect(ahead.middle).toEqual({ x: 410, y: 65 });
-    // Pointing back, the arrow leaves the left side and lands on the right one.
-    const back = boardConnector(note, card);
-    expect(back.path.startsWith("M500 112 ")).toBe(true);
-    expect(back.path.endsWith(" 320 18")).toBe(true);
-    // A resized card and an artifact, at their own widths.
-    const wide = boardConnector(boardCardBox({ x: 0, y: 0 }, { w: 450, h: 200 }), note);
-    expect(wide.path.startsWith("M450 18 ")).toBe(true);
-    const artifact = boardNoteBox({ x: 0, y: 0, kind: "artifact" });
-    expect(artifact.width).toBeGreaterThan(boardNoteBox({ x: 0, y: 0 }).width);
-    expect(boardConnector(artifact, note).path.startsWith(`M${artifact.width} 12 `)).toBe(true);
+  // A 320 by 240 card at the origin, and where the other box is relative to it.
+  const card = boardCardBox({ x: 0, y: 0 });
+  it.each([
+    ["right of it", { x: 500, y: 40 }, ["right", "left"], "M320 120 ", " 500 112"],
+    ["left of it", { x: -400, y: 300 }, ["left", "right"], "M0 120 ", " -208 372"],
+    ["below it", { x: 60, y: 400 }, ["bottom", "top"], "M160 240 ", " 156 400"],
+    ["above it", { x: 100, y: -300 }, ["top", "bottom"], "M160 0 ", " 196 -156"],
+    // Further across than down: the wider gap decides, so the line never cuts a card.
+    ["below and far right", { x: 700, y: 300 }, ["right", "left"], "M320 120 ", " 700 372"],
+    ["right and far below", { x: 400, y: 600 }, ["bottom", "top"], "M160 240 ", " 496 600"],
+  ] as const)("joins the facing side midpoints of a note %s", (_, at, sides, start, end) => {
+    const note = boardNoteBox(at);
+    expect(boardConnectorSides(card, note)).toEqual(sides);
+    const { path } = boardConnector(card, note);
+    expect(path.startsWith(start)).toBe(true);
+    expect(path.endsWith(end)).toBe(true);
+    // Drawn back the other way, it is the same line reversed.
+    expect(boardConnectorSides(note, card)).toEqual([sides[1], sides[0]]);
   });
 
-  it("joins whichever sides of two cards are nearer each other, from either side", () => {
-    const card = boardCardBox({ x: 600, y: 0 });
-    // A card to the left: the line leaves the card's left side for the note's right side.
-    const left = boardConnector(card, boardNoteBox({ x: 100, y: 300 }));
-    expect(left.path.startsWith("M600 18 ")).toBe(true);
-    expect(left.path.endsWith(" 292 312")).toBe(true);
-    // One under the other at the same place: both ends on the same side, curving out and back.
-    const below = boardConnector(card, boardCardBox({ x: 600, y: 400 }));
-    expect(below.path).toBe("M920 18 C960 18, 960 418, 920 418");
-    expect(below.middle).toEqual({ x: 950, y: 218 });
-    // Overlapping a little to the right: the right sides are nearer than the facing ones.
-    const overlap = boardConnector(card, boardCardBox({ x: 700, y: 400 }));
-    expect(overlap.path.startsWith("M920 18 ")).toBe(true);
-    expect(overlap.path.endsWith(" 1020 418")).toBe(true);
+  it("leaves square to its sides and finds the middle of the curve", () => {
+    const below = boardConnector(card, boardCardBox({ x: 0, y: 400 }));
+    expect(below.path).toBe("M160 240 C160 320, 160 320, 160 400");
+    expect(below.middle).toEqual({ x: 160, y: 320 });
+    const ahead = boardConnector(card, boardNoteBox({ x: 500, y: 48 }));
+    expect(ahead.path).toBe("M320 120 C410 120, 410 120, 500 120");
+    // A short gap bends no further than it reaches, so the line does not loop back.
+    expect(boardConnector(card, boardCardBox({ x: 340, y: 0 })).path).toBe(
+      "M320 120 C340 120, 320 120, 340 120",
+    );
+  });
+
+  it("attaches at each box's own size, a measured height, or a pin's zoomed size", () => {
+    const wide = boardCardBox({ x: 0, y: 0 }, { w: 450, h: 200 });
+    expect(boardSidePoint(wide, "right")).toEqual({ x: 450, y: 100 });
+    expect(boardSidePoint(boardCardBox({ x: 0, y: 0 }, undefined, 500), "bottom")).toEqual({
+      x: 160,
+      y: 500,
+    });
+    const artifact = boardNoteBox({ x: 0, y: 0, kind: "artifact" });
+    expect(artifact.width).toBeGreaterThan(boardNoteBox({ x: 0, y: 0 }).width);
+    expect(boardSidePoint(artifact, "right")).toEqual({
+      x: artifact.width,
+      y: artifact.height / 2,
+    });
+    expect(boardNoteBox({ x: 0, y: 0 }, 1, 90).height).toBe(90);
+  });
+
+  it("follows the swaying belly without moving its ends", () => {
+    const note = boardNoteBox({ x: 500, y: 48 });
+    expect(boardConnector(card, note, { x: 5, y: -10 }).path).toBe(
+      "M320 120 C415 110, 415 110, 500 120",
+    );
   });
 });
 
@@ -2325,7 +2368,7 @@ describe("comment pins", () => {
     }
     // A line meets a pin at the middle of its side, at the size it is drawn.
     const pin = { x: 10, y: 20, kind: "comment" as const };
-    expect(boardNoteBox(pin, BOARD_MIN_ZOOM)).toEqual({ x: 10, y: 20, width: 120, headerY: 60 });
+    expect(boardNoteBox(pin, BOARD_MIN_ZOOM)).toEqual({ x: 10, y: 20, width: 120, height: 120 });
   });
 
   it("opens a thread beside its pin, inside the board and never over the pin", () => {

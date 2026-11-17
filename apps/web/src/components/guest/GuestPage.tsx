@@ -27,6 +27,7 @@ import { boardAccountsEnabled, useBoardAccount } from "~/guest/boardAccount";
 import { rememberBoardName, suggestedBoardName } from "~/guest/cloudBoards";
 import { isCloudBoardsHost } from "~/guest/cloudBoardsHost";
 import { redeemInvite } from "~/guest/redeemInvite";
+import { AccountCorner } from "../boards/BoardsAccount";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { BoardBackdrop } from "../room/BoardChrome";
 import { TinkjamWordmark } from "../TinkjamLogo";
@@ -165,7 +166,8 @@ export function GuestPage() {
 
   const open = joined ?? (step.step === "open" ? step.share : null);
   return (
-    <BoardBackdrop className="flex h-dvh flex-col px-4 text-foreground">
+    <BoardBackdrop className="relative flex h-dvh flex-col px-4 text-foreground">
+      {open === null ? <AccountCorner /> : null}
       {open !== null ? (
         <Navigate
           to="/$environmentId/$threadId"

@@ -12,18 +12,21 @@ import { resolveClerkSignInProps } from "../clerk/authRedirect";
 import { Button } from "../ui/button";
 
 const invalidLinkMessage = {
-  context: "Authorization request",
-  title: "This connect link is incomplete",
-  description:
-    "The link is missing its authorization request. Re-run `t3 connect` in your terminal and open the freshly printed URL.",
+  context: "Connect a computer",
+  title: "This link is incomplete",
+  description: "Run the Tinkjam Sync command on your computer again and open the link it prints.",
 } as const;
 
+/**
+ * Where Tinkjam Sync (or `t3 connect`) sends the browser: the signed-in person approves this
+ * computer for their account. Approving hands a one-time code back to the computer itself.
+ */
 export function ConnectCliAuthorizeSurface() {
   const [request] = useState(() => readConnectAuthorizeRequest(new URL(window.location.href)));
   const clerk = useClerk();
   const { isLoaded, isSignedIn } = useAuth();
   const signInOpened = useRef(false);
-  const redirecting = useRef(false);
+  const [connecting, setConnecting] = useState(false);
 
   const openSignIn = () => {
     if (!request) {
@@ -38,24 +41,13 @@ export function ConnectCliAuthorizeSurface() {
   };
   const openSignInOnLoad = useEffectEvent(openSignIn);
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens Clerk sign-in or navigates the window to the authorize URL once Clerk has loaded
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens Clerk sign-in once Clerk has loaded signed out
   useEffect(() => {
-    if (!request || !isLoaded || redirecting.current) {
+    if (!request || !isLoaded || isSignedIn || signInOpened.current) {
       return;
     }
-    if (!isSignedIn) {
-      if (!signInOpened.current) {
-        signInOpened.current = true;
-        openSignInOnLoad();
-      }
-      return;
-    }
-    const authorizeUrl = buildConnectCliClerkAuthorizeUrl(request);
-    if (!authorizeUrl) {
-      return;
-    }
-    redirecting.current = true;
-    window.location.assign(authorizeUrl);
+    signInOpened.current = true;
+    openSignInOnLoad();
   }, [isLoaded, isSignedIn, request]);
 
   if (!request) {
@@ -66,22 +58,39 @@ export function ConnectCliAuthorizeSurface() {
     );
   }
 
+  const connect = () => {
+    const authorizeUrl = buildConnectCliClerkAuthorizeUrl(request);
+    if (!authorizeUrl) return;
+    setConnecting(true);
+    window.location.assign(authorizeUrl);
+  };
+  const computer = request.computerName ?? "this computer";
+
   return (
     <StandalonePage>
       <StandalonePageHeader
-        context="Browser authorization"
-        title="Connecting your terminal"
+        context="Connect a computer"
+        title={`Connect ${computer} to Tinkjam?`}
         description={
           isSignedIn
-            ? "Redirecting to authorize Tinkjam Connect for your CLI…"
-            : "Sign in to continue authorizing Tinkjam Connect for your CLI."
+            ? "Your boards can then use the agents on it, such as Claude Code or Codex. They run there, on your own sign-in, and only when you send them something."
+            : "Sign in first. Your boards can then use the agents on this computer, on your own sign-in."
         }
       />
-      {isLoaded && !isSignedIn ? (
-        <div className="mt-6">
-          <Button type="button" onClick={openSignIn}>
-            Sign in
-          </Button>
+      {isLoaded ? (
+        <div className="mt-6 flex flex-wrap items-center gap-3">
+          {isSignedIn ? (
+            <Button type="button" disabled={connecting} onClick={connect} data-connect-computer>
+              {connecting ? "Connecting..." : "Connect"}
+            </Button>
+          ) : (
+            <Button type="button" onClick={openSignIn}>
+              Sign in to connect
+            </Button>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Only approve a computer you just ran Tinkjam Sync on.
+          </p>
         </div>
       ) : null}
     </StandalonePage>

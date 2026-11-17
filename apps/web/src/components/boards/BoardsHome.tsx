@@ -11,13 +11,33 @@ import {
   type RoomBoardSummary,
   type RoomBoardSummaryShape,
 } from "@t3tools/contracts";
+import { decodeBoardPreview } from "@t3tools/shared/boardPreview";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ChevronDownIcon, MegaphoneIcon, PlusIcon, SearchIcon } from "lucide-react";
+import * as Schema from "effect/Schema";
+import {
+  ArrowDownUpIcon,
+  ChevronDownIcon,
+  MegaphoneIcon,
+  PlusIcon,
+  SearchIcon,
+} from "lucide-react";
 import { type MouseEvent, useEffect, useState } from "react";
 
 import { isElectron } from "~/env";
-import { openAccountBoard } from "~/guest/boardAccount";
-import { accountBoardsAtom, guestSharesAtom, isCloudShare } from "~/guest/guestShares";
+import { refreshAccountBoards, useBoardAccount } from "~/guest/boardAccount";
+import {
+  accountBoardsAtom,
+  guestSharesAtom,
+  isCloudShare,
+  localBoardPreviewsAtom,
+} from "~/guest/guestShares";
+import {
+  openListedBoard,
+  refreshWorkspaceList,
+  useWorkspaceScope,
+  useWorkspaces,
+} from "~/guest/workspaces";
+import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { workspaceAreaProps } from "~/lib/workspaceFocus";
 import {
@@ -28,7 +48,6 @@ import {
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { readTeamBoard, useTeams } from "~/teams/teams";
-import { formatRelativeTimeLabel } from "~/timestampFormat";
 import { useWhatsNewSeen } from "~/whatsNew";
 
 import { BoardChip } from "../room/BoardChrome";
@@ -37,31 +56,90 @@ import { roomBoardLocation } from "../room/roomBoardNavigation";
 import { Button } from "../ui/button";
 import { Group, GroupSeparator } from "../ui/group";
 import { Input } from "../ui/input";
+import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
 import { SidebarInset } from "../ui/sidebar";
+import { Skeleton } from "../ui/skeleton";
 import { Spinner } from "../ui/spinner";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { toastManager } from "../ui/toast";
-import { BoardsAccount } from "./BoardsAccount";
+import { AccountNameAsk, BoardsAccount } from "./BoardsAccount";
 import { BoardsWelcome } from "./BoardsWelcome";
 import { SignInNudge } from "./SignInNudge";
 import { BoardThumbnail } from "./BoardThumbnail";
 import {
+  HOME_BOARD_SORTS,
+  HOME_RECENT_AFTER,
+  HOME_RECENT_COUNT,
   type HomeBoard,
+  type HomeBoardSort,
+  boardPaint,
+  boardTimeLabel,
+  boardsInScope,
+  homeContent,
   joinedBoardSources,
   listHomeBoards,
+  sortHomeBoards,
   teamBoardShapes,
+  withWorkspaceBoards,
 } from "./boardsHome.logic";
 import { openBoardTemplates, useNewBoardWaiting, useStartNewBoard } from "./newBoard";
 import { JoinedBoardMenu } from "./removeJoinedBoard";
+import { WorkspaceInvite, WorkspacePeople, WorkspaceSwitcher } from "./Workspaces";
 
 const NO_THREAD_IDS: ReadonlyArray<ThreadId> = [];
 
-/** Every board the user has, most recently active first, and the way to start one. */
+// Per browser: how the home orders boards.
+const SORT_KEY = "t3code:boards-sort:v1";
+const SortSchema = Schema.Literals(HOME_BOARD_SORTS);
+const readSort = (): HomeBoardSort => {
+  try {
+    return getLocalStorageItem(SORT_KEY, SortSchema) ?? "recent";
+  } catch {
+    return "recent";
+  }
+};
+const SORT_LABELS: Readonly<Record<HomeBoardSort, string>> = {
+  recent: "Recently opened",
+  name: "Name",
+  created: "Newest first",
+};
+
+// Past this, a sign-in or a list of boards that has not answered no longer holds the welcome back.
+const ACCOUNT_WAIT_MS = 8_000;
+
+/** Whether sign-in said who this is and, signed in, their boards arrived, or it took too long. */
+function useAccountSettled(): boolean {
+  const account = useBoardAccount();
+  const [waitedOut, setWaitedOut] = useState(false);
+  const waiting =
+    account.status === "loading" || (account.status === "signed-in" && !account.listed);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- caps how long a sign-in or board list that never answers holds the home on placeholders
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = setTimeout(() => setWaitedOut(true), ACCOUNT_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [waiting]);
+  return !waiting || waitedOut;
+}
+
+/** Every board the user has, most recently opened first, and the way to start one. */
 export function BoardsHome() {
   const threads = useThreadShells();
   const projects = useProjects();
   const joined = useAtomValue(guestSharesAtom);
   const accountBoards = useAtomValue(accountBoardsAtom);
+  const localPreviews = useAtomValue(localBoardPreviewsAtom);
+  const accountSettled = useAccountSettled();
+  const [sort, setSort] = useState(readSort);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the account's boards and workspaces again from the board service each time the home opens
+  useEffect(() => {
+    void refreshAccountBoards();
+    refreshWorkspaceList();
+  }, []);
+  // Null signed out and without accounts: then nothing about workspaces shows.
+  const workspaces = useWorkspaces();
+  const scope = useWorkspaceScope();
+  const workspace = workspaces?.find((candidate) => candidate.id === scope) ?? null;
   const { teams } = useTeams();
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const startNewBoard = useStartNewBoard();
@@ -73,20 +151,38 @@ export function BoardsHome() {
       ?.title;
   const sources = {
     threads,
-    joined: joinedBoardSources({
-      local: joined.map((share) => ({
-        ...share,
-        cloud: isCloudShare(share),
-        maker: share.made === true,
-      })),
-      listed: accountBoards,
-    }),
+    joined: withWorkspaceBoards(
+      joinedBoardSources({
+        local: joined.map((share) => ({
+          ...share,
+          cloud: isCloudShare(share),
+          maker: share.made === true,
+          preview: localPreviews[share.shareId],
+        })),
+        listed: accountBoards,
+      }),
+      workspaces,
+    ),
     teams: teams ?? [],
     isOwnEnvironment: (environmentId: string) => !isGuestEnvironment(environmentId),
     projectName,
   };
   const all = listHomeBoards(sources);
-  const shown = query.trim() === "" ? all : listHomeBoards({ ...sources, query });
+  // A search looks through every board, whichever workspace is shown.
+  const searching = query.trim() !== "";
+  const inScope = boardsInScope(all, scope);
+  const shown = sortHomeBoards(searching ? listHomeBoards({ ...sources, query }) : inScope, sort);
+  const recent =
+    !searching && inScope.length > HOME_RECENT_AFTER
+      ? sortHomeBoards(inScope, "recent").slice(0, HOME_RECENT_COUNT)
+      : [];
+  const showWorkspace = searching || scope === "all";
+  const content = homeContent({
+    boards: all.length,
+    workspaces: workspaces?.length ?? 0,
+    machinesLoaded: bootstrapped,
+    accountLoaded: accountSettled,
+  });
   // One summary request per machine, for its most recent boards; every tile there shares it.
   const threadIdsByEnvironment = new Map<string, Array<ThreadId>>();
   for (const board of all) {
@@ -100,6 +196,22 @@ export function BoardsHome() {
   const nowMs = Date.parse(`${nowMinute}:00.000Z`);
   const contentArea = workspaceAreaProps("home", 1, "Boards");
   const whatsNew = useWhatsNewSeen();
+  const tile = (board: HomeBoard) => (
+    <BoardTile
+      key={board.key}
+      board={board}
+      projectName={
+        board.kind === "own" ? projectName(board.environmentId, board.projectId) : undefined
+      }
+      summaryThreadIds={
+        board.kind === "own"
+          ? (threadIdsByEnvironment.get(board.environmentId) ?? NO_THREAD_IDS)
+          : NO_THREAD_IDS
+      }
+      showWorkspace={showWorkspace}
+      nowMs={nowMs}
+    />
+  );
 
   return (
     <SidebarInset
@@ -114,19 +226,25 @@ export function BoardsHome() {
         // Room for the floating sidebar button on phones.
         <WorkspacePageHeader className="md:hidden" />
       )}
-      {all.length === 0 ? (
-        bootstrapped ? (
-          <BoardsWelcome />
-        ) : null
+      {content === "welcome" ? (
+        <BoardsWelcome />
+      ) : content === "loading" ? (
+        <HomeSkeleton />
       ) : (
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-6 sm:px-6">
           <header className="flex flex-wrap items-center gap-3" data-boards-home-header>
             <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <h1 className="text-2xl leading-tight font-semibold">Boards</h1>
+              <h1 className="truncate text-2xl leading-tight font-semibold">
+                {workspace?.name ?? (scope === "personal" ? "My boards" : "Boards")}
+              </h1>
               <p className="text-sm text-muted-foreground">
                 Where you, your team and everyone's agents work on the same thing.
               </p>
             </div>
+            {workspaces === null ? null : (
+              <WorkspaceSwitcher scope={scope} workspaces={workspaces} />
+            )}
+            {workspace === null ? null : <WorkspacePeople workspace={workspace} />}
             <Button variant="ghost-muted" render={<Link to="/whats-new" />} data-whats-new-link>
               <MegaphoneIcon />
               What's new
@@ -173,14 +291,65 @@ export function BoardsHome() {
             </Group>
           </header>
           <SignInNudge cloudBoards={joined.some(isCloudShare)} />
-          {shown.length === 0 ? (
+          <AccountNameAsk />
+          {workspace !== null &&
+          !searching &&
+          (workspace.members.length === 1 || shown.length === 0) ? (
+            <WorkspaceInvite workspace={workspace} />
+          ) : null}
+          {recent.length > 0 ? (
+            <section className="flex flex-col gap-2" aria-label="Recent" data-boards-recent>
+              <h2 className="text-sm font-medium text-muted-foreground">Recent</h2>
+              <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {recent.map(tile)}
+              </ul>
+            </section>
+          ) : null}
+          <div className="flex items-center gap-2">
+            {recent.length > 0 ? (
+              <h2 className="text-sm font-medium text-muted-foreground">All boards</h2>
+            ) : null}
+            {all.length > 1 ? (
+              <Menu>
+                <MenuTrigger
+                  render={<Button variant="ghost-muted" size="sm" className="ms-auto" />}
+                  data-boards-sort
+                >
+                  <ArrowDownUpIcon />
+                  {SORT_LABELS[sort]}
+                </MenuTrigger>
+                <MenuPopup align="end">
+                  <MenuRadioGroup
+                    value={sort}
+                    onValueChange={(value) => {
+                      const next = HOME_BOARD_SORTS.find((candidate) => candidate === value);
+                      if (next === undefined) return;
+                      setSort(next);
+                      try {
+                        setLocalStorageItem(SORT_KEY, next, SortSchema);
+                      } catch {
+                        // Blocked storage only forgets the order next time.
+                      }
+                    }}
+                  >
+                    {HOME_BOARD_SORTS.map((option) => (
+                      <MenuRadioItem key={option} value={option} closeOnClick>
+                        {SORT_LABELS[option]}
+                      </MenuRadioItem>
+                    ))}
+                  </MenuRadioGroup>
+                </MenuPopup>
+              </Menu>
+            ) : null}
+          </div>
+          {shown.length === 0 && searching ? (
             <p className="text-sm text-muted-foreground">No boards match "{query.trim()}".</p>
           ) : (
             <ul
               className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
               data-boards-grid
             >
-              {query.trim() === "" ? (
+              {!searching ? (
                 <li>
                   <button
                     type="button"
@@ -203,23 +372,7 @@ export function BoardsHome() {
                   </button>
                 </li>
               ) : null}
-              {shown.map((board) => (
-                <BoardTile
-                  key={board.key}
-                  board={board}
-                  projectName={
-                    board.kind === "own"
-                      ? projectName(board.environmentId, board.projectId)
-                      : undefined
-                  }
-                  summaryThreadIds={
-                    board.kind === "own"
-                      ? (threadIdsByEnvironment.get(board.environmentId) ?? NO_THREAD_IDS)
-                      : NO_THREAD_IDS
-                  }
-                  nowMs={nowMs}
-                />
-              ))}
+              {shown.map(tile)}
             </ul>
           )}
         </div>
@@ -228,16 +381,50 @@ export function BoardsHome() {
   );
 }
 
+/** Where the boards will be, while the home cannot yet say whether there are any. */
+function HomeSkeleton() {
+  return (
+    <div
+      className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-6 sm:px-6"
+      aria-busy
+      aria-label="Loading your boards"
+      data-boards-loading
+    >
+      <div className="flex flex-col gap-2">
+        <Skeleton className="h-7 w-40" />
+        <Skeleton className="h-4 w-72 max-w-full" />
+      </div>
+      <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        {["a", "b", "c", "d"].map((key) => (
+          <li
+            key={key}
+            className="flex flex-col overflow-hidden rounded-board border border-board-hairline bg-card shadow-paint"
+          >
+            <Skeleton className="aspect-video w-full" />
+            <div className="flex flex-col gap-2 p-3">
+              <Skeleton className="h-4 w-2/3" />
+              <Skeleton className="h-3 w-1/3" />
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function BoardTile({
   board,
   projectName,
   summaryThreadIds,
+  showWorkspace,
   nowMs,
 }: {
   readonly board: HomeBoard;
   readonly projectName: string | undefined;
   /** The threads its machine's summary request names, the same list for every tile there. */
   readonly summaryThreadIds: ReadonlyArray<ThreadId>;
+  /** Boards from several workspaces are shown, so each says which it is in. */
+  readonly showWorkspace: boolean;
   readonly nowMs: number;
 }) {
   const summary = useBoardSummary(board, summaryThreadIds);
@@ -248,7 +435,7 @@ function BoardTile({
   const openRemote = async () => {
     if (board.kind !== "joined" || opening) return;
     setOpening(true);
-    const opened = await openAccountBoard(board.shareId);
+    const opened = await openListedBoard(board);
     setOpening(false);
     if (typeof opened === "string") {
       toastManager.add({ type: "error", title: opened });
@@ -263,16 +450,23 @@ function BoardTile({
     board.kind === "own"
       ? projectName
       : board.kind === "joined"
-        ? board.cloud
-          ? board.maker
-            ? "Made by you"
-            : "Shared with you"
-          : board.owner === null
-            ? "Shared with you"
-            : `Shared by ${board.owner}`
+        ? showWorkspace && board.workspaceName !== null
+          ? board.workspaceName
+          : board.cloud
+            ? board.maker
+              ? "Made by you"
+              : "Shared with you"
+            : board.owner === null
+              ? "Shared with you"
+              : `Shared by ${board.owner}`
         : "Team";
-  const activity =
-    board.activityAt === null ? null : formatRelativeTimeLabel(board.activityAt, nowMs) || null;
+  const activity = board.openedAt === null ? null : boardTimeLabel(board.openedAt, nowMs);
+  const shapes =
+    board.kind === "own"
+      ? summary?.shapes
+      : board.kind === "team"
+        ? teamShapes
+        : decodeBoardPreview(board.preview);
   const live = summary !== null && summary.shared && summary.online > 0;
   return (
     <li
@@ -295,7 +489,11 @@ function BoardTile({
         className="flex h-full flex-col overflow-hidden rounded-board border border-board-hairline bg-card shadow-paint transition-shadow outline-none hover:shadow-board focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       >
         <div className="border-b border-board-hairline">
-          <BoardThumbnail shapes={summary?.shapes ?? teamShapes} />
+          <BoardThumbnail
+            shapes={shapes}
+            paint={boardPaint(board.kind === "joined" ? board : { key: board.key })}
+            seed={board.key}
+          />
         </div>
         <div className="flex min-w-0 flex-col gap-1 p-3">
           <div className="flex min-w-0 items-center gap-2">

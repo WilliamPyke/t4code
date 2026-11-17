@@ -30,6 +30,10 @@ interface BoardAccountSession {
   readonly userId: string;
   /** The name the account joins boards under, so it is never asked for. */
   readonly name: string | null;
+  /** Whether that name is the account's own, rather than this browser's or its username. */
+  readonly realName: boolean;
+  /** Its picture, which its workspaces show beside its name. */
+  readonly imageUrl?: string | undefined;
   readonly readToken: () => Promise<string | null>;
 }
 
@@ -56,19 +60,42 @@ export const boardAccountsEnabled = () =>
 
 export type BoardAccountState =
   | { readonly status: "off" | "loading" | "signed-out" }
-  | { readonly status: "signed-in"; readonly name: string | null };
+  | {
+      readonly status: "signed-in";
+      readonly name: string | null;
+      readonly realName: boolean;
+      /** Whether the account's list of boards has been read since it signed in (or failed to). */
+      readonly listed: boolean;
+    };
+
+// Whether the signed-in account's list of boards was read, or the read failed, since sign-in.
+const accountListSettledAtom = Atom.make(false).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("account-boards-settled"),
+);
 
 /** Who is signed in for cloud boards, as React reads it. */
 export function useBoardAccount(): BoardAccountState {
   const account = useAtomValue(boardAccountAtom);
   const loaded = useAtomValue(boardAccountLoadedAtom);
+  const listed = useAtomValue(accountListSettledAtom);
   if (!boardAccountsEnabled()) return { status: "off" };
   if (!loaded) return { status: "loading" };
-  return account === null ? { status: "signed-out" } : { status: "signed-in", name: account.name };
+  return account === null
+    ? { status: "signed-out" }
+    : { status: "signed-in", name: account.name, realName: account.realName, listed };
 }
 
 /** The signed-in account's name, or null signed out or with none. */
 export const readBoardAccountName = () => readBoardAccount()?.name ?? null;
+
+/** Who is signed in: their id and how others see them, or null. */
+export const readBoardAccountProfile = () => {
+  const account = readBoardAccount();
+  return account === null
+    ? null
+    : { userId: account.userId, name: account.name, imageUrl: account.imageUrl };
+};
 
 const decodeList = Schema.decodeUnknownOption(CloudBoardAccountList);
 const decodeOpened = Schema.decodeUnknownOption(CloudBoardAccountOpenResult);
@@ -98,7 +125,8 @@ export async function boardAccountAuth(): Promise<{
   return token === null ? null : { userId: account.userId, authorization: `Bearer ${token}` };
 }
 
-async function accountRequest(
+/** A request to the cloud board host signed as the account, or null signed out or unreachable. */
+export async function accountRequest(
   path: string,
   init: {
     readonly method?: string;
@@ -127,10 +155,11 @@ const listedOf = async (response: Response | null) =>
 
 /** Reads the account's boards from the host again. */
 export async function refreshAccountBoards(): Promise<void> {
+  const reader = readBoardAccount()?.userId;
   const listed = await listedOf(await accountRequest(CLOUD_BOARD_ACCOUNT_ROUTE));
-  if (listed !== null && readBoardAccount() !== null) {
-    appAtomRegistry.set(accountBoardsAtom, listed.boards);
-  }
+  if (reader === undefined || readBoardAccount()?.userId !== reader) return;
+  if (listed !== null) appAtomRegistry.set(accountBoardsAtom, listed.boards);
+  appAtomRegistry.set(accountListSettledAtom, true);
 }
 
 /** Adds the cloud boards this browser made or joined while signed out to the account. */
@@ -173,6 +202,7 @@ export function syncBoardAccount(session: BoardAccountSession | null): void {
   }
   appAtomRegistry.set(boardAccountAtom, session);
   appAtomRegistry.set(accountBoardsAtom, null);
+  appAtomRegistry.set(accountListSettledAtom, false);
   triedClaims.clear();
   for (const shareId of sharesOfOtherAccounts(readGuestShares(), session?.userId ?? null)) {
     forgetGuestShare(shareId);

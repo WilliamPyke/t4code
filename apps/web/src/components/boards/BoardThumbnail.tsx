@@ -39,11 +39,36 @@ function fillOf(shape: {
   return KIND_FILL[shape.kind];
 }
 
-/** A small map of a board's cards in their colours. No shapes yet draws an empty frame. */
+// A board with nothing to draw yet gets a few notes in its own paint, placed by its key, so a
+// tile never looks empty or broken. Laid out on a 6 by 3 grid of spots, three of them taken.
+const PATTERN_SPOTS = 18;
+function patternNotes(seed: string): ReadonlyArray<{ x: number; y: number; size: number }> {
+  let hash = 2166136261;
+  for (const char of seed) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+  const taken = new Set<number>();
+  for (let step = 0; taken.size < 3 && step < 12; step++) {
+    hash = Math.imul(hash ^ (hash >>> 13), 1274126177);
+    taken.add(Math.abs(hash) % PATTERN_SPOTS);
+  }
+  return [...taken].map((spot, index) => ({
+    x: 28 + (spot % 6) * 32 + (index % 2) * 6,
+    y: 22 + Math.floor(spot / 6) * 30 + (index % 3) * 4,
+    size: index === 0 ? 34 : 26,
+  }));
+}
+
+/**
+ * A small map of a board's cards in their colours. With none to draw (a board not summarised
+ * yet), a few notes in the board's `paint`, placed by its `seed`.
+ */
 export function BoardThumbnail({
   shapes,
+  paint = "yellow",
+  seed = "",
 }: {
   readonly shapes: ReadonlyArray<RoomBoardSummaryShape> | undefined;
+  readonly paint?: NonNullable<RoomBoardSummaryShape["color"]>;
+  readonly seed?: string;
 }) {
   const dots = useId();
   const rects =
@@ -56,6 +81,7 @@ export function BoardThumbnail({
       className="block aspect-video w-full bg-board-canvas"
       aria-hidden
       data-board-thumbnail
+      data-board-thumbnail-pattern={rects.length === 0 || undefined}
     >
       <defs>
         <pattern id={dots} width="8" height="8" patternUnits="userSpaceOnUse">
@@ -63,6 +89,20 @@ export function BoardThumbnail({
         </pattern>
       </defs>
       <rect width={WIDTH} height={HEIGHT} fill={`url(#${dots})`} />
+      {rects.length === 0
+        ? patternNotes(seed).map((note) => (
+            <rect
+              key={`${note.x}:${note.y}`}
+              x={note.x}
+              y={note.y}
+              width={note.size}
+              height={note.size}
+              rx={1}
+              className={NOTE_FILL[paint]}
+              opacity={0.85}
+            />
+          ))
+        : null}
       {rects.map((rect, index) => {
         const paper = rect.kind === "note" || rect.kind === "task";
         return (

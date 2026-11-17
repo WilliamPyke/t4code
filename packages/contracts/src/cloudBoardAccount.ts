@@ -19,6 +19,15 @@ export const CLOUD_BOARD_ACCOUNT_CLAIM_MAX = 25;
 /** As many boards as one account lists; the oldest added goes first past it. */
 export const CLOUD_BOARD_ACCOUNT_MAX_BOARDS = 500;
 
+/**
+ * The longest board preview the host keeps: a few dozen of the board's cards as kind, place,
+ * size and paint, without any of their text. `@t3tools/shared/boardPreview` writes and reads it.
+ */
+export const CLOUD_BOARD_PREVIEW_MAX_CHARS = 640;
+export const CloudBoardPreview = Schema.String.check(
+  Schema.isMaxLength(CLOUD_BOARD_PREVIEW_MAX_CHARS),
+);
+
 export const CloudBoardAccountBoard = Schema.Struct({
   shareId: GuestShareId,
   threadId: ThreadId,
@@ -30,6 +39,8 @@ export const CloudBoardAccountBoard = Schema.Struct({
   addedAt: Schema.String,
   /** The board's invite, so the account can invite others from any device. */
   credential: Schema.optional(TrimmedNonEmptyString),
+  /** A small map of its cards for its tile on the home, once the board has changed. */
+  preview: Schema.optional(CloudBoardPreview),
 });
 export type CloudBoardAccountBoard = typeof CloudBoardAccountBoard.Type;
 

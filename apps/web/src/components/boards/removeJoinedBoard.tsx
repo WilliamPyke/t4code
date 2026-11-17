@@ -1,14 +1,30 @@
 import { guestEnvironmentId } from "@t3tools/client-runtime/environment";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { EllipsisIcon, LogOutIcon, Trash2Icon } from "lucide-react";
+import {
+  EllipsisIcon,
+  FolderInputIcon,
+  FolderOutputIcon,
+  LogOutIcon,
+  Trash2Icon,
+} from "lucide-react";
 
 import { isAccountBoard, leaveAccountBoard, openAccountBoard } from "~/guest/boardAccount";
 import { deleteCloudBoard, removeFromCloudBoard } from "~/guest/cloudBoards";
 import { findGuestShare, forgetGuestShare } from "~/guest/guestShares";
+import { moveBoardOutOfWorkspace, moveBoardToWorkspace, useWorkspaces } from "~/guest/workspaces";
 import { ensureLocalApi } from "~/localApi";
 
 import { Button } from "../ui/button";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import {
+  Menu,
+  MenuItem,
+  MenuPopup,
+  MenuSeparator,
+  MenuSub,
+  MenuSubPopup,
+  MenuSubTrigger,
+  MenuTrigger,
+} from "../ui/menu";
 import { toastManager } from "../ui/toast";
 
 interface JoinedBoardRef {
@@ -17,6 +33,8 @@ interface JoinedBoardRef {
   readonly cloud: boolean;
   /** This person made the cloud board, so they delete it rather than leave it. */
   readonly maker?: boolean;
+  /** The workspace it is in: its members leave the workspace, not the board. */
+  readonly workspaceId?: string | null;
 }
 
 /**
@@ -103,6 +121,23 @@ export function JoinedBoardMenu({
 }) {
   const remove = useRemoveJoinedBoard();
   const deleteBoard = useDeleteCloudBoard();
+  const workspaces = useWorkspaces() ?? [];
+  const workspaceId = board.workspaceId ?? null;
+  const inWorkspace = workspaces.find((workspace) => workspace.id === workspaceId) ?? null;
+  // Its maker moves a cloud board between workspaces; an owner of its workspace takes it out.
+  const moveTargets =
+    board.cloud && board.maker === true
+      ? workspaces.filter((workspace) => workspace.id !== workspaceId)
+      : [];
+  const canMoveOut =
+    workspaceId !== null && (board.maker === true || inWorkspace?.role === "owner");
+  const canDelete = board.cloud && board.maker === true;
+  const canLeave = !canDelete && workspaceId === null;
+  if (moveTargets.length === 0 && !canMoveOut && !canDelete && !canLeave) return null;
+  const moved = (failed: string | null, where: string) =>
+    failed === null
+      ? toastManager.add({ type: "success", title: `Moved to ${where}` })
+      : toastManager.add({ type: "error", title: "Could not move the board", description: failed });
   return (
     <Menu>
       <MenuTrigger
@@ -119,7 +154,45 @@ export function JoinedBoardMenu({
         <EllipsisIcon />
       </MenuTrigger>
       <MenuPopup align="end">
-        {board.cloud && board.maker === true ? (
+        {moveTargets.length > 0 ? (
+          <MenuSub>
+            <MenuSubTrigger>
+              <FolderInputIcon />
+              Move to workspace
+            </MenuSubTrigger>
+            <MenuSubPopup>
+              {moveTargets.map((workspace) => (
+                <MenuItem
+                  key={workspace.id}
+                  onClick={() =>
+                    void moveBoardToWorkspace(board.shareId, workspace.id).then((failed) =>
+                      moved(failed, workspace.name),
+                    )
+                  }
+                >
+                  <span className="min-w-0 truncate">{workspace.name}</span>
+                </MenuItem>
+              ))}
+            </MenuSubPopup>
+          </MenuSub>
+        ) : null}
+        {canMoveOut && workspaceId !== null ? (
+          <MenuItem
+            onClick={() =>
+              void moveBoardOutOfWorkspace(board.shareId, workspaceId).then((failed) =>
+                moved(failed, board.maker === true ? "My boards" : "its maker's boards"),
+              )
+            }
+            data-move-out-of-workspace
+          >
+            <FolderOutputIcon />
+            {`Move out of ${inWorkspace?.name ?? "workspace"}`}
+          </MenuItem>
+        ) : null}
+        {(moveTargets.length > 0 || canMoveOut) && (canDelete || canLeave) ? (
+          <MenuSeparator />
+        ) : null}
+        {canDelete ? (
           <MenuItem
             variant="destructive"
             onClick={() => void deleteBoard(board)}
@@ -128,7 +201,7 @@ export function JoinedBoardMenu({
             <Trash2Icon />
             Delete board
           </MenuItem>
-        ) : (
+        ) : canLeave ? (
           <MenuItem
             variant="destructive"
             onClick={() => void remove(board)}
@@ -137,7 +210,7 @@ export function JoinedBoardMenu({
             <LogOutIcon />
             {board.cloud ? "Leave board" : "Remove from my boards"}
           </MenuItem>
-        )}
+        ) : null}
       </MenuPopup>
     </Menu>
   );

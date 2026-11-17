@@ -1,6 +1,7 @@
 import type {
   RoomBoardAssignee,
   RoomBoardNote,
+  RoomTaskPriority,
   RoomTaskStatus,
   ThreadGuest,
 } from "@t3tools/contracts";
@@ -8,11 +9,12 @@ import { roomTaskStatus } from "@t3tools/shared/roomBoard";
 import {
   AppWindowIcon,
   ArrowDownIcon,
+  ArrowDownWideNarrowIcon,
   ArrowUpIcon,
   BotIcon,
-  CalendarIcon,
   EllipsisIcon,
   LinkIcon,
+  ListIcon,
   LocateFixedIcon,
   PlayIcon,
   PlusIcon,
@@ -20,9 +22,11 @@ import {
   SquareKanbanIcon,
   StickyNoteIcon,
   Trash2Icon,
+  XIcon,
 } from "lucide-react";
 import {
   type FormEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   useEffect,
@@ -52,24 +56,35 @@ import {
   MenuGroupLabel,
   MenuItem,
   MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
   MenuSeparator,
   MenuTrigger,
 } from "../ui/menu";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Textarea } from "../ui/textarea";
-import { Toggle, ToggleGroup } from "../ui/toggle-group";
+import { Toggle } from "../ui/toggle";
+import { Toggle as GroupToggle, ToggleGroup } from "../ui/toggle-group";
 import { BoardChip, PersonDot } from "./BoardChrome";
 import {
   BOARD_PLAN_COLUMNS,
+  BOARD_PLAN_PRIORITIES,
   BOARD_VIEW_PARAM,
   type BoardPlanAttached,
   type BoardPlanColumns,
+  type BoardPlanFilter,
+  type BoardPlanSort,
   type BoardViewMode,
+  NO_PLAN_FILTER,
   boardPlanAttachedLine,
-  boardPlanDue,
+  boardPlanIndexAmong,
+  boardPlanShows,
+  boardPlanSorted,
   boardPlanToday,
   boardViewModeOf,
+  isPlanFiltered,
 } from "./boardPlan.logic";
+import { TaskAssigneeDot, TaskDueChip, TaskPriorityIcon, TaskPriorityMark } from "./BoardTaskMarks";
 import { BoardProgressLine } from "./RoomBoardArtifact";
 import { WhyNot } from "./RoomBoardWhy";
 import { type BoardPeople, boardCursorColor, boardPersonName } from "./roomBoard.logic";
@@ -90,14 +105,24 @@ export function useBoardViewMode(
     if (onView !== undefined) return onView(next);
     setOwn(next);
     const url = new URL(window.location.href);
-    if (next === "plan") url.searchParams.set(BOARD_VIEW_PARAM, next);
-    else url.searchParams.delete(BOARD_VIEW_PARAM);
+    if (next === "board") url.searchParams.delete(BOARD_VIEW_PARAM);
+    else url.searchParams.set(BOARD_VIEW_PARAM, next);
     window.history.replaceState(window.history.state, "", url);
   });
   return [view ?? own, pick];
 }
 
-/** Board | Plan, in the board's header. */
+const VIEWS: ReadonlyArray<{
+  readonly view: BoardViewMode;
+  readonly title: string;
+  readonly icon: ReactNode;
+}> = [
+  { view: "board", title: "Board", icon: <ShapesIcon /> },
+  { view: "plan", title: "Plan", icon: <SquareKanbanIcon /> },
+  { view: "list", title: "List", icon: <ListIcon /> },
+];
+
+/** Board | Plan | List, in the board's header; only icons where the board is narrow. */
 export function BoardViewSwitch({
   view,
   onView,
@@ -111,17 +136,15 @@ export function BoardViewSwitch({
       value={[view]}
       onValueChange={(next) => {
         const picked = next[0];
-        if (picked === "board" || picked === "plan") onView(picked);
+        if (picked === "board" || picked === "plan" || picked === "list") onView(picked);
       }}
     >
-      <Toggle value="board">
-        <ShapesIcon />
-        Board
-      </Toggle>
-      <Toggle value="plan">
-        <SquareKanbanIcon />
-        Plan
-      </Toggle>
+      {VIEWS.map((one) => (
+        <GroupToggle key={one.view} value={one.view} aria-label={one.title}>
+          {one.icon}
+          <span className="sr-only @3xl/board:not-sr-only">{one.title}</span>
+        </GroupToggle>
+      ))}
     </ToggleGroup>
   );
 }
@@ -143,16 +166,39 @@ interface PlanTaskActions {
 const SLOP = 5;
 const TOUCH_HOLD_MS = 300;
 const EDGE_SCROLL = 48;
+const MANUAL_SORTS: Readonly<Record<RoomTaskStatus, BoardPlanSort>> = {
+  todo: "manual",
+  doing: "manual",
+  done: "manual",
+};
+const NO_PICKS: ReadonlySet<string> = new Set();
+const SORTS: ReadonlyArray<{ readonly sort: BoardPlanSort; readonly title: string }> = [
+  { sort: "manual", title: "As ordered" },
+  { sort: "priority", title: "Priority" },
+  { sort: "due", title: "Due date" },
+];
+
+const isPicking = (event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) =>
+  event.shiftKey || event.ctrlKey || event.metaKey;
+
+/** Whether a key went to something that takes typing, or a dialog or menu that has its own keys. */
+const typingIn = (target: EventTarget | null) =>
+  target instanceof Element &&
+  target.closest(
+    'input, textarea, select, [contenteditable="true"], [role="dialog"], [role="menu"], [role="listbox"], [role="textbox"]',
+  ) !== null;
 
 /**
- * The board's tasks as columns: To do, In progress and Done. Each card is the task on the board,
- * so a move here is a change to it there, seen by everyone as it happens.
+ * The board's tasks as columns (To do, In progress and Done) or as one list. Each card is the task
+ * on the board, so a move here is a change to it there, seen by everyone as it happens.
  */
 export function BoardPlan({
+  layout,
   columns,
   attachments,
   people,
   guests,
+  viewer,
   ownerAssignable,
   canEdit,
   cannotAdd,
@@ -162,12 +208,16 @@ export function BoardPlan({
   onAdd,
   onChange,
   onMove,
+  onMoveAll,
   actionsOf,
 }: {
+  readonly layout: "columns" | "list";
   readonly columns: BoardPlanColumns;
   readonly attachments: ReadonlyMap<string, BoardPlanAttached>;
   readonly people: BoardPeople;
   readonly guests: ReadonlyArray<ThreadGuest>;
+  /** Who is looking: a guest, or null for the owner. */
+  readonly viewer: string | null;
   readonly ownerAssignable: boolean;
   readonly canEdit: boolean;
   /** Why no task can be added now, or null. */
@@ -180,10 +230,16 @@ export function BoardPlan({
   readonly onAdd: (status: RoomTaskStatus, text: string) => void;
   readonly onChange: (task: RoomBoardNote, update: (task: RoomBoardNote) => RoomBoardNote) => void;
   readonly onMove: (taskId: string, to: RoomTaskStatus, index: number) => void;
+  /** Moves several tasks to the bottom of a column, together. */
+  readonly onMoveAll: (taskIds: ReadonlySet<string>, to: RoomTaskStatus) => void;
   readonly actionsOf: (task: RoomBoardNote) => PlanTaskActions;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [adding, setAdding] = useState<RoomTaskStatus | null>(null);
+  const [filter, setFilter] = useState<BoardPlanFilter>(NO_PLAN_FILTER);
+  const [sorts, setSorts] = useState(MANUAL_SORTS);
+  const [listSort, setListSort] = useState<BoardPlanSort>("manual");
+  const [pickedIds, setPicked] = useState<ReadonlySet<string>>(NO_PICKS);
   const [lifted, setLifted] = useState<{ readonly id: string; readonly width: number } | null>(
     null,
   );
@@ -199,10 +255,46 @@ export function BoardPlan({
   // The day the Plan opened on: a Plan left open past midnight reads due days a day behind.
   const [today] = useState(() => boardPlanToday(new Date()));
   const all = BOARD_PLAN_COLUMNS.flatMap(({ status }) => columns[status]);
+  // Tasks someone else took off leave the picked ones.
+  const picked: ReadonlySet<string> =
+    pickedIds.size === 0
+      ? NO_PICKS
+      : new Set(all.flatMap((task) => (pickedIds.has(task.id) ? [task.id] : [])));
+  const shownColumns: BoardPlanColumns = {
+    todo: boardPlanSorted(
+      columns.todo.filter((task) => boardPlanShows(task, filter)),
+      sorts.todo,
+    ),
+    doing: boardPlanSorted(
+      columns.doing.filter((task) => boardPlanShows(task, filter)),
+      sorts.doing,
+    ),
+    done: boardPlanSorted(
+      columns.done.filter((task) => boardPlanShows(task, filter)),
+      sorts.done,
+    ),
+  };
   const editingTask = editing === null ? undefined : all.find((task) => task.id === editing);
   const liftedTask = lifted === null ? undefined : all.find((task) => task.id === lifted.id);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a drag's window listeners outlive the Plan unless it ends them as it closes
   useEffect(() => () => endDrag.current?.(), []);
+  const quickAdd = useStableCallback((event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.key === "Escape" && pickedIds.size > 0 && !typingIn(event.target)) {
+      setPicked(NO_PICKS);
+      return;
+    }
+    const key = event.key.toLowerCase();
+    if ((key !== "c" && key !== "n") || typingIn(event.target)) return;
+    if (!canEdit || cannotAdd !== null || editing !== null) return;
+    event.preventDefault();
+    setAdding("todo");
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- C or N starts a task wherever focus rests on the page, which only the window hears
+  useEffect(() => {
+    window.addEventListener("keydown", quickAdd);
+    return () => window.removeEventListener("keydown", quickAdd);
+  }, [quickAdd]);
 
   const placeGhost = (element: HTMLDivElement | null) => {
     if (element === null) return;
@@ -211,7 +303,7 @@ export function BoardPlan({
   };
 
   const press = (event: ReactPointerEvent<HTMLElement>, task: RoomBoardNote) => {
-    if (!canEdit || event.button !== 0 || endDrag.current !== null) return;
+    if (!canEdit || event.button !== 0 || endDrag.current !== null || isPicking(event)) return;
     if (event.target instanceof Element && event.target.closest("[data-plan-no-drag]") !== null) {
       return;
     }
@@ -296,7 +388,19 @@ export function BoardPlan({
         setTimeout(() => {
           clickBlocked.current = false;
         }, 0);
-        if (target !== null) onMove(task.id, target.status, target.index);
+        if (target !== null) {
+          // A sorted column keeps its own order: a task dropped there goes to the bottom.
+          const index =
+            sorts[target.status] === "manual"
+              ? boardPlanIndexAmong(
+                  columns[target.status],
+                  shownColumns[target.status],
+                  task.id,
+                  target.index,
+                )
+              : columns[target.status].filter((other) => other.id !== task.id).length;
+          onMove(task.id, target.status, index);
+        }
       }
       end();
     };
@@ -325,20 +429,62 @@ export function BoardPlan({
     endDrag.current = end;
   };
 
-  const open = (task: RoomBoardNote) => {
-    if (!clickBlocked.current) setEditing(task.id);
+  // Shift, Ctrl or Cmd and a click picks a task, or takes it out; a plain click opens it.
+  const open = (event: ReactMouseEvent, task: RoomBoardNote) => {
+    if (clickBlocked.current) return;
+    if (isPicking(event) && canEdit) {
+      setPicked((current) => {
+        const next = new Set(current);
+        if (!next.delete(task.id)) next.add(task.id);
+        return next;
+      });
+      return;
+    }
+    setEditing(task.id);
   };
+  const moveTo = (task: RoomBoardNote, to: RoomTaskStatus) => {
+    if (picked.has(task.id) && picked.size > 1) return onMoveAll(picked, to);
+    onMove(task.id, to, columns[to].filter((other) => other.id !== task.id).length);
+  };
+  const cardOf = (task: RoomBoardNote) => ({
+    task,
+    attached: attachments.get(task.id),
+    box: boxOf(task),
+    worker: workerOf(task),
+    people,
+    guests,
+    today,
+  });
 
   const total = all.length;
+  const toolbar = (
+    <PlanToolbar
+      history={history}
+      total={total}
+      shown={BOARD_PLAN_COLUMNS.reduce((sum, { status }) => sum + shownColumns[status].length, 0)}
+      filter={filter}
+      onFilter={setFilter}
+      people={people}
+      guests={guests}
+      viewer={viewer}
+      ownerAssignable={ownerAssignable}
+      picked={picked}
+      onMoveAll={(to) => {
+        onMoveAll(picked, to);
+        setPicked(NO_PICKS);
+      }}
+      onClearPicked={() => setPicked(NO_PICKS)}
+    />
+  );
   if (total === 0 && adding === null) {
     return (
-      <PlanFrame history={history} total={0}>
+      <PlanFrame toolbar={toolbar}>
         <Empty>
           <EmptyHeader>
             <EmptyTitle>Plan the work</EmptyTitle>
             <EmptyDescription>
-              The Plan shows this board's tasks as columns to move through, and every task you add
-              here is a card on the board too.
+              The Plan shows this board's tasks to move through, and every task you add here is a
+              card on the board too. Press C to add one.
             </EmptyDescription>
           </EmptyHeader>
           <Button disabled={cannotAdd !== null} onClick={() => setAdding("todo")}>
@@ -351,15 +497,95 @@ export function BoardPlan({
     );
   }
 
+  const dialog =
+    editingTask === undefined ? null : (
+      <PlanTaskDialog
+        key={editingTask.id}
+        task={editingTask}
+        attached={attachments.get(editingTask.id)}
+        people={people}
+        guests={guests}
+        ownerAssignable={ownerAssignable}
+        canEdit={canEdit}
+        actions={actionsOf(editingTask)}
+        onChange={onChange}
+        onStatus={(status) =>
+          onMove(
+            editingTask.id,
+            status,
+            columns[status].filter((task) => task.id !== editingTask.id).length,
+          )
+        }
+        onClose={() => setEditing(null)}
+      />
+    );
+
+  if (layout === "list") {
+    const rows = boardPlanSorted(
+      BOARD_PLAN_COLUMNS.flatMap(({ status }) =>
+        columns[status].filter((task) => boardPlanShows(task, filter)),
+      ),
+      listSort,
+    );
+    return (
+      <PlanFrame toolbar={toolbar}>
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 pb-3 scrollbar-gutter-both">
+          <div className="mx-auto flex w-full max-w-4xl flex-col rounded-board border border-board-hairline bg-card">
+            <div className="flex items-center gap-2 border-b border-board-hairline px-3 py-1.5 text-2xs font-medium text-muted-foreground">
+              <span className="min-w-0 flex-1">Task</span>
+              <span className="hidden w-28 sm:block">For</span>
+              <span className="w-20">Priority</span>
+              <span className="hidden w-28 sm:block">Due</span>
+              <SortMenu sort={listSort} onSort={setListSort} label="Sort the list" />
+            </div>
+            <ol aria-label="Tasks">
+              {rows.map((task) => (
+                <PlanListRow
+                  key={task.id}
+                  {...cardOf(task)}
+                  picked={picked.has(task.id)}
+                  canEdit={canEdit}
+                  actions={actionsOf(task)}
+                  pickedCount={picked.has(task.id) ? picked.size : 1}
+                  onMoveTo={(to) => moveTo(task, to)}
+                  onOpen={(event) => open(event, task)}
+                />
+              ))}
+            </ol>
+            {rows.length === 0 ? (
+              <p className="px-3 py-6 text-center text-sm text-muted-foreground">
+                No task matches. Clear the filters to see every task.
+              </p>
+            ) : null}
+            <div className="border-t border-board-hairline">
+              <PlanAdd
+                status="todo"
+                open={adding !== null}
+                cannotAdd={cannotAdd}
+                onOpen={() => setAdding("todo")}
+                onClose={() => setAdding(null)}
+                onAdd={(text) => onAdd("todo", text)}
+              />
+            </div>
+          </div>
+        </div>
+        {dialog}
+      </PlanFrame>
+    );
+  }
+
   return (
-    <PlanFrame history={history} total={total}>
+    <PlanFrame toolbar={toolbar}>
       <div
         ref={scrollerRef}
         className="flex min-h-0 flex-1 snap-x snap-mandatory gap-3 overflow-x-auto px-3 pb-3 sm:snap-none"
       >
         {BOARD_PLAN_COLUMNS.map(({ status, title }) => {
-          const tasks = columns[status];
+          const tasks = shownColumns[status];
+          const column = columns[status];
+          const manual = sorts[status] === "manual";
           const dropHere = drop?.status === status ? drop.index : null;
+          const lineAt = manual ? dropHere : null;
           let shownAt = 0;
           return (
             <section
@@ -371,39 +597,50 @@ export function BoardPlan({
                 dropHere !== null && "border-primary/50",
               )}
             >
-              <header className="flex items-center gap-2 px-3 pt-3 pb-2">
+              <header className="flex items-center gap-2 px-3 pt-2 pb-1">
                 <PlanStatusMark status={status} />
                 <h2 className="text-sm font-semibold">{title}</h2>
-                <span className="text-xs text-muted-foreground tabular-nums">{tasks.length}</span>
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {tasks.length === column.length
+                    ? column.length
+                    : `${tasks.length} of ${column.length}`}
+                </span>
+                <span className="ms-auto">
+                  <SortMenu
+                    sort={sorts[status]}
+                    onSort={(sort) => setSorts((current) => ({ ...current, [status]: sort }))}
+                    label={`Sort ${title}`}
+                  />
+                </span>
               </header>
               <ol data-plan-list className="flex min-h-0 flex-col gap-2 overflow-y-auto px-2 pb-1">
                 {tasks.map((task) => {
                   const placeholder = lifted?.id === task.id;
-                  const before = !placeholder && dropHere === shownAt;
+                  const before = !placeholder && lineAt === shownAt;
                   if (!placeholder) shownAt += 1;
+                  const index = column.findIndex((other) => other.id === task.id);
                   return (
                     <li key={task.id} className="flex flex-col gap-2">
                       {before ? <DropLine /> : null}
                       <PlanCard
-                        task={task}
-                        attached={attachments.get(task.id)}
-                        box={boxOf(task)}
-                        worker={workerOf(task)}
-                        people={people}
-                        guests={guests}
-                        today={today}
+                        {...cardOf(task)}
                         canEdit={canEdit}
                         placeholder={placeholder}
-                        columns={columns}
+                        picked={picked.has(task.id)}
+                        pickedCount={picked.has(task.id) ? picked.size : 1}
+                        status={status}
+                        canMoveUp={manual && index > 0}
+                        canMoveDown={manual && index >= 0 && index < column.length - 1}
                         actions={actionsOf(task)}
-                        onMove={onMove}
-                        onOpen={() => open(task)}
+                        onMoveTo={(to) => moveTo(task, to)}
+                        onMoveBy={(by) => onMove(task.id, status, index + by)}
+                        onOpen={(event) => open(event, task)}
                         onPress={(event) => press(event, task)}
                       />
                     </li>
                   );
                 })}
-                {dropHere !== null && dropHere >= shownAt ? (
+                {lineAt !== null && lineAt >= shownAt ? (
                   <li>
                     <DropLine />
                   </li>
@@ -433,63 +670,222 @@ export function BoardPlan({
               className="pointer-events-none fixed top-0 left-0 z-[140]"
               style={{ width: lifted.width }}
             >
-              <PlanCardBody
-                task={liftedTask}
-                attached={attachments.get(liftedTask.id)}
-                box={boxOf(liftedTask)}
-                worker={workerOf(liftedTask)}
-                people={people}
-                guests={guests}
-                today={today}
-                lifted
-              />
+              <PlanCardBody {...cardOf(liftedTask)} lifted />
             </div>,
             document.body,
           )}
-      {editingTask === undefined ? null : (
-        <PlanTaskDialog
-          key={editingTask.id}
-          task={editingTask}
-          attached={attachments.get(editingTask.id)}
-          people={people}
-          guests={guests}
-          ownerAssignable={ownerAssignable}
-          canEdit={canEdit}
-          actions={actionsOf(editingTask)}
-          onChange={onChange}
-          onStatus={(status) =>
-            onMove(
-              editingTask.id,
-              status,
-              columns[status].filter((task) => task.id !== editingTask.id).length,
-            )
-          }
-          onClose={() => setEditing(null)}
-        />
-      )}
+      {dialog}
     </PlanFrame>
   );
 }
 
 function PlanFrame({
-  history,
-  total,
+  toolbar,
   children,
 }: {
-  readonly history: ReactNode;
-  readonly total: number;
+  readonly toolbar: ReactNode;
   readonly children: ReactNode;
 }) {
   return (
     <div className="relative z-10 flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-2 px-4 pt-1 pb-2">
-        <p className="text-xs text-muted-foreground">
-          {total === 1 ? "1 task" : `${total} tasks`} · the same tasks as on the board
-        </p>
-        <div className="ms-auto flex items-center gap-0.5">{history}</div>
-      </div>
+      {toolbar}
       {children}
     </div>
+  );
+}
+
+const EVERYONE = "everyone";
+const NOBODY = "nobody";
+const OWNER = "owner";
+
+/** Search, whose tasks, and done ones; or, with tasks picked, what to do with them. */
+function PlanToolbar({
+  history,
+  total,
+  shown,
+  filter,
+  onFilter,
+  people,
+  guests,
+  viewer,
+  ownerAssignable,
+  picked,
+  onMoveAll,
+  onClearPicked,
+}: {
+  readonly history: ReactNode;
+  readonly total: number;
+  readonly shown: number;
+  readonly filter: BoardPlanFilter;
+  readonly onFilter: (filter: BoardPlanFilter) => void;
+  readonly people: BoardPeople;
+  readonly guests: ReadonlyArray<ThreadGuest>;
+  readonly viewer: string | null;
+  readonly ownerAssignable: boolean;
+  readonly picked: ReadonlySet<string>;
+  readonly onMoveAll: (to: RoomTaskStatus) => void;
+  readonly onClearPicked: () => void;
+}) {
+  const person = filter.person;
+  const personValue =
+    person === null ? EVERYONE : person === "nobody" ? NOBODY : (person.guestId ?? OWNER);
+  const mine = person !== null && person !== "nobody" && person.guestId === viewer;
+  const choices = [
+    ...(ownerAssignable ? [OWNER] : []),
+    ...guests.map((guest) => guest.id as string),
+  ];
+  const nameOf = (value: string) =>
+    value === EVERYONE
+      ? "Everyone"
+      : value === NOBODY
+        ? "No one"
+        : boardPersonName(people, value === OWNER ? undefined : value);
+  return (
+    <div className="flex flex-wrap items-center gap-2 px-3 pt-1 pb-2">
+      {picked.size > 0 ? (
+        <div role="status" className="flex items-center gap-2">
+          <span className="text-xs font-medium">
+            {picked.size === 1 ? "1 task picked" : `${picked.size} tasks picked`}
+          </span>
+          <Menu>
+            <MenuTrigger render={<Button size="xs" variant="outline" />}>Move to</MenuTrigger>
+            <MenuPopup align="start">
+              {BOARD_PLAN_COLUMNS.map((column) => (
+                <MenuItem key={column.status} onClick={() => onMoveAll(column.status)}>
+                  <PlanStatusMark status={column.status} />
+                  {column.title}
+                </MenuItem>
+              ))}
+            </MenuPopup>
+          </Menu>
+          <Button size="xs" variant="ghost" onClick={onClearPicked}>
+            Clear
+          </Button>
+        </div>
+      ) : (
+        <>
+          <div className="w-full sm:w-56">
+            <Input
+              size="sm"
+              type="search"
+              aria-label="Search tasks"
+              placeholder="Search tasks"
+              value={filter.text}
+              onChange={(event) => onFilter({ ...filter, text: event.target.value })}
+              onKeyDown={(event) => {
+                if (event.key === "Escape" && filter.text !== "") {
+                  event.preventDefault();
+                  onFilter({ ...filter, text: "" });
+                }
+              }}
+            />
+          </div>
+          <div className="w-36">
+            <Select
+              value={personValue}
+              onValueChange={(next) => {
+                if (typeof next !== "string") return;
+                onFilter({
+                  ...filter,
+                  person:
+                    next === EVERYONE
+                      ? null
+                      : next === NOBODY
+                        ? "nobody"
+                        : { guestId: next === OWNER ? null : next },
+                });
+              }}
+            >
+              <SelectTrigger size="sm" aria-label="Whose tasks">
+                <SelectValue>{nameOf(personValue)}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup>
+                <SelectItem value={EVERYONE}>Everyone</SelectItem>
+                <SelectItem value={NOBODY}>No one</SelectItem>
+                {choices.map((choice) => (
+                  <SelectItem key={choice} value={choice}>
+                    {nameOf(choice)}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          </div>
+          <Toggle
+            size="sm"
+            variant="outline"
+            pressed={mine}
+            onPressedChange={(pressed) =>
+              onFilter({ ...filter, person: pressed ? { guestId: viewer } : null })
+            }
+          >
+            Only mine
+          </Toggle>
+          <Toggle
+            size="sm"
+            variant="outline"
+            pressed={filter.hideDone}
+            onPressedChange={(hideDone) => onFilter({ ...filter, hideDone })}
+          >
+            Hide done
+          </Toggle>
+          {isPlanFiltered(filter) ? (
+            <Button size="xs" variant="ghost-muted" onClick={() => onFilter(NO_PLAN_FILTER)}>
+              <XIcon />
+              {shown} of {total}
+            </Button>
+          ) : (
+            <p className="hidden text-xs text-muted-foreground sm:block">
+              {total === 1 ? "1 task" : `${total} tasks`}
+            </p>
+          )}
+        </>
+      )}
+      <div className="ms-auto flex items-center gap-0.5">{history}</div>
+    </div>
+  );
+}
+
+function SortMenu({
+  sort,
+  onSort,
+  label,
+}: {
+  readonly sort: BoardPlanSort;
+  readonly onSort: (sort: BoardPlanSort) => void;
+  readonly label: string;
+}) {
+  return (
+    <Menu>
+      <MenuTrigger
+        render={
+          <Button
+            size="icon-xs"
+            variant={sort === "manual" ? "ghost-muted" : "ghost"}
+            aria-label={label}
+            title={label}
+          />
+        }
+      >
+        <ArrowDownWideNarrowIcon />
+      </MenuTrigger>
+      <MenuPopup align="end">
+        <MenuGroup>
+          <MenuGroupLabel>Sort by</MenuGroupLabel>
+          <MenuRadioGroup
+            value={sort}
+            onValueChange={(next) => {
+              if (next === "manual" || next === "priority" || next === "due") onSort(next);
+            }}
+          >
+            {SORTS.map((one) => (
+              <MenuRadioItem key={one.sort} value={one.sort}>
+                {one.title}
+              </MenuRadioItem>
+            ))}
+          </MenuRadioGroup>
+        </MenuGroup>
+      </MenuPopup>
+    </Menu>
   );
 }
 
@@ -530,7 +926,13 @@ function PlanAdd({
     return (
       <div className="flex px-2 pt-1 pb-2">
         <WhyNot reason={cannotAdd}>
-          <Button size="sm" variant="ghost-muted" disabled={cannotAdd !== null} onClick={onOpen}>
+          <Button
+            size="sm"
+            variant="ghost-muted"
+            disabled={cannotAdd !== null}
+            onClick={onOpen}
+            title={status === "todo" ? "Add a task (C)" : undefined}
+          >
             <PlusIcon />
             Add a task
           </Button>
@@ -572,22 +974,7 @@ function PlanAdd({
   );
 }
 
-function PlanCard({
-  task,
-  attached,
-  box,
-  worker,
-  people,
-  guests,
-  today,
-  canEdit,
-  placeholder,
-  columns,
-  actions,
-  onMove,
-  onOpen,
-  onPress,
-}: {
+interface PlanCardShows {
   readonly task: RoomBoardNote;
   readonly attached: BoardPlanAttached | undefined;
   readonly box: BoardPlanBox | undefined;
@@ -595,39 +982,119 @@ function PlanCard({
   readonly people: BoardPeople;
   readonly guests: ReadonlyArray<ThreadGuest>;
   readonly today: string;
+}
+
+/** The task's menu: where to move it, or the picked tasks with it, and what else it does. */
+function PlanCardMenu({
+  label,
+  status,
+  canEdit,
+  pickedCount,
+  canMoveUp,
+  canMoveDown,
+  actions,
+  onMoveTo,
+  onMoveBy,
+}: {
+  readonly label: string;
+  readonly status: RoomTaskStatus;
+  readonly canEdit: boolean;
+  readonly pickedCount: number;
+  readonly canMoveUp: boolean;
+  readonly canMoveDown: boolean;
+  readonly actions: PlanTaskActions;
+  readonly onMoveTo: (to: RoomTaskStatus) => void;
+  readonly onMoveBy: ((by: number) => void) | undefined;
+}) {
+  return (
+    <Menu>
+      <MenuTrigger
+        render={<Button size="icon-xs" variant="ghost" aria-label={`Actions for ${label}`} />}
+      >
+        <EllipsisIcon />
+      </MenuTrigger>
+      <MenuPopup align="end">
+        {canEdit ? (
+          <>
+            <MenuGroup>
+              <MenuGroupLabel>
+                {pickedCount > 1 ? `Move ${pickedCount} picked tasks to` : "Move to"}
+              </MenuGroupLabel>
+              {BOARD_PLAN_COLUMNS.map((target) => (
+                <MenuItem
+                  key={target.status}
+                  disabled={pickedCount <= 1 && target.status === status}
+                  onClick={() => onMoveTo(target.status)}
+                >
+                  <PlanStatusMark status={target.status} />
+                  {target.title}
+                </MenuItem>
+              ))}
+            </MenuGroup>
+            {onMoveBy === undefined ? null : (
+              <>
+                <MenuItem disabled={!canMoveUp} onClick={() => onMoveBy(-1)}>
+                  <ArrowUpIcon />
+                  Move up
+                </MenuItem>
+                <MenuItem disabled={!canMoveDown} onClick={() => onMoveBy(1)}>
+                  <ArrowDownIcon />
+                  Move down
+                </MenuItem>
+              </>
+            )}
+            <MenuSeparator />
+          </>
+        ) : null}
+        <PlanTaskMenuActions actions={actions} />
+      </MenuPopup>
+    </Menu>
+  );
+}
+
+function PlanCard({
+  canEdit,
+  placeholder,
+  picked,
+  pickedCount,
+  status,
+  canMoveUp,
+  canMoveDown,
+  actions,
+  onMoveTo,
+  onMoveBy,
+  onOpen,
+  onPress,
+  ...shows
+}: PlanCardShows & {
   readonly canEdit: boolean;
   readonly placeholder: boolean;
-  readonly columns: BoardPlanColumns;
+  readonly picked: boolean;
+  readonly pickedCount: number;
+  readonly status: RoomTaskStatus;
+  readonly canMoveUp: boolean;
+  readonly canMoveDown: boolean;
   readonly actions: PlanTaskActions;
-  readonly onMove: (taskId: string, to: RoomTaskStatus, index: number) => void;
-  readonly onOpen: () => void;
+  readonly onMoveTo: (to: RoomTaskStatus) => void;
+  readonly onMoveBy: (by: number) => void;
+  readonly onOpen: (event: ReactMouseEvent) => void;
   readonly onPress: (event: ReactPointerEvent<HTMLElement>) => void;
 }) {
-  const status = roomTaskStatus(task);
-  const column = columns[status];
-  const index = column.findIndex((other) => other.id === task.id);
-  const label = task.text.trim() || "Untitled task";
+  const label = shows.task.text.trim() || "Untitled task";
   return (
     <div
-      data-plan-card={task.id}
+      data-plan-card={shows.task.id}
       className={cn(
         "group/plan relative select-none [-webkit-touch-callout:none]",
         placeholder && "opacity-40",
       )}
       onPointerDown={onPress}
     >
-      <PlanCardBody
-        task={task}
-        attached={attached}
-        box={box}
-        worker={worker}
-        people={people}
-        guests={guests}
-        today={today}
-      />
+      <PlanCardBody {...shows} picked={picked} />
       <button
         type="button"
         aria-label={`Open task: ${label}`}
+        aria-pressed={picked ? true : undefined}
         className="absolute inset-0 cursor-pointer rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
         onClick={onOpen}
       />
@@ -635,53 +1102,101 @@ function PlanCard({
         data-plan-no-drag
         className="absolute top-1.5 right-1.5 opacity-100 transition-opacity [@media(hover:hover)]:opacity-0 group-hover/plan:opacity-100 group-focus-within/plan:opacity-100 has-[[data-popup-open]]:opacity-100"
       >
-        <Menu>
-          <MenuTrigger
-            render={<Button size="icon-xs" variant="ghost" aria-label={`Actions for ${label}`} />}
-          >
-            <EllipsisIcon />
-          </MenuTrigger>
-          <MenuPopup align="end">
-            {canEdit ? (
-              <>
-                <MenuGroup>
-                  <MenuGroupLabel>Move to</MenuGroupLabel>
-                  {BOARD_PLAN_COLUMNS.map((target) => (
-                    <MenuItem
-                      key={target.status}
-                      disabled={target.status === status}
-                      onClick={() =>
-                        onMove(
-                          task.id,
-                          target.status,
-                          columns[target.status].filter((other) => other.id !== task.id).length,
-                        )
-                      }
-                    >
-                      <PlanStatusMark status={target.status} />
-                      {target.title}
-                    </MenuItem>
-                  ))}
-                </MenuGroup>
-                <MenuItem disabled={index <= 0} onClick={() => onMove(task.id, status, index - 1)}>
-                  <ArrowUpIcon />
-                  Move up
-                </MenuItem>
-                <MenuItem
-                  disabled={index < 0 || index >= column.length - 1}
-                  onClick={() => onMove(task.id, status, index + 1)}
-                >
-                  <ArrowDownIcon />
-                  Move down
-                </MenuItem>
-                <MenuSeparator />
-              </>
-            ) : null}
-            <PlanTaskMenuActions actions={actions} />
-          </MenuPopup>
-        </Menu>
+        <PlanCardMenu
+          label={label}
+          status={status}
+          canEdit={canEdit}
+          pickedCount={pickedCount}
+          canMoveUp={canMoveUp}
+          canMoveDown={canMoveDown}
+          actions={actions}
+          onMoveTo={onMoveTo}
+          onMoveBy={onMoveBy}
+        />
       </div>
     </div>
+  );
+}
+
+/** One task as a row of the List: status, title, who it is for, priority and due day. */
+function PlanListRow({
+  canEdit,
+  picked,
+  pickedCount,
+  actions,
+  onMoveTo,
+  onOpen,
+  ...shows
+}: PlanCardShows & {
+  readonly canEdit: boolean;
+  readonly picked: boolean;
+  readonly pickedCount: number;
+  readonly actions: PlanTaskActions;
+  readonly onMoveTo: (to: RoomTaskStatus) => void;
+  readonly onOpen: (event: ReactMouseEvent) => void;
+}) {
+  const { task, people, guests, today } = shows;
+  const status = roomTaskStatus(task);
+  const done = task.done === true;
+  const label = task.text.trim() || "Untitled task";
+  const assignee = task.assignee;
+  return (
+    <li
+      className={cn(
+        "group/plan relative flex min-h-10 items-center gap-2 border-b border-board-hairline px-3 py-1.5 last:border-b-0 hover:bg-accent/40",
+        picked && "bg-primary/8",
+      )}
+    >
+      <PlanStatusMark status={status} />
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate text-sm",
+          done && "text-muted-foreground line-through",
+          task.text.trim() === "" && "text-muted-foreground italic",
+        )}
+      >
+        {label}
+      </span>
+      <span className="hidden w-28 min-w-0 items-center gap-1.5 text-xs text-muted-foreground sm:flex">
+        {assignee === undefined ? null : (
+          <>
+            <PersonDot
+              color={boardCursorColor(guests, assignee.guestId)}
+              className="size-4 text-4xs font-semibold"
+            >
+              {boardPersonName(people, assignee.guestId).charAt(0).toUpperCase()}
+            </PersonDot>
+            <span className="truncate">{boardPersonName(people, assignee.guestId)}</span>
+          </>
+        )}
+      </span>
+      <span className="flex w-20">
+        {task.priority === undefined ? null : <TaskPriorityMark priority={task.priority} />}
+      </span>
+      <span className="hidden w-28 sm:flex">
+        {task.due === undefined ? null : <TaskDueChip due={task.due} today={today} done={done} />}
+      </span>
+      <button
+        type="button"
+        aria-label={`Open task: ${label}`}
+        aria-pressed={picked ? true : undefined}
+        className="absolute inset-0 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+        onClick={onOpen}
+      />
+      <span className="relative">
+        <PlanCardMenu
+          label={label}
+          status={status}
+          canEdit={canEdit}
+          pickedCount={pickedCount}
+          canMoveUp={false}
+          canMoveDown={false}
+          actions={actions}
+          onMoveTo={onMoveTo}
+          onMoveBy={undefined}
+        />
+      </span>
+    </li>
   );
 }
 
@@ -727,24 +1242,16 @@ function PlanCardBody({
   guests,
   today,
   lifted = false,
-}: {
-  readonly task: RoomBoardNote;
-  readonly attached: BoardPlanAttached | undefined;
-  readonly box: BoardPlanBox | undefined;
-  readonly worker: string | undefined;
-  readonly people: BoardPeople;
-  readonly guests: ReadonlyArray<ThreadGuest>;
-  readonly today: string;
-  readonly lifted?: boolean;
-}) {
+  picked = false,
+}: PlanCardShows & { readonly lifted?: boolean; readonly picked?: boolean }) {
   const done = task.done === true;
-  const due = task.due === undefined ? null : boardPlanDue(task.due, today);
   const line = boardPlanAttachedLine(attached);
   return (
     <div
       className={cn(
         "flex flex-col gap-2 rounded-lg border border-board-hairline bg-card p-3 text-card-foreground shadow-xs",
         lifted && "shadow-board ring-2 ring-primary/40",
+        picked && "ring-2 ring-primary",
       )}
     >
       <p
@@ -768,23 +1275,8 @@ function PlanCardBody({
         </p>
       )}
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-muted-foreground">
-        {task.assignee === undefined ? null : (
-          <span className="flex min-w-0 items-center gap-1">
-            <PersonDot
-              color={boardCursorColor(guests, task.assignee.guestId)}
-              className="size-4 text-4xs font-semibold"
-            >
-              {boardPersonName(people, task.assignee.guestId).charAt(0).toUpperCase()}
-            </PersonDot>
-            <span className="truncate">{boardPersonName(people, task.assignee.guestId)}</span>
-          </span>
-        )}
-        {due === null ? null : (
-          <BoardChip tone={due.overdue && !done ? "error" : "neutral"}>
-            <CalendarIcon className="size-3" />
-            {due.label}
-          </BoardChip>
-        )}
+        {task.priority === undefined ? null : <TaskPriorityMark priority={task.priority} />}
+        {task.due === undefined ? null : <TaskDueChip due={task.due} today={today} done={done} />}
         {line === "" ? null : (
           <span className="flex items-center gap-1">
             {attached !== undefined && attached.notes > 0 ? (
@@ -795,6 +1287,15 @@ function PlanCardBody({
               <AppWindowIcon aria-hidden className="size-3" />
             )}
             {line}
+          </span>
+        )}
+        {task.assignee === undefined ? null : (
+          <span className="ms-auto">
+            <TaskAssigneeDot
+              assignee={task.assignee}
+              name={boardPersonName(people, task.assignee.guestId)}
+              color={boardCursorColor(guests, task.assignee.guestId)}
+            />
           </span>
         )}
       </div>
@@ -822,7 +1323,7 @@ function PlanBoxLine({ box, running }: { readonly box: BoardPlanBox; readonly ru
 }
 
 const NO_ONE = "none";
-const OWNER = "owner";
+const NO_PRIORITY = "none";
 
 function PlanTaskDialog({
   task,
@@ -876,9 +1377,17 @@ function PlanTaskDialog({
   };
   const setDue = (due: string) =>
     onChange(task, ({ due: _due, ...rest }) => (due === "" ? rest : { ...rest, due }));
+  const setPriority = (value: string) => {
+    const picked = BOARD_PLAN_PRIORITIES.find((one) => one.priority === value)?.priority;
+    onChange(task, ({ priority: _priority, ...rest }) =>
+      picked === undefined ? rest : { ...rest, priority: picked },
+    );
+  };
   const line = boardPlanAttachedLine(attached);
   const nameOf = (value: string) =>
     value === NO_ONE ? "No one" : boardPersonName(people, value === OWNER ? undefined : value);
+  const priorityName = (value: RoomTaskPriority | undefined) =>
+    BOARD_PLAN_PRIORITIES.find((one) => one.priority === value)?.title ?? "No priority";
   return (
     <Dialog
       open
@@ -916,15 +1425,15 @@ function PlanTaskDialog({
               }}
             >
               {BOARD_PLAN_COLUMNS.map((column) => (
-                <Toggle key={column.status} value={column.status}>
+                <GroupToggle key={column.status} value={column.status}>
                   {column.title}
-                </Toggle>
+                </GroupToggle>
               ))}
             </ToggleGroup>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="flex flex-col gap-1.5">
-              <span className="text-xs font-medium text-muted-foreground">Assignee</span>
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground">For</span>
               <Select
                 value={assignee}
                 disabled={!canEdit}
@@ -945,7 +1454,30 @@ function PlanTaskDialog({
                 </SelectPopup>
               </Select>
             </div>
-            <div className="flex flex-col gap-1.5">
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Priority</span>
+              <Select
+                value={task.priority ?? NO_PRIORITY}
+                disabled={!canEdit}
+                onValueChange={(next) => {
+                  if (typeof next === "string") setPriority(next);
+                }}
+              >
+                <SelectTrigger aria-label="Priority">
+                  <SelectValue>{priorityName(task.priority)}</SelectValue>
+                </SelectTrigger>
+                <SelectPopup>
+                  <SelectItem value={NO_PRIORITY}>No priority</SelectItem>
+                  {BOARD_PLAN_PRIORITIES.map((one) => (
+                    <SelectItem key={one.priority} value={one.priority}>
+                      <TaskPriorityIcon priority={one.priority} />
+                      {one.title}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </div>
+            <div className="flex min-w-0 flex-col gap-1.5">
               <span className="text-xs font-medium text-muted-foreground">Due</span>
               <span className="flex items-center gap-1">
                 <Input
@@ -966,28 +1498,33 @@ function PlanTaskDialog({
           </div>
         </DialogPanel>
         <DialogFooter>
-          {actions.onDelete === undefined ? null : (
-            <Button variant="destructive-outline" onClick={then(actions.onDelete)}>
-              <Trash2Icon />
-              Delete
+          {/* One wrapping row, so four actions never run out of the dialog on a narrow screen. */}
+          <div className="flex w-full flex-wrap items-center justify-end gap-2">
+            {actions.onDelete === undefined ? null : (
+              <span className="me-auto">
+                <Button variant="destructive-outline" onClick={then(actions.onDelete)}>
+                  <Trash2Icon />
+                  Delete
+                </Button>
+              </span>
+            )}
+            <Button variant="outline" onClick={then(actions.onShow)}>
+              <LocateFixedIcon />
+              Show on board
             </Button>
-          )}
-          <Button variant="outline" onClick={then(actions.onShow)}>
-            <LocateFixedIcon />
-            Show on board
-          </Button>
-          {actions.onTake === undefined ? null : (
-            <Button variant="outline" onClick={then(actions.onTake)}>
-              <BotIcon />
-              Take it to my agent
-            </Button>
-          )}
-          {actions.onRun === undefined ? null : (
-            <Button onClick={then(actions.onRun)}>
-              <PlayIcon />
-              Run with an agent
-            </Button>
-          )}
+            {actions.onTake === undefined ? null : (
+              <Button variant="outline" onClick={then(actions.onTake)}>
+                <BotIcon />
+                Take it to my agent
+              </Button>
+            )}
+            {actions.onRun === undefined ? null : (
+              <Button onClick={then(actions.onRun)}>
+                <PlayIcon />
+                Run with an agent
+              </Button>
+            )}
+          </div>
         </DialogFooter>
       </DialogPopup>
     </Dialog>

@@ -292,32 +292,43 @@ function useCreateBoard() {
     }
     // An unshared board with nothing on it is not kept; placing the thread's own card, which
     // every template does first, keeps it. One at a time: a line waits for the cards it joins.
-    let notes = 0;
-    for (const change of boardTemplateChanges(template, randomUUID)) {
-      const changed = await changeBoard({
-        environmentId: project.environmentId,
-        input: { threadId, change },
-      });
-      if (changed._tag === "Failure") {
-        toastManager.add({
-          type: "error",
-          title: "Some of the template is missing",
-          description: "The board was made, but not all of its cards could be added.",
-        });
-        break;
-      }
-      if (change.type === "note.put") notes += 1;
-    }
+    const changes = boardTemplateChanges(template, randomUUID);
+    const put = async (change: (typeof changes)[number]) =>
+      (
+        await changeBoard({
+          environmentId: project.environmentId,
+          input: { threadId, change },
+        })
+      )._tag === "Success";
+    const [first, ...rest] = changes;
+    const kept = first === undefined || (await put(first));
     rememberLastProject(project);
     const ref = scopeThreadRef(project.environmentId, threadId);
     // A template's board opens showing all of it, once its cards reach this page.
+    const notes = changes.filter((change) => change.type === "note.put").length;
     if (notes > 0) fitRoomBoardOnOpen(roomBoardViewKey(ref), notes);
     // Typing on a new board names it; it never reaches a prompt the user has not clicked into.
     if (title === null) nameBoardOnOpen(ref);
+    // Open it now; the rest of the template lands on the open board.
     void navigate(newBoardLocation(ref));
+    void (async () => {
+      let complete = kept;
+      for (const change of rest) {
+        if (!complete) break;
+        complete = await put(change);
+      }
+      if (!complete) toastTemplateMissing();
+    })();
     return true;
   };
 }
+
+const toastTemplateMissing = () =>
+  toastManager.add({
+    type: "error",
+    title: "Some of the template is missing",
+    description: "The board was made, but not all of its cards could be added.",
+  });
 
 /**
  * Brings this person's agent to a cloud board they just made, in the background, as the join
@@ -397,20 +408,17 @@ function useCreateCloudBoard() {
       return false;
     }
     rememberGuestShare(created);
-    if (!(await putOnCloudBoard(created, changes))) {
-      toastManager.add({
-        type: "error",
-        title: "Some of the template is missing",
-        description: "The board was made, but not all of its cards could be added.",
-      });
-    }
     const ref = scopeThreadRef(guestEnvironmentId(created.shareId), created.threadId);
     const notes = changes.filter((change) => change.type === "note.put").length;
     if (notes > 0) fitRoomBoardOnOpen(`guest:${created.shareId}`, notes);
     if (title === null) nameBoardOnOpen(ref);
+    // Straight onto the new board, wherever it was started from; its template lands there live.
     void navigate({
       to: "/$environmentId/$threadId",
       params: { environmentId: ref.environmentId, threadId: ref.threadId },
+    });
+    void putOnCloudBoard(created, changes).then((complete) => {
+      if (!complete) toastTemplateMissing();
     });
     void bringAgent(created);
     return true;
@@ -610,6 +618,8 @@ function NewBoardTemplatePicker() {
     hasCloudBoards() && machines.operable.size === 0 && machines.connecting.size === 0;
   const [onComputer, setOnComputer] = useState(() => readPlace() === "machine");
   const cloud = hasCloudBoards() && (cloudOnly || !onComputer);
+  // Only what can be made here: a template that needs a computer is not offered in the cloud.
+  const templates = cloud ? BOARD_TEMPLATES.filter(fitsCloud) : BOARD_TEMPLATES;
   return (
     <Dialog
       open
@@ -624,14 +634,13 @@ function NewBoardTemplatePicker() {
         </DialogHeader>
         <DialogPanel>
           <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3" data-new-board-templates>
-            {BOARD_TEMPLATES.map((template, index) => (
+            {templates.map((template, index) => (
               <li key={template.id}>
                 <button
                   type="button"
                   // Blank is the default, so Enter makes the board New board always made.
                   autoFocus={index === 0}
-                  disabled={cloud && !fitsCloud(template)}
-                  className="flex h-full w-full flex-col overflow-hidden rounded-board border border-board-hairline bg-card text-start shadow-paint outline-none transition-shadow hover:shadow-board focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset disabled:pointer-events-none disabled:opacity-50"
+                  className="flex h-full w-full flex-col overflow-hidden rounded-board border border-board-hairline bg-card text-start shadow-paint outline-none transition-shadow hover:shadow-board focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                   data-board-template={template.id}
                   onClick={() => {
                     closeTemplates();
@@ -646,11 +655,9 @@ function NewBoardTemplatePicker() {
                   <span className="flex flex-col gap-0.5 p-2.5">
                     <span className="text-sm font-semibold">{template.name}</span>
                     <span className="text-xs text-muted-foreground">
-                      {cloud && !fitsCloud(template)
-                        ? "Needs a board on your computer."
-                        : cloud
-                          ? (template.cloudDescription ?? template.description)
-                          : template.description}
+                      {cloud
+                        ? (template.cloudDescription ?? template.description)
+                        : template.description}
                     </span>
                   </span>
                 </button>

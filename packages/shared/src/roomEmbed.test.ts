@@ -91,11 +91,11 @@ describe("roomEmbedOf", () => {
     [
       "https://linear.app/acme/issue/ENG-123/fix-the-login-loop",
       "linear",
-      "ENG-123 fix the login loop",
+      "ENG-123 · Fix the login loop",
       undefined,
     ],
-    ["https://github.com/acme/app/issues/12", "github", "Issue acme/app#12", undefined],
-    ["https://github.com/acme/app/blob/main/src/a.ts", "github", "src/a.ts in acme/app", undefined],
+    ["https://github.com/acme/app/issues/12", "github", "acme/app #12", undefined],
+    ["https://github.com/acme/app/blob/main/src/a.ts", "github", "src/a.ts", undefined],
     [
       "https://docs.superhuman.com/d/Team-wiki_dAbC12/Launch-plan_suXyZ9",
       "superhuman",
@@ -118,13 +118,45 @@ describe("roomEmbedOf", () => {
     ["https://acme.atlassian.net/browse/OPS-7", "jira", "OPS-7", undefined],
     ["https://app.asana.com/0/123/456", "asana", "Asana task", undefined],
     ["https://miro.com/app/board/uXjVabc=/", "miro", "Miro board", undefined],
-    ["https://example.com/spec", "web", "example.com", undefined],
+    ["https://example.com/spec", "web", "Spec", undefined],
+    ["https://www.example.com/", "web", "example.com", undefined],
   ])("reads %s", (url, source, title, embedUrl) => {
     const embed = roomEmbedOf(url);
     expect(embed?.source).toBe(source);
     expect(embed?.title).toBe(title);
     expect(embed?.embedUrl).toBe(embedUrl);
     if (embedUrl !== undefined) expect(isRoomEmbedFrameUrl(embedUrl)).toBe(true);
+  });
+
+  it.each([
+    ["https://linear.app/acme/issue/ENG-123/fix-login", "ENG-123 · Fix login", "Linear issue"],
+    ["https://linear.app/acme/issue/ENG-9", "ENG-9", "Linear issue"],
+    [
+      "https://linear.app/acme/project/q3-roadmap-8f2a1b3c4d5e/overview",
+      "Q3 roadmap",
+      "Linear project",
+    ],
+    ["https://github.com/pingdotgg/t3code/issues/1", "pingdotgg/t3code #1", "GitHub issue"],
+    ["https://github.com/pingdotgg/t3code/pull/42", "pingdotgg/t3code #42", "GitHub pull request"],
+    ["https://github.com/acme/app/tree/main/docs", "docs", "Folder in acme/app"],
+    ["https://github.com/acme/app/commit/0123456789abcdef", "acme/app @ 0123456", "GitHub commit"],
+    ["https://github.com/acme/app", "acme/app", "GitHub repository"],
+    ["https://www.figma.com/board/AZBcScMePxSpiX9j/Retro", "Retro", "FigJam board"],
+    ["https://youtu.be/dQw4w9WgXcQ", "YouTube video", "YouTube video"],
+    ["https://acme.atlassian.net/browse/OPS-7", "OPS-7", "Jira issue"],
+    // Any other site: named from its address's last name, and labelled with its host.
+    [
+      "https://blog.example.com/2024/05/how-we-ship-fast.html",
+      "How we ship fast",
+      "blog.example.com",
+    ],
+    ["https://example.com/posts/123456/", "Posts", "example.com"],
+    ["https://www.example.com/a/0123456789abcdef0123", "A", "example.com"],
+    ["http://intranet.local/Team-Wiki", "Team Wiki", "intranet.local"],
+  ])("titles %s as %s, a %s", (url, title, kind) => {
+    const embed = roomEmbedOf(url);
+    expect(embed?.title).toBe(title);
+    expect(embed?.kind).toBe(kind);
   });
 
   it("refuses anything but an http or https address", () => {

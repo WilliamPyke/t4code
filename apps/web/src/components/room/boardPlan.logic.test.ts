@@ -6,8 +6,14 @@ import {
   boardPlanAttachments,
   boardPlanColumns,
   boardPlanDue,
+  boardPlanIndexAmong,
   boardPlanMove,
-  boardPlanTaskSpot,
+  boardPlanMoveAll,
+  boardPlanShows,
+  boardPlanSorted,
+  boardPlanTaskPlace,
+  boardPlanUntick,
+  NO_PLAN_FILTER,
 } from "./boardPlan.logic";
 
 const task = (id: string, fields: Partial<RoomBoardNote> = {}): RoomBoardNote => ({
@@ -95,6 +101,22 @@ describe("boardPlanMove", () => {
   });
 });
 
+describe("boardPlanMoveAll", () => {
+  it("moves picked tasks together to the bottom of a column, in the order they show", () => {
+    const columns = boardPlanColumns([
+      task("a", { order: 1 }),
+      task("b", { order: 2 }),
+      task("w", { order: 0, status: "doing" }),
+      task("d", { order: 5, done: true }),
+    ]);
+    expect(boardPlanMoveAll(columns, new Set(["w", "a"]), "done")).toEqual([
+      { id: "a", status: "done", order: 6 },
+      { id: "w", status: "done", order: 7 },
+    ]);
+    expect(boardPlanMoveAll(columns, new Set(), "done")).toEqual([]);
+  });
+});
+
 describe("boardPlanAttachments", () => {
   it("counts the notes, links, artifacts and boxes joined to each task by a line", () => {
     const board: RoomBoard = {
@@ -126,15 +148,121 @@ describe("boardPlanAttachments", () => {
   });
 });
 
-describe("boardPlanTaskSpot", () => {
-  it("puts a task from the Plan beside the newest task, clear of everything", () => {
-    const board: RoomBoard = {
+describe("boardPlanTaskPlace", () => {
+  const spot = ({ x, y }: { x: number; y: number }) => ({ x, y });
+
+  it("puts tasks from the Plan in rows beside the newest, wrapping, never over a card", () => {
+    const notes = [task("old", { x: 0, y: 0 }), task("new", { x: 400, y: 0 })];
+    const placed: Array<{ x: number; y: number }> = [];
+    for (let added = 0; added < 4; added += 1) {
+      const at = boardPlanTaskPlace({ positions: {}, notes }, []);
+      expect(at.grow).toBeUndefined();
+      placed.push(spot(at));
+      notes.push(task(`t${added}`, spot(at)));
+    }
+    // The row fills to four, then wraps under its left end.
+    expect(placed).toEqual([
+      { x: 648, y: 0 },
+      { x: 0, y: 208 },
+      { x: 216, y: 208 },
+      { x: 432, y: 208 },
+    ]);
+  });
+
+  it("wraps within the section the newest task is in, and grows it to hold them", () => {
+    const tasksSection = { id: "s", text: "Tasks", x: 440, y: 328, section: true as const };
+    let board: RoomBoard = {
       positions: {},
-      notes: [task("old", { x: 0, y: 0 }), task("new", { x: 400, y: 0 })],
+      notes: [
+        { ...tasksSection, size: { w: 1000, h: 248 } },
+        task("a", { x: 464, y: 384 }),
+        task("b", { x: 680, y: 384 }),
+        task("c", { x: 896, y: 384 }),
+        { id: "below", text: "Below", x: 440, y: 1000 },
+      ],
     };
-    const spot = boardPlanTaskSpot(board, []);
-    expect(spot.y).toBe(0);
-    expect(spot.x).toBeGreaterThanOrEqual(400 + 192);
+    const fourth = boardPlanTaskPlace(board, []);
+    expect(fourth).toEqual({ x: 1112, y: 384 });
+    board = { ...board, notes: [...board.notes, task("d", spot(fourth))] };
+    // The fifth starts a second row inside the section, which grows down to hold it.
+    const fifth = boardPlanTaskPlace(board, []);
+    expect(fifth).toEqual({ x: 464, y: 592, grow: { id: "s", size: { w: 1000, h: 472 } } });
+  });
+
+  it("goes right of everything on a board with no task", () => {
+    const board: RoomBoard = { positions: {}, notes: [{ id: "n", text: "", x: 0, y: 0 }] };
+    expect(boardPlanTaskPlace(board, []).x).toBeGreaterThan(192);
+  });
+});
+
+describe("Plan filters and sorts", () => {
+  const ada = "guest:ada";
+  const tasks = [
+    task("Write the spec", { priority: "low", due: "2026-12-05" }),
+    task("Fix login", { priority: "urgent", assignee: { guestId: ada as never } }),
+    task("Ship it", { due: "2026-11-20", assignee: {}, done: true }),
+    task("Tidy up"),
+  ];
+
+  it("sorts by priority or due day, none last, ties as ordered", () => {
+    expect(ids(boardPlanSorted(tasks, "manual"))).toEqual(ids(tasks));
+    expect(ids(boardPlanSorted(tasks, "priority"))).toEqual([
+      "Fix login",
+      "Write the spec",
+      "Ship it",
+      "Tidy up",
+    ]);
+    expect(ids(boardPlanSorted(tasks, "due"))).toEqual([
+      "Ship it",
+      "Write the spec",
+      "Fix login",
+      "Tidy up",
+    ]);
+  });
+
+  it("keeps the tasks whose text has every word, for whom it is, and hides done ones", () => {
+    const shown = (filter: Partial<typeof NO_PLAN_FILTER>) =>
+      ids(tasks.filter((one) => boardPlanShows(one, { ...NO_PLAN_FILTER, ...filter })));
+    expect(shown({})).toEqual(ids(tasks));
+    expect(shown({ text: " LOGIN fix " })).toEqual(["Fix login"]);
+    expect(shown({ person: { guestId: ada } })).toEqual(["Fix login"]);
+    expect(shown({ person: { guestId: null } })).toEqual(["Ship it"]);
+    expect(shown({ person: "nobody" })).toEqual(["Write the spec", "Tidy up"]);
+    expect(shown({ hideDone: true })).toEqual(["Write the spec", "Fix login", "Tidy up"]);
+  });
+
+  it("places a drop among the shown tasks before the one it lands above in the whole column", () => {
+    const column = ["a", "b", "c", "d"].map((id) => task(id));
+    const shown = [column[0]!, column[2]!];
+    expect(boardPlanIndexAmong(column, shown, "x", 1)).toBe(2);
+    expect(boardPlanIndexAmong(column, shown, "x", 2)).toBe(3);
+    expect(boardPlanIndexAmong(column, shown, "a", 0)).toBe(1);
+    expect(boardPlanIndexAmong(column, [], "x", 0)).toBe(4);
+  });
+});
+
+describe("boardPlanUntick", () => {
+  const columns = boardPlanColumns([
+    task("a", { order: 1 }),
+    task("b", { order: 2 }),
+    task("c", { order: 3 }),
+    task("w", { order: 0, status: "doing" }),
+    task("t", { order: 0, done: true }),
+  ]);
+
+  it("returns an unticked task to where it was before it was done", () => {
+    expect(boardPlanUntick(columns, "t", { status: "todo", order: 2.5 })).toEqual([
+      { id: "t", status: "todo", order: 2.5 },
+    ]);
+    expect(boardPlanUntick(columns, "t", { status: "doing", order: 1 })).toEqual([
+      { id: "t", status: "doing", order: 1 },
+    ]);
+  });
+
+  it("sends it to the bottom of To do when where it was is not known", () => {
+    expect(boardPlanUntick(columns, "t", undefined)).toEqual([
+      { id: "t", status: "todo", order: 4 },
+    ]);
   });
 });
 
