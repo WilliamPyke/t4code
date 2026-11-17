@@ -5,6 +5,7 @@ import { boardCardKindName, boardCardLabel } from "./boardCommands.logic";
 import { boardLinkTitle } from "./boardSnapshot.logic";
 import {
   BOARD_SECTION_SIZE,
+  type BoardPoint,
   type BoardRect,
   boardBounds,
   boardNewNoteSize,
@@ -120,15 +121,32 @@ export async function boardPng(
     const rect = id === null ? undefined : rects.get(id);
     return rect === undefined ? null : { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
   };
+  const sections = new Set(
+    notes.filter((one) => one.section === true).map((one) => `note:${one.id}`),
+  );
+  // A section's line meets its frame, not its middle under the cards.
+  const end = (ref: string, at: BoardPoint, toward: BoardPoint): BoardPoint => {
+    const rect = sections.has(ref) ? rects.get(ref.slice("note:".length)) : undefined;
+    if (rect === undefined) return at;
+    const dx = toward.x - at.x;
+    const dy = toward.y - at.y;
+    const t = Math.min(
+      dx === 0 ? Infinity : rect.width / 2 / Math.abs(dx),
+      dy === 0 ? Infinity : rect.height / 2 / Math.abs(dy),
+    );
+    return t >= 1 ? at : { x: at.x + dx * t, y: at.y + dy * t };
+  };
   context.strokeStyle = MUTED;
   context.lineWidth = 2;
   for (const edge of board.edges ?? []) {
     const from = centre(edge.from);
     const to = centre(edge.to);
     if (from === null || to === null) continue;
+    const start = end(edge.from, from, to);
+    const finish = end(edge.to, to, from);
     context.beginPath();
-    context.moveTo(from.x, from.y);
-    context.lineTo(to.x, to.y);
+    context.moveTo(start.x, start.y);
+    context.lineTo(finish.x, finish.y);
     context.stroke();
   }
 

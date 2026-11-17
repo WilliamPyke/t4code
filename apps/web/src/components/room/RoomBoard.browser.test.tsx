@@ -195,7 +195,9 @@ describe("RoomBoard sections", () => {
     const section = screen.container.querySelector('[data-board-item="note:frame"]');
     if (section === null) throw new Error("The board did not draw the section");
     const zoom = section.getBoundingClientRect().width / 640;
-    const corner = middleOf(section.querySelectorAll("div[data-board-grip]")[1]!);
+    const corner = middleOf(
+      section.querySelectorAll("div[data-board-grip]:not([data-board-frame-edge])")[1]!,
+    );
     await commands.mouse([
       { type: "down", ...corner },
       { type: "move", x: corner.x + 100, y: corner.y + 60 },
@@ -579,7 +581,9 @@ describe("RoomBoard drags", () => {
     const { onChange } = board;
     await using screen = await board.screen;
     const note = itemIn(screen.container, "note:a");
-    const corner = middleOf(note.querySelectorAll("div[data-board-grip]")[1]!);
+    const corner = middleOf(
+      note.querySelectorAll("div[data-board-grip]:not([data-board-frame-edge])")[1]!,
+    );
     await commands.mouse([
       { type: "down", ...corner },
       { type: "move", x: corner.x + 120, y: corner.y + 90 },

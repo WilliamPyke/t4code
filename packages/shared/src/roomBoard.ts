@@ -16,6 +16,7 @@ import {
   ROOM_BOX_CONTEXT_KIND,
   ROOM_BOX_REPLY_MAX_LENGTH,
   ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH,
+  ROOM_COMMENT_MAX_REACTIONS,
   isRoomBoardUrl,
   roomPullRequestOf,
   roomBoardCardRef,
@@ -40,6 +41,7 @@ import {
   type RoomBoardMention,
   type RoomBoardNote,
   type RoomBoardReaction,
+  type RoomBoardReactionEmoji,
   type RoomBoardSize,
   type RoomBoxModel,
   type RoomTaskStatus,
@@ -625,6 +627,26 @@ export function roomBoardAfterAgentTurn(
   return { board: next, left };
 }
 
+const ROOM_COMMENT_REACTIONS_FULL = "This comment has as many reactions as it holds.";
+
+/**
+ * A card's or comment's reactions once `author`'s `emoji` is taken back, when they had it, or
+ * added; empty when none are left, null when it holds no more.
+ */
+function toggledReaction(
+  reactions: ReadonlyArray<RoomBoardReaction> | undefined,
+  emoji: RoomBoardReactionEmoji,
+  author: GuestId | null,
+  comment: boolean,
+): ReadonlyArray<RoomBoardReaction> | null {
+  const all = reactions ?? [];
+  const mine = (reaction: RoomBoardReaction) =>
+    reaction.emoji === emoji && (reaction.guestId ?? null) === author;
+  if (all.some(mine)) return all.filter((reaction) => !mine(reaction));
+  if (all.length >= (comment ? ROOM_COMMENT_MAX_REACTIONS : ROOM_BOARD_MAX_REACTIONS)) return null;
+  return [...all, { emoji, ...(author === null ? {} : { guestId: author }) }];
+}
+
 /**
  * The board after one change by `author` (null for the room's owner) at `at` (the ISO time the
  * server takes it, which signs a reply), the same board when the change does nothing, or why the
@@ -759,11 +781,6 @@ export function applyRoomBoardChange(
         return Result.succeed(board);
       }
       if (change.from === change.to) return Result.fail("An arrow joins two different cards.");
-      if (
-        [change.from, change.to].some((ref) => roomBoardNoteOfRef(board, ref)?.section === true)
-      ) {
-        return Result.fail("An arrow cannot join a section.");
-      }
       if (!isOnBoard(scope, board, change.from) || !isOnBoard(scope, board, change.to)) {
         return Result.fail("An arrow joins cards that are on the board.");
       }
@@ -884,25 +901,32 @@ export function applyRoomBoardChange(
     }
     case "note.react": {
       const note = board.notes.find((candidate) => candidate.id === change.noteId);
-      if (note === undefined || note.kind === "comment") {
-        return Result.fail("This card is not on the board.");
-      }
-      const reactions = note.reactions ?? [];
-      const mine = (reaction: RoomBoardReaction) =>
-        reaction.emoji === change.emoji && (reaction.guestId ?? null) === author;
-      const { reactions: _reactions, ...rest } = note;
-      if (reactions.some(mine)) {
-        const kept = reactions.filter((reaction) => !mine(reaction));
+      if (note === undefined) return Result.fail("This card is not on the board.");
+      const comment = note.kind === "comment";
+      if (change.replyId !== undefined) {
+        const replies = comment ? (note.replies ?? []) : [];
+        const reply = replies.find((candidate) => candidate.id === change.replyId);
+        if (reply === undefined) return Result.fail("This reply is not in the thread.");
+        const reactions = toggledReaction(reply.reactions, change.emoji, author, true);
+        if (reactions === null) return Result.fail(ROOM_COMMENT_REACTIONS_FULL);
+        const { reactions: _reactions, ...rest } = reply;
+        const next = reactions.length === 0 ? rest : { ...rest, reactions };
         return Result.succeed(
-          withNote(board, note, kept.length === 0 ? rest : { ...rest, reactions: kept }),
+          withNote(board, note, {
+            ...note,
+            replies: replies.map((candidate) => (candidate === reply ? next : candidate)),
+          }),
         );
       }
-      if (reactions.length >= ROOM_BOARD_MAX_REACTIONS) {
-        return Result.fail("This card has as many reactions as it holds.");
+      const reactions = toggledReaction(note.reactions, change.emoji, author, comment);
+      if (reactions === null) {
+        return Result.fail(
+          comment ? ROOM_COMMENT_REACTIONS_FULL : "This card has as many reactions as it holds.",
+        );
       }
-      const reaction = { emoji: change.emoji, ...(author === null ? {} : { guestId: author }) };
+      const { reactions: _reactions, ...rest } = note;
       return Result.succeed(
-        withNote(board, note, { ...rest, reactions: [...reactions, reaction] }),
+        withNote(board, note, reactions.length === 0 ? rest : { ...rest, reactions }),
       );
     }
     case "agent-turn.undo": {
@@ -1150,9 +1174,8 @@ export function roomCardRefsOf(
 
 /**
  * The board with the lines that carried `refs` into a thread box marked sent at `at`: into the box
- * or the artifact it rewrites in `sentAt`, into a card whose lines lead there in `sentFor` for this
- * box alone, as other boxes reach that card too. Lines no prompt from this box could carry stay as
- * they were, so a sender can mark only what their own prompt took.
+ * or its artifact in `sentAt`, into a card other boxes reach too in `sentFor` for this box, from a
+ * section in `sentCards` per card. Lines no prompt from this box could carry stay as they were.
  */
 export function roomBoardWithCardsSent(
   board: RoomBoard,
@@ -1178,8 +1201,9 @@ export function roomBoardWithCardsSent(
   const roots = new Set([box, ...(rewrites ? [artifact] : [])]);
   const sent = new Set(refs.filter((ref) => !roots.has(ref)));
   // Every card a prompt from this box carries, as it finds them: along lines into the box or its
-  // artifact, and into those cards, never through another box.
+  // artifact, and into those cards, never through another box. A section's line carries its cards.
   const reached = new Set<string>();
+  const held = new Map<string, ReadonlyArray<string>>();
   let frontier = [...roots];
   while (frontier.length > 0) {
     const next: Array<string> = [];
@@ -1189,11 +1213,32 @@ export function roomBoardWithCardsSent(
       if (note === undefined || note.kind === "thread") continue;
       reached.add(edge.from);
       next.push(edge.from);
+      if (note.section !== true) continue;
+      const cards = roomSectionCards(board, note).map((card) => roomBoardNoteRef(card.id));
+      held.set(edge.from, cards);
+      for (const ref of cards) {
+        if (roots.has(ref) || reached.has(ref)) continue;
+        reached.add(ref);
+        next.push(ref);
+      }
     }
     frontier = next;
   }
   let changed = false;
   const next = edges.map((edge) => {
+    const cards = held.get(edge.from);
+    if (cards !== undefined) {
+      const took = cards.filter((ref) => sent.has(ref));
+      if (took.length === 0 || (!roots.has(edge.to) && !reached.has(edge.to))) return edge;
+      const before = edge.sentCards?.[boxId] ?? {};
+      if (took.every((ref) => before[ref] === at)) return edge;
+      const marks = Object.fromEntries([
+        ...Object.entries(before).filter(([ref]) => cards.includes(ref) && !took.includes(ref)),
+        ...took.map((ref) => [ref, at] as const),
+      ]);
+      changed = true;
+      return { ...edge, sentCards: { ...edge.sentCards, [boxId]: marks } };
+    }
     if (!sent.has(edge.from)) return edge;
     if (roots.has(edge.to)) {
       if (edge.sentAt === at) return edge;
@@ -1247,6 +1292,50 @@ export const roomRunReplyText = (items: ReadonlyArray<OrchestrationV2TurnItem>):
 /** The note an arrow or a card names (`note:<id>`), if the board has it. */
 export const roomBoardNoteOfRef = (board: RoomBoard | undefined, ref: string) =>
   board?.notes.find((note) => roomBoardNoteRef(note.id) === ref);
+
+/** How big a section is until someone resizes it. */
+export const ROOM_BOARD_SECTION_SIZE: RoomBoardSize = { w: 640, h: 420 };
+const PIN_SIZE: RoomBoardSize = { w: 32, h: 32 };
+const NOTE_SIZES: Partial<Record<NonNullable<RoomBoardNote["kind"]>, RoomBoardSize>> = {
+  artifact: { w: 380, h: 400 },
+  thread: { w: 340, h: 460 },
+  code: { w: 560, h: 420 },
+  "pull-request": { w: 360, h: 300 },
+  comment: PIN_SIZE,
+  task: ROOM_BOARD_TASK_SIZE,
+};
+
+/** A card's size as the board draws it, or about, until someone resizes it. */
+export const roomBoardNoteSize = (
+  note: Pick<RoomBoardNote, "kind" | "size" | "section">,
+): RoomBoardSize =>
+  note.size ??
+  (note.section === true
+    ? ROOM_BOARD_SECTION_SIZE
+    : note.kind === undefined
+      ? ROOM_BOARD_NOTE_SIZE
+      : (NOTE_SIZES[note.kind] ?? ROOM_BOARD_NOTE_SIZE));
+
+/**
+ * The cards in a section: those whose middle is inside it, as dragging it carries them. A line
+ * from a section carries each as if it had a line of its own, so this is read whenever a line is,
+ * and a card moved in or out later counts or stops counting. Never sections, boxes or comments.
+ */
+export function roomSectionCards(
+  board: Pick<RoomBoard, "notes">,
+  section: RoomBoardNote,
+): ReadonlyArray<RoomBoardNote> {
+  if (section.section !== true) return [];
+  const area = roomBoardNoteSize(section);
+  return board.notes.filter((note) => {
+    if (note.section === true || note.kind === "thread" || note.kind === "comment") return false;
+    if (note.pinnedTo !== undefined) return false;
+    const size = roomBoardNoteSize(note);
+    const x = note.x + size.w / 2;
+    const y = note.y + size.h / 2;
+    return x >= section.x && x <= section.x + area.w && y >= section.y && y <= section.y + area.h;
+  });
+}
 
 /** A thread box as lines name it: the room thread's own card, or a thread note. */
 export const roomBoxRef = (boxId: string): string =>

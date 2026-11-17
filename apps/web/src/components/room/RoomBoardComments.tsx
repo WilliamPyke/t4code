@@ -3,6 +3,8 @@ import {
   ROOM_BOARD_NOTE_MAX_LENGTH,
   type RoomBoardMention,
   type RoomBoardNote,
+  type RoomBoardReaction,
+  type RoomBoardReactionEmoji,
   type RoomBoardReply,
 } from "@t3tools/contracts";
 import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
@@ -34,6 +36,7 @@ import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Textarea } from "../ui/textarea";
 import { MentionText, useMentionPicker } from "./BoardMentions";
+import { AddReaction, ReactionChips } from "./RoomBoardReactions";
 import {
   type BoardPeople,
   type BoardRect,
@@ -234,6 +237,12 @@ const scrollIntoViewOnMount = (element: HTMLElement | null) => {
 
 type InlineConfirm = ReturnType<typeof useInlineActionConfirm>;
 
+// Like a card's hover chrome, for one comment: faded, not removed, and always shown on touch.
+const COMMENT_HOVER_CHROME_CLASS =
+  "transition-opacity [@media(hover:hover)]:opacity-0 group-hover/comment:opacity-100 group-focus-within/comment:opacity-100 has-[[data-popup-open]]:opacity-100";
+
+const NO_REACTIONS: ReadonlyArray<RoomBoardReaction> = [];
+
 function CommentEntry({
   id,
   people,
@@ -243,7 +252,9 @@ function CommentEntry({
   mentions,
   at,
   now,
+  reactions,
   confirm,
+  onReact,
   onRemove,
 }: {
   /** Names the entry to the confirm its delete button asks for. */
@@ -256,12 +267,15 @@ function CommentEntry({
   readonly mentions: ReadonlyArray<RoomBoardMention> | undefined;
   readonly at: string | undefined;
   readonly now: number;
+  readonly reactions: ReadonlyArray<RoomBoardReaction> | undefined;
   readonly confirm: InlineConfirm;
+  /** Absent for a viewer who cannot change the board. */
+  readonly onReact: ((emoji: RoomBoardReactionEmoji) => void) | undefined;
   readonly onRemove: (() => void) | undefined;
 }) {
   const armed = confirm.isArmed(id);
   return (
-    <li ref={scrollIntoViewOnMount} className="flex flex-col gap-1">
+    <li ref={scrollIntoViewOnMount} className="group/comment flex flex-col gap-1">
       <div className="flex min-w-0 items-center gap-1.5">
         <Avatar people={people} guestId={guestId} agent={agent !== undefined} />
         <span className="min-w-0 truncate text-xs font-medium">
@@ -274,18 +288,24 @@ function CommentEntry({
             {boardTimeLabel(at, now) ?? ""}
           </time>
         )}
-        {onRemove === undefined ? null : (
-          <Button
-            size={armed ? "micro" : "icon-micro"}
-            variant={armed ? "destructive-outline" : "ghost-muted"}
-            aria-label={armed ? "Confirm delete reply" : "Delete reply"}
-            className="ms-auto"
-            {...confirm.props(id, onRemove)}
-          >
-            <XIcon />
-            {armed ? "Delete?" : null}
-          </Button>
-        )}
+        <div className="ms-auto flex shrink-0 items-center gap-0.5">
+          {onReact === undefined ? null : (
+            <span className={cn("flex", COMMENT_HOVER_CHROME_CLASS)}>
+              <AddReaction onReact={onReact} />
+            </span>
+          )}
+          {onRemove === undefined ? null : (
+            <Button
+              size={armed ? "micro" : "icon-micro"}
+              variant={armed ? "destructive-outline" : "ghost-muted"}
+              aria-label={armed ? "Confirm delete reply" : "Delete reply"}
+              {...confirm.props(id, onRemove)}
+            >
+              <XIcon />
+              {armed ? "Delete?" : null}
+            </Button>
+          )}
+        </div>
       </div>
       {agent === undefined ? (
         <p className="ps-6.5 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">
@@ -302,6 +322,12 @@ function CommentEntry({
           />
         </div>
       )}
+      <ReactionChips
+        reactions={reactions ?? NO_REACTIONS}
+        people={people}
+        onReact={onReact}
+        className="ps-6.5"
+      />
     </li>
   );
 }
@@ -342,6 +368,7 @@ export function CommentThreadPanel({
   onSend,
   onAsk,
   onRemoveReply,
+  onReact,
   onResolve,
   onDelete,
   onClose,
@@ -361,6 +388,13 @@ export function CommentThreadPanel({
    */
   readonly onAsk: (boxId: string, text: string) => Promise<boolean>;
   readonly onRemoveReply: (replyId: string) => void;
+  /**
+   * Toggles the viewer's reaction on the first comment (no `replyId`) or a reply. Absent for
+   * whoever may not react, and on a draft.
+   */
+  readonly onReact:
+    | ((replyId: string | undefined, emoji: RoomBoardReactionEmoji) => void)
+    | undefined;
   readonly onResolve: (resolved: boolean) => void;
   /** Absent for whoever may not delete the thread. */
   readonly onDelete: (() => void) | undefined;
@@ -489,7 +523,9 @@ export function CommentThreadPanel({
             mentions={note.mentions}
             at={note.createdAt}
             now={now}
+            reactions={note.reactions}
             confirm={confirm}
+            onReact={onReact === undefined ? undefined : (emoji) => onReact(undefined, emoji)}
             onRemove={undefined}
           />
           {replies.map((reply) => (
@@ -503,7 +539,9 @@ export function CommentThreadPanel({
               mentions={reply.mentions}
               at={reply.at}
               now={now}
+              reactions={reply.reactions}
               confirm={confirm}
+              onReact={onReact === undefined ? undefined : (emoji) => onReact(reply.id, emoji)}
               onRemove={
                 canEdit && isRoomCardOwnedBy(reply, people.viewer)
                   ? () => onRemoveReply(reply.id)

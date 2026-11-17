@@ -16,34 +16,21 @@
       "x": 0,
       "y": 0,
       "size": {
-        "w": 680,
-        "h": 460
+        "w": 888,
+        "h": 232
       },
       "color": "yellow"
-    },
-    {
-      "id": "welcome-screen",
-      "by": "maya",
-      "section": true,
-      "text": "Welcome screen",
-      "x": 720,
-      "y": 0,
-      "size": {
-        "w": 1180,
-        "h": 460
-      },
-      "color": "pink"
     },
     {
       "id": "research",
       "by": "sam",
       "section": true,
       "text": "Research",
-      "x": 1940,
-      "y": 0,
+      "x": 0,
+      "y": 272,
       "size": {
-        "w": 980,
-        "h": 460
+        "w": 888,
+        "h": 456
       },
       "color": "blue"
     },
@@ -53,10 +40,10 @@
       "section": true,
       "text": "Tasks",
       "x": 0,
-      "y": 500,
+      "y": 768,
       "size": {
-        "w": 1440,
-        "h": 520
+        "w": 1104,
+        "h": 480
       },
       "color": "green"
     },
@@ -65,11 +52,11 @@
       "by": "maya",
       "section": true,
       "text": "Decisions",
-      "x": 2960,
+      "x": 2184,
       "y": 0,
       "size": {
-        "w": 520,
-        "h": 1020
+        "w": 456,
+        "h": 400
       },
       "color": "purple"
     },
@@ -99,40 +86,40 @@
       "id": "g4",
       "by": "priya",
       "text": "Halve the drop-off at the 'Bring your agent' step",
-      "x": 24,
-      "y": 232,
+      "x": 672,
+      "y": 64,
       "color": "green"
     },
     {
       "id": "r1",
       "by": "sam",
       "text": "5 of 8 interviewees stopped at 'Bring your agent'. They thought it was required.",
-      "x": 1964,
-      "y": 64,
+      "x": 24,
+      "y": 336,
       "color": "blue"
     },
     {
       "id": "r2",
       "by": "sam",
       "text": "PMs want a template that already looks like their sprint board",
-      "x": 2180,
-      "y": 64,
+      "x": 240,
+      "y": 336,
       "color": "blue"
     },
     {
       "id": "r3",
       "by": "jonas",
       "text": "Designers open boards from Figma links far more often than from email",
-      "x": 2396,
-      "y": 64,
+      "x": 456,
+      "y": 336,
       "color": "pink"
     },
     {
       "id": "r4",
       "by": "sam",
       "text": "\"I'd rather copy someone's good board than design one from nothing.\" 4 of 8 asked for an example board.",
-      "x": 2612,
-      "y": 64
+      "x": 672,
+      "y": 336
     },
     {
       "id": "fig",
@@ -140,10 +127,10 @@
       "kind": "link",
       "text": "Material 3 Design Kit: component reference for the new welcome screen",
       "url": "https://www.figma.com/community/file/1035203688168086460/material-3-design-kit",
-      "x": 1964,
-      "y": 240,
+      "x": 24,
+      "y": 504,
       "size": {
-        "w": 280,
+        "w": 264,
         "h": 200
       }
     },
@@ -153,10 +140,10 @@
       "kind": "link",
       "text": "Krystal Higgins: User Onboarding for the Long Run",
       "url": "https://www.youtube.com/watch?v=nl8Bpr3a8Lc",
-      "x": 744,
-      "y": 60,
+      "x": 600,
+      "y": 504,
       "size": {
-        "w": 280,
+        "w": 264,
         "h": 200
       }
     },
@@ -165,11 +152,11 @@
       "by": "maya",
       "kind": "thread",
       "text": "Welcome copy",
-      "x": 1044,
-      "y": 60,
+      "x": 968,
+      "y": 104,
       "size": {
-        "w": 380,
-        "h": 380
+        "w": 420,
+        "h": 520
       }
     },
     {
@@ -178,10 +165,10 @@
       "kind": "link",
       "text": "Prior art: Excalidraw links a sample file for new users",
       "url": "https://github.com/excalidraw/excalidraw-vscode/issues/50",
-      "x": 2260,
-      "y": 240,
+      "x": 312,
+      "y": 504,
       "size": {
-        "w": 280,
+        "w": 264,
         "h": 200
       }
     },
@@ -191,7 +178,7 @@
       "kind": "task",
       "text": "Make 'Bring your agent' skippable on step 2",
       "x": 24,
-      "y": 564,
+      "y": 832,
       "status": "doing",
       "priority": "urgent",
       "dueInDays": 3,
@@ -204,7 +191,7 @@
       "kind": "task",
       "text": "Put a public sample board on the homepage",
       "x": 240,
-      "y": 564,
+      "y": 832,
       "status": "doing",
       "priority": "high",
       "dueInDays": 4,
@@ -217,7 +204,7 @@
       "kind": "task",
       "text": "Write the welcome copy for the first board",
       "x": 456,
-      "y": 564,
+      "y": 832,
       "status": "doing",
       "priority": "high",
       "dueInDays": 7,
@@ -229,8 +216,8 @@
       "by": "priya",
       "kind": "task",
       "text": "Track the invite step: sent, opened, joined",
-      "x": 672,
-      "y": 564,
+      "x": 888,
+      "y": 832,
       "status": "todo",
       "priority": "high",
       "dueInDays": 10,
@@ -242,8 +229,8 @@
       "by": "jonas",
       "kind": "task",
       "text": "Starter templates: Sprint board, Design review, Research synthesis",
-      "x": 888,
-      "y": 564,
+      "x": 24,
+      "y": 1040,
       "status": "todo",
       "priority": "medium",
       "dueInDays": 14,
@@ -255,8 +242,8 @@
       "by": "maya",
       "kind": "task",
       "text": "A/B test: template picker before or after naming the board",
-      "x": 24,
-      "y": 772,
+      "x": 240,
+      "y": 1040,
       "status": "todo",
       "priority": "medium",
       "dueInDays": 17,
@@ -268,8 +255,8 @@
       "by": "jonas",
       "kind": "task",
       "text": "Empty-state illustrations for Plan and List",
-      "x": 240,
-      "y": 772,
+      "x": 672,
+      "y": 832,
       "status": "doing",
       "priority": "low",
       "dueInDays": 21,
@@ -282,7 +269,7 @@
       "kind": "task",
       "text": "Synthesize round-1 interviews into three themes",
       "x": 456,
-      "y": 772,
+      "y": 1040,
       "status": "done",
       "priority": "high",
       "assignee": "sam",
@@ -294,7 +281,7 @@
       "kind": "task",
       "text": "Recruit six more PMs for round-2 interviews",
       "x": 672,
-      "y": 772,
+      "y": 1040,
       "status": "done",
       "priority": "medium",
       "assignee": "sam",
@@ -306,7 +293,7 @@
       "kind": "task",
       "text": "Fix: invite link copies with a trailing space in Safari",
       "x": 888,
-      "y": 772,
+      "y": 1040,
       "status": "done",
       "priority": "urgent",
       "assignee": "priya",
@@ -318,10 +305,10 @@
       "kind": "link",
       "text": "ENG-142: agent step blocks the welcome flow",
       "url": "https://linear.app/tinkjam-sample/issue/ENG-142/agent-step-blocks-the-welcome-flow",
-      "x": 1120,
-      "y": 564,
+      "x": 2184,
+      "y": 768,
       "size": {
-        "w": 280,
+        "w": 456,
         "h": 200
       }
     },
@@ -330,18 +317,43 @@
       "by": "sam",
       "kind": "artifact",
       "text": "ENG-142 snapshot",
-      "x": 1120,
-      "y": 784,
+      "x": 2184,
+      "y": 992,
       "size": {
-        "w": 300,
-        "h": 220
+        "w": 456,
+        "h": 256
       }
+    },
+    {
+      "id": "priya-agent",
+      "by": "priya",
+      "kind": "thread",
+      "text": "Friday update",
+      "x": 1184,
+      "y": 768,
+      "size": {
+        "w": 400,
+        "h": 480
+      }
+    },
+    {
+      "id": "update",
+      "by": "priya",
+      "kind": "artifact",
+      "text": "Onboarding v2: week 2 update",
+      "x": 1664,
+      "y": 768,
+      "size": {
+        "w": 440,
+        "h": 480
+      },
+      "body": "onboarding-v2/update.md"
     },
     {
       "id": "d1",
       "by": "maya",
       "text": "Decided: the agent step is optional. People bring one later from the toolbar.",
-      "x": 2984,
+      "x": 2208,
       "y": 64,
       "color": "purple"
     },
@@ -349,7 +361,7 @@
       "id": "d2",
       "by": "jonas",
       "text": "Decided: templates open on the Board view. Plan is one click away.",
-      "x": 3224,
+      "x": 2424,
       "y": 64,
       "color": "purple"
     },
@@ -357,7 +369,7 @@
       "id": "d4",
       "by": "maya",
       "text": "Decided: a view-only sample board, one click from the homepage",
-      "x": 2984,
+      "x": 2208,
       "y": 232,
       "color": "purple"
     },
@@ -366,8 +378,8 @@
       "by": "sam",
       "kind": "comment",
       "text": "Do we ask for a name before or after the first card? Asking first feels heavy.",
-      "x": 3260,
-      "y": 260,
+      "x": 2470,
+      "y": 270,
       "replies": [
         {
           "id": "c1-r1",
@@ -392,11 +404,11 @@
       "kind": "artifact",
       "text": "Welcome screen: first-run copy",
       "body": "onboarding-v2/welcome.html",
-      "x": 1444,
-      "y": 60,
+      "x": 1468,
+      "y": 104,
       "size": {
-        "w": 432,
-        "h": 380
+        "w": 640,
+        "h": 520
       }
     },
     {
@@ -405,110 +417,25 @@
       "kind": "artifact",
       "text": "Onboarding v2: spec",
       "body": "onboarding-v2/spec.md",
-      "x": 3520,
-      "y": 0,
+      "x": 2184,
+      "y": 440,
       "size": {
-        "w": 520,
-        "h": 320
-      }
-    },
-    {
-      "id": "interviews",
-      "by": "sam",
-      "kind": "artifact",
-      "text": "Interview synthesis: round 1",
-      "body": "onboarding-v2/interviews.md",
-      "x": 3520,
-      "y": 360,
-      "size": {
-        "w": 520,
-        "h": 260
+        "w": 456,
+        "h": 288
       }
     }
   ],
   "lines": [
     {
-      "id": "l-r1-t2",
-      "by": "sam",
-      "from": "r1",
-      "to": "t2"
-    },
-    {
-      "id": "l-r4-t8",
-      "by": "sam",
-      "from": "r4",
-      "to": "t8"
-    },
-    {
-      "id": "l-r2-t3",
-      "by": "sam",
-      "from": "r2",
-      "to": "t3"
-    },
-    {
-      "id": "l-r3-fig",
-      "by": "jonas",
-      "from": "r3",
-      "to": "fig"
-    },
-    {
-      "id": "l-g1-spec",
+      "id": "l-goals-maya",
       "by": "maya",
-      "from": "g1",
-      "to": "spec"
-    },
-    {
-      "id": "l-d1-t2",
-      "by": "maya",
-      "from": "d1",
-      "to": "t2"
-    },
-    {
-      "id": "l-welcome-t1",
-      "by": "jonas",
-      "from": "welcome",
-      "to": "t1"
-    },
-    {
-      "id": "l-g4-r1",
-      "by": "priya",
-      "from": "g4",
-      "to": "r1"
-    },
-    {
-      "id": "l-t4-g2",
-      "by": "priya",
-      "from": "t4",
-      "to": "g2"
-    },
-    {
-      "id": "l-gh-t8",
-      "by": "priya",
-      "from": "gh",
-      "to": "t8"
-    },
-    {
-      "id": "l-linear-t2",
-      "by": "priya",
-      "from": "linear",
-      "to": "t2"
-    },
-    {
-      "id": "l-d4-t8",
-      "by": "maya",
-      "from": "d4",
-      "to": "t8"
-    },
-    {
-      "id": "l-g3-maya",
-      "by": "maya",
-      "from": "g3",
+      "from": "goals",
       "to": "maya-agent"
     },
     {
-      "id": "l-yt-maya",
+      "id": "l-research-maya",
       "by": "maya",
-      "from": "yt",
+      "from": "research",
       "to": "maya-agent"
     },
     {
@@ -516,6 +443,30 @@
       "by": "maya",
       "from": "maya-agent",
       "to": "welcome"
+    },
+    {
+      "id": "l-welcome-d1",
+      "by": "jonas",
+      "from": "welcome",
+      "to": "decisions"
+    },
+    {
+      "id": "l-decisions-spec",
+      "by": "maya",
+      "from": "decisions",
+      "to": "spec"
+    },
+    {
+      "id": "l-tasks-priya",
+      "by": "priya",
+      "from": "tasks",
+      "to": "priya-agent"
+    },
+    {
+      "id": "l-priya-update",
+      "by": "priya",
+      "from": "priya-agent",
+      "to": "update"
     },
     {
       "id": "l-linear-eng142",
@@ -556,7 +507,7 @@
       "emoji": "🎉"
     }
   ],
-  "start": "goals",
+  "start": "maya-agent",
   "agentTurns": [
     {
       "id": "sample-maya-welcome-1",
@@ -564,7 +515,7 @@
       "box": "maya-agent",
       "model": "Claude Sonnet 5.5",
       "prompt": "Write the first-run copy for the welcome screen. Short, friendly, no jargon, and make it clear that bringing an agent is optional.",
-      "context": ["g3", "yt"],
+      "context": ["g1", "g2", "g3", "g4", "r1", "r2", "r3", "r4", "fig", "gh", "yt"],
       "reply": "Done: the welcome screen in the artifact now has a one-line promise, three first steps and a clear Skip on the agent step. It's under 60 words, so it reads at a glance. Following the talk, it shows value before asking for any setup, which is why the agent step comes last.",
       "artifact": {
         "card": "welcome",
@@ -586,6 +537,19 @@
       "artifact": {
         "card": "eng142",
         "body": "onboarding-v2/eng-142.md"
+      }
+    },
+    {
+      "id": "sample-priya-update-1",
+      "by": "priya",
+      "box": "priya-agent",
+      "model": "Claude Opus 5.5",
+      "prompt": "Write this week's update from the Tasks section: what shipped, what is in progress, what is at risk. Keep it short enough to paste into Slack.",
+      "context": ["t2", "t8", "t1", "t7", "t4", "t3", "t9", "t6", "t5", "t10"],
+      "reply": "Written to the artifact beside me. Three tasks shipped, four are in progress, and one is at risk: making the agent step skippable is due in three days and blocks ENG-142.",
+      "artifact": {
+        "card": "update",
+        "body": "onboarding-v2/update-v2.md"
       }
     }
   ]

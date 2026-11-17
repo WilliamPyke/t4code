@@ -12,7 +12,7 @@ import * as Schema from "effect/Schema";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { type ReactNode, useEffect, useEffectEvent, useState } from "react";
 
-import { TINKJAM_SYNC_COMMAND } from "~/branding";
+import { TINKJAM_AGENT_PROMPT, TINKJAM_SYNC_COMMAND } from "~/branding";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { environmentCatalog } from "~/connection/catalog";
 import { boardAccountsEnabled, useBoardAccount } from "~/guest/boardAccount";
@@ -373,34 +373,18 @@ export function ConnectComputerRoutes({
     <div className="grid gap-3 sm:grid-cols-[3fr_2fr]" data-bring-agent-steps>
       <section className="flex flex-col gap-3 rounded-xl border border-border p-4">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold">Tinkjam Sync</h3>
-          <Badge variant="success">One command</Badge>
+          <h3 className="text-sm font-semibold">Ask your agent to set it up</h3>
+          <Badge variant="success">One prompt</Badge>
         </div>
-        <ToggleGroup
-          aria-label="Your computer"
-          value={[os]}
-          onValueChange={(next) => {
-            const value = next[0];
-            if (value === "unix" || value === "windows") setOs(value);
-          }}
-        >
-          <Toggle value="unix">Mac or Linux</Toggle>
-          <Toggle value="windows">Windows</Toggle>
-        </ToggleGroup>
         <ol className="flex flex-col gap-2.5 text-sm">
-          <Step number={1}>
-            {os === "windows" ? (
-              <>Open PowerShell: press the Windows key, type PowerShell, press Enter.</>
-            ) : (
-              <>Open Terminal. On a Mac, press ⌘ Space, type Terminal, press Return.</>
-            )}
-          </Step>
+          <Step number={1}>Open Claude Code, Codex or another coding agent on your computer.</Step>
           <Step number={2}>
-            Copy this, paste it there and press {enter}:
-            <SyncCommand />
+            Copy this prompt and send it:
+            <CopyLine text={TINKJAM_AGENT_PROMPT} />
           </Step>
           <Step number={3}>
-            Open the link it prints and press Connect. Keep that window open while you work.
+            Open the link your agent gives you and press Connect. Keep that agent session open while
+            you work.
           </Step>
           {withAccount && !signedIn ? (
             <Step number={4}>
@@ -408,6 +392,33 @@ export function ConnectComputerRoutes({
             </Step>
           ) : null}
         </ol>
+        <Collapsible>
+          <CollapsibleTrigger render={<Button size="xs" variant="ghost" />}>
+            Run it yourself in a terminal
+          </CollapsibleTrigger>
+          <CollapsiblePanel>
+            <div className="flex flex-col gap-2.5 pt-2 text-sm">
+              <ToggleGroup
+                aria-label="Your computer"
+                value={[os]}
+                onValueChange={(next) => {
+                  const value = next[0];
+                  if (value === "unix" || value === "windows") setOs(value);
+                }}
+              >
+                <Toggle value="unix">Mac or Linux</Toggle>
+                <Toggle value="windows">Windows</Toggle>
+              </ToggleGroup>
+              <p>
+                {os === "windows"
+                  ? "Open PowerShell: press the Windows key, type PowerShell, press Enter."
+                  : "Open Terminal. On a Mac, press ⌘ Space, type Terminal, press Return."}{" "}
+                Paste this and press {enter}, then open the link it prints and press Connect:
+              </p>
+              <CopyLine text={TINKJAM_SYNC_COMMAND} mono />
+            </div>
+          </CollapsiblePanel>
+        </Collapsible>
         <p className="text-xs text-muted-foreground">
           Needs Node.js 22.16 or newer from{" "}
           <a className="underline" href="https://nodejs.org" target="_blank" rel="noreferrer">
@@ -415,7 +426,7 @@ export function ConnectComputerRoutes({
           </a>
           . Tinkjam Sync lets your boards use the agents on this computer, such as Claude Code or
           Codex, under your own account; they can use what those agents can on it. Nothing anyone
-          else writes reaches your agent unless you press Send. Press Ctrl+C in that window to stop
+          else writes reaches your agent unless you press Send. Close that session or window to stop
           it.
         </p>
         {withAccount ? null : (
@@ -430,23 +441,28 @@ export function ConnectComputerRoutes({
           <Badge variant="outline">Coming soon</Badge>
         </div>
         <p className="text-sm">
-          An app for your computer that does the same, with no terminal. Until then, Tinkjam Sync is
-          the way in.
+          An app for your computer that does the same, with nothing to paste. Until then, your agent
+          sets it up.
         </p>
       </section>
     </div>
   );
 }
 
-/** The Tinkjam Sync command, with a Copy button anyone can find. */
-function SyncCommand() {
+/** A prompt or command to copy, shown whole, with a Copy button anyone can find. */
+function CopyLine({ text, mono = false }: { readonly text: string; readonly mono?: boolean }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard({ timeout: 2000, target: "command" });
   return (
-    <div className="mt-1.5 flex items-center gap-2" data-sync-command>
-      <code className="min-w-0 flex-1 truncate rounded-lg border border-border bg-muted/50 px-3 py-2 font-mono text-sm">
-        {TINKJAM_SYNC_COMMAND}
-      </code>
-      <Button size="sm" onClick={() => copyToClipboard(TINKJAM_SYNC_COMMAND, undefined)}>
+    <div className="mt-1.5 flex items-start gap-2" data-sync-command>
+      <p
+        className={cn(
+          "min-w-0 flex-1 rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm break-words select-all",
+          mono && "font-mono",
+        )}
+      >
+        {text}
+      </p>
+      <Button size="sm" onClick={() => copyToClipboard(text, undefined)}>
         {isCopied ? <CheckIcon /> : <CopyIcon />}
         {isCopied ? "Copied" : "Copy"}
       </Button>

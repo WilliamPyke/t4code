@@ -9,7 +9,7 @@ import {
   roomBoardCardRef,
   roomBoardNoteRef,
 } from "@t3tools/contracts";
-import { ROOM_BOARD_TASK_SIZE, roomTaskStatus } from "@t3tools/shared/roomBoard";
+import { ROOM_BOARD_TASK_SIZE, roomSectionCards, roomTaskStatus } from "@t3tools/shared/roomBoard";
 
 import {
   type BoardPoint,
@@ -201,9 +201,22 @@ export function boardPlanAttachments(board: RoomBoard): ReadonlyMap<string, Boar
     else if (other.kind === "artifact") counts.artifacts += 1;
     else if (other.kind === undefined && other.pinnedTo === undefined) counts.notes += 1;
   };
+  // A section's line to a box attaches every task in the section to it.
+  const isBox = (ref: string) => ref === roomBox || byRef.get(ref)?.kind === "thread";
+  const sectionTasks = (ref: string) => {
+    const section = byRef.get(ref);
+    return section?.section === true ? roomSectionCards(board, section) : [];
+  };
   for (const edge of board.edges ?? []) {
     add(edge.from, edge.to);
     add(edge.to, edge.from);
+    for (const [inside, other] of [
+      [edge.from, edge.to],
+      [edge.to, edge.from],
+    ] as const) {
+      if (!isBox(other)) continue;
+      for (const task of sectionTasks(inside)) add(roomBoardNoteRef(task.id), other);
+    }
   }
   return attached;
 }

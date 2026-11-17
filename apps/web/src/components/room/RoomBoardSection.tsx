@@ -21,9 +21,18 @@ import { NoteColorPicker, sectionColorClassName, sectionLabelClassName } from ".
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
 
+// A band along each edge, thicker as the board zooms out, from which a line is drawn.
+const FRAME_EDGES = [
+  "inset-x-0 -top-[calc(5px*var(--board-line-scale,1))] h-[calc(10px*var(--board-line-scale,1))]",
+  "inset-x-0 -bottom-[calc(5px*var(--board-line-scale,1))] h-[calc(10px*var(--board-line-scale,1))]",
+  "inset-y-0 -left-[calc(5px*var(--board-line-scale,1))] w-[calc(10px*var(--board-line-scale,1))]",
+  "inset-y-0 -right-[calc(5px*var(--board-line-scale,1))] w-[calc(10px*var(--board-line-scale,1))]",
+];
+
 /**
  * A section: a titled frame drawn behind the cards. Dragging its title bar moves it with what sits
- * over it, which the board decides; it holds nothing of its own.
+ * over it, which the board decides; it holds nothing of its own. Dragging its edge draws a line
+ * from it, which carries every card in it.
  */
 export function BoardSection({
   note,
@@ -32,6 +41,7 @@ export function BoardSection({
   onMove,
   onDrop,
   handles,
+  link,
   onText,
   onBlur,
   onRevert,
@@ -44,8 +54,12 @@ export function BoardSection({
   /** The title bar dragged by this far, in screen pixels, and let go. */
   readonly onMove: (dx: number, dy: number) => void;
   readonly onDrop: () => void;
-  /** Its resize grips. */
+  /** Its resize and line grips. */
   readonly handles: ReactNode;
+  /** Starts a line from it on a press on its edge. Absent for whoever cannot edit. */
+  readonly link?:
+    | { readonly onStart: (from: string, event: PointerEvent<HTMLElement>) => void }
+    | undefined;
   readonly onText: (text: string) => void;
   readonly onBlur: () => void;
   /** Escape: the title goes back to what is stored. */
@@ -133,6 +147,21 @@ export function BoardSection({
           ) : null}
         </div>
       </div>
+      {link === undefined
+        ? null
+        : FRAME_EDGES.map((edge) => (
+            <div
+              key={edge}
+              aria-hidden
+              data-board-grip
+              data-board-frame-edge
+              className={cn(
+                "pointer-events-auto absolute cursor-crosshair touch-none pointer-coarse:hidden",
+                edge,
+              )}
+              onPointerDown={(event) => link.onStart(ref, event)}
+            />
+          ))}
       <div className="pointer-events-auto contents">{handles}</div>
     </div>
   );

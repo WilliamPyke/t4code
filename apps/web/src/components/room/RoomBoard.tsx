@@ -203,6 +203,7 @@ import {
   boardItemsInRect,
   boardItemsCentredIn,
   boardSectionAround,
+  boardSectionFrameAt,
   boardSectionHolding,
   BOARD_SECTION_SIZE,
   type BoardSelected,
@@ -366,7 +367,7 @@ import {
   boardPlanUntick,
   boardPlanWithStatus,
 } from "./boardPlan.logic";
-import { BoardEdgeLine, boardStroke } from "./RoomBoardEdge";
+import { BoardEdgeLine, boardStroke, useBoardLineFocus } from "./RoomBoardEdge";
 import { TaskAssigneeDot, TaskDueChip, TaskPriorityMark } from "./BoardTaskMarks";
 import { MentionChips, useMentionPicker } from "./BoardMentions";
 import { useBoardFocusRequest } from "./boardFocus";
@@ -1391,6 +1392,7 @@ export function RoomBoard({
     selectedItems.map(({ target }) => boardEditKey(target)),
   );
   const removal = boardSelectionRemoval(shown, selected, viewer);
+  const { ref: linesRef, ...lineHover } = useBoardLineFocus(selected, selectedEdge, edges.length);
   const inGroup = (target: BoardTarget) => selected.size > 1 && selected.has(boardEditKey(target));
   const commentNotes = shown.notes.filter((note) => note.kind === "comment");
   const resolvedComments = commentNotes.filter((note) => note.resolved === true).length;
@@ -3328,18 +3330,27 @@ export function RoomBoard({
     surfaceRef.current?.focus({ preventScroll: true });
   };
 
-  /** The card or note under a point a line from `from` may end on, if any. */
+  /**
+   * The card or note under a point a line from `from` may end on, if any: a section by its title
+   * or near its edge, as its middle is the board's and its cards'.
+   */
   const linkTargetAt = (x: number, y: number, from: string | null) => {
-    const element = document
+    const hit = document
       .elementsFromPoint(x, y)
       .find(
         (each): each is HTMLElement =>
-          each instanceof HTMLElement && each.dataset.boardItem !== undefined,
+          each instanceof HTMLElement && each.closest("[data-board-item]") !== null,
       );
+    const at = hit === undefined ? pointerOnBoard({ clientX: x, clientY: y }) : null;
+    const frame =
+      at === null
+        ? null
+        : boardSectionFrameAt(drawnSections(), at, LINK_FRAME_BAND / view.zoom)?.note;
+    const element =
+      hit?.closest<HTMLElement>("[data-board-item]") ??
+      (frame === undefined || frame === null ? null : drawnItem(noteRef(frame.id)));
     const ref = element?.dataset.boardItem;
-    return element === undefined || ref === undefined || ref === from || isSectionRef(ref)
-      ? null
-      : { ref, element };
+    return element === null || ref === undefined || ref === from ? null : { ref, element };
   };
   // While drawing, the line snaps to the card under the pointer, as it will land there.
   const drawLinkTo = (event: { readonly clientX: number; readonly clientY: number }) => {
@@ -3356,7 +3367,7 @@ export function RoomBoard({
   };
   /** Draws a line between two cards, unless one is there or the board holds no more. */
   const addEdge = (from: string, to: string) => {
-    if (to === from || isSectionRef(to) || edges.length >= ROOM_BOARD_MAX_EDGES) return;
+    if (to === from || edges.length >= ROOM_BOARD_MAX_EDGES) return;
     if (edges.some((edge) => edge.from === from && edge.to === to)) return;
     const id = randomUUID();
     send({ kind: "edge", id }, { id, from, to });
@@ -3574,6 +3585,17 @@ export function RoomBoard({
             noteId: openNote.id,
             replyId,
           })
+        }
+        onReact={
+          reactTo === undefined || openNote === draftNote
+            ? undefined
+            : (replyId, emoji) =>
+                void changeComment(openNote.id, {
+                  type: "note.react",
+                  noteId: openNote.id,
+                  emoji,
+                  ...(replyId === undefined ? {} : { replyId }),
+                })
         }
         onResolve={(resolved) =>
           void changeComment(openNote.id, {
@@ -5409,8 +5431,10 @@ export function RoomBoard({
         >
           <BoardSelectionContext value={selected}>
             <div
+              ref={linesRef}
+              {...lineHover}
               className={cn(
-                "absolute top-0 left-0 origin-top-left",
+                "group/lines absolute top-0 left-0 origin-top-left",
                 following !== null && "transition-transform duration-200 ease-out",
               )}
               style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}
@@ -5427,10 +5451,11 @@ export function RoomBoard({
                     canDelete={own}
                     onMove={(dx, dy) => dragBy(target, note, dx, dy)}
                     onDrop={() => dropItem(target)}
+                    link={link}
                     handles={
                       <ItemHandles
                         from={noteRef(note.id)}
-                        link={undefined}
+                        link={link}
                         onResize={
                           canEdit
                             ? (corner, from, dx, dy) => resizeNote(note, corner, from, dx, dy)
@@ -6314,7 +6339,8 @@ function LineLegend() {
         <div className="flex flex-col gap-1.5 text-2xs text-muted-foreground">
           <span className="flex items-center gap-2">
             <span aria-hidden className={cn(swatch, "border-primary")} />
-            Into a thread, or into the artifact it rewrites: goes with the next prompt
+            Into a thread, or into the artifact it rewrites: goes with the next prompt. From a
+            section, every card in it goes
           </span>
           <span className="flex items-center gap-2">
             <span aria-hidden className={cn(swatch, "border-t-3 border-primary")} />
@@ -6342,6 +6368,9 @@ function LineLegend() {
     </Popover>
   );
 }
+
+/** How near a section's edge, in screen pixels, a line being drawn lands on the section. */
+const LINK_FRAME_BAND = 16;
 
 /** Where each side's grip sits: 28px, mostly outside the side's middle, its dot just outside. */
 const LINK_HANDLE_SPOTS: Readonly<Record<BoardSide, string>> = {

@@ -76,7 +76,7 @@ describe("the public sample board", () => {
     expect(new Set(tasks.map(roomTaskStatus))).toEqual(new Set(["todo", "doing", "done"]));
     expect(tasks.every((task) => task.assignee?.guestId !== undefined)).toBe(true);
     expect(board.notes.filter((note) => note.artifact !== undefined)).toHaveLength(4);
-    expect(board.start).toBe("goals");
+    expect(board.start).toBe("maya-agent");
   });
 
   it("shows agents at work: a finished conversation, an artifact it wrote, a task and a snapshot", () => {
@@ -88,15 +88,20 @@ describe("the public sample board", () => {
     expect(box.thread?.turns[0]).toMatchObject({
       guestId: guestOf("maya"),
       model: "Claude Sonnet 5.5",
-      cards: [
-        "Nobody needs a terminal to get value on day one",
-        "Krystal Higgins: User Onboarding for the Long Run",
-      ],
     });
-    // The lines that fed it read as sent with its prompt.
-    for (const id of ["l-g3-maya", "l-yt-maya"]) {
-      expect(board.edges?.find((edge) => edge.id === id)?.sentAt).toBe(NOW);
+    expect(box.thread?.turns[0]?.cards).toHaveLength(11);
+    // One line from each section fed it, and reads as sent for every card inside.
+    for (const id of ["l-goals-maya", "l-research-maya"]) {
+      const edge = board.edges?.find((one) => one.id === id);
+      expect(edge?.from).toBe(id === "l-goals-maya" ? "note:goals" : "note:research");
+      expect(Object.keys(edge?.sentCards?.["maya-agent"] ?? {}).length).toBeGreaterThan(3);
     }
+    expect(
+      Object.keys(
+        board.edges?.find((edge) => edge.id === "l-tasks-priya")?.sentCards?.["priya-agent"] ?? {},
+      ),
+    ).toHaveLength(10);
+    expect(note("update").artifact).toMatchObject({ boxId: "priya-agent" });
     expect(
       board.edges?.some((edge) => edge.from === "note:maya-agent" && edge.to === "note:welcome"),
     ).toBe(true);

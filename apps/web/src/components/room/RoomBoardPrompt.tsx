@@ -1,4 +1,4 @@
-import { ArrowUpIcon, PinIcon, PinOffIcon, XIcon } from "lucide-react";
+import { ArrowUpIcon, FrameIcon, PinIcon, PinOffIcon, XIcon } from "lucide-react";
 import { type PointerEvent, type ReactNode, useState } from "react";
 
 import { Button } from "../ui/button";
@@ -8,7 +8,9 @@ import {
   BOARD_PROMPT_MAX_CARDS,
   type BoardPrompt,
   type BoardPromptCard,
+  type BoardPromptSectionChip,
   boardPromptCardGoes,
+  boardPromptChips,
 } from "./roomBoard.logic";
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
@@ -40,10 +42,9 @@ export interface BoardPromptDraft {
 }
 
 /**
- * The prompt box on a thread box. Connected cards that are new, changed since they were last
- * sent, or pinned show as chips and go; one left out by hand stays out until the prompt goes.
- * Cards already sent wait under "N already sent", where one can be put back for this prompt or
- * pinned. Only the chips shown when Send is pressed go.
+ * The prompt box on a thread box. Connected cards that are new, changed since last sent, or pinned
+ * show as chips and go, a section's as one; one left out stays out until the prompt goes. Cards
+ * already sent wait under "N already sent", to put back or pin. Only the chips shown at Send go.
  */
 export function BoardPromptBox({
   cards: connected,
@@ -134,6 +135,63 @@ export function BoardPromptBox({
       ? setLeftOut((current) => new Set(current).add(card.ref))
       : setPutBack((current) => without(current, card.ref));
   const shown = attached.length + hidden + waiting.length;
+  const chips = boardPromptChips(attached);
+  const sectionChip = ({ section, first, cards: group }: BoardPromptSectionChip) => {
+    const title = section.title === "" ? "Untitled section" : section.title;
+    const pinned = group.every((card) => card.status === "pinned");
+    const label = `${title} (${group.length} cards)`;
+    // Pinning the chip pins the section's line, so every card in it goes with every prompt.
+    const line: BoardPromptCard = {
+      ...first,
+      label,
+      status: pinned ? "pinned" : "new",
+      edgeIds: section.edgeIds,
+    };
+    return (
+      <li
+        key={section.ref}
+        data-card-status={pinned ? "pinned" : "new"}
+        className="flex max-w-full min-w-0 items-center gap-0.5 rounded-md bg-primary/10 ps-1.5 text-2xs font-medium dark:bg-primary/18"
+      >
+        <Tooltip>
+          <TooltipTrigger render={<span className="flex min-w-0 items-center gap-1" />}>
+            {pinned ? (
+              <PinIcon aria-label="Always sent" className="size-3 shrink-0 text-primary" />
+            ) : (
+              <FrameIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+            )}
+            <span className="min-w-0 truncate">
+              {title}
+              <span className="font-normal text-muted-foreground"> ({group.length} cards)</span>
+            </span>
+          </TooltipTrigger>
+          <TooltipPopup side="top">
+            <p className="mb-1 text-muted-foreground">Every card in this section goes.</p>
+            <ul className="max-w-64">
+              {group.map((card) => (
+                <li key={card.ref} className="truncate">
+                  {card.label}
+                  {card.excerpt === "" ? null : `: ${card.excerpt}`}
+                  {card.status === "updated" ? " · updated" : null}
+                </li>
+              ))}
+            </ul>
+          </TooltipPopup>
+        </Tooltip>
+        {pinButton(line)}
+        <button
+          type="button"
+          aria-label={`Leave out ${label}`}
+          className="grid size-5 shrink-0 place-items-center rounded-full opacity-60 hover:opacity-100"
+          onClick={() => {
+            for (const card of group) leave(card);
+          }}
+        >
+          <XIcon className="size-3" />
+        </button>
+      </li>
+    );
+  };
   return (
     <div className="flex flex-col gap-1.5" data-board-prompt onPointerDown={stopPointer}>
       {draft === undefined ? null : (
@@ -152,49 +210,60 @@ export function BoardPromptBox({
               : "Goes with the next prompt"}
           </p>
           <ul className="flex flex-wrap gap-1">
-            {attached.map((card) => (
-              <li
-                key={card.ref}
-                data-card-status={card.status ?? "new"}
-                className="flex max-w-full min-w-0 items-center gap-0.5 rounded-md bg-primary/10 ps-1.5 text-2xs font-medium dark:bg-primary/18"
-              >
-                <Tooltip>
-                  <TooltipTrigger render={<span className="flex min-w-0 items-center gap-1" />}>
-                    {card.status === "pinned" ? (
-                      <PinIcon aria-label="Always sent" className="size-3 shrink-0 text-primary" />
-                    ) : null}
-                    <span className="min-w-0 truncate">
-                      {card.label}
-                      {card.excerpt === "" ? null : (
-                        <span className="font-normal text-muted-foreground">: {card.excerpt}</span>
-                      )}
-                    </span>
-                    {card.status === "updated" ? (
-                      <span className="shrink-0 text-muted-foreground">· updated</span>
-                    ) : null}
-                  </TooltipTrigger>
-                  <TooltipPopup side="top">
-                    {card.status === "updated" ? (
-                      <p className="mb-1 text-muted-foreground">Changed since it was last sent.</p>
-                    ) : null}
-                    <p className="max-w-64 whitespace-pre-line [overflow-wrap:anywhere]">
-                      {card.text.length > PREVIEW_LENGTH
-                        ? `${card.text.slice(0, PREVIEW_LENGTH).trimEnd()}…`
-                        : card.text}
-                    </p>
-                  </TooltipPopup>
-                </Tooltip>
-                {pinButton(card)}
-                <button
-                  type="button"
-                  aria-label={`Leave out ${card.label}`}
-                  className="grid size-5 shrink-0 place-items-center rounded-full opacity-60 hover:opacity-100"
-                  onClick={() => leave(card)}
+            {chips.map((chip) => {
+              if ("section" in chip) return sectionChip(chip);
+              const { card } = chip;
+              return (
+                <li
+                  key={card.ref}
+                  data-card-status={card.status ?? "new"}
+                  className="flex max-w-full min-w-0 items-center gap-0.5 rounded-md bg-primary/10 ps-1.5 text-2xs font-medium dark:bg-primary/18"
                 >
-                  <XIcon className="size-3" />
-                </button>
-              </li>
-            ))}
+                  <Tooltip>
+                    <TooltipTrigger render={<span className="flex min-w-0 items-center gap-1" />}>
+                      {card.status === "pinned" ? (
+                        <PinIcon
+                          aria-label="Always sent"
+                          className="size-3 shrink-0 text-primary"
+                        />
+                      ) : null}
+                      <span className="min-w-0 truncate">
+                        {card.label}
+                        {card.excerpt === "" ? null : (
+                          <span className="font-normal text-muted-foreground">
+                            : {card.excerpt}
+                          </span>
+                        )}
+                      </span>
+                      {card.status === "updated" ? (
+                        <span className="shrink-0 text-muted-foreground">· updated</span>
+                      ) : null}
+                    </TooltipTrigger>
+                    <TooltipPopup side="top">
+                      {card.status === "updated" ? (
+                        <p className="mb-1 text-muted-foreground">
+                          Changed since it was last sent.
+                        </p>
+                      ) : null}
+                      <p className="max-w-64 whitespace-pre-line [overflow-wrap:anywhere]">
+                        {card.text.length > PREVIEW_LENGTH
+                          ? `${card.text.slice(0, PREVIEW_LENGTH).trimEnd()}…`
+                          : card.text}
+                      </p>
+                    </TooltipPopup>
+                  </Tooltip>
+                  {pinButton(card)}
+                  <button
+                    type="button"
+                    aria-label={`Leave out ${card.label}`}
+                    className="grid size-5 shrink-0 place-items-center rounded-full opacity-60 hover:opacity-100"
+                    onClick={() => leave(card)}
+                  >
+                    <XIcon className="size-3" />
+                  </button>
+                </li>
+              );
+            })}
             {hidden === 0 ? null : (
               <li>
                 <Button size="micro" variant="ghost-muted" onClick={() => setLeftOut(NONE)}>

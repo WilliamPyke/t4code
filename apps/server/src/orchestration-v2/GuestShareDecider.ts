@@ -268,7 +268,10 @@ function boardGuestIds(board: RoomBoard): ReadonlySet<GuestId | undefined> {
       note.artifact?.previous?.askedBy,
       note.changes?.guestId,
       ...(note.thread?.turns.flatMap((turn) => [turn.guestId, turn.askedBy]) ?? []),
-      ...(note.replies?.map((reply) => reply.guestId) ?? []),
+      ...(note.replies?.flatMap((reply) => [
+        reply.guestId,
+        ...(reply.reactions?.map((reaction) => reaction.guestId) ?? []),
+      ]) ?? []),
       ...(note.reactions?.map((reaction) => reaction.guestId) ?? []),
     ]),
   );

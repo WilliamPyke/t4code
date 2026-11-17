@@ -21,42 +21,24 @@ import * as Result from "effect/Result";
 
 import { sanitizeLinkedPrompt } from "./promptLinks.ts";
 import {
-  ROOM_BOARD_NOTE_SIZE,
-  ROOM_BOARD_TASK_SIZE,
+  ROOM_BOARD_SECTION_SIZE,
   roomBoardNoteOfRef,
+  roomBoardNoteSize,
   roomBoxIdOfRef,
+  roomSectionCards,
   roomTaskStatus,
 } from "./roomBoard.ts";
+
+export { roomBoardNoteSize } from "./roomBoard.ts";
 
 // The sizes the board draws a card at until someone resizes it.
 export const ROOM_BOARD_CARD_SIZE: RoomBoardSize = { w: 320, h: 240 };
 export const ROOM_THREAD_CARD_SIZE: RoomBoardSize = { w: 320, h: 420 };
-const PIN: RoomBoardSize = { w: 32, h: 32 };
-const SECTION: RoomBoardSize = { w: 640, h: 420 };
-const NOTE_SIZES: Partial<Record<NonNullable<RoomBoardNote["kind"]>, RoomBoardSize>> = {
-  artifact: { w: 380, h: 400 },
-  thread: { w: 340, h: 460 },
-  code: { w: 560, h: 420 },
-  "pull-request": { w: 360, h: 300 },
-  comment: PIN,
-  task: ROOM_BOARD_TASK_SIZE,
-};
 // What one read of the board shows an agent at most, so a big board fits in its context.
 export const ROOM_BOARD_AGENT_VIEW_MAX_CARDS = 100;
 export const ROOM_BOARD_AGENT_VIEW_MAX_LINES = 150;
 // Where the board puts its own thread's card before anyone moves it.
 export const ROOM_THREAD_ORIGIN = { x: 80, y: 72 };
-
-/** A card's size as the board draws it, or about, until someone resizes it. */
-export const roomBoardNoteSize = (
-  note: Pick<RoomBoardNote, "kind" | "size" | "section">,
-): RoomBoardSize =>
-  note.size ??
-  (note.section === true
-    ? SECTION
-    : note.kind === undefined
-      ? ROOM_BOARD_NOTE_SIZE
-      : (NOTE_SIZES[note.kind] ?? ROOM_BOARD_NOTE_SIZE));
 
 /** The room thread's own card's size, as the board draws it until someone resizes it. */
 export const roomThreadCardSize = (board: RoomBoard | undefined): RoomBoardSize =>
@@ -287,10 +269,12 @@ const personOfBox = (board: RoomBoard, boxId: string): GuestId | null =>
 
 /**
  * Every thread box a card at `ref` would go to with a prompt: the box itself, a box whose artifact
- * it is, and those its lines lead to, as a prompt from a box finds its cards.
+ * it is, and those its lines lead to, or the lines of a section it is in, as a prompt from a box
+ * finds its cards.
  */
 function boxesReachedFrom(board: RoomBoard, ref: string): ReadonlySet<string> {
   const edges = board.edges ?? [];
+  const sections = sectionsOf(board);
   const boxes = new Set<string>();
   const seen = new Set([ref]);
   let frontier = [ref];
@@ -302,7 +286,15 @@ function boxesReachedFrom(board: RoomBoard, ref: string): ReadonlySet<string> {
         boxes.add(box);
         continue;
       }
-      const artifact = roomBoardNoteOfRef(board, at)?.kind === "artifact";
+      const note = roomBoardNoteOfRef(board, at);
+      for (const section of sections) {
+        const holder = roomBoardNoteRef(section.id);
+        if (note === undefined || seen.has(holder)) continue;
+        if (!roomSectionCards(board, section).includes(note)) continue;
+        seen.add(holder);
+        next.push(holder);
+      }
+      const artifact = note?.kind === "artifact";
       for (const edge of edges) {
         const rewriter = artifact && edge.to === at ? roomBoxIdOfRef(board, edge.from) : undefined;
         if (rewriter !== undefined) boxes.add(rewriter);
@@ -332,6 +324,22 @@ function someoneElsesBox(
     return target.people.find((candidate) => candidate.guestId === person)?.name ?? "someone else";
   }
   return undefined;
+}
+
+/** A section the agent may put cards in: never one whose lines take them to another's agent. */
+function sectionForCards(
+  target: RoomBoardAgentTarget,
+  sectionId: string,
+): Result.Result<string, string> {
+  const elsewhere = someoneElsesBox(
+    target,
+    boxesReachedFrom(target.board, roomBoardNoteRef(sectionId)),
+  );
+  return elsewhere === undefined
+    ? Result.succeed(sectionId)
+    : Result.fail(
+        `Cards in this section go to ${elsewhere}'s agent with their next message. Only ${elsewhere} attaches cards to their agent: tell your user instead.`,
+      );
 }
 
 /** A free place in a section, which grows to take it when it is full. */
@@ -380,7 +388,7 @@ const sectionFor = Effect.fnUntraced(function* <E, R>(
   if (found !== undefined) return Result.succeed(found.id);
   const title = cleanText(name);
   if (title === "") return Result.fail("A section needs a title.");
-  const spot = spotNearBox(target, SECTION);
+  const spot = spotNearBox(target, ROOM_BOARD_SECTION_SIZE);
   if (spot === undefined) return Result.fail("There is no free space near this thread's box.");
   const id = yield* ops.uuid;
   const refused = yield* ops.apply({
@@ -414,10 +422,16 @@ export function roomBoardAgentView(
         : `${person(note.guestId)}'s agent`;
   const board = target.board;
   const yours = refOf(target.boxId);
+  // A section's line attaches every card in it.
   const attached = new Set(
-    (board.edges ?? []).flatMap((edge) =>
-      edge.from === yours ? [edge.to] : edge.to === yours ? [edge.from] : [],
-    ),
+    (board.edges ?? [])
+      .flatMap((edge) => (edge.from === yours ? [edge.to] : edge.to === yours ? [edge.from] : []))
+      .flatMap((ref) => {
+        const section = roomBoardNoteOfRef(board, ref);
+        return section?.section === true
+          ? [ref, ...roomSectionCards(board, section).map((card) => roomBoardNoteRef(card.id))]
+          : [ref];
+      }),
   );
   // On a big board, what this box is most likely to work on stays: itself, what is attached to
   // it, sections and open tasks, then the rest, each in board order.
@@ -510,8 +524,10 @@ export const roomBoardAgentAdd = Effect.fnUntraced(function* <E, R>(
   const done: Array<string> = [];
   const refused: Array<{ readonly card: string; readonly reason: string }> = [];
   const made: Array<{ readonly id: string; readonly title: string }> = [];
-  const section =
+  const found =
     input.section === undefined ? undefined : yield* sectionFor(target, ops, input.section, made);
+  const section =
+    found === undefined || Result.isFailure(found) ? found : sectionForCards(target, found.success);
   if (section !== undefined && Result.isFailure(section)) {
     refused.push({ card: input.section ?? "", reason: section.failure });
   }
@@ -665,6 +681,11 @@ export const roomBoardAgentUpdate = Effect.fnUntraced(function* <E, R>(
           continue;
         }
         if (sectionOf(target.board, note)?.id !== section.success) {
+          const open = sectionForCards(target, section.success);
+          if (Result.isFailure(open)) {
+            refuse(open.failure);
+            continue;
+          }
           const spot = yield* spotInSection(target, ops, section.success, roomBoardNoteSize(note));
           if (Result.isFailure(spot)) {
             refuse(spot.failure);

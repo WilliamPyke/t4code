@@ -20,6 +20,7 @@ import {
   type RoomBoardAgentMark,
   type RoomBoardChange,
   type RoomBoardNote,
+  type RoomBoardReaction,
   type RoomBoardReply,
   type RoomBoxProgress,
   type RoomCodeChanges,
@@ -348,15 +349,25 @@ export function roomBoardWithoutGuest(board: RoomBoard, guestId: GuestId): RoomB
       ...withoutCards,
       notes: board.notes.flatMap((note) => {
         if (note.guestId === guestId) return [];
-        const theirs = [...(note.replies ?? []), ...(note.reactions ?? [])].some(
-          (entry) => entry.guestId === guestId,
-        );
+        const theirs = [
+          ...(note.replies ?? []),
+          ...(note.reactions ?? []),
+          ...(note.replies ?? []).flatMap((reply) => reply.reactions ?? []),
+        ].some((entry) => entry.guestId === guestId);
         if (!theirs && note.assignee?.guestId !== guestId && note.answer?.guestId !== guestId) {
           return [note];
         }
         const { assignee, answer, replies, reactions, ...rest } = note;
-        const kept = replies?.filter((reply) => reply.guestId !== guestId) ?? [];
-        const keptReactions = reactions?.filter((reaction) => reaction.guestId !== guestId) ?? [];
+        const notTheirs = (reaction: RoomBoardReaction) => reaction.guestId !== guestId;
+        const kept =
+          replies?.flatMap((reply) => {
+            if (reply.guestId === guestId) return [];
+            const left = reply.reactions?.filter(notTheirs);
+            if (left === undefined || left.length === reply.reactions?.length) return [reply];
+            const { reactions: _theirs, ...replyRest } = reply;
+            return [left.length === 0 ? replyRest : { ...replyRest, reactions: left }];
+          }) ?? [];
+        const keptReactions = reactions?.filter(notTheirs) ?? [];
         return [
           {
             ...rest,

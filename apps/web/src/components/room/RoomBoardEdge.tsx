@@ -1,6 +1,8 @@
 import { type PointerEvent, memo, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
+import { useStableCallback } from "~/hooks/useStableCallback";
+
 import {
   type BoardBox,
   type BoardLineSlots,
@@ -81,10 +83,82 @@ interface BoardEdgeLineProps {
 }
 
 /**
- * One line between two cards. Each reads where anyone drags its own two ends from the live store,
- * so a drag redraws only the lines on the card that moves, never the board. It also draws
- * a faint copy of itself into `over`, above the cards, so it can be followed behind one. Its ends
- * compare by value, so the board's other changes leave it alone.
+ * Brings forward the lines on the cards `refs` names and the lines `edgeIds` names, each with its
+ * faint copy above the cards, and dims the rest. With none of them, every line shows as it is and
+ * no copy shows. Set on the page, not in state, so hovering a card re-renders nothing.
+ */
+function focusBoardLines(
+  layer: HTMLElement | null,
+  refs: ReadonlySet<string>,
+  edgeIds: ReadonlySet<string>,
+) {
+  if (layer === null) return;
+  let any = false;
+  for (const line of layer.querySelectorAll<SVGElement>("[data-line-id]")) {
+    const on =
+      edgeIds.has(line.dataset.lineId ?? "") ||
+      refs.has(line.dataset.lineFrom ?? "") ||
+      refs.has(line.dataset.lineTo ?? "");
+    any ||= on;
+    line.toggleAttribute("data-line-focus", on);
+  }
+  layer.toggleAttribute("data-lines-focused", any);
+}
+
+/**
+ * Which lines stand out: those on the cards selected or under the pointer (as one being dragged
+ * is), and the line selected or under it. Put `ref` and the handlers on the element holding every
+ * line, which takes the `group/lines` class.
+ */
+export function useBoardLineFocus(
+  selected: ReadonlySet<string>,
+  selectedEdge: string | null,
+  lineCount: number,
+) {
+  const layer = useRef<HTMLDivElement | null>(null);
+  const hovered = useRef<{ item: string | null; edge: string | null }>({ item: null, edge: null });
+  const shown = useRef({ key: "", edge: null as string | null, lines: 0 });
+  const focus = useStableCallback((key: string, edge: string | null, lines: number) => {
+    shown.current = { key, edge, lines };
+    const over = hovered.current;
+    const refs = new Set(key === "" ? [] : key.split(" "));
+    if (over.item !== null) refs.add(over.item);
+    const edgeIds = new Set([edge, over.edge].filter((id) => id !== null));
+    focusBoardLines(layer.current, lines === 0 ? new Set<string>() : refs, edgeIds);
+  });
+  const selectedKey = [...selected].join(" ");
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- marks the selection's lines on the page, as hovering does, so no line re-renders for it
+  useLayoutEffect(
+    () => focus(selectedKey, selectedEdge, lineCount),
+    [focus, selectedKey, selectedEdge, lineCount],
+  );
+  const hover = (item: string | null, edge: string | null) => {
+    if (hovered.current.item === item && hovered.current.edge === edge) return;
+    hovered.current = { item, edge };
+    focus(shown.current.key, shown.current.edge, shown.current.lines);
+  };
+  return {
+    ref: layer,
+    onPointerOver: (event: PointerEvent<HTMLElement>) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const edge = target?.closest("[data-board-edge]")?.getAttribute("data-board-edge") ?? null;
+      const item =
+        edge === null
+          ? (target?.closest<HTMLElement>("[data-board-item]")?.dataset.boardItem ?? null)
+          : null;
+      hover(item, edge);
+    },
+    onPointerOut: (event: PointerEvent<HTMLElement>) => {
+      const next = event.relatedTarget;
+      if (!(next instanceof Node) || !event.currentTarget.contains(next)) hover(null, null);
+    },
+  };
+}
+
+/**
+ * One line between two cards. It reads its ends' live drags itself, so a drag redraws only the
+ * lines on the moving card. Its faint copy in `over`, above the cards, shows only while
+ * `focusBoardLines` brings it forward, so most lines never cross cards. Ends compare by value.
  */
 export const BoardEdgeLine = memo(function BoardEdgeLine({
   id,
@@ -207,7 +281,13 @@ export const BoardEdgeLine = memo(function BoardEdgeLine({
   );
 
   return (
-    <g ref={group}>
+    <g
+      ref={group}
+      data-line-id={id}
+      data-line-from={fromRef}
+      data-line-to={toRef}
+      className="group-data-[lines-focused]/lines:opacity-30 data-[line-focus]:opacity-100!"
+    >
       {selectable ? (
         <path
           d={path}
@@ -242,6 +322,10 @@ export const BoardEdgeLine = memo(function BoardEdgeLine({
         : createPortal(
             <path
               ref={ghost}
+              data-line-id={id}
+              data-line-from={fromRef}
+              data-line-to={toRef}
+              className="hidden data-[line-focus]:inline"
               d={path}
               fill="none"
               stroke={color}

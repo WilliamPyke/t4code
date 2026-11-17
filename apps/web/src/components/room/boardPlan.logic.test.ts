@@ -128,6 +128,7 @@ describe("boardPlanAttachments", () => {
         { id: "l", text: "", x: 0, y: 0, kind: "link", url: "https://example.com" },
         { id: "a", text: "Spec", x: 0, y: 0, kind: "artifact" },
         { id: "b", text: "Box", x: 0, y: 0, kind: "thread" },
+        { id: "b2", text: "Other box", x: 900, y: 0, kind: "thread" },
         { id: "s", text: "Frame", x: 0, y: 0, section: true },
       ],
       edges: [
@@ -137,13 +138,16 @@ describe("boardPlanAttachments", () => {
         { id: "4", from: "note:t", to: "note:b" },
         { id: "5", from: "note:t", to: "card:thread" },
         { id: "6", from: "note:n", to: "note:a" },
+        // The task is in the section: its line to a box attaches it; one to a note does not.
+        { id: "7", from: "note:s", to: "note:b2" },
+        { id: "8", from: "note:s", to: "note:n" },
       ],
     };
     expect(boardPlanAttachments(board).get("t")).toEqual({
       notes: 1,
       links: 1,
       artifacts: 1,
-      boxIds: ["b", "thread"],
+      boxIds: ["b", "thread", "b2"],
     });
     expect(boardPlanAttachments(board).has("n")).toBe(false);
   });

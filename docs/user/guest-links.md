@@ -269,7 +269,8 @@ To talk about something on the board, choose **Comment**, click where the commen
 it and press Enter. It shows as a pin with your initial; click a pin to open its thread, where
 anyone in the room can reply (Shift+Enter starts a new line). Everyone sees replies as they land.
 A dot on a pin means someone replied since you last opened that thread on this device. Drag a pin
-to move it. A thread holds up to 30 replies.
+to move it. A thread holds up to 30 replies. To react to a comment or a reply, an agent's too, point
+at it and choose the smiley; click a reaction under it to add or take back your own.
 
 When a thread is settled, choose **Resolve**. Resolved threads are hidden: **Resolved** in the
 board's toolbar shows them, and **Reopen** brings one back. Anyone can resolve or reopen a thread.
@@ -305,6 +306,11 @@ as a **Board** chip on the message, and opening it shows exactly what the agent 
 reads each card as the words of whoever wrote it, so a guest's note is background, not the
 owner's instruction. A guest's cards are written into their message's text, so the owner reads
 all of it before sending.
+
+A line from a section works as a line from every card in it: draw it from the section's edge or
+title to a thread box (or the artifact a box rewrites) and each card inside goes as above. A card
+counts while its middle is inside the section, so dragging one in or out changes what goes. The
+box's message shows them as one chip, such as "Research (5 cards)".
 
 A line from a thread box to an artifact means that box's replies fill the artifact.
 
@@ -504,13 +510,23 @@ A cloud board has no agent of its own. Each person brings theirs. When you make 
 
 ### Connect your computer with Tinkjam Sync
 
-Your agents, such as Claude Code or Codex, are programs on your computer, so a browser cannot run them by itself. Tinkjam Sync is a small helper that connects them to your account. It needs [Node.js](https://nodejs.org) 22 or newer. Open Terminal (on Windows, PowerShell), paste the command from **Bring your agent**, and press Enter:
+Your agents, such as Claude Code or Codex, are programs on your computer, so a browser cannot run them by itself. Tinkjam Sync is a small helper that connects them to your account. It needs [Node.js](https://nodejs.org) 22.16 or newer.
+
+The easiest way is to let your agent set it up. Open Claude Code, Codex or another coding agent on your computer, copy the prompt from **Bring your agent**, and send it:
+
+```
+Connect this computer to my Tinkjam account. Read https://trellium.org/agent.md and follow it.
+```
+
+Your agent starts Tinkjam Sync and gives you a link. Open it, sign in if asked, and choose **Connect**. Tinkjam Sync runs as long as that agent session keeps it running.
+
+To run it yourself instead, open Terminal (on Windows, PowerShell), paste this, and press Enter:
 
 ```
 npx -y https://trellium.org/sync.tgz
 ```
 
-It prints a link. Open it, sign in if asked, and choose **Connect**. The terminal then says **Connected**; keep that window open while you work, and press Ctrl+C to stop. The computer shows under **Your computers** on every board you open signed in with the same account, without reloading. Next time, the same command connects without asking. When a newer Tinkjam Sync is out, it says so at start and prints the command that runs the new one.
+It prints the same link. The terminal then says **Connected**; keep that window open while you work, and press Ctrl+C to stop. Either way, the computer shows under **Your computers** on every board you open signed in with the same account, without reloading. Next time, it connects without asking. When a newer Tinkjam Sync is out, it says so at start and prints the command that runs the new one.
 
 Tinkjam Sync runs agents on your computer under your own Claude or Codex sign-in, and they can use what those agents can there. Nothing anyone else writes reaches your agent unless you press **Send**. To disconnect the computer from your account, run the command with `--disconnect` at the end. Tinkjam for desktop, an app that does the same without a terminal, is coming.
 

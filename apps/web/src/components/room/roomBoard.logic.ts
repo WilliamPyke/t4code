@@ -40,11 +40,13 @@ import {
   canUndoRoomAgentTurn,
   isRoomCardOwnedBy,
   ROOM_BOARD_NOTE_SIZE,
+  ROOM_BOARD_SECTION_SIZE,
   ROOM_BOARD_TASK_SIZE,
   roomBoardCardChangedAt,
   roomLinkLabel,
   roomLinkPromptText,
   roomPullRequestLabel,
+  roomSectionCards,
   roomTaskStatus,
   roomWindowBoxId,
 } from "@t3tools/shared/roomBoard";
@@ -834,22 +836,24 @@ export function resizeBoardFromLeft(
 
 /** The size a note shows at, or undefined for one that grows with its text. */
 export const boardNoteSize = (
-  note: Pick<RoomBoardNote, "kind" | "size" | "url">,
+  note: Pick<RoomBoardNote, "kind" | "size" | "url" | "section">,
 ): RoomBoardSize | undefined =>
   note.size ??
-  (note.kind === "artifact"
-    ? BOARD_ARTIFACT_SIZE
-    : note.kind === "thread"
-      ? BOARD_THREAD_BOX_SIZE
-      : note.kind === "code"
-        ? BOARD_CODE_WINDOW_SIZE
-        : note.kind === "pull-request"
-          ? BOARD_PULL_REQUEST_SIZE
-          : note.kind === "link"
-            ? note.url !== undefined && boardEmbedOf(note.url)?.embedUrl !== undefined
-              ? BOARD_EMBED_SIZE
-              : BOARD_LINK_SIZE
-            : undefined);
+  (note.section === true
+    ? ROOM_BOARD_SECTION_SIZE
+    : note.kind === "artifact"
+      ? BOARD_ARTIFACT_SIZE
+      : note.kind === "thread"
+        ? BOARD_THREAD_BOX_SIZE
+        : note.kind === "code"
+          ? BOARD_CODE_WINDOW_SIZE
+          : note.kind === "pull-request"
+            ? BOARD_PULL_REQUEST_SIZE
+            : note.kind === "link"
+              ? note.url !== undefined && boardEmbedOf(note.url)?.embedUrl !== undefined
+                ? BOARD_EMBED_SIZE
+                : BOARD_LINK_SIZE
+              : undefined);
 
 /** A card's box: at its given size, else its width and `drawnHeight`, or a row's height. */
 export const boardCardBox = (
@@ -877,7 +881,7 @@ export const boardPinScale = (zoom: number): number =>
  * its height, else a guess. A comment pin's depends on the zoom it is drawn at.
  */
 export function boardNoteBox(
-  note: BoardPoint & Partial<Pick<RoomBoardNote, "kind" | "size" | "url">>,
+  note: BoardPoint & Partial<Pick<RoomBoardNote, "kind" | "size" | "url" | "section">>,
   zoom = 1,
   drawnHeight?: number,
 ): BoardBox {
@@ -1035,11 +1039,16 @@ export function boardLineSlots(
 }
 
 const MIN_BEND = 40;
+// However long the line, its ends leave this far at most before it heads straight across.
+const MAX_BEND = 120;
+// Room between an arrowhead's tip and the card it points at, so the card never covers it.
+const ARROW_GAP = 4;
 
 /**
  * A curve from one box's side to another's, leaving and arriving square to the sides
- * `boardConnectorSides` picks (or `ends.sides`), at `ends.slots` along them, and the point halfway
- * along it. `sway` pulls its belly off its resting course while it springs back.
+ * `boardConnectorSides` picks (or `ends.sides`), at `ends.slots` along them, its tip just short of
+ * the far box, and the point halfway along it. `sway` pulls its belly off its resting course while
+ * it springs back.
  */
 export function boardConnector(
   from: BoardBox,
@@ -1052,10 +1061,18 @@ export function boardConnector(
 ): { readonly path: string; readonly middle: BoardPoint } {
   const [fromSide, toSide] = ends?.sides ?? boardConnectorSides(from, to);
   const start = boardSidePoint(from, fromSide, ends?.slots?.from);
-  const end = boardSidePoint(to, toSide, ends?.slots?.to);
-  const across = SIDE_OUT[fromSide].x === 0 ? Math.abs(end.y - start.y) : Math.abs(end.x - start.x);
-  // Each end leaves its box square to its side; a short line bends no further than it reaches.
-  const bend = Math.max(Math.min(MIN_BEND, across), across / 2);
+  const tip = boardSidePoint(to, toSide, ends?.slots?.to);
+  const end = {
+    x: tip.x + SIDE_OUT[toSide].x * ARROW_GAP,
+    y: tip.y + SIDE_OUT[toSide].y * ARROW_GAP,
+  };
+  const out = SIDE_OUT[fromSide];
+  // How far the end is the way the line leaves; below 0 when it is behind the start.
+  const ahead = out.x === 0 ? (end.y - start.y) * out.y : (end.x - start.x) * out.x;
+  // Each end leaves its box square to its side: a short line no further than it reaches, a long
+  // one no further than MAX_BEND, so it runs straight between; one turning back only hooks.
+  const bend =
+    ahead <= 0 ? MIN_BEND / 2 : Math.min(MAX_BEND, Math.max(Math.min(MIN_BEND, ahead), ahead / 2));
   const c1 = { x: start.x + SIDE_OUT[fromSide].x * bend, y: start.y + SIDE_OUT[fromSide].y * bend };
   const c2 = { x: end.x + SIDE_OUT[toSide].x * bend, y: end.y + SIDE_OUT[toSide].y * bend };
   const middle = {
@@ -1671,6 +1688,15 @@ export interface BoardPromptCard {
   readonly status?: BoardPromptCardStatus | undefined;
   /** The lines that carry it, which pinning it pins. */
   readonly edgeIds?: ReadonlyArray<string> | undefined;
+  /** The section whose line carries it, and those lines, so its chips can show as one. */
+  readonly section?: BoardPromptSection | undefined;
+}
+
+interface BoardPromptSection {
+  /** `note:<id>` of the section. */
+  readonly ref: string;
+  readonly title: string;
+  readonly edgeIds: ReadonlyArray<string>;
 }
 
 /**
@@ -1683,6 +1709,46 @@ export type BoardPromptCardStatus = "new" | "updated" | "sent" | "pinned";
 /** Whether a card goes with the next prompt unless someone leaves it out by hand. */
 export const boardPromptCardGoes = (card: Pick<BoardPromptCard, "status">): boolean =>
   card.status !== "sent";
+
+/** Two or more cards that go along one section's line, shown as one chip. */
+export interface BoardPromptSectionChip {
+  readonly section: BoardPromptSection;
+  readonly first: BoardPromptCard;
+  readonly cards: ReadonlyArray<BoardPromptCard>;
+}
+
+/**
+ * The chips a prompt's cards show as, in their order: a section's cards as one chip where two or
+ * more of them go, every other card as its own.
+ */
+export function boardPromptChips(
+  cards: ReadonlyArray<BoardPromptCard>,
+): ReadonlyArray<{ readonly card: BoardPromptCard } | BoardPromptSectionChip> {
+  const counts = new Map<string, number>();
+  for (const card of cards) {
+    if (card.section !== undefined) {
+      counts.set(card.section.ref, (counts.get(card.section.ref) ?? 0) + 1);
+    }
+  }
+  const groups = new Map<string, Array<BoardPromptCard>>();
+  const chips: Array<{ readonly card: BoardPromptCard } | BoardPromptSectionChip> = [];
+  for (const card of cards) {
+    const section = card.section;
+    if (section === undefined || (counts.get(section.ref) ?? 0) < 2) {
+      chips.push({ card });
+      continue;
+    }
+    const group = groups.get(section.ref);
+    if (group !== undefined) {
+      group.push(card);
+      continue;
+    }
+    const started = [card];
+    groups.set(section.ref, started);
+    chips.push({ section, first: card, cards: started });
+  }
+  return chips;
+}
 
 /** A message sent from a thread box on the board. */
 export interface BoardPrompt {
@@ -1933,7 +1999,7 @@ export function boardHtmlTitle(html: string): string | null {
 }
 
 /** How many connected cards one message from the board carries. */
-export const BOARD_PROMPT_MAX_CARDS = 8;
+export const BOARD_PROMPT_MAX_CARDS = 16;
 /** How many cards a box's lines reach, sent ones too, before the board stops looking further. */
 const BOARD_PROMPT_MAX_REACH = 32;
 const PROMPT_ARTIFACT_LENGTH = 4_000;
@@ -2171,9 +2237,9 @@ export const boardBoxRef = (boxId: string): string =>
 
 /**
  * The cards a prompt from a thread box carries: each note with a line into the box, or into the
- * artifact the box rewrites, and each note with a line into one of those, once each, nearest
- * first and in the order the lines were drawn. Thread boxes are never carried; the artifact the
- * box rewrites goes as its own record. The box's artifact is the first one it has a line to.
+ * artifact it rewrites (the first it has a line to), and into those, once each, nearest first;
+ * a section's line carries each card in it now. Thread boxes are never carried; the artifact goes
+ * as its own record.
  */
 export function boardPromptContext(
   board: RoomBoard,
@@ -2195,16 +2261,26 @@ export function boardPromptContext(
     const own = edge.sentFor?.[boxId];
     return own === undefined ? rest : { ...rest, sentAt: own };
   };
+  // A section's line carries each card in it with that card's own marks for this box.
+  const sectionMarked = (
+    edge: RoomBoardEdge,
+    ref: string,
+  ): Pick<RoomBoardEdge, "sentAt" | "pinned"> => {
+    const sentAt = edge.sentCards?.[boxId]?.[ref];
+    return {
+      ...(edge.pinned === true ? { pinned: true as const } : {}),
+      ...(sentAt === undefined ? {} : { sentAt }),
+    };
+  };
   const reached = new Set<string>();
+  // Each section reached, by ref, with the cards in it.
+  const held = new Map<string, ReadonlyArray<RoomBoardNote>>();
   const found: Array<RoomBoardNote> = [];
   // Cards already sent stay out of the next prompt, so only the ones that go use up its room.
   let going = 0;
+  const full = () => going === BOARD_PROMPT_MAX_CARDS || reached.size === BOARD_PROMPT_MAX_REACH;
   let frontier = roots;
-  while (
-    frontier.length > 0 &&
-    going < BOARD_PROMPT_MAX_CARDS &&
-    reached.size < BOARD_PROMPT_MAX_REACH
-  ) {
+  while (frontier.length > 0 && !full()) {
     const next: Array<string> = [];
     for (const edge of edges) {
       const note = notes.get(edge.from);
@@ -2217,11 +2293,25 @@ export function boardPromptContext(
       ) {
         continue;
       }
-      if (going === BOARD_PROMPT_MAX_CARDS || reached.size === BOARD_PROMPT_MAX_REACH) break;
+      if (full()) break;
       reached.add(edge.from);
       next.push(edge.from);
-      found.push(note);
-      if (boardPromptCardStatus(note, [marked(edge)], boxId) !== "sent") going += 1;
+      if (note.section !== true) {
+        found.push(note);
+        if (boardPromptCardStatus(note, [marked(edge)], boxId) !== "sent") going += 1;
+        continue;
+      }
+      const inside = roomSectionCards(board, note);
+      held.set(edge.from, inside);
+      for (const card of inside) {
+        const ref = roomBoardNoteRef(card.id);
+        if (roots.includes(ref) || reached.has(ref)) continue;
+        if (full()) break;
+        reached.add(ref);
+        next.push(ref);
+        found.push(card);
+        if (boardPromptCardStatus(card, [sectionMarked(edge, ref)], boxId) !== "sent") going += 1;
+      }
     }
     frontier = next;
   }
@@ -2232,16 +2322,43 @@ export function boardPromptContext(
   for (const note of found) {
     const ref = roomBoardNoteRef(note.id);
     const own = lines.filter((edge) => edge.from === ref);
+    const through = lines.filter(
+      (edge) => held.get(edge.from)?.some((card) => card.id === note.id) === true,
+    );
     const status = boardPromptCardStatus(
       boardLinkWithSnapshotChange(board, note),
-      own.map(marked),
+      [...own.map(marked), ...through.map((edge) => sectionMarked(edge, ref))],
       boxId,
     );
     for (const edge of own) edgeStatus.set(edge.id, status);
+    // A section's line reads as the most any card in it does.
+    for (const edge of through) {
+      const before = edgeStatus.get(edge.id);
+      if (before === undefined || STATUS_RANK[status] > STATUS_RANK[before]) {
+        edgeStatus.set(edge.id, status);
+      }
+    }
     const card = boardPromptCard(note, people, boardNoteQuote(note, messages));
     if (card === null) continue;
     const text = boardLinkTextWithSnapshot(board, note, card.text, carried);
-    cards.push({ ...card, text, status, edgeIds: own.map((edge) => edge.id) });
+    const section = through[0] === undefined ? undefined : notes.get(through[0].from);
+    cards.push({
+      ...card,
+      text,
+      status,
+      edgeIds: [...own, ...through].map((edge) => edge.id),
+      ...(section === undefined
+        ? {}
+        : {
+            section: {
+              ref: roomBoardNoteRef(section.id),
+              title: section.text.trim(),
+              edgeIds: through
+                .filter((edge) => edge.from === roomBoardNoteRef(section.id))
+                .map((edge) => edge.id),
+            },
+          }),
+    });
   }
   return {
     cards,
@@ -2251,6 +2368,13 @@ export function boardPromptContext(
     artifactEdgeId: artifactEdge?.id ?? null,
   };
 }
+
+const STATUS_RANK: Readonly<Record<BoardPromptCardStatus, number>> = {
+  sent: 0,
+  new: 1,
+  updated: 1,
+  pinned: 2,
+};
 
 /**
  * What a card does with a box's next prompt, from the lines that carry it there: pinned on any of
@@ -2592,7 +2716,7 @@ export function boardItemsInRect(
 }
 
 /** How big a new section is when it frames nothing yet. */
-export const BOARD_SECTION_SIZE: RoomBoardSize = { w: 640, h: 420 };
+export const BOARD_SECTION_SIZE: RoomBoardSize = ROOM_BOARD_SECTION_SIZE;
 const SECTION_PADDING = 32;
 const SECTION_TITLE_HEIGHT = 40;
 
@@ -2632,6 +2756,28 @@ export const boardSectionHolding = <Section extends { readonly rect: BoardRect }
             x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height,
         ),
       );
+
+/**
+ * The section whose frame `point` is on, within `band` of its edge either side, where a line can
+ * start or end at the section; inside that, the board and its cards keep the pointer. The smallest
+ * such section, or null.
+ */
+export function boardSectionFrameAt<Section extends { readonly rect: BoardRect }>(
+  sections: ReadonlyArray<Section>,
+  point: BoardPoint,
+  band: number,
+): Section | null {
+  const within = (rect: BoardRect, grow: number) =>
+    point.x >= rect.x - grow &&
+    point.x <= rect.x + rect.width + grow &&
+    point.y >= rect.y - grow &&
+    point.y <= rect.y + rect.height + grow;
+  return (
+    sections
+      .filter(({ rect }) => within(rect, band) && !within(rect, -band))
+      .toSorted((a, b) => a.rect.width * a.rect.height - b.rect.width * b.rect.height)[0] ?? null
+  );
+}
 
 /** A section that frames these rects, with room for its title, or null for none. */
 export function boardSectionAround(

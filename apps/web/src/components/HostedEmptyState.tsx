@@ -4,7 +4,12 @@ import { Link } from "@tanstack/react-router";
 import { CheckIcon } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
-import { APP_DISPLAY_NAME, TINKJAM_SYNC_COMMAND, TINKJAM_SYNC_URL } from "~/branding";
+import {
+  APP_DISPLAY_NAME,
+  TINKJAM_AGENT_PROMPT,
+  TINKJAM_SYNC_COMMAND,
+  TINKJAM_SYNC_URL,
+} from "~/branding";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { isElectron } from "../env";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
@@ -87,7 +92,14 @@ function T3ConnectSteps() {
         )}
       </SetupStep>
       <SetupStep number={2}>
-        <p>Copy this into a terminal on your computer, then open the link it prints:</p>
+        <p>
+          Send this prompt to Claude Code or Codex on your computer, then open the link it gives
+          you:
+        </p>
+        <p className="mt-2 rounded-lg border border-border bg-muted/50 px-3 py-2.5 text-sm select-all">
+          {TINKJAM_AGENT_PROMPT}
+        </p>
+        <p className="mt-3 text-muted-foreground">Or run this in a terminal yourself:</p>
         <CommandBlock command={TINKJAM_SYNC_COMMAND} className="mt-2" />
         {isSignedIn ? (
           <div className="mt-4 space-y-1.5">

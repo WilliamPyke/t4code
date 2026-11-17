@@ -1636,7 +1636,15 @@ it.effect("keeps tasks, links, comments and arrows on the board, checked by the 
       { emoji: "👍", guestId: sam },
       { emoji: "🎉" },
     ]);
-    assert.isTrue(yield* refused(change(sam, { type: "note.react", noteId: "talk", emoji: "👀" })));
+    // On a comment thread a reaction goes on the first comment, or on the reply it names.
+    yield* change(sam, { type: "note.react", noteId: "talk", emoji: "👀" });
+    yield* change(alex, { type: "note.react", noteId: "talk", emoji: "👀", replyId: "reply:sam" });
+    assert.deepEqual((yield* repliesOf)?.[1]?.reactions, [{ emoji: "👀", guestId: alex }]);
+    assert.isTrue(
+      yield* refused(
+        change(sam, { type: "note.react", noteId: "talk", emoji: "👀", replyId: "nobody" }),
+      ),
+    );
 
     // A removed guest's cards, comments, replies, reactions and arrows go; tasks they had are left
     // with no one.

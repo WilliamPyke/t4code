@@ -157,7 +157,7 @@ export const ThreadGuestMessageStatus = Schema.Literals(["pending", "sent", "dis
 export type ThreadGuestMessageStatus = typeof ThreadGuestMessageStatus.Type;
 
 /** The labels of the cards that went with a turn, at most this many. */
-export const ROOM_BOX_CARD_LABELS_MAX = 8;
+export const ROOM_BOX_CARD_LABELS_MAX = 16;
 /**
  * Board cards as a turn or an artifact names them: "Note from Sam", 'Artifact "Plan"'. The
  * owner's server writes them from the board, so they read the same to everyone.
@@ -560,6 +560,23 @@ const RoomBoardMentions = Schema.Array(RoomBoardMention).check(
   Schema.isMaxLength(ROOM_BOARD_MAX_MENTIONS),
 );
 
+/** The reactions anyone can leave on a card or a comment. */
+export const ROOM_BOARD_REACTIONS = ["👍", "❤️", "🎉", "👀", "✅", "❓"] as const;
+export const RoomBoardReactionEmoji = Schema.Literals(ROOM_BOARD_REACTIONS);
+export type RoomBoardReactionEmoji = typeof RoomBoardReactionEmoji.Type;
+/** Reactions one card holds, from everyone. */
+export const ROOM_BOARD_MAX_REACTIONS = 60;
+/** Reactions one comment in a thread holds, its first or a reply, from everyone. */
+export const ROOM_COMMENT_MAX_REACTIONS = 20;
+
+/** Someone's reaction on a card or a comment. */
+export const RoomBoardReaction = Schema.Struct({
+  emoji: RoomBoardReactionEmoji,
+  /** The guest who reacted. Absent on the owner's. */
+  guestId: Schema.optional(GuestId),
+});
+export type RoomBoardReaction = typeof RoomBoardReaction.Type;
+
 /** A reply in a comment thread on the board. */
 export const RoomBoardReply = Schema.Struct({
   /** The client that adds the reply names it, or the owner's server for an agent's. */
@@ -584,6 +601,10 @@ export const RoomBoardReply = Schema.Struct({
       boxId: RoomBoardNoteId,
       model: Schema.optional(RoomBoxModelName),
     }),
+  ),
+  /** Who reacted with what, oldest first. Only `note.react` with this reply's id sets them. */
+  reactions: Schema.optional(
+    Schema.Array(RoomBoardReaction).check(Schema.isMaxLength(ROOM_COMMENT_MAX_REACTIONS)),
   ),
 });
 export type RoomBoardReply = typeof RoomBoardReply.Type;
@@ -610,21 +631,6 @@ export const ROOM_BOARD_NOTE_COLORS = [
 ] as const;
 export const RoomBoardNoteColor = Schema.Literals(ROOM_BOARD_NOTE_COLORS);
 export type RoomBoardNoteColor = typeof RoomBoardNoteColor.Type;
-
-/** The reactions anyone can leave on a card. */
-export const ROOM_BOARD_REACTIONS = ["👍", "❤️", "🎉", "👀", "✅", "❓"] as const;
-export const RoomBoardReactionEmoji = Schema.Literals(ROOM_BOARD_REACTIONS);
-export type RoomBoardReactionEmoji = typeof RoomBoardReactionEmoji.Type;
-/** Reactions one card holds, from everyone. */
-export const ROOM_BOARD_MAX_REACTIONS = 60;
-
-/** Someone's reaction on a card. */
-export const RoomBoardReaction = Schema.Struct({
-  emoji: RoomBoardReactionEmoji,
-  /** The guest who reacted. Absent on the owner's. */
-  guestId: Schema.optional(GuestId),
-});
-export type RoomBoardReaction = typeof RoomBoardReaction.Type;
 
 /**
  * A card someone added to the board: a note unless `kind` names another card. A note with
@@ -734,6 +740,13 @@ export const RoomBoardEdge = Schema.Struct({
    * by box id, last carried the card along it. `sentAt` is for lines into a box or its artifact.
    */
   sentFor: Schema.optional(Schema.Record(Schema.String, IsoDateTime)),
+  /**
+   * On a line from a section, which carries every card in it: when a prompt from each box, by box
+   * id, last carried each card along it, by the card's ref. Only cards still in the section stay.
+   */
+  sentCards: Schema.optional(
+    Schema.Record(Schema.String, Schema.Record(Schema.String, IsoDateTime)),
+  ),
   /** The card goes with every prompt along this line, not only while it is new. */
   pinned: Schema.optional(Schema.Literal(true)),
 });
@@ -894,7 +907,7 @@ export const RoomBoardAgentView = Schema.Struct({
     }),
   ),
   lines: Schema.Array(Schema.Struct({ from: Schema.String, to: Schema.String })),
-  /** Cards with a line to or from this thread's box. */
+  /** Cards with a line to or from this thread's box, and the cards in a section that has one. */
   attachedToYou: Schema.optional(Schema.Array(Schema.String)),
   /** Who a task can be for; `me` marks this box's user. */
   people: Schema.optional(
@@ -1064,11 +1077,15 @@ export const RoomBoardChange = Schema.Union([
     noteId: RoomBoardNote.fields.id,
     resolved: Schema.Boolean,
   }),
-  /** Adds the sender's own reaction to a card, or takes it back if they had it. */
+  /**
+   * Adds the sender's own reaction to a card, or takes it back if they had it. On a comment
+   * thread it goes on the first comment, or on the reply `replyId` names.
+   */
   Schema.Struct({
     type: Schema.Literal("note.react"),
     noteId: RoomBoardNote.fields.id,
     emoji: RoomBoardReactionEmoji,
+    replyId: Schema.optional(RoomBoardReply.fields.id),
   }),
   /**
    * Takes back everything one agent turn did to the board (`undone: true`), or does it again,

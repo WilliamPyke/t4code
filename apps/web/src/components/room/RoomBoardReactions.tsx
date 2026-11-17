@@ -15,7 +15,7 @@ import { BOARD_ICON_BUTTON_CLASS } from "./BoardChrome";
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
 
-/** The control on a card's header that adds one of the fixed reactions, or takes it back. */
+/** The control on a card's header or a comment that adds one of the fixed reactions, or takes it back. */
 export function AddReaction({
   onReact,
 }: {
@@ -66,21 +66,26 @@ export function ReactionChoices({
   );
 }
 
-/** A card's reactions under it, each a chip with its count that toggles the viewer's own. */
+/**
+ * A card's or comment's reactions under it, each a chip with its count that toggles the viewer's
+ * own. `className` places the row: a card's sits in its padding.
+ */
 export function ReactionChips({
   reactions,
   people,
   onReact,
+  className = "px-2 pb-2",
 }: {
   readonly reactions: ReadonlyArray<RoomBoardReaction>;
   readonly people: BoardPeople;
   /** Absent for a viewer who cannot change the board. */
   readonly onReact: ((emoji: RoomBoardReactionEmoji) => void) | undefined;
+  readonly className?: string;
 }) {
   const chips = boardReactionChips(reactions, people);
   if (chips.length === 0) return null;
   return (
-    <div className="flex shrink-0 flex-wrap gap-1 px-2 pb-2">
+    <div className={cn("flex shrink-0 flex-wrap gap-1", className)}>
       {chips.map(({ emoji, count, mine, names }) => (
         <Tooltip key={emoji}>
           <TooltipTrigger

@@ -107,6 +107,7 @@ import {
   boardTidySection,
   boardPushedBelow,
   boardSectionAround,
+  boardSectionFrameAt,
   boardSectionHolding,
   boardItemTarget,
   boardItemRects,
@@ -125,6 +126,7 @@ import {
   boardProgressPhase,
   boardReactionChips,
   boardPromptCardGoes,
+  boardPromptChips,
   boardPromptContext,
   boardReplyQuote,
   boardRestoreLabel,
@@ -977,13 +979,14 @@ describe("boardConnector", () => {
   // A 320 by 240 card at the origin, and where the other box is relative to it.
   const card = boardCardBox({ x: 0, y: 0 });
   it.each([
-    ["right of it", { x: 500, y: 40 }, ["right", "left"], "M320 120 ", " 500 112"],
-    ["left of it", { x: -400, y: 300 }, ["left", "right"], "M0 120 ", " -208 372"],
-    ["below it", { x: 60, y: 400 }, ["bottom", "top"], "M160 240 ", " 156 400"],
-    ["above it", { x: 100, y: -300 }, ["top", "bottom"], "M160 0 ", " 196 -156"],
+    // Its tip stops just short of the note, so the note never covers the arrowhead.
+    ["right of it", { x: 500, y: 40 }, ["right", "left"], "M320 120 ", " 496 112"],
+    ["left of it", { x: -400, y: 300 }, ["left", "right"], "M0 120 ", " -204 372"],
+    ["below it", { x: 60, y: 400 }, ["bottom", "top"], "M160 240 ", " 156 396"],
+    ["above it", { x: 100, y: -300 }, ["top", "bottom"], "M160 0 ", " 196 -152"],
     // Further across than down: the wider gap decides, so the line never cuts a card.
-    ["below and far right", { x: 700, y: 300 }, ["right", "left"], "M320 120 ", " 700 372"],
-    ["right and far below", { x: 400, y: 600 }, ["bottom", "top"], "M160 240 ", " 496 600"],
+    ["below and far right", { x: 700, y: 300 }, ["right", "left"], "M320 120 ", " 696 372"],
+    ["right and far below", { x: 400, y: 600 }, ["bottom", "top"], "M160 240 ", " 496 596"],
   ] as const)("joins the facing side midpoints of a note %s", (_, at, sides, start, end) => {
     const note = boardNoteBox(at);
     expect(boardConnectorSides(card, note)).toEqual(sides);
@@ -996,13 +999,22 @@ describe("boardConnector", () => {
 
   it("leaves square to its sides and finds the middle of the curve", () => {
     const below = boardConnector(card, boardCardBox({ x: 0, y: 400 }));
-    expect(below.path).toBe("M160 240 C160 320, 160 320, 160 400");
-    expect(below.middle).toEqual({ x: 160, y: 320 });
+    expect(below.path).toBe("M160 240 C160 318, 160 318, 160 396");
+    expect(below.middle).toEqual({ x: 160, y: 318 });
     const ahead = boardConnector(card, boardNoteBox({ x: 500, y: 48 }));
-    expect(ahead.path).toBe("M320 120 C410 120, 410 120, 500 120");
+    expect(ahead.path).toBe("M320 120 C408 120, 408 120, 496 120");
     // A short gap bends no further than it reaches, so the line does not loop back.
     expect(boardConnector(card, boardCardBox({ x: 340, y: 0 })).path).toBe(
-      "M320 120 C340 120, 320 120, 340 120",
+      "M320 120 C336 120, 320 120, 336 120",
+    );
+    // A long line leaves square but heads straight across, with no wide swing.
+    expect(boardConnector(card, boardNoteBox({ x: 2_000, y: 900 })).path).toBe(
+      "M320 120 C440 120, 1876 972, 1996 972",
+    );
+    // One whose end is behind its start, on the sides it keeps, only hooks a little.
+    const behind = boardNoteBox({ x: 300, y: 400 });
+    expect(boardConnector(card, behind, undefined, { sides: ["right", "left"] }).path).toBe(
+      "M320 120 C340 120, 276 472, 296 472",
     );
   });
 
@@ -1025,7 +1037,7 @@ describe("boardConnector", () => {
   it("follows the swaying belly without moving its ends", () => {
     const note = boardNoteBox({ x: 500, y: 48 });
     expect(boardConnector(card, note, { x: 5, y: -10 }).path).toBe(
-      "M320 120 C415 110, 415 110, 500 120",
+      "M320 120 C413 110, 413 110, 496 120",
     );
   });
 
@@ -1518,7 +1530,7 @@ describe("boardPromptContext", () => {
     );
     expect(context.cards).toHaveLength(BOARD_PROMPT_MAX_CARDS - 1);
     expect(context.cards[0]?.ref).toBe("note:n0");
-    expect(context.edgeIds.has("note:n9>card:thread")).toBe(false);
+    expect(context.edgeIds.has(`note:n${BOARD_PROMPT_MAX_CARDS + 1}>card:thread`)).toBe(false);
   });
 
   it("names each kind of card and who wrote it, and finds the artifact the thread points to", () => {
@@ -1891,6 +1903,77 @@ describe("boardPromptContext", () => {
     expect(read("y")).toEqual([
       ["note:b", "new"],
       ["note:a", "new"],
+    ]);
+  });
+
+  it("offers a section's cards as its line's, read now, and only a prompt taking them marks them", () => {
+    const sentAt = "2026-11-13T12:00:00.000Z";
+    const tray: RoomBoard = {
+      positions: {},
+      notes: [
+        note("box", { kind: "thread", x: 2_000 }),
+        note("other", { kind: "thread", x: 3_000 }),
+        note("tray", { section: true, text: " Tasks ", size: { w: 640, h: 420 } }),
+        note("in1", { x: 20, y: 60 }),
+        note("in2", { x: 240, y: 60, guestId: sam }),
+        note("out", { x: 900, y: 0 }),
+        note("why", { x: 900, y: 300 }),
+      ],
+      edges: [
+        { id: "tray>box", from: "note:tray", to: "note:box" },
+        { id: "why>tray", from: "note:why", to: "note:tray" },
+      ],
+    };
+    const context = boardPromptContext(tray, people, [], "box");
+    const tasks = { ref: "note:tray", title: "Tasks", edgeIds: ["tray>box"] };
+    expect(
+      context.cards.map(({ ref, status, edgeIds, section }) => ({ ref, status, edgeIds, section })),
+    ).toEqual([
+      { ref: "note:in1", status: "new", edgeIds: ["tray>box"], section: tasks },
+      { ref: "note:in2", status: "new", edgeIds: ["tray>box"], section: tasks },
+      { ref: "note:why", status: "new", edgeIds: ["why>tray"], section: undefined },
+    ]);
+    expect(context.edgeStatus.get("tray>box")).toBe("new");
+    // Its owner sees the section's cards as one chip, and every other card as its own.
+    expect(
+      boardPromptChips(context.cards).map((chip) =>
+        "section" in chip ? [chip.section.title, chip.cards.length] : [chip.card.ref],
+      ),
+    ).toEqual([["Tasks", 2], ["note:why"]]);
+    expect(boardPromptChips(context.cards.slice(1)).map((chip) => "card" in chip)).toEqual([
+      true,
+      true,
+    ]);
+    // A box the section has no line to is offered none of it.
+    expect(boardPromptContext(tray, people, [], "other").cards).toEqual([]);
+    // Only the cards a prompt took read as sent; one moved in since goes, one moved out is gone.
+    const sent = roomBoardWithCardsSent(tray, "box", undefined, ["note:in1"], sentAt);
+    const moved: RoomBoard = {
+      ...sent,
+      notes: sent.notes.map((card) =>
+        card.id === "out"
+          ? { ...card, x: 400, y: 200 }
+          : card.id === "in2"
+            ? { ...card, x: 1_400 }
+            : card,
+      ),
+    };
+    expect(
+      boardPromptContext(moved, people, [], "box").cards.map((card) => [card.ref, card.status]),
+    ).toEqual([
+      ["note:in1", "sent"],
+      ["note:out", "new"],
+      ["note:why", "new"],
+    ]);
+    // A pinned section line pins every card in it.
+    const pinned = {
+      ...tray,
+      edges: tray.edges?.map((edge) => ({ ...edge, pinned: true as const })),
+    };
+    expect(boardPromptContext(pinned, people, [], "box").cards.map((card) => card.status)).toEqual([
+      "pinned",
+      "pinned",
+      "pinned",
     ]);
   });
 
@@ -2625,6 +2708,18 @@ describe("selecting several cards", () => {
     ).toBeUndefined();
     expect(boardSectionHolding(sections, [{ x: 500, y: 60 }])).toBeUndefined();
     expect(boardSectionHolding(sections, [])).toBeUndefined();
+    // A line lands on a section near its edge, either side; its middle stays the cards'.
+    expect(boardSectionFrameAt(sections, { x: 395, y: 100 }, 12)?.id).toBe("wide");
+    expect(boardSectionFrameAt(sections, { x: 200, y: -8 }, 12)?.id).toBe("wide");
+    expect(boardSectionFrameAt(sections, { x: 200, y: 150 }, 12)).toBeNull();
+    expect(boardSectionFrameAt(sections, { x: 200, y: 330 }, 12)).toBeNull();
+    expect(
+      boardSectionFrameAt(
+        [...sections, { id: "inner", rect: { x: 380, y: 0, width: 20, height: 20 } }],
+        { x: 395, y: 10 },
+        12,
+      )?.id,
+    ).toBe("inner");
     expect(
       boardSectionAround([
         { x: 100, y: 100, width: 200, height: 100 },

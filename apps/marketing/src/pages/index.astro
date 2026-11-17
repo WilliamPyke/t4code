@@ -3,14 +3,14 @@ import BoardScene from "../components/BoardScene.astro";
 import Cursor from "../components/Cursor.astro";
 import Icon from "../components/Icon.astro";
 import Layout from "../layouts/Layout.astro";
-import { APP_URL, SAMPLE_BOARD_URL, SYNC_COMMAND, UPSTREAM_REPO_URL } from "../lib/site";
+import { AGENT_PROMPT, APP_URL, SAMPLE_BOARD_URL, SYNC_COMMAND, UPSTREAM_REPO_URL } from "../lib/site";
 
 const today = [
   "Accounts and workspaces, with invites by link",
   "Boards in the cloud that stay open when your computer is off",
   "Share links that can edit or only view; viewers need no account",
   "Starter templates, and copies of boards their makers allow",
-  "Tinkjam Sync: connect your computer's agents with one command",
+  "Tinkjam Sync: your own agent connects your computer from one prompt",
   "Bring your own Claude or Codex agent",
   "Sticky notes, and lines with handles on every side",
   "Link embeds, and readable snapshots your agent brings in",
@@ -30,7 +30,7 @@ const faqs = [
   },
   {
     q: "Do I need a terminal?",
-    a: "Only once, if you bring an agent: you paste one command to connect your computer, then everything happens in the browser. Teammates who just join boards never need one. A desktop app is coming soon.",
+    a: "No. To bring an agent, you send it one prompt and it connects your computer itself; then everything happens in the browser. Teammates who just join boards never need one. A desktop app is coming soon.",
   },
   {
     q: "Where do my boards live?",
@@ -218,7 +218,7 @@ const faqs = [
           <span class="step__num" aria-hidden="true">3</span>
           <h3>Bring your agents</h3>
           <p>
-            Run one command on your computer and click Connect. Your Claude or Codex agent shows
+            Send your agent one prompt and click Connect. Your Claude or Codex agent shows
             up as a box everyone can follow.
           </p>
         </li>
@@ -441,15 +441,15 @@ const faqs = [
       <div class="agents">
         <div class="section__head">
           <p class="kicker">Bring your own agents</p>
-          <h2 id="agents-title">One command, one click, and your agent is on the board.</h2>
+          <h2 id="agents-title">One prompt, one click, and your agent is on the board.</h2>
           <ol class="agent-steps">
             <li>
-              <b>Run the command</b>
-              <span>Paste it into a terminal on the computer where Claude or Codex runs.</span>
+              <b>Send your agent the prompt</b>
+              <span>Paste it into Claude Code or Codex on your computer. It sets itself up.</span>
             </li>
             <li>
               <b>Click Connect</b>
-              <span>Your browser opens. Approve this computer, signed in to Tinkjam.</span>
+              <span>Open the link your agent gives you and approve this computer.</span>
             </li>
             <li>
               <b>Bring your agent onto a board</b>
@@ -462,13 +462,15 @@ const faqs = [
           <div class="cmd">
             <div class="cmd__bar">
               <i></i><i></i><i></i>
-              <span>Terminal</span>
+              <span>Your coding agent</span>
             </div>
             <div class="cmd__body">
-              <code><span class="cmd__prompt" aria-hidden="true">$</span> {SYNC_COMMAND}</code>
-              <button class="cmd__copy" type="button" data-copy={SYNC_COMMAND}>Copy</button>
+              <code class="cmd__say"><span class="cmd__prompt" aria-hidden="true">&gt;</span> {AGENT_PROMPT}</code>
+              <button class="cmd__copy" type="button" data-copy={AGENT_PROMPT}>Copy</button>
             </div>
-            <p class="cmd__note">Tinkjam Sync. Needs Node 22.16 or newer. No desktop app needed.</p>
+            <p class="cmd__note">
+              Prefer a terminal? Run <code>{SYNC_COMMAND}</code>. Needs Node 22.16 or newer.
+            </p>
           </div>
 
           <div class="connect" aria-hidden="true">

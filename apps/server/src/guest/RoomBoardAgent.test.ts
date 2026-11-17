@@ -623,11 +623,14 @@ it.effect("never attaches a card to someone else's agent, nor edits one that goe
     { id: "brief", text: "Brief for Sam's agent", x: 1_400, y: 0 },
     { id: "spec", text: "Spec", x: 1_400, y: 400, kind: "artifact" },
     { id: "idea", text: "An idea", x: 1_400, y: 900 },
+    { id: "tray", text: "Sam's tray", x: 3_000, y: 0, section: true, size: { w: 640, h: 420 } },
+    { id: "inTray", text: "In the tray", x: 3_020, y: 60 },
   ]);
-  // Sam attached the brief to their box, whose agent rewrites the spec.
+  // Sam attached the brief, and every card in the tray, to their box, whose agent rewrites the spec.
   withEdges(threads, [
     { id: "e1", from: "note:brief", to: "note:box:sam" },
     { id: "e2", from: "note:box:sam", to: "note:spec" },
+    { id: "e3", from: "note:tray", to: "note:box:sam" },
   ]);
   const samsBox = { roomThreadId, shareId, guestId: sam, boxId: "box:sam", turnId: "run:sam" };
   return Effect.gen(function* () {
@@ -648,17 +651,34 @@ it.effect("never attaches a card to someone else's agent, nor edits one that goe
       boardOf(threads).find((note) => note.id === "brief")?.text,
       "Brief for Sam's agent",
     );
-    assert.lengthOf(threads[roomThreadId]?.guestShare?.board?.edges ?? [], 3);
+    assert.lengthOf(threads[roomThreadId]?.guestShare?.board?.edges ?? [], 4);
+    // Nor through Sam's section: no edit of a card in it, no card moved, added or lined into it.
+    const tray = yield* agent.update(boxThreadId, {
+      changes: [
+        { id: "inTray", text: "Rewritten" },
+        { id: "idea", section: "tray" },
+        { id: "idea", lineTo: "tray" },
+      ],
+    });
+    assert.deepEqual(tray.done, []);
+    assert.lengthOf(tray.refused, 3);
+    for (const refusal of tray.refused) assert.include(refusal.reason, "Sam's agent");
+    const slipped = yield* agent.add(boxThreadId, { section: "tray", cards: [{ text: "Slip" }] });
+    assert.include(slipped.refused[0]?.reason, "Sam's agent");
+    const placed = boardOf(threads).find((note) => note.id === slipped.done[0]);
+    assert.isBelow(placed?.x ?? 0, 3_000);
+    assert.strictEqual(boardOf(threads).find((note) => note.id === "idea")?.x, 1_400);
 
     // Sam's own agent may, for Sam's own box, and "me" is Sam; the owner's box is not Sam's.
     const sams = yield* agent.update(samsBox, {
       changes: [
         { id: "brief", text: "Sam's brief" },
+        { id: "inTray", text: "Sam's tray note" },
         { id: "idea", lineTo: "box:sam" },
         { id: "idea", lineTo: "box:b" },
       ],
     });
-    assert.deepEqual(sams.done, ["brief", "idea"]);
+    assert.deepEqual(sams.done, ["brief", "inTray", "idea"]);
     assert.deepEqual(
       sams.refused.map((refusal) => refusal.reason),
       [

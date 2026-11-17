@@ -13,6 +13,7 @@ import {
   ROOM_BOARD_MAX_THREADS,
   ROOM_BOARD_ROOM_BOX,
   ROOM_COMMENT_AGENT_REPLY_MAX_LENGTH,
+  ROOM_COMMENT_MAX_REACTIONS,
   RoomBoard,
   type RoomBoardAgentMark,
   type RoomBoardChange,
@@ -45,6 +46,7 @@ import {
   roomBoxRequestOf,
   roomCommentAnswer,
   roomCommentRequestOf,
+  roomSectionCards,
   roomTaskStatus,
   roomWindowBoxId,
 } from "./roomBoard.ts";
@@ -145,7 +147,7 @@ describe("applyRoomBoardChange", () => {
     expect(Result.isFailure(apply(task, put("t", { color: "blue" })))).toBe(true);
   });
 
-  it("toggles each person's own reaction on a card, within a cap, and never on a pin", () => {
+  it("toggles each person's own reaction on a card, within a cap", () => {
     const board: RoomBoard = {
       positions: {},
       notes: [
@@ -193,11 +195,14 @@ describe("applyRoomBoardChange", () => {
     for (const [, from, emoji, by, reactions] of rows) {
       expect(reacted(from, emoji, by).notes[0]?.reactions).toEqual(reactions);
     }
-    expect(Result.isFailure(apply(board, { type: "note.react", noteId: "c", emoji: "👍" }))).toBe(
-      true,
-    );
     expect(
       Result.isFailure(apply(board, { type: "note.react", noteId: "gone", emoji: "👍" })),
+    ).toBe(true);
+    // A card has no replies to react to.
+    expect(
+      Result.isFailure(
+        apply(board, { type: "note.react", noteId: "n", emoji: "👍", replyId: "r" }),
+      ),
     ).toBe(true);
     const full: RoomBoard = {
       ...board,
@@ -212,6 +217,68 @@ describe("applyRoomBoardChange", () => {
     // Editing a card keeps its reactions.
     const kept = applied(reacted(board, "👍", sam), put("n", { text: "Hello" }));
     expect(kept.notes[0]?.reactions).toEqual([{ emoji: "👍", guestId: sam }]);
+  });
+
+  it("toggles each person's own reaction on a thread's first comment and on each reply", () => {
+    const answer = { id: "agent:run-1", text: "Done.", at, agent: { turnId: "run-1", boxId: "b" } };
+    // A board stored before comments took reactions decodes as it did.
+    const board = decodeBoard({
+      positions: {},
+      notes: [
+        {
+          id: "c",
+          text: "Ship it?",
+          x: 0,
+          y: 0,
+          guestId: sam,
+          kind: "comment",
+          replies: [{ id: "r1", text: "Yes", at }, answer],
+        },
+      ],
+    });
+    const react = (replyId?: string, emoji: "👍" | "🎉" = "👍"): RoomBoardChange => ({
+      type: "note.react",
+      noteId: "c",
+      emoji,
+      ...(replyId === undefined ? {} : { replyId }),
+    });
+    const by = (from: RoomBoard, change: RoomBoardChange, author: GuestId | null) =>
+      Result.getOrThrow(applyRoomBoardChange(from, scope, author, change, at));
+    const first = by(board, react(), sam);
+    expect(first.notes[0]?.reactions).toEqual([{ emoji: "👍", guestId: sam }]);
+    expect(first.notes[0]?.replies).toEqual(board.notes[0]?.replies);
+    // The owner reacts to an agent's answer, as their own; the other reply is left alone.
+    const onAnswer = by(first, react("agent:run-1", "🎉"), null);
+    expect(onAnswer.notes[0]?.replies).toEqual([
+      { id: "r1", text: "Yes", at },
+      { ...answer, reactions: [{ emoji: "🎉" }] },
+    ]);
+    expect(onAnswer.notes[0]?.reactions).toEqual(first.notes[0]?.reactions);
+    // Pressing the same one again takes it back, and the field with it.
+    expect(by(onAnswer, react("agent:run-1", "🎉"), null).notes[0]?.replies?.[1]).toEqual(answer);
+    expect(by(first, react(), sam).notes[0]).toEqual(board.notes[0]);
+    expect(isRoomBoard(onAnswer)).toBe(true);
+    expect(Result.isFailure(apply(board, react("gone")))).toBe(true);
+    // A comment holds fewer reactions than a card.
+    const crowd = Array.from({ length: ROOM_COMMENT_MAX_REACTIONS }, () => ({
+      emoji: "👀" as const,
+    }));
+    const full: RoomBoard = {
+      ...board,
+      notes: [
+        {
+          ...board.notes[0]!,
+          reactions: crowd,
+          replies: [{ id: "r1", text: "Yes", at, reactions: crowd }],
+        },
+      ],
+    };
+    expect(Result.isFailure(apply(full, react()))).toBe(true);
+    expect(Result.isFailure(apply(full, react("r1")))).toBe(true);
+    // A deleted thread brought back by undo has its reactions again.
+    const removed = by(onAnswer, { type: "note.remove", noteId: "c" }, sam);
+    const back = by(removed, put("c", { kind: "comment", text: "Ship it?" }), sam);
+    expect(back.notes[0]).toEqual(onAnswer.notes[0]);
   });
 
   it("keeps the quote a comment was added with, and takes none on any other note", () => {
@@ -439,9 +506,9 @@ describe("applyRoomBoardChange", () => {
       [put("frame", { text: "Renamed" }), sam, true],
       [put("frame", { text: "Renamed" }), eve, false],
       [put("frame", { text: "Plan", x: 80, y: 80, color: "blue" }), eve, true],
-      // A section is a frame, not a card: no line joins it.
-      [{ type: "edge.put", edgeId: "f", from: "note:sams", to: "note:frame" }, null, false],
-      [{ type: "edge.put", edgeId: "g", from: "note:frame", to: "note:sams" }, sam, false],
+      // Anyone draws a line to or from a section, as to any card.
+      [{ type: "edge.put", edgeId: "f", from: "note:sams", to: "note:frame" }, eve, true],
+      [{ type: "edge.put", edgeId: "g", from: "note:frame", to: "note:box" }, eve, true],
       // Anyone moves or sizes any card, edits a note or a task, and ticks or assigns a task.
       [put("box", { text: "Box", x: 40, y: 40, size: { w: 400, h: 300 } }), eve, true],
       [put("sams", { text: "Edited" }), eve, true],
@@ -1282,6 +1349,38 @@ describe("roomBoardWithCardsSent", () => {
       sentIds(roomBoardWithCardsSent(board, ROOM_BOARD_ROOM_BOX, undefined, ["note:a"], at)),
     ).toEqual(["a>thread"]);
     expect(roomBoardWithCardsSent(board, "box", undefined, ["note:nope"], at)).toBe(board);
+  });
+
+  it("marks each card a section's line carried, for this box, keeping only cards still in it", () => {
+    const later = "2026-11-13T13:00:00.000Z";
+    const tray: RoomBoard = {
+      positions: {},
+      notes: [
+        note("tray", { section: true, size: { w: 640, h: 420 } }),
+        note("in1", { x: 20, y: 60 }),
+        note("in2", { x: 240, y: 60, kind: "task" }),
+        // Its middle is outside, though its corner is in.
+        note("edge", { x: 560, y: 60 }),
+        note("pin", { x: 100, y: 100, kind: "comment" }),
+        note("inner", { x: 300, y: 200, section: true, size: { w: 200, h: 100 } }),
+        note("box", { kind: "thread", x: 900 }),
+      ],
+      edges: [
+        { id: "tray>box", from: "note:tray", to: "note:box", sentCards: { other: { x: at } } },
+      ],
+    };
+    expect(roomSectionCards(tray, tray.notes[0]!).map((card) => card.id)).toEqual(["in1", "in2"]);
+    const sent = roomBoardWithCardsSent(tray, "box", undefined, ["note:in1"], at);
+    expect(sent.edges?.[0]?.sentCards).toEqual({ other: { x: at }, box: { "note:in1": at } });
+    // A card moved out is no longer the section's; one never in it marks nothing.
+    const movedOut = {
+      ...sent,
+      notes: sent.notes.map((card) => (card.id === "in1" ? { ...card, x: 900 } : card)),
+    };
+    expect(roomBoardWithCardsSent(movedOut, "box", undefined, ["note:edge"], later)).toBe(movedOut);
+    expect(
+      roomBoardWithCardsSent(movedOut, "box", undefined, ["note:in2"], later).edges?.[0]?.sentCards,
+    ).toEqual({ other: { x: at }, box: { "note:in2": later } });
   });
 
   it("times a card's change by its edit, a reply other than this box's agent's, or new content", () => {
