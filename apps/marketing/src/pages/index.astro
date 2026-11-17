@@ -1,19 +1,46 @@
 ---
 import BoardScene from "../components/BoardScene.astro";
+import Cursor from "../components/Cursor.astro";
 import Icon from "../components/Icon.astro";
 import Layout from "../layouts/Layout.astro";
-import { APP_URL } from "../lib/site";
+import { APP_URL, SYNC_COMMAND, UPSTREAM_REPO_URL } from "../lib/site";
 
 const today = [
+  "Accounts: sign in and your boards follow you to any device",
+  "Workspaces, with invites by link",
   "Boards in the cloud that stay open when your computer is off",
-  "Accounts, so your boards follow you",
-  "Bring your own agent: Claude, Codex and more",
-  "Sticky notes anyone can pin to an agent or an artifact",
-  "Lines that turn notes and links into context",
-  "Artifacts that change live as agents edit them",
+  "Starter templates: Project kickoff and Design review",
+  "Tinkjam Sync: connect your computer's agents with one command",
+  "Bring your own Claude or Codex agent",
+  "Sticky notes, and lines with handles on every side",
   "Link embeds with live previews",
+  "Artifacts that change live as agents edit them",
+  "Plan view: kanban and list, with priority, due dates and assignees",
   "Live cursors for everyone on the board",
   "Nothing reaches your agent until you press Send",
+];
+
+const faqs = [
+  {
+    q: "What agents work?",
+    a: "Claude and Codex, running on your own computer under your own account. Each person brings their own.",
+  },
+  {
+    q: "Do I need a terminal?",
+    a: "Only once, if you bring an agent: you paste one command to connect your computer, then everything happens in the browser. Teammates who just join boards never need one. A desktop app is coming soon.",
+  },
+  {
+    q: "Where do my boards live?",
+    a: "In the cloud, in your workspace, so they stay open for your team when every computer is off. Agents run on the computers of the people who connected them.",
+  },
+  {
+    q: "Who pays for the AI?",
+    a: "Each person's agent uses that person's own Claude or Codex account. Tinkjam itself is free while in beta.",
+  },
+  {
+    q: "Can others run my agent?",
+    a: "No. Teammates can write a message for your agent or hand it a task, but nothing reaches it until you press Send.",
+  },
 ];
 ---
 
@@ -82,13 +109,13 @@ const today = [
             </div>
             <div class="fa-agent fa-agent--c fa-agent--yours">
               <span class="agent-glyph" style="background:var(--maya)"><Icon name="spark" /></span>
-              <span>Yours<small>Any agent you use</small></span>
+              <span>Yours<small>Your own account</small></span>
             </div>
           </div>
           <h3>Everyone brings their own agent</h3>
           <p>
-            Connect Claude, Codex or another agent you already use. Each one becomes a box on the
-            board, and the whole team can watch it think, write and change things.
+            Connect Claude or Codex from your own computer, on your own account. Each agent becomes
+            a box on the board, and the whole team can watch it think, write and change things.
           </p>
         </article>
 
@@ -158,24 +185,24 @@ const today = [
           <span class="step__num" aria-hidden="true">1</span>
           <h3>Start a board</h3>
           <p>
-            Sign in and start a board. It lives in the cloud, so it stays open for your team even
-            when your laptop is closed.
+            Sign in and start from a blank board or a template like Project kickoff or Design
+            review. It lives in the cloud, so it stays open when your laptop is closed.
           </p>
         </li>
         <li class="step">
           <span class="step__num" aria-hidden="true">2</span>
           <h3>Invite your team</h3>
           <p>
-            Share the board. Designers, PMs and engineers join the same space and see each other's
-            cursors, notes and lines as they happen.
+            Invite teammates to your workspace with a link. Designers, PMs and engineers see the
+            same boards, and each other's cursors, notes and lines as they happen.
           </p>
         </li>
         <li class="step">
           <span class="step__num" aria-hidden="true">3</span>
           <h3>Bring your agents</h3>
           <p>
-            Each person connects the agent they already use, running on their own computer. It
-            shows up as a box everyone can follow.
+            Run one command on your computer and click Connect. Your Claude or Codex agent shows
+            up as a box everyone can follow.
           </p>
         </li>
       </ol>
@@ -198,7 +225,7 @@ const today = [
             ))
           }
         </ul>
-        <p class="today__soon"><span class="soon">Being built</span>A Plan view: the same work as a board of tasks.</p>
+        <p class="today__soon"><span class="soon">Coming soon</span>A desktop app, for connecting your agents without a terminal.</p>
       </div>
     </div>
   </section>
@@ -282,35 +309,152 @@ const today = [
           </div>
         </div>
       </div>
+    </div>
+  </section>
 
-      <div class="plan-teaser">
-        <div class="plan-teaser__text">
-          <span class="soon">Coming soon</span>
-          <h3>Plan view</h3>
-          <p>The same work as a board of tasks, handed to people or to agents. Being built now.</p>
+  <section class="section section--tint" id="plan" aria-labelledby="plan-title">
+    <div class="wrap">
+      <div class="section__split section__split--list">
+        <div class="section__head">
+          <p class="kicker">Plan</p>
+          <h2 id="plan-title">The same work, as a plan.</h2>
+          <p class="section__lede">
+            Every task on the board is also a card in the Plan. Move it in one place and it moves in
+            the other, so the PM's view and the board never drift apart.
+          </p>
         </div>
-        <div class="kanban" aria-hidden="true">
-          <div class="kanban__col">
-            <b>To do</b>
-            <div class="task">
-              Invite step copy
-              <span class="task__who"><span class="s-dot" style="background:var(--priya)"></span>Priya</span>
+        <ul class="ticks">
+          <li><Icon name="check" />Kanban and list views</li>
+          <li><Icon name="check" />Priority, due dates and filters</li>
+          <li><Icon name="check" />Assign tasks to people or to agents</li>
+          <li><Icon name="check" />Hand a task to an agent; its owner presses Send</li>
+        </ul>
+      </div>
+
+      <div class="plan" aria-hidden="true">
+        <div class="plan__bar">
+          <span class="seg"><span>Board</span><span class="is-active">Plan</span><span>List</span></span>
+          <span class="chip">Assignee: anyone</span>
+          <span class="chip">Priority: all</span>
+          <span class="plan__due chip">Due this week</span>
+        </div>
+        <div class="plan__cols">
+          <div class="pcol">
+            <b>To do <em>3</em></b>
+            <div class="ptask">
+              <span class="ptask__title">Write the invite email</span>
+              <span class="ptask__meta">
+                <span class="prio prio--high" title="High"><i></i><i></i><i></i></span>
+                <span class="due">Thu</span>
+                <span class="avatar avatar--sm" style="background:var(--priya)">P</span>
+              </span>
+            </div>
+            <div class="ptask">
+              <span class="ptask__title">Check sign-up on small phones</span>
+              <span class="ptask__handoff"><Icon name="spark" />For Codex. Waiting for Sam to press Send</span>
+              <span class="ptask__meta">
+                <span class="prio prio--med"><i></i><i></i><i></i></span>
+                <span class="due">Fri</span>
+                <span class="agent-glyph agent-glyph--codex agent-glyph--sm"><Icon name="spark" /></span>
+              </span>
+            </div>
+            <div class="ptask ptask--ghost"></div>
+          </div>
+          <div class="pcol">
+            <b>In progress <em>2</em></b>
+            <div class="ptask ptask--agent">
+              <span class="ptask__title">Greet people by name</span>
+              <span class="ptask__live">
+                <span class="ptask__stream">Updating the onboarding heading</span>
+                <span class="ptask__bar"><i></i></span>
+              </span>
+              <span class="ptask__meta">
+                <span class="prio prio--urgent">!</span>
+                <span class="due">Today</span>
+                <span class="agent-glyph agent-glyph--sm"><Icon name="spark" /></span>
+              </span>
+            </div>
+            <div class="ptask ptask--slot"></div>
+          </div>
+          <div class="pcol pcol--done">
+            <b>Done <em>4</em></b>
+            <div class="ptask">
+              <span class="ptask__title">Onboarding brief</span>
+              <span class="ptask__meta">
+                <span class="prio prio--low"><i></i><i></i><i></i></span>
+                <span class="due due--done"><Icon name="check" />Mon</span>
+                <span class="avatar avatar--sm" style="background:var(--sam)">S</span>
+              </span>
+            </div>
+            <div class="ptask">
+              <span class="ptask__title">Empty state illustration</span>
+              <span class="ptask__meta">
+                <span class="prio prio--med"><i></i><i></i><i></i></span>
+                <span class="due due--done"><Icon name="check" />Tue</span>
+                <span class="avatar avatar--sm" style="background:var(--maya)">M</span>
+              </span>
             </div>
           </div>
-          <div class="kanban__col">
-            <b>In progress</b>
-            <div class="task">
-              Greet people by name
-              <span class="task__who"><span class="agent-glyph"><Icon name="spark" /></span>Claude for Maya</span>
-            </div>
+          <div class="ptask ptask--drag">
+            <span class="ptask__title">Pick the welcome photo</span>
+            <span class="ptask__meta">
+              <span class="prio prio--med"><i></i><i></i><i></i></span>
+              <span class="due">Wed</span>
+              <span class="avatar avatar--sm" style="background:var(--maya)">M</span>
+            </span>
+            <Cursor name="Maya" color="var(--maya)" class="cursor--drag" />
           </div>
-          <div class="kanban__col">
-            <b>Review</b>
-            <div class="task">
-              Fix sign-up form on phones
-              <span class="task__who"><span class="agent-glyph agent-glyph--codex"><Icon name="spark" /></span>Codex for Sam</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="agents" aria-labelledby="agents-title">
+    <div class="wrap">
+      <div class="agents">
+        <div class="section__head">
+          <p class="kicker">Bring your own agents</p>
+          <h2 id="agents-title">One command, one click, and your agent is on the board.</h2>
+          <ol class="agent-steps">
+            <li>
+              <b>Run the command</b>
+              <span>Paste it into a terminal on the computer where Claude or Codex runs.</span>
+            </li>
+            <li>
+              <b>Click Connect</b>
+              <span>Your browser opens. Approve this computer, signed in to Tinkjam.</span>
+            </li>
+            <li>
+              <b>Bring your agent onto a board</b>
+              <span>Pick the agent and the board. It shows up as a box your team can follow.</span>
+            </li>
+          </ol>
+        </div>
+
+        <div class="agents__art">
+          <div class="cmd">
+            <div class="cmd__bar">
+              <i></i><i></i><i></i>
+              <span>Terminal</span>
             </div>
+            <div class="cmd__body">
+              <code><span class="cmd__prompt" aria-hidden="true">$</span> {SYNC_COMMAND}</code>
+              <button class="cmd__copy" type="button" data-copy={SYNC_COMMAND}>Copy</button>
+            </div>
+            <p class="cmd__note">Tinkjam Sync. Needs Node 22.16 or newer. No desktop app needed.</p>
           </div>
+
+          <div class="connect" aria-hidden="true">
+            <span class="tape"></span>
+            <p class="connect__title">Connect Maya's MacBook to Tinkjam?</p>
+            <p class="connect__text">Only approve a computer you just ran Tinkjam Sync on.</p>
+            <span class="mini-btn mini-btn--send">Connect</span>
+          </div>
+
+          <p class="agents__promise">
+            Your agents run on your computer, under your own Claude or Codex account. Nobody else's
+            words run on your agent unless you press Send.
+          </p>
         </div>
       </div>
     </div>
@@ -409,6 +553,119 @@ const today = [
     </div>
   </section>
 
+  <section class="section" id="teams" aria-labelledby="teams-title">
+    <div class="wrap">
+      <div class="teams">
+        <div class="section__head">
+          <p class="kicker">For teams</p>
+          <h2 id="teams-title">Everyone's boards, in one place.</h2>
+          <p class="section__lede">
+            Make a workspace for your team and invite people with a link. Every member sees the
+            workspace's boards, and because you sign in, your boards follow you to any device.
+          </p>
+          <ul class="ticks">
+            <li><Icon name="check" />Workspaces with invites by link</li>
+            <li><Icon name="check" />Every member sees every board in the workspace</li>
+            <li><Icon name="check" />Starter templates: Project kickoff and Design review</li>
+          </ul>
+        </div>
+
+        <div class="home" aria-hidden="true">
+          <div class="home__bar">
+            <span class="home__ws"><span class="home__ws-mark">P</span>Product team</span>
+            <span class="avatars">
+              <span class="avatar" style="background:var(--priya)">P</span>
+              <span class="avatar" style="background:var(--maya)">M</span>
+              <span class="avatar" style="background:var(--sam)">S</span>
+            </span>
+            <span class="invite"><Icon name="wire" />Invite link</span>
+          </div>
+          <div class="home__grid">
+            <div class="thumb">
+              <div class="thumb__img thumb__img--a"><i></i><i></i><i></i></div>
+              <b>Onboarding v2</b><span>Edited today</span>
+            </div>
+            <div class="thumb">
+              <div class="thumb__img thumb__img--b"><i></i><i></i><i></i></div>
+              <b>Q3 launch</b><span>Project kickoff</span>
+            </div>
+            <div class="thumb">
+              <div class="thumb__img thumb__img--c"><i></i><i></i><i></i></div>
+              <b>Checkout review</b><span>Design review</span>
+            </div>
+            <div class="thumb thumb--new">
+              <div class="thumb__img"><span>+</span></div>
+              <b>New board</b><span>Blank or template</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--tint" id="pricing" aria-labelledby="pricing-title">
+    <div class="wrap">
+      <div class="section__head section__head--center">
+        <p class="kicker">Pricing</p>
+        <h2 id="pricing-title">Free while in beta.</h2>
+        <p class="section__lede">
+          Everything below is free today. You bring your own Claude or Codex account for the agents.
+        </p>
+      </div>
+      <div class="prices">
+        <div class="price price--main">
+          <h3>Beta</h3>
+          <p class="price__amount">Free</p>
+          <ul class="ticks">
+            <li><Icon name="check" />Cloud boards with live cursors</li>
+            <li><Icon name="check" />Workspaces and invites</li>
+            <li><Icon name="check" />Plan view, link embeds and live artifacts</li>
+            <li><Icon name="check" />Tinkjam Sync for your own agents</li>
+          </ul>
+          <a class="btn btn--primary" href={APP_URL}>Start a board</a>
+        </div>
+        <div class="price">
+          <h3>Team</h3>
+          <p class="price__amount price__amount--tbd">Not priced yet</p>
+          <p>No team plan yet. During the beta, teams use everything free in a shared workspace.</p>
+          <a class="btn btn--ghost" href={APP_URL}>Sign in</a>
+        </div>
+        <div class="price">
+          <h3>Enterprise</h3>
+          <p class="price__amount price__amount--tbd">Not priced yet</p>
+          <p>Not offered yet. Larger organisations can try the beta in a workspace today.</p>
+          <a class="btn btn--ghost" href={APP_URL}>Sign in</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="faq" aria-labelledby="faq-title">
+    <div class="wrap faq">
+      <div class="section__head">
+        <p class="kicker">Questions</p>
+        <h2 id="faq-title">Good questions, straight answers.</h2>
+      </div>
+      <div class="faq__list">
+        {
+          faqs.map((item) => (
+            <details>
+              <summary>{item.q}</summary>
+              <p>{item.a}</p>
+            </details>
+          ))
+        }
+        <details>
+          <summary>Is it open source?</summary>
+          <p>
+            Yes, at its core. Tinkjam is built on <a href={UPSTREAM_REPO_URL}>T3 Code</a>, which is
+            open source under the MIT licence.
+          </p>
+        </details>
+      </div>
+    </div>
+  </section>
+
   <section class="closing" aria-labelledby="closing-title">
     <div class="wrap">
       <div class="closing__panel">
@@ -426,4 +683,18 @@ const today = [
       </div>
     </div>
   </section>
+
+  <script is:inline>
+    for (const button of document.querySelectorAll("[data-copy]")) {
+      button.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(button.dataset.copy);
+          button.textContent = "Copied";
+        } catch {
+          button.textContent = "Select and copy";
+        }
+        setTimeout(() => (button.textContent = "Copy"), 1800);
+      });
+    }
+  </script>
 </Layout>

@@ -1,0 +1,62 @@
+---
+import Layout from "../layouts/Layout.astro";
+
+const entries = [
+  {
+    title: "We're called Tinkjam now",
+    text: "A new name everywhere you see it, in the app and on this site.",
+  },
+  {
+    title: "A new logo",
+    text: "A lowercase t drawn as a line leaving a sticky note, on a jam-red tile.",
+  },
+  {
+    title: "Boards in the cloud",
+    text: "Boards live online, so your team can open them when every computer is off.",
+  },
+  {
+    title: "Accounts",
+    text: "Sign in and your boards follow you to any device.",
+  },
+  {
+    title: "Link embeds",
+    text: "Paste a Figma, Google Docs, Sheets or Slides, YouTube, Loom or Vimeo link for a live preview. Linear, GitHub, Notion, Jira and any other link become a titled card. Draw a line to an agent to make it context.",
+  },
+  {
+    title: "Plan view",
+    text: "The board's tasks as a kanban or a list, with priority, due dates, assignees and filters. A task is the same on the board and in the Plan, and you can hand one to an agent; its owner presses Send.",
+  },
+  {
+    title: "Workspaces",
+    text: "Make a workspace, invite teammates with a link, and every member sees the workspace's boards.",
+  },
+  {
+    title: "Tinkjam Sync",
+    text: "Connect the agents on your computer with one command and one click in the browser. No desktop app needed.",
+  },
+];
+---
+
+<Layout
+  title="Changelog | Tinkjam"
+  description="What shipped in Tinkjam this week, in plain words."
+>
+  <div class="wrap">
+    <article class="prose changelog">
+      <h1>Changelog</h1>
+      <p>What is new in Tinkjam, in plain words.</p>
+
+      <h2>This week</h2>
+      <ul class="changelog__list">
+        {
+          entries.map((entry) => (
+            <li>
+              <b>{entry.title}</b>
+              <span>{entry.text}</span>
+            </li>
+          ))
+        }
+      </ul>
+    </article>
+  </div>
+</Layout>
