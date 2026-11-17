@@ -64,10 +64,17 @@ const silentConsole: Console.Console = {
   warn: () => {},
 };
 
-/** Asks the browser to connect this computer to the person's account, unless it already is. */
+const SYNC_NOT_CONNECTED_MESSAGE =
+  "This computer is not connected to Tinkjam, so Tinkjam Sync stopped. To connect it, run the Tinkjam Sync command again with --install.";
+
+/**
+ * Asks the browser to connect this computer to the person's account, unless it already is.
+ * In the background nobody can press Connect, so it says so and reports false instead.
+ */
 const approveIfNeeded = Effect.fn("cli.sync.approve_if_needed")(function* (input: {
   readonly computerName: string;
   readonly openBrowser: (url: string) => Effect.Effect<void>;
+  readonly background: boolean;
 }) {
   const config = yield* ServerConfig.ServerConfig;
   const running = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
@@ -90,7 +97,11 @@ const approveIfNeeded = Effect.fn("cli.sync.approve_if_needed")(function* (input
     signedIn,
     revoked: Option.isSome(yield* secrets.get(CLOUD_LINK_REVOKED)),
   });
-  if (!needsApproval) return;
+  if (!needsApproval) return true;
+  if (input.background) {
+    yield* Console.log(SYNC_NOT_CONNECTED_MESSAGE);
+    return false;
+  }
 
   yield* requireConnectAllowed;
   const relayClient = yield* RelayClient.RelayClient;
@@ -113,6 +124,7 @@ const approveIfNeeded = Effect.fn("cli.sync.approve_if_needed")(function* (input
   yield* CliState.setCliDesiredCloudLink(true, "managed");
   yield* CliState.dropRevokedCloudLink;
   yield* Console.log("Approved.");
+  return true;
 });
 
 const disconnect = Effect.fn("cli.sync.disconnect")(function* () {
@@ -126,6 +138,16 @@ export const syncCommand = Command.make("sync", {
   ...projectLocationFlags,
   disconnect: Flag.Boolean("disconnect").pipe(
     Flag.withDescription("Disconnect this computer from your Tinkjam account and sign out."),
+    Flag.withDefault(false),
+  ),
+  // The launcher's --install connects with this in the foreground, then starts the background
+  // copy with --background, which must never wait for a Connect nobody can see.
+  connectOnly: Flag.Boolean("connect-only").pipe(
+    Flag.withDescription("Connect this computer if it is not yet, then exit."),
+    Flag.withDefault(false),
+  ),
+  background: Flag.Boolean("background").pipe(
+    Flag.withDescription("Run without asking to connect; exit if this computer is not connected."),
     Flag.withDefault(false),
   ),
 }).pipe(
@@ -151,17 +173,22 @@ export const syncCommand = Command.make("sync", {
         Effect.provide(ProcessRunner.layer),
       );
       const launcher = yield* ExternalLauncher.ExternalLauncher;
-      const openBrowser = (yield* canOpenBrowser)
-        ? (url: string) => launcher.launchBrowser(url).pipe(Effect.ignore)
-        : () => Effect.void;
+      const openBrowser =
+        !flags.background && (yield* canOpenBrowser)
+          ? (url: string) => launcher.launchBrowser(url).pipe(Effect.ignore)
+          : () => Effect.void;
       const digest = yield* Digest.Digest;
-      yield* runCloudCommand(
+      const connected = yield* runCloudCommand(
         flags,
-        approveIfNeeded({ computerName, openBrowser }).pipe(
+        approveIfNeeded({ computerName, openBrowser, background: flags.background }).pipe(
           Effect.provideService(Digest.Digest, digest),
         ),
         { quietLogs: true },
       );
+      if (!connected) return;
+      if (flags.connectOnly) {
+        return yield* Console.log("This computer is connected to your Tinkjam account.");
+      }
       // Loopback only: the account's tunnel is the one way in, and no pairing code is printed.
       return yield* runServerCommand(
         {

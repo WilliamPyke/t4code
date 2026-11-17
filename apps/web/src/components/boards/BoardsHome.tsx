@@ -65,6 +65,7 @@ import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { toastManager } from "../ui/toast";
 import { AccountNameAsk, BoardsAccount } from "./BoardsAccount";
 import { BoardsWelcome } from "./BoardsWelcome";
+import { ConnectComputerNudge } from "./ConnectComputerNudge";
 import { InboxBell } from "./InboxBell";
 import { MyTasks } from "./MyTasks";
 import { ViewedBoards } from "./ViewedBoards";
@@ -300,6 +301,7 @@ export function BoardsHome() {
               </Button>
             </Group>
           </header>
+          <ConnectComputerNudge />
           <SignInNudge cloudBoards={joined.some(isCloudShare)} />
           <AccountNameAsk />
           {workspace !== null &&

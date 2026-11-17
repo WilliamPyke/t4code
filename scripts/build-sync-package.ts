@@ -109,12 +109,17 @@ function main() {
     .replace("__TINKJAM_SYNC_MANIFEST_URL__", manifestUrl)
     .replace("__TINKJAM_SYNC_URL__", syncUrl);
   NodeFS.writeFileSync(NodePath.join(stage, "bin/tinkjam-sync.mjs"), launcher, { mode: 0o755 });
-  // Node 22 runs no TypeScript, so the update check goes in as plain JavaScript.
-  const updateCheck = transformSync(
-    NodeFS.readFileSync(NodePath.join(repoRoot, "scripts/sync-package/updateCheck.ts"), "utf8"),
-    { loader: "ts", format: "esm", target: "node22" },
-  ).code;
-  NodeFS.writeFileSync(NodePath.join(stage, "bin/update-check.mjs"), updateCheck);
+  // Node 22 runs no TypeScript, so the launcher's modules go in as plain JavaScript.
+  for (const [source, output] of [
+    ["updateCheck.ts", "update-check.mjs"],
+    ["service.ts", "service.mjs"],
+  ] as const) {
+    const code = transformSync(
+      NodeFS.readFileSync(NodePath.join(repoRoot, "scripts/sync-package", source), "utf8"),
+      { loader: "ts", format: "esm", target: "node22" },
+    ).code;
+    NodeFS.writeFileSync(NodePath.join(stage, "bin", output), code);
+  }
   NodeFS.writeFileSync(
     NodePath.join(stage, "package.json"),
     `${JSON.stringify(

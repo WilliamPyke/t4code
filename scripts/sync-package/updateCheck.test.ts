@@ -27,6 +27,9 @@ describe("Tinkjam Sync's update check", () => {
     expect(syncUpdateNotice("0.1.7+202611170900", release)).toContain(
       "npx -y https://trellium.org/sync.tgz?v=0.1.8%2B202611171530",
     );
+    expect(syncUpdateNotice("0.1.7+202611170900", release, { install: true })).toContain(
+      "npx -y https://trellium.org/sync.tgz?v=0.1.8%2B202611171530 --install",
+    );
   });
 
   it("reads only a well-formed sync.json, and nothing when it fails", async () => {

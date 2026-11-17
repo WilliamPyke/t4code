@@ -12,7 +12,11 @@ import * as Schema from "effect/Schema";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { type ReactNode, useEffect, useEffectEvent, useState } from "react";
 
-import { TINKJAM_AGENT_PROMPT, TINKJAM_SYNC_COMMAND } from "~/branding";
+import {
+  TINKJAM_AGENT_PROMPT,
+  TINKJAM_SYNC_COMMAND,
+  TINKJAM_SYNC_UNINSTALL_COMMAND,
+} from "~/branding";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { environmentCatalog } from "~/connection/catalog";
 import { boardAccountsEnabled, useBoardAccount } from "~/guest/boardAccount";
@@ -377,17 +381,18 @@ export function ConnectComputerRoutes({
           <Badge variant="success">One prompt</Badge>
         </div>
         <ol className="flex flex-col gap-2.5 text-sm">
-          <Step number={1}>Open Claude Code, Codex or another coding agent on your computer.</Step>
-          <Step number={2}>
-            Copy this prompt and send it:
+          <Step number={1}>
+            Copy this prompt and paste it into Claude Code, Codex or another coding agent on your
+            computer:
             <CopyLine text={TINKJAM_AGENT_PROMPT} />
           </Step>
-          <Step number={3}>
-            Open the link your agent gives you and press Connect. Keep that agent session open while
-            you work.
+          <Step number={2}>
+            Press Connect on the link it gives you. That is all: Tinkjam Sync then runs in the
+            background and starts by itself when you log in. The same prompt updates or repairs it
+            later.
           </Step>
           {withAccount && !signedIn ? (
-            <Step number={4}>
+            <Step number={3}>
               <SignInHere />
             </Step>
           ) : null}
@@ -413,7 +418,8 @@ export function ConnectComputerRoutes({
                 {os === "windows"
                   ? "Open PowerShell: press the Windows key, type PowerShell, press Enter."
                   : "Open Terminal. On a Mac, press ⌘ Space, type Terminal, press Return."}{" "}
-                Paste this and press {enter}, then open the link it prints and press Connect:
+                Paste this and press {enter}, then open the link it prints and press Connect. You
+                can close the window once it says it runs in the background:
               </p>
               <CopyLine text={TINKJAM_SYNC_COMMAND} mono />
             </div>
@@ -426,8 +432,8 @@ export function ConnectComputerRoutes({
           </a>
           . Tinkjam Sync lets your boards use the agents on this computer, such as Claude Code or
           Codex, under your own account; they can use what those agents can on it. Nothing anyone
-          else writes reaches your agent unless you press Send. Close that session or window to stop
-          it.
+          else writes reaches your agent unless you press Send. To stop it starting by itself, run{" "}
+          <code>{TINKJAM_SYNC_UNINSTALL_COMMAND}</code>.
         </p>
         {withAccount ? null : (
           <Button size="sm" variant="outline" render={<Link to="/settings/connections" />}>

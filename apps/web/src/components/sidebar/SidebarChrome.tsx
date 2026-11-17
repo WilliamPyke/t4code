@@ -343,7 +343,8 @@ function SidebarConnectComputer() {
           data-sidebar-connect-computer
         >
           <LaptopIcon />
-          <span>Connect a computer</span>
+          <span className="font-medium text-foreground">Connect a computer</span>
+          <span aria-hidden className="ms-auto size-2 shrink-0 rounded-full bg-primary" />
         </SidebarMenuButton>
       </SidebarMenuItem>
     </SidebarMenu>

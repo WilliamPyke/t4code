@@ -101,6 +101,10 @@ function T3ConnectSteps() {
         </p>
         <p className="mt-3 text-muted-foreground">Or run this in a terminal yourself:</p>
         <CommandBlock command={TINKJAM_SYNC_COMMAND} className="mt-2" />
+        <p className="mt-2 text-xs text-muted-foreground">
+          It then runs in the background and starts by itself when you log in. To stop that, run the
+          same command with --uninstall instead of --install.
+        </p>
         {isSignedIn ? (
           <div className="mt-4 space-y-1.5">
             <CloudEnvironmentConnectRows

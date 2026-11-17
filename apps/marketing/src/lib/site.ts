@@ -5,7 +5,7 @@ export const APP_URL = "https://app.trellium.org/";
 export const SAMPLE_BOARD_URL: string =
   "https://app.trellium.org/guest?host=boards.trellium.org#1ecbf7b4-8fc3-46f8-8a5c-8a683e311029.v.usrcvSaVH6bFGp3ACk5tGWNPWwFWYCZ5eXYLRB7usFE";
 // Tinkjam Sync's package is served beside this site; the app shows the same command.
-export const SYNC_COMMAND = "npx -y https://trellium.org/sync.tgz";
+export const SYNC_COMMAND = "npx -y https://trellium.org/sync.tgz --install";
 export const AGENT_PROMPT =
   "Connect this computer to my Tinkjam account. Read https://trellium.org/agent.md and follow it.";
 // Tinkjam is a fork of T3 Code, which is MIT licensed; the footer credits it.

@@ -35,15 +35,29 @@ export function isNewerSync(own: string, latest: string): boolean {
 const syncUpdateCommand = (release: SyncRelease): string =>
   `npx -y ${release.url}?v=${encodeURIComponent(release.version)}`;
 
-/** What to tell the person when a newer copy is out, or null. */
-export function syncUpdateNotice(own: string, release: SyncRelease | null): string | null {
+/**
+ * What to tell the person when a newer copy is out, or null. With `install`, the copy to update
+ * is the one in the background, which `--install` replaces.
+ */
+export function syncUpdateNotice(
+  own: string,
+  release: SyncRelease | null,
+  options?: { readonly install?: boolean },
+): string | null {
   if (release === null || !isNewerSync(own, release.version)) return null;
-  return [
-    "A newer Tinkjam Sync is out. To use it, press Ctrl+C, then run:",
-    "",
-    `  ${syncUpdateCommand(release)}`,
-    "",
-  ].join("\n");
+  return options?.install === true
+    ? [
+        "A newer Tinkjam Sync is out. To run it in the background instead of this one, run:",
+        "",
+        `  ${syncUpdateCommand(release)} --install`,
+        "",
+      ].join("\n")
+    : [
+        "A newer Tinkjam Sync is out. To use it, press Ctrl+C, then run:",
+        "",
+        `  ${syncUpdateCommand(release)}`,
+        "",
+      ].join("\n");
 }
 
 const isRelease = (value: unknown): value is SyncRelease =>
