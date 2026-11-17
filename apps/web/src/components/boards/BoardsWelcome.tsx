@@ -17,6 +17,7 @@ import { BoardThumbnail } from "./BoardThumbnail";
 import { type BoardTemplate, STARTER_BOARD_TEMPLATES, boardTemplateShapes } from "./boardTemplates";
 import { UNTITLED_BOARD } from "./boardsHome.logic";
 import { useNewBoardWaiting, useStartNewBoard } from "./newBoard";
+import { CreateWorkspaceButton } from "./Workspaces";
 
 /**
  * The home before a person has any board: what Tinkjam is, and one button that starts a board,
@@ -141,6 +142,13 @@ export function BoardsWelcome() {
             {account.status === "signed-out" && boardAccountsEnabled() ? <WelcomeSignIn /> : null}
           </div>
         </form>
+        {/* Outside the form: the dialog's own form would otherwise submit this one too. */}
+        {account.status === "signed-in" ? (
+          <div className="flex flex-wrap items-center justify-center gap-2 text-sm text-muted-foreground">
+            Working with a team?
+            <CreateWorkspaceButton />
+          </div>
+        ) : null}
       </div>
     </BoardBackdrop>
   );

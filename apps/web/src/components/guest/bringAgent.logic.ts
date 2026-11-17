@@ -29,6 +29,34 @@ const ORDER: Record<BringAgentComputerStatus, number> = {
   unsupported: 4,
 };
 
+export interface DiscoveredComputer {
+  readonly environmentId: EnvironmentId;
+  readonly name: string;
+  readonly availability: Discovery.RelayEnvironmentAvailability;
+  readonly unsupported: boolean;
+}
+
+/**
+ * The account's computers as the dialog shows them while it asks again every few seconds: each
+ * ask lists none at first and then says "checking" for every one, so what was shown stays until
+ * the new answer says something.
+ */
+export function steadyDiscovered(
+  shown: ReadonlyArray<DiscoveredComputer>,
+  latest: { readonly listed: boolean; readonly computers: ReadonlyArray<DiscoveredComputer> },
+): ReadonlyArray<DiscoveredComputer> {
+  if (!latest.listed) return shown;
+  const before = new Map(shown.map((computer) => [computer.environmentId, computer]));
+  return latest.computers.map((computer) => {
+    const known = before.get(computer.environmentId);
+    return computer.availability === "checking" &&
+      known !== undefined &&
+      known.availability !== "checking"
+      ? { ...computer, availability: known.availability, unsupported: known.unsupported }
+      : computer;
+  });
+}
+
 /**
  * The person's computers for "Bring my agent": the ones this browser connects to, and the ones
  * their account says Tinkjam Sync runs on. The account's word on online or offline is the real
@@ -41,12 +69,7 @@ export function bringAgentComputers(input: {
     readonly phase: EnvironmentConnectionPhase;
     readonly hasConfig: boolean;
   }>;
-  readonly discovered: ReadonlyArray<{
-    readonly environmentId: EnvironmentId;
-    readonly name: string;
-    readonly availability: Discovery.RelayEnvironmentAvailability;
-    readonly unsupported: boolean;
-  }>;
+  readonly discovered: ReadonlyArray<DiscoveredComputer>;
 }): ReadonlyArray<BringAgentComputer> {
   const discoveredById = new Map(input.discovered.map((entry) => [entry.environmentId, entry]));
   const savedIds = new Set(input.saved.map((entry) => entry.environmentId));

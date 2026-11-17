@@ -10,7 +10,7 @@ import { useLocation } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
-import { DESKTOP_DOWNLOAD_URL } from "~/branding";
+import { TINKJAM_SYNC_URL } from "~/branding";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { isHostedStaticApp } from "~/hostedPairing";
 import { useEnvironments } from "~/state/environments";
@@ -210,8 +210,8 @@ function HostedPromptLinkLanding({
             Continue here
           </Button>
         ) : null}
-        <Button variant="ghost" render={<a href={DESKTOP_DOWNLOAD_URL} />}>
-          Get Tinkjam
+        <Button variant="ghost" render={<a href={TINKJAM_SYNC_URL} />}>
+          Get Tinkjam Sync
         </Button>
       </div>
       <label className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">

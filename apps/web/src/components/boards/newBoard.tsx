@@ -458,12 +458,13 @@ export function useStartNewBoard() {
     let decision = decide(machines, false);
     if (decision.kind === "wait") {
       appAtomRegistry.set(newBoardWaitingAtom, true);
-      try {
-        await waitForMachines();
-        decision = decide(appAtomRegistry.get(newBoardMachinesAtom), true);
-      } finally {
-        appAtomRegistry.set(newBoardWaitingAtom, false);
-      }
+      const failed = await waitForMachines().then(
+        () => null,
+        (error: unknown) => ({ error }),
+      );
+      appAtomRegistry.set(newBoardWaitingAtom, false);
+      if (failed !== null) throw failed.error;
+      decision = decide(appAtomRegistry.get(newBoardMachinesAtom), true);
     }
     if (decision.kind === "cloud") {
       await createCloudBoard(template, knownBoardName(), title);

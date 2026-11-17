@@ -17,7 +17,7 @@ const PRIORITY_LOOK: Readonly<
 > = {
   urgent: { icon: FlameIcon, tone: "error" },
   high: { icon: SignalHighIcon, tone: "warning" },
-  medium: { icon: SignalMediumIcon, tone: "neutral" },
+  medium: { icon: SignalMediumIcon, tone: "info" },
   low: { icon: SignalLowIcon, tone: "neutral" },
 };
 

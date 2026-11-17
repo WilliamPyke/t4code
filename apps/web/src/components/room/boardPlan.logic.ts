@@ -16,7 +16,6 @@ import {
   type BoardRect,
   boardBounds,
   boardItemRects,
-  boardNextNoteSpot,
   boardNoteRect,
   clampBoardSize,
   placeBoardItem,
@@ -217,6 +216,7 @@ const SECTION_INSET = { x: 24, y: 56 };
 // Rows a free-standing pile of tasks is laid out in, at the least.
 const FREE_ROW_TASKS = 4;
 const MAX_ROWS = 200;
+const FREE_ROWS = 6;
 
 const centreIn = (rect: BoardRect, inner: BoardRect) => {
   const x = inner.x + inner.width / 2;
@@ -238,8 +238,9 @@ function firstClearSlot(
   origin: BoardPoint,
   columns: number,
   taken: ReadonlyArray<BoardRect>,
+  rows = MAX_ROWS,
 ): BoardPoint | null {
-  for (let row = 0; row < MAX_ROWS; row += 1) {
+  for (let row = 0; row < rows; row += 1) {
     for (let column = 0; column < columns; column += 1) {
       const at = {
         x: Math.round(origin.x + column * TASK_STEP_X),
@@ -279,15 +280,13 @@ export function boardPlanTaskPlace(
   const tasks = board.notes.filter((note) => note.kind === "task" && note.section !== true);
   const newest = tasks.at(-1);
   if (newest === undefined) {
-    const bounds = boardBounds(taken);
+    // The nearest clear spot to the middle of what people put on the board, else of its cards.
+    const bounds = boardBounds(board.notes.length > 0 ? board.notes.map(rectOf) : cards);
     if (bounds === null) return { x: 80, y: 72 };
     return placeBoardItem(
       ROOM_BOARD_TASK_SIZE,
-      {
-        x: bounds.x + bounds.width + 48 + ROOM_BOARD_TASK_SIZE.w / 2,
-        y: bounds.y + ROOM_BOARD_TASK_SIZE.h / 2,
-      },
-      taken,
+      { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 },
+      [...taken, ...sections.map(boardNoteRect)],
     );
   }
   const newestRect = rectOf(newest);
@@ -329,9 +328,18 @@ export function boardPlanTaskPlace(
   const left = Math.min(newestRect.x, ...row.map((rect) => rect.x));
   const columns = Math.max(FREE_ROW_TASKS, Math.round((newestRect.x - left) / TASK_STEP_X) + 1);
   const blocked = [...taken, ...sections.map(boardNoteRect)];
+  // A few rows at most: past them, a crowded board would push the task far off. The nearest
+  // clear spot right of the newest task is better then.
   return (
-    firstClearSlot({ x: left, y: newestRect.y }, columns, blocked) ??
-    boardNextNoteSpot(newestRect, ROOM_BOARD_TASK_SIZE, blocked)
+    firstClearSlot({ x: left, y: newestRect.y }, columns, blocked, FREE_ROWS) ??
+    placeBoardItem(
+      ROOM_BOARD_TASK_SIZE,
+      {
+        x: newestRect.x + newestRect.width + TASK_GAP + ROOM_BOARD_TASK_SIZE.w / 2,
+        y: newestRect.y + ROOM_BOARD_TASK_SIZE.h / 2,
+      },
+      blocked,
+    )
   );
 }
 
@@ -468,6 +476,34 @@ export function boardPlanIndexAmong(
   if (before !== undefined) return others.findIndex((task) => task.id === before.id);
   const last = visible.at(-1);
   return last === undefined ? others.length : others.findIndex((task) => task.id === last.id) + 1;
+}
+
+/**
+ * The tasks selected after a click on `id`: a plain click selects it alone, Ctrl or Cmd adds it
+ * or takes it out, and Shift adds every task shown (`order`) from the last one clicked (`anchor`)
+ * to it. A plain click on the task selected alone opens it: `open`.
+ */
+export function boardPlanPick(
+  picked: ReadonlySet<string>,
+  anchor: string | null,
+  id: string,
+  keys: { readonly shiftKey: boolean; readonly ctrlKey: boolean; readonly metaKey: boolean },
+  order: ReadonlyArray<string>,
+): { readonly picked: ReadonlySet<string>; readonly open: boolean } {
+  if (keys.shiftKey) {
+    const from = anchor === null ? -1 : order.indexOf(anchor);
+    const to = order.indexOf(id);
+    if (from === -1 || to === -1) return { picked: new Set([...picked, id]), open: false };
+    const range = order.slice(Math.min(from, to), Math.max(from, to) + 1);
+    return { picked: new Set([...picked, ...range]), open: false };
+  }
+  if (keys.ctrlKey || keys.metaKey) {
+    const next = new Set(picked);
+    if (!next.delete(id)) next.add(id);
+    return { picked: next, open: false };
+  }
+  const alone = picked.size === 1 && picked.has(id);
+  return { picked: alone ? picked : new Set([id]), open: alone };
 }
 
 /** Where a task was in the Plan before it was done. */

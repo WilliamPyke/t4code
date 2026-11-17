@@ -51,6 +51,11 @@ import {
 import { roomEmbedOf } from "@t3tools/shared/roomEmbed";
 import * as Schema from "effect/Schema";
 
+import {
+  boardCutForPrompt,
+  boardLinkTextWithSnapshot,
+  boardLinkWithSnapshotChange,
+} from "./boardSnapshot.logic";
 import { boardVotable } from "./boardVotes.logic";
 
 /** Where the board is scrolled to and how far it is zoomed. `x`/`y` are screen pixels. */
@@ -925,43 +930,117 @@ const SIDE_OUT: Readonly<Record<BoardSide, BoardPoint>> = {
   bottom: { x: 0, y: 1 },
 };
 
-/** The middle of one side of a box, where a line attaches. */
-export function boardSidePoint(box: BoardBox, side: BoardSide): BoardPoint {
+/** A point along one side of a box, where a line attaches: its middle at `slot` 0.5. */
+export function boardSidePoint(box: BoardBox, side: BoardSide, slot = 0.5): BoardPoint {
   const out = SIDE_OUT[side];
   return {
-    x: box.x + (box.width * (out.x + 1)) / 2,
-    y: box.y + (box.height * (out.y + 1)) / 2,
+    x: box.x + box.width * (out.x === 0 ? slot : (out.x + 1) / 2),
+    y: box.y + box.height * (out.y === 0 ? slot : (out.y + 1) / 2),
   };
 }
 
+// How much clearer the other pair of sides must be before a line moves to it.
+const SIDE_HYSTERESIS = 32;
+
 /**
  * The sides a line between two boxes leaves and arrives by: the facing pair across the wider gap
- * between them, left and right on a tie, so a line never cuts through either box.
+ * between them, left and right on a tie, so a line never cuts through either box. Given the
+ * sides it uses now (`previous`), it keeps them, the same tuple, until the other choice is
+ * clearly better, so a line does not jump between sides as a card is dragged past the turn.
  */
-export function boardConnectorSides(from: BoardBox, to: BoardBox): readonly [BoardSide, BoardSide] {
+export function boardConnectorSides(
+  from: BoardBox,
+  to: BoardBox,
+  previous?: readonly [BoardSide, BoardSide],
+): readonly [BoardSide, BoardSide] {
   const gapX = Math.max(to.x - (from.x + from.width), from.x - (to.x + to.width));
   const gapY = Math.max(to.y - (from.y + from.height), from.y - (to.y + to.height));
-  if (gapX >= gapY) {
-    return from.x + from.width / 2 <= to.x + to.width / 2 ? ["right", "left"] : ["left", "right"];
+  const dx = to.x + to.width / 2 - (from.x + from.width / 2);
+  const dy = to.y + to.height / 2 - (from.y + from.height / 2);
+  const wasAcross = previous !== undefined && SIDE_OUT[previous[0]].y === 0;
+  const across =
+    previous === undefined
+      ? gapX >= gapY
+      : wasAcross
+        ? gapY <= gapX + SIDE_HYSTERESIS
+        : gapX > gapY + SIDE_HYSTERESIS;
+  const next: readonly [BoardSide, BoardSide] = across
+    ? dx >= 0
+      ? ["right", "left"]
+      : ["left", "right"]
+    : dy >= 0
+      ? ["bottom", "top"]
+      : ["top", "bottom"];
+  if (previous === undefined) return next;
+  if (previous[0] === next[0]) return previous;
+  // Facing the other way only once the centres have clearly passed each other.
+  const kept = across === wasAcross && Math.abs(across ? dx : dy) < SIDE_HYSTERESIS;
+  return kept ? previous : next;
+}
+
+/** Where along each end's side a line attaches; 0.5 is the middle. */
+export interface BoardLineSlots {
+  readonly from: number;
+  readonly to: number;
+}
+
+/**
+ * Where each line attaches along its sides: alone on a side, the middle; with others, spread
+ * along it in the order of where their other ends are, so lines leaving one side do not cross.
+ */
+export function boardLineSlots(
+  lines: ReadonlyArray<{
+    readonly id: string;
+    readonly fromRef: string;
+    readonly toRef: string;
+    readonly from: BoardBox;
+    readonly to: BoardBox;
+  }>,
+): ReadonlyMap<string, BoardLineSlots> {
+  const sides = new Map<string, Array<{ id: string; end: "from" | "to"; along: number }>>();
+  const add = (key: string, id: string, end: "from" | "to", side: BoardSide, other: BoardBox) => {
+    const along = SIDE_OUT[side].x === 0 ? other.x + other.width / 2 : other.y + other.height / 2;
+    const group = sides.get(key) ?? [];
+    group.push({ id, end, along });
+    sides.set(key, group);
+  };
+  for (const line of lines) {
+    const [fromSide, toSide] = boardConnectorSides(line.from, line.to);
+    add(`${line.fromRef}|${fromSide}`, line.id, "from", fromSide, line.to);
+    add(`${line.toRef}|${toSide}`, line.id, "to", toSide, line.from);
   }
-  return from.y + from.height / 2 <= to.y + to.height / 2 ? ["bottom", "top"] : ["top", "bottom"];
+  const slots = new Map<string, { from: number; to: number }>();
+  for (const group of sides.values()) {
+    if (group.length < 2) continue;
+    group.sort((a, b) => a.along - b.along || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    group.forEach(({ id, end }, index) => {
+      const slot = slots.get(id) ?? { from: 0.5, to: 0.5 };
+      slot[end] = (index + 1) / (group.length + 1);
+      slots.set(id, slot);
+    });
+  }
+  return slots;
 }
 
 const MIN_BEND = 40;
 
 /**
- * A curve from the middle of one box's side to the middle of another's, leaving and arriving
- * square to the sides `boardConnectorSides` picks, and the point halfway along it. `sway` pulls
- * its belly off its resting course while it springs back.
+ * A curve from one box's side to another's, leaving and arriving square to the sides
+ * `boardConnectorSides` picks (or `ends.sides`), at `ends.slots` along them, and the point halfway
+ * along it. `sway` pulls its belly off its resting course while it springs back.
  */
 export function boardConnector(
   from: BoardBox,
   to: BoardBox,
   sway?: BoardPoint,
+  ends?: {
+    readonly sides?: readonly [BoardSide, BoardSide] | undefined;
+    readonly slots?: BoardLineSlots | undefined;
+  },
 ): { readonly path: string; readonly middle: BoardPoint } {
-  const [fromSide, toSide] = boardConnectorSides(from, to);
-  const start = boardSidePoint(from, fromSide);
-  const end = boardSidePoint(to, toSide);
+  const [fromSide, toSide] = ends?.sides ?? boardConnectorSides(from, to);
+  const start = boardSidePoint(from, fromSide, ends?.slots?.from);
+  const end = boardSidePoint(to, toSide, ends?.slots?.to);
   const across = SIDE_OUT[fromSide].x === 0 ? Math.abs(end.y - start.y) : Math.abs(end.x - start.x);
   // Each end leaves its box square to its side; a short line bends no further than it reaches.
   const bend = Math.max(Math.min(MIN_BEND, across), across / 2);
@@ -1972,7 +2051,7 @@ export function boardPromptCard(
   };
   const body =
     note.kind === "artifact"
-      ? [text, cutText(note.artifact?.body.trim() ?? "", PROMPT_ARTIFACT_LENGTH)]
+      ? [text, boardCutForPrompt(note.artifact?.body.trim() ?? "", PROMPT_ARTIFACT_LENGTH)]
           .filter(Boolean)
           .join("\n\n")
       : note.kind === "code"
@@ -2135,10 +2214,16 @@ export function boardPromptContext(
   for (const note of found) {
     const ref = roomBoardNoteRef(note.id);
     const own = lines.filter((edge) => edge.from === ref);
-    const status = boardPromptCardStatus(note, own.map(marked), boxId);
+    const status = boardPromptCardStatus(
+      boardLinkWithSnapshotChange(board, note),
+      own.map(marked),
+      boxId,
+    );
     for (const edge of own) edgeStatus.set(edge.id, status);
     const card = boardPromptCard(note, people, boardNoteQuote(note, messages));
-    if (card !== null) cards.push({ ...card, status, edgeIds: own.map((edge) => edge.id) });
+    if (card === null) continue;
+    const text = boardLinkTextWithSnapshot(board, note, card.text, carried);
+    cards.push({ ...card, text, status, edgeIds: own.map((edge) => edge.id) });
   }
   return {
     cards,
@@ -2548,6 +2633,28 @@ export function boardSectionAround(
   };
 }
 
+/** How far a duplicate sits from its original, right and down, in board pixels. */
+const BOARD_DUPLICATE_STEP = 24;
+
+/**
+ * How far duplicates of cards at `copies` go: one small step right and down, and another for as
+ * long as a copy would sit exactly where a card already is, as duplicating a duplicate does.
+ */
+export function boardDuplicateOffset(
+  copies: ReadonlyArray<BoardPoint>,
+  taken: ReadonlyArray<BoardPoint>,
+): BoardPoint {
+  const corners = new Set(taken.map((at) => `${Math.round(at.x)},${Math.round(at.y)}`));
+  let step = BOARD_DUPLICATE_STEP;
+  while (
+    step < BOARD_DUPLICATE_STEP * 100 &&
+    copies.some((at) => corners.has(`${Math.round(at.x + step)},${Math.round(at.y + step)}`))
+  ) {
+    step += BOARD_DUPLICATE_STEP;
+  }
+  return { x: step, y: step };
+}
+
 /**
  * Copies of the notes, tasks and links among `notes`, each named by `newId`, as `viewer`'s own
  * (null for the owner), where the originals are: a task as not done and given to no one. Thread
@@ -2869,6 +2976,43 @@ export function boardSelectionRemoval(
   );
   const noteIds = notes.filter((note) => isRoomCardOwnedBy(note, viewer)).map((note) => note.id);
   return { noteIds, left: notes.length - noteIds.length };
+}
+
+/**
+ * Whether undo can put a deleted card back as it was. A thread box, code window or pull request
+ * window is tied to a machine, and a comment thread or what the owner's server wrote into a card
+ * cannot be sent again, so those are gone once deleted.
+ */
+export const boardNoteRestorable = (note: RoomBoardNote) =>
+  note.kind !== "thread" &&
+  note.kind !== "code" &&
+  note.kind !== "pull-request" &&
+  note.kind !== "comment" &&
+  !hasServerContent(note);
+
+/**
+ * What deleting these notes sends: first the lines on the ones undo can bring back, so one undo
+ * draws them again, then the notes. Lines on the rest go with them on the server. `undoable` is
+ * false when any of them cannot come back, which is worth a confirm.
+ */
+export function boardDeletion(
+  board: RoomBoard,
+  noteIds: ReadonlyArray<string>,
+): { readonly edgeIds: ReadonlyArray<string>; readonly undoable: boolean } {
+  const notes = board.notes.filter((note) => noteIds.includes(note.id));
+  const lost = new Set(
+    notes.filter((note) => !boardNoteRestorable(note)).map((note) => roomBoardNoteRef(note.id)),
+  );
+  const kept = new Set(
+    notes.filter((note) => boardNoteRestorable(note)).map((note) => roomBoardNoteRef(note.id)),
+  );
+  const edgeIds = (board.edges ?? [])
+    .filter(
+      (edge) =>
+        (kept.has(edge.from) || kept.has(edge.to)) && !lost.has(edge.from) && !lost.has(edge.to),
+    )
+    .map((edge) => edge.id);
+  return { edgeIds, undoable: lost.size === 0 };
 }
 
 /** How many of this viewer's own board changes they can take back. */

@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
+import { sharedNameIds } from "~/guest/boardAccount.logic";
 import { cloudBoardInviteLink, removeFromCloudBoard } from "~/guest/cloudBoards";
 import type { JoinedGuestShare } from "~/guest/guestShares";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
@@ -196,6 +197,9 @@ export function CloudBoardSharing({
 
 const initialOf = (name: string) => Array.from(name.trim())[0]?.toUpperCase() ?? "?";
 
+const joinedOn = (at: string) =>
+  new Date(at).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+
 /**
  * Everyone who has joined the board, those here now first, the viewer marked as you and the
  * maker as such, with a way to remove each other person when `onRemove` is given.
@@ -216,6 +220,7 @@ function BoardPeople({
   const people = guests.toSorted(
     (left, right) => Number(online.includes(right.id)) - Number(online.includes(left.id)),
   );
+  const sameName = sharedNameIds(guests);
   return (
     <ul className="flex flex-col gap-1.5" data-cloud-board-people-list>
       {people.map((guest) => {
@@ -233,6 +238,9 @@ function BoardPeople({
               {guest.id === viewer ? <span className="text-muted-foreground"> (you)</span> : null}
               {guest.id === maker ? (
                 <span className="text-muted-foreground"> · made it</span>
+              ) : null}
+              {sameName.has(guest.id) ? (
+                <span className="text-muted-foreground"> · joined {joinedOn(guest.joinedAt)}</span>
               ) : null}
             </span>
             <span className="shrink-0 text-xs text-muted-foreground">

@@ -323,6 +323,26 @@ to their own agent. It opens as a draft in their thread from this room, with the
 current content attached. Nothing runs until they send it; when their turn finishes, its reply
 fills the artifact.
 
+### Bring documents in with your agent
+
+Many sources (Linear, GitHub, Notion, Jira, Superhuman, private Google Docs) do not show inside a
+link card. To let everyone read one, choose **Bring in with my agent** on its link card, or
+**Add and bring in** when you add the link from the toolbar. Tinkjam writes a prompt in one of
+your own thread boxes asking your agent to open the link with the tools you connected to it (a
+Linear or Google Drive connection, for example) and write a snapshot of it: for an issue its
+status, assignee and latest comments, for a spreadsheet its sheets and first rows, for a design
+its pages and frames. Read the prompt, change it if you like, and press **Send**; nothing runs
+before that, and only your own agent and your own access are used. Without an agent on the board,
+the button offers to bring yours first.
+
+The reply becomes an artifact beside the link card, joined to it by a line, that everyone can
+read. It says what it is a snapshot of, whose agent read it and how long ago, with **Open source**
+to go to the original. **Refresh** asks your own agent to read it again into the same card; the
+previous snapshot stays under **Restore previous**. A snapshot counts toward the board's 6
+artifacts. A line from a snapshot, or from its link card, into a thread box sends what the
+snapshot says with that box's next prompt; a long one is cut to its start, and the agent is told
+so.
+
 ### Code windows
 
 A **Code** window shows what a thread box's agent changed: each file with its lines added and
@@ -435,7 +455,7 @@ A cloud board is kept by the board service instead of on your computer, so it op
 
 Everyone on a cloud board can edit it, rename it and copy its invite link from the header. The **here now** button there lists who is on the board. Anyone can **Leave board** from it. The person who made the board can also **Remove** someone, and **Delete board** deletes it for everyone; that cannot be undone. **Remove from my boards** on the home page or sidebar leaves a cloud board too; its invite link brings you back.
 
-Without signing in, your cloud boards live in this browser only. **Sign in** on the boards home keeps them with your account instead: the boards you make or join while signed in, and the ones this browser already had, show on every device where you sign in, and open there as the same person on the board. Signing out takes the boards you made, joined or opened while signed in off that browser; they stay with your account.
+Without signing in, your cloud boards live in this browser only. **Sign in** on the boards home keeps them with your account instead: the boards you make or join while signed in, and the ones this browser already had, show on every device where you sign in, and open there as the same person on the board. Signing out takes your boards, the ones this browser had before you signed in included, and your name off that browser; they stay with your account, so the next person to use it sees nothing of yours.
 
 Signed in, the menu under your picture has **Your account**: the name everyone on your boards sees, your picture and sign-in details, and **Sign out**. Boards you are already on keep the name you joined them with. Deleting all your data in one step is not there yet; delete the boards you made, and leave the others, from each board's menu on the home.
 
@@ -447,7 +467,7 @@ Everyone in a workspace sees its boards and opens them as themselves, without th
 
 An owner can make someone else an owner, remove someone, or delete the workspace; anyone can leave it. Someone removed, or who left, can no longer open its boards, and their cards on them stay. The last owner must make someone else an owner, or delete the workspace, before leaving. Deleting a workspace does not delete its boards: they stay with everyone already on them. A workspace holds up to 50 people and 500 boards.
 
-A cloud board has no agent of its own. Each person brings theirs. When you make a cloud board and this browser has one computer connected, your agent comes along by itself, so **Thread** and **Ask an agent** work at once. Otherwise, or on a board someone invited you to, choose **Thread**, **Ask an agent** or **Attach my agent**. **Bring your agent** lists your computers with whether each is online; choose **Bring my agent** on one and its agent joins the board, in no project or the project you pick. Your thread boxes then run on that computer, and only you can prompt them. A box whose person is not on the board shows **Offline**.
+A cloud board has no agent of its own. Each person brings theirs. When you make a cloud board and this browser has one computer connected, your agent comes along by itself, so **Thread** and **Ask an agent** work at once. Otherwise, or on a board someone invited you to, choose **Thread**, **Ask an agent** or **Attach my agent**. **Bring your agent** lists your computers with whether each is online; choose **Bring my agent** on one and your agent's box appears in the middle of your view, ready for your first prompt, in no project or the project you pick (the next time, the one you picked last). Your thread boxes then run on that computer, and only you can prompt them. A box whose person is not on the board shows **Offline**.
 
 ### Connect your computer with Tinkjam Sync
 
@@ -457,7 +477,7 @@ Your agents, such as Claude Code or Codex, are programs on your computer, so a b
 npx -y https://trellium.org/sync.tgz
 ```
 
-It prints a link. Open it, sign in if asked, and choose **Connect**. The terminal then says **Connected**; keep that window open while you work, and press Ctrl+C to stop. The computer shows under **Your computers** on every board you open signed in with the same account. Next time, the same command connects without asking.
+It prints a link. Open it, sign in if asked, and choose **Connect**. The terminal then says **Connected**; keep that window open while you work, and press Ctrl+C to stop. The computer shows under **Your computers** on every board you open signed in with the same account, without reloading. Next time, the same command connects without asking. When a newer Tinkjam Sync is out, it says so at start and prints the command that runs the new one.
 
 Tinkjam Sync runs agents on your computer under your own Claude or Codex sign-in, and they can use what those agents can there. Nothing anyone else writes reaches your agent unless you press **Send**. To disconnect the computer from your account, run the command with `--disconnect` at the end. Tinkjam for desktop, an app that does the same without a terminal, is coming.
 

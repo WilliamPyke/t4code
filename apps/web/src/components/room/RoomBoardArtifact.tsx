@@ -219,7 +219,8 @@ function RoomArtifactEditor({
     <div className="flex min-h-0 flex-1 flex-col gap-1 border-t border-board-hairline px-3 py-2">
       <textarea
         aria-label="Artifact text"
-        autoFocus
+        // Focused without scrolling: on the moved board, the browser would scroll its box.
+        ref={(field) => field?.focus({ preventScroll: true })}
         value={text}
         maxLength={ROOM_ARTIFACT_MAX_LENGTH}
         placeholder="Write Markdown, or paste a whole HTML page"

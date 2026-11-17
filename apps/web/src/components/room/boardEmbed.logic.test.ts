@@ -1,7 +1,12 @@
 import type { RoomBoardNote } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { BOARD_LIVE_EMBEDS_MAX, boardLiveEmbeds } from "./boardEmbed.logic";
+import {
+  BOARD_LIVE_EMBEDS_MAX,
+  boardEmbedTitleOf,
+  boardEmbedTitleUrl,
+  boardLiveEmbeds,
+} from "./boardEmbed.logic";
 
 const figma = (id: string, x: number, y = 0): RoomBoardNote => ({
   id,
@@ -31,5 +36,21 @@ describe("boardLiveEmbeds", () => {
     expect(boardLiveEmbeds(row, view, 1, ["f0"]).has("f0")).toBe(true);
     expect(boardLiveEmbeds(row, view, 0.2, ["f0"]).size).toBe(0);
     expect(boardLiveEmbeds(row, { ...view, y: 5_000 }, 1, ["f0"]).size).toBe(0);
+  });
+});
+
+describe("boardEmbedTitleUrl", () => {
+  it("reads a video's title from its source's keyless oEmbed, and nothing else", () => {
+    const video = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+    expect(boardEmbedTitleUrl(video)).toBe(
+      `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(video)}`,
+    );
+    expect(boardEmbedTitleUrl("https://www.figma.com/design/Key/File")).toBeNull();
+    expect(boardEmbedTitleUrl("https://example.com/watch?v=1")).toBeNull();
+    expect(boardEmbedTitleOf({ title: "  Never Gonna Give You Up " })).toBe(
+      "Never Gonna Give You Up",
+    );
+    expect(boardEmbedTitleOf({ title: 4 })).toBeNull();
+    expect(boardEmbedTitleOf(null)).toBeNull();
   });
 });

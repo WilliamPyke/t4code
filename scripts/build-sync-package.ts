@@ -1,25 +1,31 @@
 #!/usr/bin/env node
-// @effect-diagnostics nodeBuiltinImport:off globalConsole:off - A plain build step: bundle, stage and tar.
+// @effect-diagnostics nodeBuiltinImport:off globalConsole:off globalDate:off - A plain build step: bundle, stage and tar.
 /**
  * `pnpm run build:sync` writes dist-sync/sync.tgz, run as `npx <its url>`: the server bundle with
  * .env's sign-in, relay and hosted app baked in (no web client), and a launcher for `t3 sync`.
- * npm installs the native runtime packages the bundle leaves out.
+ * npm installs the native runtime packages the bundle leaves out. Beside it, sync.json names this
+ * build's version, which every copy already out checks at start; publish both, at the same URL.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
+import { transformSync } from "esbuild";
+
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 import { selectCliRuntimeExternalDependencies } from "./lib/cli-external-packages.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 import { windowsSystemTar } from "./lib/windows-tar.ts";
+import { syncVersion } from "./sync-package/updateCheck.ts";
 
 const SYNC_PACKAGE_NAME = "tinkjam-sync";
 // Cloudflare Workers static assets refuse larger files.
 const MAX_TARBALL_BYTES = 25 * 1024 * 1024;
 const DEFAULT_HOSTED_APP_URL = "https://app.trellium.org";
+// Where the tarball is published. It stays the same for every build; sync.json goes beside it.
+const DEFAULT_SYNC_URL = "https://trellium.org/sync.tgz";
 
 const repoRoot = NodePath.resolve(NodeURL.fileURLToPath(import.meta.url), "../..");
 const serverDir = NodePath.join(repoRoot, "apps/server");
@@ -79,7 +85,11 @@ function main() {
   const dependencies = selectCliRuntimeExternalDependencies(
     resolveCatalogDependencies(serverPackageJson.dependencies, catalog, serverPackageJson.name),
   );
-  const hostedAppUrl = loadRepoEnv().T3CODE_HOSTED_APP_URL?.trim() || DEFAULT_HOSTED_APP_URL;
+  const env = loadRepoEnv();
+  const hostedAppUrl = env.T3CODE_HOSTED_APP_URL?.trim() || DEFAULT_HOSTED_APP_URL;
+  const syncUrl = env.TINKJAM_SYNC_URL?.trim() || DEFAULT_SYNC_URL;
+  const manifestUrl = new URL("sync.json", syncUrl).toString();
+  const version = syncVersion(serverPackageJson.version, new Date().toISOString());
 
   const stageRoot = NodePath.join(outputDir, ".stage");
   const stage = NodePath.join(stageRoot, "package");
@@ -93,8 +103,18 @@ function main() {
   const launcher = NodeFS.readFileSync(
     NodePath.join(repoRoot, "scripts/sync-package/tinkjam-sync.mjs"),
     "utf8",
-  ).replace("__TINKJAM_HOSTED_APP_URL__", hostedAppUrl);
+  )
+    .replace("__TINKJAM_HOSTED_APP_URL__", hostedAppUrl)
+    .replace("__TINKJAM_SYNC_VERSION__", version)
+    .replace("__TINKJAM_SYNC_MANIFEST_URL__", manifestUrl)
+    .replace("__TINKJAM_SYNC_URL__", syncUrl);
   NodeFS.writeFileSync(NodePath.join(stage, "bin/tinkjam-sync.mjs"), launcher, { mode: 0o755 });
+  // Node 22 runs no TypeScript, so the update check goes in as plain JavaScript.
+  const updateCheck = transformSync(
+    NodeFS.readFileSync(NodePath.join(repoRoot, "scripts/sync-package/updateCheck.ts"), "utf8"),
+    { loader: "ts", format: "esm", target: "node22" },
+  ).code;
+  NodeFS.writeFileSync(NodePath.join(stage, "bin/update-check.mjs"), updateCheck);
   NodeFS.writeFileSync(
     NodePath.join(stage, "package.json"),
     `${JSON.stringify(
@@ -118,8 +138,17 @@ function main() {
   );
   NodeFS.rmSync(stageRoot, { recursive: true, force: true });
 
+  NodeFS.writeFileSync(
+    NodePath.join(outputDir, "sync.json"),
+    `${JSON.stringify({ version, url: syncUrl }, null, 2)}
+`,
+  );
+
   const bytes = NodeFS.statSync(tarball).size;
-  console.log(`[sync] Wrote ${tarball} (${(bytes / 1024 / 1024).toFixed(1)} MiB)`);
+  console.log(
+    `[sync] Wrote ${tarball} (${(bytes / 1024 / 1024).toFixed(1)} MiB), version ${version}`,
+  );
+  console.log(`[sync] Wrote ${NodePath.join(outputDir, "sync.json")}: publish it beside sync.tgz`);
   console.log(`[sync] Hosted app: ${hostedAppUrl}`);
   console.log(`[sync] Installs from npm: ${Object.keys(dependencies).join(", ")}`);
   if (bytes > MAX_TARBALL_BYTES) {

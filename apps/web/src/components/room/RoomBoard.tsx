@@ -71,10 +71,12 @@ import {
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
+  type Ref,
   createContext,
   use,
   useEffect,
   useId,
+  useImperativeHandle,
   useLayoutEffect,
   useRef,
   useState,
@@ -105,6 +107,15 @@ import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
@@ -117,6 +128,7 @@ import {
   BOARD_PIN_SIZE,
   type BoardArea,
   type BoardBox,
+  type BoardHistoryEntry,
   type BoardHistoryItem,
   type BoardMessage,
   type BoardPeople,
@@ -206,6 +218,10 @@ import {
   boardThreadBoxTitle,
   boardSelectionItems,
   boardSelectionRemoval,
+  boardDeletion,
+  boardDuplicateOffset,
+  boardLineSlots,
+  boardNoteRestorable,
   boardThreadBoxes,
   BOARD_COMMENT_ASK_TEXT,
   BOARD_PAGE_TO_ARTIFACT_TEXT,
@@ -254,7 +270,7 @@ import { RoomArtifactLive } from "./RoomBoardArtifact";
 import { useBoardDrawnHeights } from "./roomBoardHeights";
 import { BoardFirstRunHint } from "./BoardFirstRunHint";
 import { BoardEmbedIcon, RoomEmbedBody, useBoardSurfaceSize } from "./RoomBoardEmbed";
-import { boardLiveEmbeds } from "./boardEmbed.logic";
+import { boardEmbedTitleOf, boardEmbedTitleUrl, boardLiveEmbeds } from "./boardEmbed.logic";
 import { type ReadRoomCodePatch, RoomCodeWindow } from "./RoomBoardCode";
 import { PullRequestStateIcon, RoomPullRequestWindow } from "./RoomBoardPullRequest";
 import { CommentPin, CommentThreadPanel } from "./RoomBoardComments";
@@ -324,6 +340,8 @@ import {
   useBoardSelectedAlone,
 } from "./RoomBoardSelection";
 import { BoardPromptBox } from "./RoomBoardPrompt";
+import { useBoardBringIn } from "./BoardBringIn";
+import { boardLinkTextWithSnapshot } from "./boardSnapshot.logic";
 import { BoardPlan, BoardViewSwitch, useBoardViewMode } from "./BoardPlan";
 import {
   type BoardPlanSpot,
@@ -339,7 +357,7 @@ import {
   boardPlanWithStatus,
 } from "./boardPlan.logic";
 import { BoardEdgeLine, boardStroke } from "./RoomBoardEdge";
-import { TaskDueChip, TaskPriorityMark } from "./BoardTaskMarks";
+import { TaskAssigneeDot, TaskDueChip, TaskPriorityMark } from "./BoardTaskMarks";
 import {
   CLICK_SLOP,
   boardPressKind,
@@ -408,7 +426,6 @@ const EDGE_MARGIN = 400;
 const FOLLOW_NOTICE_MS = 4_000;
 const VIEW_SAVE_DELAY_MS = 500;
 /** How far past the originals a duplicate is looked for, in board pixels. */
-const DUPLICATE_OFFSET = 40;
 // Below this zoom a card's header buttons are too small to miss, and fold into one menu.
 const COMPACT_CARD_ZOOM = 0.8;
 // Fitting keeps cards clear of the header pills and the toolbar floating over the board's edges.
@@ -497,6 +514,11 @@ function Built<Parts>({
   const parts = build();
   return parts === null ? null : children(parts);
 }
+
+/** Focuses an element as it mounts without the browser scrolling the board to it. */
+const focusInPlace = (element: HTMLElement | null) => {
+  element?.focus({ preventScroll: true });
+};
 
 /** Runs `run` with `flag` up, and puts it down after, even when `run` throws. */
 function withFlag(flag: { current: boolean }, run: () => void) {
@@ -827,6 +849,7 @@ export function RoomBoard({
   roomModel,
   cloud,
   bringAgent,
+  ownBoxHandle,
   view: viewMode,
   onViewChange,
 }: {
@@ -951,6 +974,11 @@ export function RoomBoard({
    * Attach my agent open this instead, which says how to bring one.
    */
   readonly bringAgent?: (() => void) | undefined;
+  /**
+   * Set by the board: adds the viewer's own agent box mid-view, selected, with the caret in its
+   * prompt, as when their agent has just come. Returns its id, or null when it cannot.
+   */
+  readonly ownBoxHandle?: Ref<(() => string | null) | null> | undefined;
   /** Board or Plan, as the host's URL keeps it. Absent: the board keeps it in the page's URL. */
   readonly view?: BoardViewMode | undefined;
   readonly onViewChange?: ((view: BoardViewMode) => void) | undefined;
@@ -967,6 +995,8 @@ export function RoomBoard({
   const batch = useRef<Array<BoardStep> | null>(null);
   const unrecorded = useRef(false);
   const [history, setHistory] = useState(NO_HISTORY);
+  // Cards whose deleting Undo could not take back, waiting for a yes.
+  const [confirmingDelete, setConfirmingDelete] = useState<ReadonlyArray<string> | null>(null);
   const [queueChange] = useState(boardChangeQueue);
   // The view left here last time, which the board reopens on when it still shows a card.
   const [remembered] = useState(() =>
@@ -1229,12 +1259,31 @@ export function RoomBoard({
     },
     [viewKey],
   );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the browser scrolls a box that hides its overflow to bring a focused element into view, which no React event reports
+  useEffect(() => {
+    // Focus on a card far out on the board would scroll a clipped box around it, moving the
+    // whole board on screen. Such a box is never scrolled on purpose: put it back.
+    const unscroll = (event: Event) => {
+      const box = event.target;
+      const surface = surfaceRef.current;
+      if (!(box instanceof Element) || surface === null || !box.contains(surface)) return;
+      if (box.scrollTop === 0 && box.scrollLeft === 0) return;
+      if (!/hidden|clip/.test(getComputedStyle(box).overflow)) return;
+      box.scrollTop = 0;
+      box.scrollLeft = 0;
+    };
+    document.addEventListener("scroll", unscroll, true);
+    return () => document.removeEventListener("scroll", unscroll, true);
+  }, []);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- follows the board's on-screen size, which a conversation opening beside it shrinks
   useEffect(() => {
     const surface = surfaceRef.current;
     if (surface === null) return;
     let last = boardAreaOf(surface) ?? { width: 0, height: 0 };
     return observeResize(surface, () => {
+      // Laid out under the Plan at another size, the board keeps the view it was left at, and
+      // comes back to it at the size it had.
+      if (surface.inert) return;
       fitFirst();
       const size = boardAreaOf(surface);
       if (size === null) return;
@@ -1494,10 +1543,14 @@ export function RoomBoard({
     letFrameGo(key);
     const before = boardStepBefore(gestureFrom.current, shown, target);
     gestureFrom.current.delete(key);
-    // Deleting a card cannot be taken back: its content and lines are not kept here.
+    // A deleted card comes back with what a change can send again; `removeNotes` takes its lines
+    // off first so the same undo draws them again.
     const undoable =
-      !(target.kind === "note" && value === null) &&
-      !(value !== null && "kind" in value && value.kind === "comment");
+      !(
+        target.kind === "note" &&
+        value === null &&
+        (before === null || !("text" in before) || !boardNoteRestorable(before))
+      ) && !(value !== null && "kind" in value && value.kind === "comment");
     if (undoable && !unrecorded.current) remember({ target, before, after: value });
     const queue = after ?? boardChangeQueueKey(shown, target, value);
     setEdits((current) => putBoardEdit(board, current, target, value, false));
@@ -1616,10 +1669,40 @@ export function RoomBoard({
       });
       return;
     }
+    // A line drawn again waits until the card it joins, put back in the same step, is there.
+    const restored = new Set(
+      changes.flatMap(({ target, value }) =>
+        target.kind === "note" && value !== null ? [boardEditKey(target)] : [],
+      ),
+    );
     withFlag(unrecorded, () => {
-      for (const { target, value } of changes) send(target, value);
+      for (const { target, value } of changes) {
+        const line = value !== null && "from" in value ? value : null;
+        send(
+          target,
+          value,
+          line === null ? undefined : [line.to, line.from].find((ref) => restored.has(ref)),
+        );
+      }
     });
   };
+  // A link card's title read from its source, once it arrives: only while nobody named it.
+  const nameLink = useStableCallback((id: string, title: string) => {
+    const note = shown.notes.find((candidate) => candidate.id === id);
+    if (
+      note?.kind !== "link" ||
+      note.text !== "" ||
+      held.current.has(boardEditKey({ kind: "note", id }))
+    ) {
+      return;
+    }
+    send({ kind: "note", id }, settleBoardValue({ ...note, text: title }));
+  });
+  // A toast's Undo takes back its own deleting, while it is still the newest step.
+  const undoDeletion = useStableCallback((steps: BoardHistoryEntry) => {
+    const last = history.undo.at(-1);
+    if (last !== undefined && "steps" in last && last.steps === steps) travel("undo");
+  });
   // Undo and redo reach the board while focus rests on a plain control outside it, such as the
   // sidebar's toggle; fields, dialogs, menus and other widgets keep their keys.
   const historyKeyOutside = useStableCallback((event: KeyboardEvent) => {
@@ -2257,8 +2340,8 @@ export function RoomBoard({
       const element = drawnItem(noteRef(copy.from));
       return element === null ? [] : [{ ...copy, rect: drawnRect(element) }];
     });
-  // Copies land together, clear of every card, near `around` (or just below the originals, a
-  // little to the right), and become the selection.
+  // Copies land together and become the selection: pasted, clear of every card near `around`;
+  // duplicated, a small step right and down from the originals, as in FigJam.
   const landCopies = (
     made: ReadonlyArray<{ readonly note: RoomBoardNote; readonly rect: BoardRect }>,
     around?: BoardPoint,
@@ -2266,14 +2349,17 @@ export function RoomBoard({
     const copies = made.slice(0, Math.max(0, ROOM_BOARD_MAX_NOTES - shown.notes.length));
     const bounds = boardBounds(copies.map(({ rect }) => rect));
     if (!canEdit || bounds === null) return;
-    const spot = placeBoardItem(
-      { w: bounds.width, h: bounds.height },
-      around ?? {
-        x: bounds.x + bounds.width / 2 + DUPLICATE_OFFSET,
-        y: bounds.y + bounds.height * 1.5 + DUPLICATE_OFFSET,
-      },
-      takenRects(),
-    );
+    const offset =
+      around === undefined
+        ? boardDuplicateOffset(
+            copies.map(({ rect }) => rect),
+            takenRects(),
+          )
+        : null;
+    const spot =
+      offset !== null
+        ? { x: bounds.x + offset.x, y: bounds.y + offset.y }
+        : placeBoardItem({ w: bounds.width, h: bounds.height }, around ?? bounds, takenRects());
     for (const { note } of copies) {
       const value = settleBoardValue({
         ...note,
@@ -2660,9 +2746,16 @@ export function RoomBoard({
   const askAfterMenu = useRef(false);
   const askKey = viewKey ?? shareId ?? title;
   const askNotes = selectedNotes.filter((note) => note.kind !== "thread" && note.section !== true);
-  const askCards = boardAskCards(askNotes, (note) =>
-    boardPromptCard(note, people, boardNoteQuote(note, messages)),
-  );
+  const askCards = boardAskCards(askNotes, (note) => {
+    const card = boardPromptCard(note, people, boardNoteQuote(note, messages));
+    // A link goes with what its snapshot says, unless the snapshot is asked about too.
+    return card === null
+      ? null
+      : {
+          ...card,
+          text: boardLinkTextWithSnapshot(shown, note, card.text, (ref) => selected.has(ref)),
+        };
+  });
   const askTargets =
     cards !== undefined || onPromptBox === undefined || !canEdit
       ? []
@@ -2962,6 +3055,29 @@ export function RoomBoard({
     reveal(drawnRect(element));
     element.querySelector<HTMLElement>("[data-box-prompt]")?.focus({ preventScroll: true });
   };
+  useImperativeHandle(ownBoxHandle, () => () => {
+    const id = flushSync(() => addCard({ kind: "thread" }, freeSpot("thread", undefined, false)));
+    if (id === null) return null;
+    const ref = noteRef(id);
+    flushSync(() => setSelection(new Set([ref])));
+    focusItem(ref);
+    return id;
+  });
+  const bringIn = useBoardBringIn({
+    board: shown,
+    people,
+    viewer,
+    boxes: threadBoxes,
+    canPrompt: onPromptBox !== undefined && cards === undefined && holds.agents && room !== null,
+    canEdit,
+    canAddArtifact: !full && !artifactsFull,
+    canAddBox: cannotAddThread === null,
+    bringAgent: cards === undefined && holds.agents ? bringAgent : undefined,
+    addBeside: (ref, kind, title) => addBeside(ref, kind, "from", undefined, title),
+    settle: (ref) => queueChange(ref, () => Promise.resolve(true)),
+    prompt: (boxId, prompt) => onPromptBox?.(boxId, prompt) ?? Promise.resolve(false),
+    focusBox: (boxId) => focusItem(boardBoxRef(boxId)),
+  });
   const fitAll = () => {
     const area = boardAreaOf(surfaceRef.current);
     if (area === null) return;
@@ -3054,7 +3170,22 @@ export function RoomBoard({
       />
     );
   };
-  const addLink = (url: string, wanted?: BoardPoint) => addCard({ kind: "link", url }, wanted);
+  const addLink = (url: string, wanted?: BoardPoint) => {
+    const id = addCard({ kind: "link", url }, wanted);
+    const from = boardEmbedTitleUrl(url);
+    // A video's real title, read by this person's browser from its source's public oEmbed (the
+    // server never fetches it), names the card unless someone named it first.
+    if (id !== null && from !== null) {
+      void fetch(from, { credentials: "omit", referrerPolicy: "no-referrer" })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((answer: unknown) => {
+          const title = boardEmbedTitleOf(answer);
+          if (title !== null) nameLink(id, title);
+        })
+        .catch(() => undefined);
+    }
+    return id;
+  };
   // A URL pasted in an empty note makes that note a link card.
   const pasteLinkInto = (note: RoomBoardNote, url: string) => {
     send({ kind: "note", id: note.id }, null);
@@ -3068,9 +3199,17 @@ export function RoomBoard({
     setDraftKind("pull-request");
     setLinkDraft("");
   };
-  const submitLinkDraft = () => {
+  const submitLinkDraft = (andBringIn = false) => {
     const url = linkDraft === null ? null : draftUrl(linkDraft);
     if (url === null) return;
+    if (andBringIn && draftKind === "link") {
+      const id = flushSync(() => {
+        setLinkDraft(null);
+        return addLink(url);
+      });
+      if (id !== null) bringIn.bringInOf({ id, kind: "link", url, text: "", x: 0, y: 0 })?.run?.();
+      return;
+    }
     addAndType(() => {
       setLinkDraft(null);
       return draftKind === "pull-request" ? addCard({ kind: "pull-request", url }) : addLink(url);
@@ -3326,11 +3465,35 @@ export function RoomBoard({
       if (!next.delete(ref)) next.add(ref);
       return next;
     });
-  // What is someone else's stays on the board, and selected.
+  // Deleting takes effect at once, since Undo, or the toast's, puts it back. What Undo cannot put
+  // back, as a thread box's conversation, asks first.
+  const removeNotes = (noteIds: ReadonlyArray<string>) => {
+    const { edgeIds } = boardDeletion(shown, noteIds);
+    for (const id of edgeIds) send({ kind: "edge", id }, null);
+    for (const id of noteIds) send({ kind: "note", id }, null);
+    const steps = batch.current;
+    if (steps === null) return;
+    const toast = toastManager.add({
+      type: "info",
+      title: noteIds.length === 1 ? "Deleted" : `Deleted ${noteIds.length}`,
+      actionProps: {
+        children: "Undo",
+        onClick: () => {
+          toastManager.close(toast);
+          undoDeletion(steps);
+        },
+      },
+    });
+  };
+  const deleteNotes = (noteIds: ReadonlyArray<string>) => {
+    if (noteIds.length === 0) return;
+    if (boardDeletion(shown, noteIds).undoable) removeNotes(noteIds);
+    else setConfirmingDelete(noteIds);
+  };
+  // What is someone else's stays on the board, and selected; what goes leaves the selection with
+  // it, and comes back selected with an undo.
   const deleteSelection = () => {
-    for (const id of removal.noteIds) send({ kind: "note", id }, null);
-    const gone = new Set(removal.noteIds.map(noteRef));
-    setSelection(new Set([...selected].filter((ref) => !gone.has(ref))));
+    deleteNotes(removal.noteIds);
     if (removal.left > 0) {
       toastManager.add({
         type: "info",
@@ -3353,7 +3516,27 @@ export function RoomBoard({
     const use = section ? undefined : messageOf(note);
     const give = section ? undefined : giveOf(note);
     const canDelete = canEdit && isRoomCardOwnedBy(note, viewer);
+    const task = note.kind === "task";
+    const take = task ? takeOf(note) : undefined;
+    const assignTo = (assignee: RoomBoardAssignee | undefined) =>
+      changeNote(note, ({ assignee: _assignee, ...rest }) =>
+        assignee === undefined ? rest : { ...rest, assignee },
+      );
     return {
+      assign:
+        task && canEdit
+          ? [
+              { label: "No one", run: () => assignTo(undefined) },
+              ...(ownerAssignable ? [{}] : []).map((owner) => ({
+                label: boardPersonName(people, undefined),
+                run: () => assignTo(owner),
+              })),
+              ...guests.map((guest) => ({
+                label: boardPersonName(people, guest.id),
+                run: () => assignTo({ guestId: guest.id }),
+              })),
+            ]
+          : undefined,
       onReact: section || reactTo === undefined ? undefined : (emoji) => reactTo(note, emoji),
       color:
         plain && pickColor !== undefined
@@ -3381,13 +3564,17 @@ export function RoomBoard({
                   },
                 ]
               : []),
+        ...(take === undefined ? [] : [{ label: "Take it to my agent", run: take }]),
+        ...(task && canRunBoardTask(note, viewer) && runTargets.length > 0 && !taskBusy(note)
+          ? [{ label: "Run with an agent", run: () => void openRun([note]) }]
+          : []),
         ...(use === undefined ? [] : [{ label: "Use as message", run: use }]),
         ...(give === undefined ? [] : [{ label: "Give to my agent", run: give }]),
         ...(canDelete
           ? [
               {
                 label: section ? "Delete section" : plain ? "Delete note" : "Delete card",
-                run: () => send({ kind: "note", id: note.id }, null),
+                run: () => deleteNotes([note.id]),
                 destructive: true,
               },
             ]
@@ -3715,6 +3902,7 @@ export function RoomBoard({
           model={renderBoxModel?.(box.id)}
           onPrompt={(prompt) => onPromptBox(box.id, prompt)}
           onPin={canEdit && onChange !== undefined ? pinPromptCard : undefined}
+          draft={bringIn.draftFor(box.id)}
         />
       );
     const body = (
@@ -3882,6 +4070,15 @@ export function RoomBoard({
   );
 
   const edgeArea = drawingArea([...boxes.values()]);
+  const lineSlots = boardLineSlots(
+    edges.flatMap((edge) => {
+      const from = boxes.get(edge.from);
+      const to = boxes.get(edge.to);
+      return from === undefined || to === undefined
+        ? []
+        : [{ id: edge.id, fromRef: edge.from, toRef: edge.to, from, to }];
+    }),
+  );
   // Marker ids land in `url(#…)`, which takes no colons.
   // The person colour of whoever owns the card a line starts from: the agent that rewrites.
   const lineColor = (ref: string) =>
@@ -3981,9 +4178,7 @@ export function RoomBoard({
           : undefined,
       onTake: take,
       onDelete:
-        canEdit && isRoomCardOwnedBy(task, viewer)
-          ? () => send({ kind: "note", id: task.id }, null)
-          : undefined,
+        canEdit && isRoomCardOwnedBy(task, viewer) ? () => deleteNotes([task.id]) : undefined,
     };
   };
 
@@ -4387,6 +4582,18 @@ export function RoomBoard({
                 <Button size="sm" type="submit" disabled={draftUrl(linkDraft) === null}>
                   Add
                 </Button>
+                {draftKind === "link" && cards === undefined && holds.agents ? (
+                  <WhatItDoes hint="Adds the link and writes a prompt in your thread box asking your agent to read it onto the board. Nothing runs until you press Send.">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={draftUrl(linkDraft) === null}
+                      onClick={() => submitLinkDraft(true)}
+                    >
+                      Add and bring in
+                    </Button>
+                  </WhatItDoes>
+                ) : null}
                 <Button
                   size="sm"
                   variant="ghost"
@@ -4747,19 +4954,17 @@ export function RoomBoard({
               nudge(direction[0] * step, direction[1] * step);
               return;
             }
-            // Delete acts only on the board itself, so a focused card's own controls keep theirs.
-            // The selection's own Delete, focused by a click that asked to confirm, takes it too.
+            // Delete takes the selection at once wherever focus is on the board but in text, a
+            // button's own keys, or a menu.
             if (
               (event.key === "Delete" || event.key === "Backspace") &&
-              (event.target === event.currentTarget ||
-                (event.target instanceof Element &&
-                  event.target.closest("[data-selection-delete]") !== null)) &&
+              boardPressKind(event.target) !== "text" &&
+              isBoardKey(event.target) &&
+              canEdit &&
               removal.noteIds.length > 0
             ) {
               event.preventDefault();
-              event.currentTarget
-                .querySelector<HTMLButtonElement>("[data-selection-delete]")
-                ?.click();
+              deleteSelection();
             }
           }}
           onPointerMove={(event) => {
@@ -4881,7 +5086,7 @@ export function RoomBoard({
                     onText={(text) => writeNote(note, text)}
                     onBlur={() => release(() => letGo(target))}
                     onRevert={() => revertText(target)}
-                    onDelete={() => send(target, null)}
+                    onDelete={() => deleteNotes([note.id])}
                     onPickColor={
                       canEdit && cards === undefined
                         ? (color) => changeNote(note, (current) => ({ ...current, color }))
@@ -4950,6 +5155,7 @@ export function RoomBoard({
                     if (from === undefined || to === undefined) return null;
                     const selected = selectedEdge === edge.id;
                     const state: EdgeStroke = selected ? "selected" : edgeRole(edge.id);
+                    const slots = lineSlots.get(edge.id);
                     return (
                       <BoardEdgeLine
                         key={edge.id}
@@ -4958,6 +5164,8 @@ export function RoomBoard({
                         toRef={edge.to}
                         from={from}
                         to={to}
+                        fromSlot={slots?.from ?? 0.5}
+                        toSlot={slots?.to ?? 0.5}
                         color={
                           state === "artifact" ? lineColor(edge.from) : EDGE_STROKE_COLORS[state]
                         }
@@ -5161,7 +5369,6 @@ export function RoomBoard({
                     note={note}
                     people={people}
                     guests={guests}
-                    ownerAssignable={ownerAssignable}
                     canEdit={canEdit}
                     link={link}
                     quote={boardNoteQuote(note, messages)}
@@ -5186,18 +5393,11 @@ export function RoomBoard({
                     onBlur={(target) => release(() => letGo(target))}
                     onRevert={revertText}
                     onText={writeNote}
-                    onChange={changeNote}
                     onTick={tickTask}
                     onPasteLink={full ? undefined : pasteLinkInto}
-                    onDelete={send}
+                    onDelete={(target) => deleteNotes([target.id])}
                     onOpenReply={onOpenReply}
                     worker={running.find((agent) => agent.taskId === note.id)}
-                    onTake={takeOf(note)}
-                    onRun={
-                      canRunBoardTask(note, viewer) && runTargets.length > 0 && !taskBusy(note)
-                        ? () => void openRun([note])
-                        : undefined
-                    }
                     taskRun={
                       note.kind === "task" && note.run !== undefined ? (
                         <TaskRunChip
@@ -5243,6 +5443,7 @@ export function RoomBoard({
                     boxName={boxName}
                     onRestore={restoreOf(note)}
                     onAttachAgent={attachAgentOf(note)}
+                    bringIn={bringIn.partOf(note)}
                     onWrite={writeOf(note)}
                     onAsk={
                       note.kind === "artifact" && askTargets.length > 0
@@ -5300,7 +5501,9 @@ export function RoomBoard({
                 const from = boxes.get(edge.from);
                 const to = boxes.get(edge.to);
                 if (selectedEdge !== edge.id || from === undefined || to === undefined) return null;
-                const { middle } = boardConnector(from, to);
+                const { middle } = boardConnector(from, to, undefined, {
+                  slots: lineSlots.get(edge.id),
+                });
                 return (
                   <div
                     key={edge.id}
@@ -5311,12 +5514,16 @@ export function RoomBoard({
                       size="icon-xs"
                       variant="outline"
                       aria-label="Delete line"
-                      autoFocus
+                      // Focused without scrolling: inside the moved board, the browser would
+                      // scroll the board's box to bring it into view.
+                      ref={focusInPlace}
                       onPointerDown={stopPointer}
                       onClick={() => removeEdge(edge.id)}
                       onKeyDown={(event) => {
-                        if (event.key === "Delete" || event.key === "Backspace")
+                        if (event.key === "Delete" || event.key === "Backspace") {
+                          event.stopPropagation();
                           removeEdge(edge.id);
+                        }
                         if (event.key === "Escape") setSelectedEdge(null);
                       }}
                     >
@@ -5400,6 +5607,41 @@ export function RoomBoard({
               ) : null}
             </SelectionBar>
           )}
+          <AlertDialog
+            open={confirmingDelete !== null}
+            onOpenChange={(open) => {
+              if (!open) setConfirmingDelete(null);
+            }}
+          >
+            <AlertDialogPopup>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  {confirmingDelete?.length === 1
+                    ? "Delete this card?"
+                    : `Delete ${confirmingDelete?.length ?? 0} cards?`}
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  A thread box&apos;s conversation, a comment thread, or what an agent wrote cannot
+                  be brought back with Undo.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogClose render={<Button variant="outline" size="sm" />}>
+                  Cancel
+                </AlertDialogClose>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => {
+                    if (confirmingDelete !== null) removeNotes(confirmingDelete);
+                    setConfirmingDelete(null);
+                  }}
+                >
+                  Delete
+                </Button>
+              </AlertDialogFooter>
+            </AlertDialogPopup>
+          </AlertDialog>
           {placingComment ? (
             <div
               aria-hidden
@@ -5481,6 +5723,7 @@ export function RoomBoard({
             onChange={changeNote}
             onMove={movePlanTask}
             onMoveAll={movePlanTasks}
+            onDeleteAll={deleteNotes}
             actionsOf={planActions}
           />
         )}
@@ -5824,7 +6067,6 @@ function BoardNote({
   note,
   people,
   guests,
-  ownerAssignable,
   canEdit,
   link,
   quote,
@@ -5834,14 +6076,11 @@ function BoardNote({
   onBlur,
   onRevert,
   onText,
-  onChange,
   onTick,
   onPasteLink,
   onDelete,
   onOpenReply,
   worker,
-  onTake,
-  onRun,
   taskRun,
   onUse,
   onGive,
@@ -5862,7 +6101,10 @@ function BoardNote({
   changedLabel,
   agentWork,
   embed,
+  bringIn,
 }: {
+  /** A link card's Bring in, or a snapshot artifact's mark with Refresh. */
+  readonly bringIn?: ReactNode;
   /** A link card's page: whether it loads now and is in use, and how to use and leave it. */
   readonly embed?:
     | {
@@ -5887,7 +6129,6 @@ function BoardNote({
   readonly note: RoomBoardNote;
   readonly people: BoardPeople;
   readonly guests: ReadonlyArray<ThreadGuest>;
-  readonly ownerAssignable: boolean;
   readonly canEdit: boolean;
   readonly link: LinkHandlers | undefined;
   /** The start of the reply a comment is pinned to. */
@@ -5905,18 +6146,14 @@ function BoardNote({
   readonly onBlur: (target: BoardTarget) => void;
   readonly onRevert: (target: BoardTarget) => void;
   readonly onText: (note: RoomBoardNote, text: string) => void;
-  readonly onChange: ChangeNote;
   /** Ticks a task done, or unticks it back to where it was in the Plan. */
   readonly onTick: (note: RoomBoardNote, done: boolean) => void;
   /** Absent when a pasted link cannot become a card of its own, on a full board. */
   readonly onPasteLink: ((note: RoomBoardNote, url: string) => void) | undefined;
-  readonly onDelete: (target: BoardTarget, value: null) => void;
+  readonly onDelete: (target: BoardTarget) => void;
   readonly onOpenReply: (messageId: string) => void;
   /** The guest's agent working on this task now. */
   readonly worker: RoomAgentActivity | undefined;
-  readonly onTake: (() => void) | undefined;
-  /** Opens Run with an agent on this task alone. Absent where the viewer cannot run it. */
-  readonly onRun?: (() => void) | undefined;
   /** Which box runs this task and how that goes, while it has a run. */
   readonly taskRun?: ReactNode;
   readonly onUse: (() => void) | undefined;
@@ -5976,6 +6213,9 @@ function BoardNote({
   const text = (drafting ? null : boardLiveText(note.text, liveDrag)) ?? note.text;
   // Notes and tasks are paper in a paint; titled cards, links among them, are windows.
   const paper = note.kind === undefined || note.kind === "task";
+  // A task's actions sit in its menu, as on its Plan card: a card full of buttons is easy to
+  // press by mistake. Any card drawn small folds its buttons into the menu too.
+  const folded = compact || note.kind === "task";
   // Paper's text moves the note like the rest of it; a click on the note selected alone types.
   const alone = useBoardSelectedAlone(noteRef(note.id));
   // Whether it was selected alone is kept from the press: the board selects on release before
@@ -6102,8 +6342,8 @@ function BoardNote({
           <AddedBy name={author} color={boardCursorColor(people.guests, note.guestId)} />
         ) : null}
         <div className={cn("flex items-center gap-1", !selected && BOARD_HOVER_CHROME_CLASS)}>
-          {compact ? <CardActionsMenu {...menuOf(note)} /> : null}
-          {compact || onUse === undefined ? null : (
+          {folded ? <CardActionsMenu {...menuOf(note)} /> : null}
+          {folded || onUse === undefined ? null : (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -6121,7 +6361,7 @@ function BoardNote({
               <TooltipPopup side="top">Use as message</TooltipPopup>
             </Tooltip>
           )}
-          {compact || onGive === undefined ? null : (
+          {folded || onGive === undefined ? null : (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -6139,26 +6379,26 @@ function BoardNote({
               <TooltipPopup side="top">Give to my agent, as a draft</TooltipPopup>
             </Tooltip>
           )}
-          {compact || onReact === undefined || !paper ? null : (
+          {folded || onReact === undefined || !paper ? null : (
             <VoteButton
               note={note}
               viewer={people.viewer}
               onVote={() => onReact(note, BOARD_VOTE)}
             />
           )}
-          {compact || onReact === undefined ? null : (
+          {folded || onReact === undefined ? null : (
             <AddReaction onReact={(emoji) => onReact(note, emoji)} />
           )}
-          {!compact && plain && onPickColor !== undefined ? (
+          {!folded && plain && onPickColor !== undefined ? (
             <NoteColorPicker color={note.color} onPick={(color) => onPickColor(note, color)} />
           ) : null}
-          {!compact && canDelete ? (
+          {!folded && canDelete ? (
             <button
               type="button"
               aria-label={plain ? "Delete note" : "Delete card"}
               className={BOARD_ICON_BUTTON_CLASS}
               onPointerDown={stopPointer}
-              onClick={() => onDelete(target, null)}
+              onClick={() => onDelete(target)}
             >
               <XIcon className="size-3.5" />
             </button>
@@ -6280,35 +6520,21 @@ function BoardNote({
           <TaskProgress note={note} people={people} worker={worker} boxName={boxName} />
         ) : null}
         {note.kind === "task" ? taskRun : null}
-        {note.kind === "task" && (note.priority !== undefined || note.due !== undefined) ? (
-          <div className="flex flex-wrap items-center gap-1 px-3 pb-1">
-            {note.priority === undefined ? null : (
-              <TaskPriorityMark priority={note.priority} iconOnly />
-            )}
+        {note.kind === "task" &&
+        (note.priority !== undefined || note.due !== undefined || note.assignee !== undefined) ? (
+          <div className="flex min-w-0 flex-wrap items-center gap-1 px-3 pb-2">
+            {note.priority === undefined ? null : <TaskPriorityMark priority={note.priority} />}
             {note.due === undefined ? null : (
               <TaskDueChip due={note.due} today={today} done={note.done === true} />
             )}
-          </div>
-        ) : null}
-        {note.kind === "task" ? (
-          <div className="flex flex-wrap items-center gap-1 px-2 pb-2">
-            <AssigneeMenu
-              note={note}
-              people={people}
-              guests={guests}
-              ownerAssignable={ownerAssignable}
-              canEdit={canEdit}
-              onChange={onChange}
-            />
-            {onTake === undefined ? null : (
-              <Button size="micro" variant="outline" onPointerDown={stopPointer} onClick={onTake}>
-                Take it to my agent
-              </Button>
-            )}
-            {onRun === undefined ? null : (
-              <Button size="micro" variant="outline" onPointerDown={stopPointer} onClick={onRun}>
-                Run with an agent
-              </Button>
+            {note.assignee === undefined ? null : (
+              <span className="ms-auto">
+                <TaskAssigneeDot
+                  assignee={note.assignee}
+                  name={boardPersonName(people, note.assignee.guestId)}
+                  color={boardCursorColor(guests, note.assignee.guestId)}
+                />
+              </span>
             )}
           </div>
         ) : null}
@@ -6353,6 +6579,7 @@ function BoardNote({
             )}
           </div>
         ) : null}
+        {artifact ? bringIn : null}
         {artifact ? (
           <RoomArtifactLive
             noteId={note.id}
@@ -6376,6 +6603,7 @@ function BoardNote({
             addedBy={
               <AddedBy name={author} color={boardCursorColor(people.guests, note.guestId)} named />
             }
+            actions={bringIn}
           />
         )}
         {box === undefined ? null : (
@@ -6503,53 +6731,6 @@ function TaskProgress({
         </p>
       </TooltipPopup>
     </Tooltip>
-  );
-}
-
-/** Who a task is for, and the people in the room it can be given to. */
-function AssigneeMenu({
-  note,
-  people,
-  guests,
-  ownerAssignable,
-  canEdit,
-  onChange,
-}: {
-  readonly note: RoomBoardNote;
-  readonly people: BoardPeople;
-  readonly guests: ReadonlyArray<ThreadGuest>;
-  readonly ownerAssignable: boolean;
-  readonly canEdit: boolean;
-  readonly onChange: ChangeNote;
-}) {
-  const label =
-    note.assignee === undefined ? "No one" : boardPersonName(people, note.assignee.guestId);
-  const choices: ReadonlyArray<RoomBoardAssignee> = [
-    ...(ownerAssignable ? [{}] : []),
-    ...guests.map((guest) => ({ guestId: guest.id })),
-  ];
-  const assign = (assignee: RoomBoardAssignee | undefined) =>
-    onChange(note, ({ assignee: _assignee, ...rest }) =>
-      assignee === undefined ? rest : { ...rest, assignee },
-    );
-  return (
-    <Menu>
-      <MenuTrigger
-        disabled={!canEdit}
-        render={<Button size="micro" variant="ghost-muted" onPointerDown={stopPointer} />}
-        aria-label={`Assigned to ${label}`}
-      >
-        {note.assignee === undefined ? "Assign" : label}
-      </MenuTrigger>
-      <MenuPopup align="start">
-        <MenuItem onClick={() => assign(undefined)}>No one</MenuItem>
-        {choices.map((choice) => (
-          <MenuItem key={boardPersonKey(choice.guestId)} onClick={() => assign(choice)}>
-            {boardPersonName(people, choice.guestId)}
-          </MenuItem>
-        ))}
-      </MenuPopup>
-    </Menu>
   );
 }
 

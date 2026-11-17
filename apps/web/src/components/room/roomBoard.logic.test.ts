@@ -73,7 +73,10 @@ import {
   boardGroupMove,
   boardAgentTurnToUndo,
   boardAgentTurnsSeen,
+  boardDeletion,
+  boardDuplicateOffset,
   boardHistoryChanges,
+  boardLineSlots,
   boardHistoryRemember,
   boardStepBefore,
   boardHistoryWith,
@@ -992,6 +995,40 @@ describe("boardConnector", () => {
     expect(boardConnector(card, note, { x: 5, y: -10 }).path).toBe(
       "M320 120 C415 110, 415 110, 500 120",
     );
+  });
+
+  it("spreads lines leaving one side along it, in the order of their far ends", () => {
+    const high = boardNoteBox({ x: 500, y: -200 });
+    const low = boardNoteBox({ x: 500, y: 300 });
+    const alone = boardNoteBox({ x: 0, y: 600 });
+    const slots = boardLineSlots([
+      { id: "low", fromRef: "card:c", toRef: "note:low", from: card, to: low },
+      { id: "high", fromRef: "card:c", toRef: "note:high", from: card, to: high },
+      { id: "down", fromRef: "card:c", toRef: "note:alone", from: card, to: alone },
+    ]);
+    // Two leave the right side: the one going up attaches higher, so they do not cross.
+    expect(slots.get("high")).toEqual({ from: 1 / 3, to: 0.5 });
+    expect(slots.get("low")).toEqual({ from: 2 / 3, to: 0.5 });
+    // A line alone on its side keeps the middle.
+    expect(slots.get("down")).toBeUndefined();
+    expect(boardConnector(card, high, undefined, { slots: slots.get("high") }).path).toMatch(
+      /^M320 80 /,
+    );
+  });
+
+  it("keeps the sides a line uses until the other pair is clearly better", () => {
+    // A note moving down past the corner, where below starts to have the wider gap.
+    const beside = boardNoteBox({ x: 400, y: 200 });
+    const sides = boardConnectorSides(card, beside);
+    expect(sides).toEqual(["right", "left"]);
+    const corner = boardNoteBox({ x: 340, y: 270 });
+    expect(boardConnectorSides(card, corner)).toEqual(["bottom", "top"]);
+    expect(boardConnectorSides(card, corner, sides)).toBe(sides);
+    // Well past it, it turns.
+    expect(boardConnectorSides(card, boardNoteBox({ x: 330, y: 400 }), sides)).toEqual([
+      "bottom",
+      "top",
+    ]);
   });
 });
 
@@ -2600,6 +2637,19 @@ describe("selecting several cards", () => {
     expect(boardDuplicates(notes.slice(0, 1), sam, () => "mine")[0]?.note.guestId).toBe(sam);
   });
 
+  it("puts a duplicate a small step from its original, past any card already sitting there", () => {
+    const original = { x: 100, y: 100 };
+    expect(boardDuplicateOffset([original], [original, { x: 400, y: 0 }])).toEqual({
+      x: 24,
+      y: 24,
+    });
+    // Duplicating again cascades past the first copy, drawn at a fraction of a pixel.
+    expect(boardDuplicateOffset([original], [original, { x: 124.2, y: 123.8 }])).toEqual({
+      x: 48,
+      y: 48,
+    });
+  });
+
   it.each([
     { name: "nothing when all of it is copied", kinds: [undefined, "task"], cards: 0, said: null },
     {
@@ -2890,6 +2940,50 @@ describe("undo and redo", () => {
     expect(boardHistoryRemember(written, { steps: [edit], seen: "t1" })).toHaveLength(2);
     const move = { target: noteTarget, before: blank, after: { ...blank, x: 99 } };
     expect(boardHistoryRemember(added, { steps: [move], seen: "" })).toHaveLength(2);
+  });
+
+  it("puts a deleted note back with its text, colour, size, place and lines, and redo deletes it again", () => {
+    const sized = { ...note, x: 120, y: 40, color: "pink" as const, size: { w: 260, h: 180 } };
+    const other = { id: "o", text: "Other", x: 400, y: 0 };
+    const line2 = { id: "e2", from: "note:o", to: "note:n" };
+    const box = { id: "box", text: "", x: 0, y: 400, kind: "thread" as const };
+    const boxLine = { id: "e3", from: "note:box", to: "note:n" };
+    const full: RoomBoard = {
+      ...board,
+      notes: [sized, other, box],
+      edges: [line, line2, boxLine],
+    };
+    // Lines on a thread box being deleted too go with it on the server, and cannot come back.
+    expect(boardDeletion(full, ["n"])).toEqual({ edgeIds: ["e", "e2", "e3"], undoable: true });
+    expect(boardDeletion(full, ["n", "box"])).toEqual({ edgeIds: ["e", "e2"], undoable: false });
+    // Deleting sends the lines first, then the note, each recorded as it was.
+    const { edgeIds } = boardDeletion(full, ["n"]);
+    const entry: BoardHistoryEntry = [
+      ...edgeIds.map((id) => ({ target: { kind: "edge", id } as const, after: null })),
+      { target: noteTarget, after: null },
+    ].map((step) => ({ ...step, before: boardStepBefore(new Map(), full, step.target) }));
+    const deleted: RoomBoard = { ...full, notes: [other, box], edges: [] };
+    const undo = boardHistoryChanges(deleted, entry, "undo");
+    expect(undo?.map(({ target, value }) => boardChangeOf(target, value))).toEqual([
+      {
+        type: "note.put",
+        noteId: "n",
+        text: "Ship",
+        x: 120,
+        y: 40,
+        color: "pink",
+        size: { w: 260, h: 180 },
+      },
+      { type: "edge.put", edgeId: "e3", from: "note:box", to: "note:n" },
+      { type: "edge.put", edgeId: "e2", from: "note:o", to: "note:n" },
+      { type: "edge.put", edgeId: "e", from: "note:n", to: "card:thread" },
+    ]);
+    expect(boardHistoryChanges(full, entry, "redo")?.map(({ value }) => value)).toEqual([
+      null,
+      null,
+      null,
+      null,
+    ]);
   });
 
   it("records a card an Alt-drag made as not there before, so undo takes it off", () => {

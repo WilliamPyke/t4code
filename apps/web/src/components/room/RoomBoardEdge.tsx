@@ -1,7 +1,13 @@
-import { type PointerEvent, memo, useLayoutEffect, useRef } from "react";
+import { type PointerEvent, memo, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { type BoardBox, boardConnector } from "./roomBoard.logic";
+import {
+  type BoardBox,
+  type BoardLineSlots,
+  type BoardSide,
+  boardConnector,
+  boardConnectorSides,
+} from "./roomBoard.logic";
 import { type BoardLiveDrag, useBoardLineEnd } from "./roomBoardLive";
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
@@ -23,13 +29,18 @@ export const boardStroke = (width: number) => `calc(${width}px * var(--board-lin
 const sameBox = (a: BoardBox, b: BoardBox) =>
   a === b || (a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height);
 
-// An underdamped spring: a line's belly trails its cards, swings past and settles in under a second.
-const STIFFNESS = 170;
-const DAMPING = 11;
+// An underdamped spring: a line's belly trails its cards, swings past once and settles in about
+// 600 ms.
+const STIFFNESS = 320;
+const DAMPING = 21;
 /** How much of its cards' movement a line's belly is left behind by. */
 const LAG = 0.9;
 const MAX_SWAY = 70;
-const SETTLED = 0.25;
+/** Half a pixel: closer to rest than this, a line stops drawing. */
+const SETTLED = 0.5;
+// More lines than this springing at once (a big selection dragged) just follow their cards.
+const MAX_SWAYING = 30;
+let swaying = 0;
 
 const limit = (value: number) => Math.max(-MAX_SWAY, Math.min(MAX_SWAY, value));
 
@@ -40,9 +51,12 @@ interface Sway {
   vy: number;
   from: BoardBox;
   to: BoardBox;
+  ends: { readonly sides: readonly [BoardSide, BoardSide]; readonly slots: BoardLineSlots };
   middle: { readonly x: number; readonly y: number };
   frame: number;
   at: number;
+  /** The path last written, so a frame that changes nothing writes nothing. */
+  drawn: string;
 }
 
 interface BoardEdgeLineProps {
@@ -51,6 +65,9 @@ interface BoardEdgeLineProps {
   readonly toRef: string;
   readonly from: BoardBox;
   readonly to: BoardBox;
+  /** Where along each end's side it attaches; see `boardLineSlots`. */
+  readonly fromSlot: number;
+  readonly toSlot: number;
   readonly color: string;
   readonly width: number;
   readonly marker: string;
@@ -75,6 +92,8 @@ export const BoardEdgeLine = memo(function BoardEdgeLine({
   toRef,
   from,
   to,
+  fromSlot,
+  toSlot,
   color,
   width,
   marker,
@@ -85,7 +104,12 @@ export const BoardEdgeLine = memo(function BoardEdgeLine({
 }: BoardEdgeLineProps) {
   const start = liveEnd(from, useBoardLineEnd(fromRef));
   const end = liveEnd(to, useBoardLineEnd(toRef));
-  const { path, middle } = boardConnector(start, end);
+  // The sides it attaches by change only once the other pair is clearly better.
+  const [held, setHeld] = useState(() => boardConnectorSides(start, end));
+  const sides = boardConnectorSides(start, end, held);
+  if (sides !== held) setHeld(sides);
+  const slots = { from: fromSlot, to: toSlot };
+  const { path, middle } = boardConnector(start, end, undefined, { sides, slots });
   const group = useRef<SVGGElement>(null);
   const ghost = useRef<SVGPathElement>(null);
   const sway = useRef<Sway | null>(null);
@@ -93,20 +117,41 @@ export const BoardEdgeLine = memo(function BoardEdgeLine({
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the spring writes paths to the DOM between renders, and stops once settled
   useLayoutEffect(() => {
     if (sway.current === null) {
-      sway.current = { x: 0, y: 0, vx: 0, vy: 0, from: start, to: end, middle, frame: 0, at: 0 };
+      sway.current = {
+        x: 0,
+        y: 0,
+        vx: 0,
+        vy: 0,
+        from: start,
+        to: end,
+        ends: { sides, slots },
+        middle,
+        frame: 0,
+        at: 0,
+        drawn: "",
+      };
     }
     const state = sway.current;
     const dx = middle.x - state.middle.x;
     const dy = middle.y - state.middle.y;
     state.from = start;
     state.to = end;
+    state.ends = { sides, slots };
     state.middle = middle;
     const draw = (rest: boolean) => {
-      const d = rest
-        ? boardConnector(state.from, state.to).path
-        : boardConnector(state.from, state.to, state).path;
+      const d = boardConnector(state.from, state.to, rest ? undefined : state, state.ends).path;
+      if (d === state.drawn) return;
+      state.drawn = d;
       for (const line of group.current?.querySelectorAll("path") ?? []) line.setAttribute("d", d);
       ghost.current?.setAttribute("d", d);
+    };
+    const stop = () => {
+      if (state.frame !== 0) {
+        cancelAnimationFrame(state.frame);
+        swaying -= 1;
+      }
+      state.x = state.y = state.vx = state.vy = 0;
+      state.frame = 0;
     };
     const step = (now: number) => {
       const seconds = Math.min(0.032, (now - state.at) / 1000);
@@ -115,20 +160,28 @@ export const BoardEdgeLine = memo(function BoardEdgeLine({
       state.vy += (-STIFFNESS * state.y - DAMPING * state.vy) * seconds;
       state.x += state.vx * seconds;
       state.y += state.vy * seconds;
+      // Under half a pixel this frame and from rest: nothing more worth drawing.
       const settled =
-        Math.abs(state.x) + Math.abs(state.y) < SETTLED &&
-        Math.abs(state.vx) + Math.abs(state.vy) < SETTLED * 20;
+        Math.abs(state.x) < SETTLED &&
+        Math.abs(state.y) < SETTLED &&
+        (Math.abs(state.vx) + Math.abs(state.vy)) * seconds < SETTLED;
       if (settled) {
-        state.x = state.y = state.vx = state.vy = 0;
-        state.frame = 0;
+        stop();
         draw(true);
         return;
       }
       draw(false);
       state.frame = requestAnimationFrame(step);
     };
+    state.drawn = path;
     if (dx !== 0 || dy !== 0) {
       if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false) return;
+      // A line longer than the screen, or one of a great many moving at once, just follows.
+      const scale = state.frame === 0 ? (group.current?.getScreenCTM()?.a ?? 1) : 1;
+      const long =
+        Math.hypot(end.x - start.x, end.y - start.y) * scale >
+        Math.max(window.innerWidth, window.innerHeight);
+      if (state.frame === 0 && (long || swaying >= MAX_SWAYING)) return;
       state.x = limit(state.x - dx * LAG);
       state.y = limit(state.y - dy * LAG);
     }
@@ -136,6 +189,7 @@ export const BoardEdgeLine = memo(function BoardEdgeLine({
     // React just wrote the resting path; put the swaying one back before paint.
     draw(false);
     if (state.frame === 0) {
+      swaying += 1;
       state.at = performance.now();
       state.frame = requestAnimationFrame(step);
     }
@@ -143,7 +197,11 @@ export const BoardEdgeLine = memo(function BoardEdgeLine({
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a frame still pending must not outlive the line
   useLayoutEffect(
     () => () => {
-      if (sway.current !== null) cancelAnimationFrame(sway.current.frame);
+      const state = sway.current;
+      if (state === null || state.frame === 0) return;
+      cancelAnimationFrame(state.frame);
+      state.frame = 0;
+      swaying -= 1;
     },
     [],
   );

@@ -13,7 +13,6 @@ import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 
-import { useInlineActionConfirm } from "../pullRequest/useInlineActionConfirm";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { selectionBarSpot } from "./roomBoard.logic";
@@ -129,8 +128,8 @@ const DOCKED_BELOW_WIDTH = 640;
 const DOCK_GAP = 8;
 
 /**
- * How many cards are selected, what they can do, Delete for the ones this viewer may remove (asked
- * twice) and Clear. It sits beside the selected cards and steps out of the way while they move;
+ * How many cards are selected, what they can do, Delete for the ones this viewer may remove and
+ * Clear. It sits beside the selected cards and steps out of the way while they move;
  * on a phone it docks above the toolbar, clear of the cards' own controls, with icons and a menu.
  */
 export function SelectionBar({
@@ -152,12 +151,9 @@ export function SelectionBar({
   readonly actions: ReadonlyArray<SelectionAction>;
   /** Controls shown first, such as the colour picker. */
   readonly children?: ReactNode;
-  /** Its button, `data-selection-delete`, is what the Delete key presses. */
   readonly onDelete: () => void;
   readonly onClear: () => void;
 }) {
-  const confirm = useInlineActionConfirm("board-selection");
-  const armed = confirm.isArmed("delete");
   const coarse = useMediaQuery(COARSE_QUERY);
   const [narrow, setNarrow] = useState(false);
   const docked = coarse || narrow;
@@ -231,7 +227,7 @@ export function SelectionBar({
     bar.style.left = `${spot.left}px`;
     bar.style.top = `${spot.top}px`;
   });
-  const deleteLabel = armed ? `Confirm delete ${removable}` : `Delete ${removable}`;
+  const deleteLabel = `Delete ${removable}`;
   return (
     <div
       ref={barRef}
@@ -275,14 +271,13 @@ export function SelectionBar({
           )}
           {removable === 0 ? null : (
             <Button
-              size={armed ? "lg" : "icon-lg"}
-              variant={armed ? "destructive-outline" : "ghost-muted"}
+              size="icon-lg"
+              variant="ghost-muted"
               aria-label={deleteLabel}
               data-selection-delete
-              {...confirm.props("delete", onDelete)}
+              onClick={onDelete}
             >
               <Trash2Icon />
-              {armed ? `Delete ${removable}?` : null}
             </Button>
           )}
           <Button
@@ -305,13 +300,13 @@ export function SelectionBar({
           {removable === 0 ? null : (
             <Button
               size="micro"
-              variant={armed ? "destructive-outline" : "ghost-muted"}
+              variant="ghost-muted"
               aria-label={deleteLabel}
               data-selection-delete
-              {...confirm.props("delete", onDelete)}
+              onClick={onDelete}
             >
               <Trash2Icon />
-              {armed ? `Delete ${removable}?` : "Delete"}
+              Delete
             </Button>
           )}
           <Button size="micro" variant="ghost-muted" onClick={onClear}>

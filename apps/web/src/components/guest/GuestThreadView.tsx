@@ -405,6 +405,8 @@ function GuestThreadSession({
   // The guest's own machine in this room, whose agent runs their thread boxes.
   const { machine, setBoxThread } = useOwnRoomMachine(share);
   const joinBoardOnComputer = useJoinBoardOnComputer();
+  // Their agent joined from this page; this page learns which machine it is a moment later.
+  const agentJoined = useRef(false);
   // The person's agent joins from one of their computers, without leaving this page.
   const bringAgentFrom = async (
     environmentId: EnvironmentId,
@@ -422,7 +424,10 @@ function GuestThreadSession({
       project,
       source: { host: share.host, token: handoff.token },
     });
-    if (failed === null) announceRoomMachineJoined(share.shareId);
+    if (failed === null) {
+      agentJoined.current = true;
+      announceRoomMachineJoined(share.shareId);
+    }
     return failed;
   };
   const ownProviders = useEnvironmentProviders();
@@ -447,6 +452,8 @@ function GuestThreadSession({
   const [addingAt, setAddingAt] = useState<BoardPoint | null>(null);
   // Says how to bring their agent to a cloud board, which has none of its own.
   const [bringingAgent, setBringingAgent] = useState(false);
+  // Set by the board: puts this person's agent box on it, ready for their first prompt.
+  const ownBox = useRef<(() => string | null) | null>(null);
   // The board keeps each of this guest's boxes' pick; this one until the board shows it.
   const [boxPicks, setBoxPicks] = useState<Readonly<Record<string, BoardLocalModelPick>>>({});
   // The guest's own machine's threads, whose records say how their boxes' runs ended.
@@ -739,7 +746,15 @@ function GuestThreadSession({
     }
     // A cloud board has no owner to send a request to: only their own agent can run it.
     if (cloud) {
-      setBringingAgent(true);
+      if (agentJoined.current) {
+        toastManager.add({
+          type: "info",
+          title: "Your agent is still joining",
+          description: "Send it again in a moment.",
+        });
+      } else {
+        setBringingAgent(true);
+      }
       return false;
     }
     const text = guestBoardPromptText(
@@ -818,6 +833,7 @@ function GuestThreadSession({
                 ? () => setBringingAgent(true)
                 : undefined
             }
+            ownBoxHandle={ownBox}
             ownerAssignable={!cloud}
             {...(cloud
               ? {
@@ -933,6 +949,13 @@ function GuestThreadSession({
         open={bringingAgent}
         onOpenChange={setBringingAgent}
         onBring={bringAgentFrom}
+        onBrought={() => {
+          if (ownBox.current?.() == null) return;
+          toastManager.add({
+            type: "info",
+            title: "This is your agent. Only you can send it work.",
+          });
+        }}
       />
       {machine == null || addingAt === null ? null : (
         <BoardThreadPicker

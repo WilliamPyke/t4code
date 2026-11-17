@@ -12,5 +12,16 @@ export function useT3ConnectAuthPrompt() {
       withSignUp: true,
     });
   };
-  return { openAuthPrompt };
+  /**
+   * The same on a page of its own, coming back here as a new page load: for a page that must see
+   * the new session for certain, such as joining a workspace right after signing up.
+   */
+  const redirectToAuth = () => {
+    const props = resolveClerkSignInProps(window.location.href, isElectron);
+    void clerk.redirectToSignIn({
+      signInForceRedirectUrl: props.forceRedirectUrl ?? null,
+      signUpForceRedirectUrl: props.signUpForceRedirectUrl ?? null,
+    });
+  };
+  return { openAuthPrompt, redirectToAuth };
 }

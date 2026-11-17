@@ -2,6 +2,32 @@ import type { RoomBoardNote } from "@t3tools/contracts";
 
 import { boardEmbedOf, boardNoteSize, type BoardRect } from "./roomBoard.logic";
 
+/**
+ * Where the browser of whoever adds a link card can read its video's real title: the source's
+ * public oEmbed endpoint, which needs no key. Null for every other source. The server never
+ * fetches it.
+ */
+export function boardEmbedTitleUrl(url: string): string | null {
+  const address = encodeURIComponent(url);
+  switch (boardEmbedOf(url)?.source) {
+    case "youtube":
+      return `https://www.youtube.com/oembed?format=json&url=${address}`;
+    case "vimeo":
+      return `https://vimeo.com/api/oembed.json?url=${address}`;
+    case "loom":
+      return `https://www.loom.com/v1/oembed?url=${address}`;
+    default:
+      return null;
+  }
+}
+
+/** The title an oEmbed answer gives, trimmed, or null when it has none. */
+export function boardEmbedTitleOf(answer: unknown): string | null {
+  if (typeof answer !== "object" || answer === null || !("title" in answer)) return null;
+  const title = typeof answer.title === "string" ? answer.title.trim() : "";
+  return title === "" ? null : title.slice(0, 200);
+}
+
 /** Framed pages one board shows at once; every other embed waits for a click. */
 export const BOARD_LIVE_EMBEDS_MAX = 4;
 /** Below this zoom a framed page is too small to read, so none loads. */

@@ -28,6 +28,8 @@ export interface CardAction {
 /** What a card's menu offers: its header buttons, and reacting and colouring where it can. */
 export interface CardMenu {
   readonly actions: ReadonlyArray<CardAction>;
+  /** A task's people to give it to, "No one" first. */
+  readonly assign?: ReadonlyArray<CardAction> | undefined;
   readonly onReact?: ((emoji: RoomBoardReactionEmoji) => void) | undefined;
   readonly color?:
     | {
@@ -38,11 +40,26 @@ export interface CardMenu {
 }
 
 const isEmpty = (menu: CardMenu) =>
-  menu.actions.length === 0 && menu.onReact === undefined && menu.color === undefined;
+  menu.actions.length === 0 &&
+  menu.assign === undefined &&
+  menu.onReact === undefined &&
+  menu.color === undefined;
 
-function CardMenuItems({ actions, onReact, color }: CardMenu) {
+function CardMenuItems({ actions, assign, onReact, color }: CardMenu) {
   return (
     <>
+      {assign === undefined ? null : (
+        <MenuSub>
+          <MenuSubTrigger>Assign</MenuSubTrigger>
+          <MenuSubPopup>
+            {assign.map((choice) => (
+              <MenuItem key={choice.label} onClick={choice.run}>
+                {choice.label}
+              </MenuItem>
+            ))}
+          </MenuSubPopup>
+        </MenuSub>
+      )}
       {onReact === undefined ? null : (
         <MenuSub>
           <MenuSubTrigger>React</MenuSubTrigger>

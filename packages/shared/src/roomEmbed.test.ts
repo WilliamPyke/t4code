@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { isRoomEmbedFrameUrl, roomEmbedOf } from "./roomEmbed.ts";
+import {
+  isRoomEmbedFrameUrl,
+  roomEmbedBringInPrompt,
+  roomEmbedOf,
+  roomEmbedReadHint,
+} from "./roomEmbed.ts";
 
 describe("roomEmbedOf", () => {
   it.each([
@@ -199,5 +204,45 @@ describe("isRoomEmbedFrameUrl", () => {
     expect(isRoomEmbedFrameUrl("https://embed.figma.com.evil.test/design/k")).toBe(false);
     expect(isRoomEmbedFrameUrl("https://www.figma.com/design/k")).toBe(false);
     expect(isRoomEmbedFrameUrl("javascript:alert(1)")).toBe(false);
+  });
+});
+
+describe("roomEmbedReadHint", () => {
+  it("asks each source for what a reader looks for first, and never to change it", () => {
+    const cases: ReadonlyArray<readonly [string, RegExp]> = [
+      ["https://linear.app/acme/issue/ENG-123/fix-login", /status, assignee, priority.*comments/],
+      ["https://linear.app/acme/document/spec-0123456789ab", /outline/],
+      ["https://github.com/acme/app/pull/12", /state, description.*changed files.*review status/],
+      ["https://github.com/acme/app/issues/7", /state, .*description.*comments/],
+      [
+        "https://docs.google.com/spreadsheets/d/abc123/edit",
+        /sheet names.*headers.*first rows.*table/,
+      ],
+      ["https://www.figma.com/design/AbC123/checkout", /page and frame names.*each frame shows/],
+      ["https://docs.google.com/document/d/abc123/edit", /outline.*full text if it is short/],
+      ["https://docs.superhuman.com/d/plan_dAbC", /outline/],
+      ["https://www.notion.so/acme/Roadmap-0123456789abcdef0123456789abcdef", /outline/],
+      ["https://coda.io/d/plan_dAbC", /outline/],
+      ["https://acme.atlassian.net/browse/OPS-4", /status, assignee/],
+      ["https://example.com/blog/launch", /title and main content/],
+    ];
+    for (const [url, expected] of cases) {
+      const embed = roomEmbedOf(url);
+      if (embed === null) throw new Error(url);
+      const hint = roomEmbedReadHint(embed);
+      expect(hint, url).toMatch(expected);
+      expect(hint, url).not.toMatch(
+        /\b(?:edit|modify|update|delete|remove|create|post|close|resolve|assign|move|rename)\b/i,
+      );
+    }
+  });
+
+  it("puts the link, the source's hint and a read-only rule in the prompt", () => {
+    const prompt = roomEmbedBringInPrompt("https://linear.app/acme/issue/ENG-123/fix-login");
+    expect(prompt).toContain("https://linear.app/acme/issue/ENG-123/fix-login");
+    expect(prompt).toContain("For this Linear issue, include its status");
+    expect(prompt).toContain("change nothing in the source");
+    expect(prompt).toContain("say exactly what access is missing");
+    expect(roomEmbedBringInPrompt("https://example.com/a")).toContain("For this page,");
   });
 });

@@ -12,18 +12,20 @@ import {
   type RoomBoardChange,
 } from "@t3tools/contracts";
 import { buildGuestLink } from "@t3tools/shared/guestLinks";
-import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { Atom } from "effect/reactivity";
 
 import { isElectron } from "../env";
-import { getLocalStorageItem, setLocalStorageItem } from "../hooks/useLocalStorage";
 import { configuredHostedAppUrl } from "../hostedPairing";
-import { appAtomRegistry } from "../rpc/atomRegistry";
 import { toastManager } from "../components/ui/toast";
-import { boardAccountAuth, readBoardAccountName, refreshAccountBoards } from "./boardAccount";
+import {
+  boardAccountAuth,
+  readBoardAccountProfile,
+  refreshAccountBoards,
+  saveBoardAccountName,
+} from "./boardAccount";
 import { friendlyName } from "./boardAccount.logic";
+import { readAccountNameSeed, readSignedOutName, rememberSignedOutName } from "./browserIdentity";
 import { cloudBoardsHost, cloudBoardsOrigin } from "./cloudBoardsHost";
 import { type JoinedGuestShare, guestShareEndpointOf, isCloudShare } from "./guestShares";
 import { placeNewBoard } from "./workspaces";
@@ -31,45 +33,36 @@ import { placeNewBoard } from "./workspaces";
 const decodeCreated = Schema.decodeUnknownOption(CloudBoardCreateResult);
 const decodeHandoff = Schema.decodeUnknownOption(GuestHandoff);
 
-// Per browser: the name this person joins boards under, so a new cloud board asks only once.
-const BOARD_NAME_KEY = "t3code:board-name:v1";
-const BoardName = Schema.String;
+/**
+ * The name to join a board under without asking: signed in, the account's own; signed out, the
+ * one typed here signed out. Null when that person has none yet.
+ */
+export const knownBoardName = (): string | null => {
+  const account = readBoardAccountProfile();
+  return account === null ? readSignedOutName() : account.name;
+};
 
-function readStoredBoardName(): string | null {
-  try {
-    return getLocalStorageItem(BOARD_NAME_KEY, BoardName)?.trim() || null;
-  } catch {
-    return null;
-  }
-}
+/**
+ * The name a name field starts with: the known one, else, for an account with none, what it
+ * typed here signed out before it signed in, else a friendly one to keep or replace.
+ */
+export const suggestedBoardName = (): string => {
+  const account = readBoardAccountProfile();
+  return (
+    knownBoardName() ??
+    (account === null ? null : readAccountNameSeed(account.userId)) ??
+    friendlyName((count) => Math.floor(Math.random() * count))
+  );
+};
 
-// Kept in an atom too, so the account's name follows it the moment the person sets it.
-const boardNameAtom = Atom.make<string | null>(readStoredBoardName()).pipe(
-  Atom.keepAlive,
-  Atom.withLabel("board-name"),
-);
-
-const readBoardName = () => appAtomRegistry.get(boardNameAtom);
-
-/** The name this browser joins boards under, or null before the person typed one. */
-export const useRememberedBoardName = () => useAtomValue(boardNameAtom);
-
-/** The name to join a board under without asking: the account's, else the one this browser keeps. */
-export const knownBoardName = (): string | null => readBoardAccountName() ?? readBoardName();
-
-/** The name a name field starts with: the known one, else a friendly one to keep or replace. */
-export const suggestedBoardName = (): string =>
-  knownBoardName() ?? friendlyName((count) => Math.floor(Math.random() * count));
-
+/**
+ * Keeps the name this person typed for boards: signed in, as their account's (on the account
+ * when it can keep one); signed out, as this browser's signed-out name.
+ */
 export function rememberBoardName(name: string) {
   const kept = name.trim().slice(0, GUEST_NAME_MAX_LENGTH).trim();
   if (kept === "") return;
-  appAtomRegistry.set(boardNameAtom, kept);
-  try {
-    setLocalStorageItem(BOARD_NAME_KEY, kept, BoardName);
-  } catch {
-    // Blocked storage only means asking again next time.
-  }
+  if (saveBoardAccountName(kept) === null) rememberSignedOutName(kept);
 }
 
 /**

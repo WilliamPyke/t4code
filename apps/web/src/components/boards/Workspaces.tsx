@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { type FormEvent, useState } from "react";
 
+import { sharedNameIds } from "~/guest/boardAccount.logic";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import {
   type WorkspaceScope,
@@ -83,6 +84,13 @@ export function WorkspaceMark({
   );
 }
 
+/** A colour of its own for a member, the same everywhere they show. */
+const memberColor = (memberId: string): RoomBoardNoteColor => {
+  let hash = 0;
+  for (const char of memberId) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return ROOM_BOARD_NOTE_COLORS[hash % ROOM_BOARD_NOTE_COLORS.length]!;
+};
+
 const scopeLabel = (scope: WorkspaceScope, workspaces: ReadonlyArray<CloudWorkspace>) =>
   scope === "all"
     ? "All boards"
@@ -144,6 +152,20 @@ export function WorkspaceSwitcher({
           </MenuItem>
         </MenuPopup>
       </Menu>
+      {creating ? <NewWorkspaceDialog onClose={() => setCreating(false)} /> : null}
+    </>
+  );
+}
+
+/** Starts a workspace from a screen with no switcher yet, such as the welcome. */
+export function CreateWorkspaceButton() {
+  const [creating, setCreating] = useState(false);
+  return (
+    <>
+      <Button type="button" variant="outline" onClick={() => setCreating(true)} data-new-workspace>
+        <UsersIcon />
+        Create a workspace for your team
+      </Button>
       {creating ? <NewWorkspaceDialog onClose={() => setCreating(false)} /> : null}
     </>
   );
@@ -340,6 +362,9 @@ function WorkspacePeopleDialog({
   const renamed =
     name.trim() !== "" && (name.trim() !== workspace.name || color !== workspace.color);
   const link = workspace.invite === undefined ? null : workspaceInviteLink(workspace.invite);
+  const sameName = sharedNameIds(
+    workspace.members.map((member) => ({ id: member.memberId, name: member.name })),
+  );
   const renew = async () => {
     if (
       workspace.invite !== undefined &&
@@ -404,7 +429,7 @@ function WorkspacePeopleDialog({
             <p className="text-sm font-medium">Invite link</p>
             {link === null ? (
               <p className="text-sm text-muted-foreground">
-                The invite link is off. {owner ? "Make a new one to invite people." : null}
+                The invite link is off. {owner ? "Turn it on to invite people." : null}
               </p>
             ) : (
               <div className="flex gap-2">
@@ -427,7 +452,7 @@ function WorkspacePeopleDialog({
             {owner ? (
               <div className="flex flex-wrap gap-2">
                 <Button size="sm" variant="outline" onClick={() => void renew()}>
-                  New link
+                  {link === null ? "Turn on link" : "New link"}
                 </Button>
                 {link === null ? null : (
                   <Button
@@ -454,6 +479,7 @@ function WorkspacePeopleDialog({
                   member={member}
                   workspace={workspace}
                   canManage={owner && member.you !== true}
+                  sameName={sameName.has(member.memberId)}
                 />
               ))}
             </ul>
@@ -505,10 +531,13 @@ function MemberRow({
   member,
   workspace,
   canManage,
+  sameName,
 }: {
   readonly member: CloudWorkspaceMember;
   readonly workspace: CloudWorkspace;
   readonly canManage: boolean;
+  /** Someone else here has the same name: their colour and join date tell them apart. */
+  readonly sameName: boolean;
 }) {
   const remove = async () => {
     const confirmed = await confirm(
@@ -529,7 +558,10 @@ function MemberRow({
       {member.imageUrl === undefined ? (
         <span
           aria-hidden
-          className="grid size-7 shrink-0 place-items-center rounded-full bg-muted text-2xs font-semibold"
+          className={cn(
+            "grid size-7 shrink-0 place-items-center rounded-full text-2xs font-semibold",
+            sameName ? paintSwatchClassName(memberColor(member.memberId)) : "bg-muted",
+          )}
         >
           {member.name.trim().charAt(0).toUpperCase()}
         </span>
@@ -544,6 +576,16 @@ function MemberRow({
       <span className="min-w-0 flex-1 truncate text-sm">
         {member.name}
         {member.you === true ? <span className="text-muted-foreground"> (you)</span> : null}
+        {sameName ? (
+          <span className="text-muted-foreground">
+            {" "}
+            · joined{" "}
+            {new Date(member.joinedAt).toLocaleDateString(undefined, {
+              day: "numeric",
+              month: "short",
+            })}
+          </span>
+        ) : null}
       </span>
       <span className="text-xs text-muted-foreground">
         {member.role === "owner" ? "Owner" : "Member"}

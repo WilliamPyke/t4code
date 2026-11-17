@@ -34,7 +34,7 @@ export function ConnectCliAuthorizeSurface() {
     }
     clerk.openSignIn(
       resolveClerkSignInProps(
-        connectCliSignInRedirectUrl(request, window.location.href),
+        clerk.buildUrlWithAuth(connectCliSignInRedirectUrl(request, window.location.href)),
         isElectron,
       ),
     );
@@ -62,7 +62,9 @@ export function ConnectCliAuthorizeSurface() {
     const authorizeUrl = buildConnectCliClerkAuthorizeUrl(request);
     if (!authorizeUrl) return;
     setConnecting(true);
-    window.location.assign(authorizeUrl);
+    // On a development sign-in instance, Clerk's own pages are on another site that cannot see
+    // this page's sign-in, and would ask for it again; this carries it there. Nothing elsewhere.
+    window.location.assign(clerk.buildUrlWithAuth(authorizeUrl));
   };
   const computer = request.computerName ?? "this computer";
 

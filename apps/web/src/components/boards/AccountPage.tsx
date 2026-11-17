@@ -5,9 +5,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeftIcon, LogInIcon, LogOutIcon, ShieldCheckIcon } from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
 
-import { boardAccountsEnabled, useBoardAccount } from "~/guest/boardAccount";
-import { accountNameParts } from "~/guest/boardAccount.logic";
-import { rememberBoardName } from "~/guest/cloudBoards";
+import { boardAccountsEnabled, saveBoardAccountName, useBoardAccount } from "~/guest/boardAccount";
 import { accountBoardsAtom } from "~/guest/guestShares";
 
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
@@ -86,8 +84,6 @@ function ConfiguredAccountPage() {
   return <SignedInAccount name={account.name} />;
 }
 
-type ClerkUser = NonNullable<ReturnType<typeof useUser>["user"]>;
-
 function SignedInAccount({ name }: { readonly name: string | null }) {
   const { user } = useUser();
   const clerk = useClerk();
@@ -122,7 +118,7 @@ function SignedInAccount({ name }: { readonly name: string | null }) {
       </header>
 
       <Section title="Your name" detail="Everyone on your boards sees it.">
-        <NameForm user={user} initial={name ?? ""} />
+        <NameForm initial={name ?? ""} />
         <p className="text-xs text-muted-foreground">
           Boards you are already on keep the name you joined them with.
         </p>
@@ -190,7 +186,7 @@ function Section({
   );
 }
 
-function NameForm({ user, initial }: { readonly user: ClerkUser; readonly initial: string }) {
+function NameForm({ initial }: { readonly initial: string }) {
   const [typed, setTyped] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const name = typed ?? initial;
@@ -200,11 +196,7 @@ function NameForm({ user, initial }: { readonly user: ClerkUser; readonly initia
     const trimmed = name.trim();
     if (trimmed === "" || saving || !changed) return;
     setSaving(true);
-    rememberBoardName(trimmed);
-    const saved = await user.update(accountNameParts(trimmed)).then(
-      () => true,
-      () => false,
-    );
+    const saved = (await saveBoardAccountName(trimmed)) ?? false;
     setSaving(false);
     setTyped(null);
     toastManager.add(

@@ -218,8 +218,17 @@ export function CommentPin({
   );
 }
 
-const scrollIntoViewOnMount = (element: HTMLElement | null) =>
-  element?.scrollIntoView({ block: "nearest" });
+// Scrolls only the thread's own list: `scrollIntoView` would scroll the page's clipped boxes
+// around the board too, moving the whole board on screen.
+const scrollIntoViewOnMount = (element: HTMLElement | null) => {
+  let box = element?.parentElement ?? null;
+  while (box !== null && !/auto|scroll/.test(getComputedStyle(box).overflowY)) {
+    box = box.parentElement;
+  }
+  if (element === null || box === null) return;
+  const below = element.getBoundingClientRect().bottom - box.getBoundingClientRect().bottom;
+  if (below > 0) box.scrollTop += below;
+};
 
 type InlineConfirm = ReturnType<typeof useInlineActionConfirm>;
 
@@ -381,7 +390,7 @@ export function CommentThreadPanel({
   const placed = spot !== null;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the field cannot take focus while the panel is hidden for measuring, so it is focused once placed
   useLayoutEffect(() => {
-    if (placed) panel.current?.querySelector("textarea")?.focus();
+    if (placed) panel.current?.querySelector("textarea")?.focus({ preventScroll: true });
   }, [placed]);
   const send = async () => {
     const body = text.trim();

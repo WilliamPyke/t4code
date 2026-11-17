@@ -47,25 +47,83 @@ interface AccountProfile {
   readonly firstName?: string | null | undefined;
   readonly lastName?: string | null | undefined;
   readonly username?: string | null | undefined;
+  /** The name the account saved where its sign-in settings keep no first or last name. */
+  readonly savedName?: string | null | undefined;
 }
 
 const fitName = (text: string | null | undefined) =>
   text?.trim().replace(/\s+/g, " ").slice(0, GUEST_NAME_MAX_LENGTH).trim() || null;
 
 /**
- * The name a signed-in account joins boards under, and whether the account itself has a real
- * one: its full name, else its first and last name; else the name this browser already joined
- * boards under, then its username. Never anything from its email, which others would see.
+ * The name a signed-in account joins boards under, and whether it is one the account has: its
+ * full name, else its first and last name, else the name it saved; then its username. Only ever
+ * the account's own: never a name this browser kept, which may be someone else's, and never
+ * anything from its email, which others would see.
  */
-export function accountDisplayName(
-  profile: AccountProfile,
-  browserName: string | null = null,
-): { readonly name: string | null; readonly real: boolean } {
+export function accountDisplayName(profile: AccountProfile): {
+  readonly name: string | null;
+  readonly real: boolean;
+} {
   const real =
     fitName(profile.fullName) ??
-    fitName([profile.firstName, profile.lastName].filter(Boolean).join(" "));
+    fitName([profile.firstName, profile.lastName].filter(Boolean).join(" ")) ??
+    fitName(profile.savedName);
   if (real !== null) return { name: real, real: true };
-  return { name: fitName(browserName) ?? fitName(profile.username), real: false };
+  return { name: fitName(profile.username), real: false };
+}
+
+/**
+ * Who has used this browser, for the names it shows. `name` is the one typed while signed out
+ * since an account last signed out here; `accounts` are the accounts that ever signed in here;
+ * `current` is the one signed in when this browser last looked.
+ */
+export interface BrowserIdentity {
+  readonly name: string | null;
+  readonly accounts: ReadonlyArray<string>;
+  readonly current: string | null;
+}
+
+/**
+ * The name "What should we call you?" starts with for `userId`: the one typed signed out here,
+ * and only while no other account has ever signed in on this browser.
+ */
+export const accountNameSeed = (identity: BrowserIdentity, userId: string): string | null =>
+  identity.accounts.every((account) => account === userId) ? fitName(identity.name) : null;
+
+/**
+ * This browser after `signedIn` (null: nobody) is seen signed in, and whether the last account's
+ * things must go from it: on sign-out or a switch, so the next person sees nothing of theirs,
+ * its signed-out name included.
+ */
+export function browserAfterSignIn(
+  identity: BrowserIdentity,
+  signedIn: string | null,
+): { readonly identity: BrowserIdentity; readonly clear: boolean } {
+  if (identity.current === signedIn) return { identity, clear: false };
+  const accounts =
+    signedIn === null || identity.accounts.includes(signedIn)
+      ? identity.accounts
+      : [...identity.accounts, signedIn].slice(-20);
+  const clear = identity.current !== null;
+  return {
+    identity: { name: clear ? null : identity.name, accounts, current: signedIn },
+    clear,
+  };
+}
+
+/**
+ * The people a list should tell apart: everyone sharing a name with someone else in it, so
+ * People can add what tells them apart.
+ */
+export function sharedNameIds<TPerson extends { readonly id: string; readonly name: string }>(
+  people: ReadonlyArray<TPerson>,
+): ReadonlySet<string> {
+  const counts = new Map<string, number>();
+  const key = (person: TPerson) => person.name.trim().toLocaleLowerCase();
+  for (const person of people) counts.set(key(person), (counts.get(key(person)) ?? 0) + 1);
+  return new Set(
+    people.filter((person) => (counts.get(key(person)) ?? 0) > 1).map((person) => person.id),
+  );
 }
 
 /** A typed name as the account keeps it: the last word as the last name, the rest as the first. */

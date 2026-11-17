@@ -25,8 +25,9 @@ export const APP_DISPLAY_NAME =
   injectedDesktopAppBranding?.displayName ??
   formatAppDisplayName({ baseName: APP_BASE_NAME, stageLabel: APP_STAGE_LABEL });
 export const APP_VERSION = import.meta.env.APP_VERSION || "0.0.0";
-export const DESKTOP_DOWNLOAD_URL = "https://t3.codes/download";
 // Tinkjam Sync, served beside the homepage (see scripts/build-sync-package.ts).
 export const TINKJAM_SYNC_COMMAND = "npx -y https://trellium.org/sync.tgz";
+// The homepage's section on bringing your agent with Tinkjam Sync.
+export const TINKJAM_SYNC_URL = "https://trellium.org/#agents";
 // Redirects to the App Store or Google Play to match the phone that opens it.
 export const MOBILE_APP_URL = "https://t3.codes/mobile";

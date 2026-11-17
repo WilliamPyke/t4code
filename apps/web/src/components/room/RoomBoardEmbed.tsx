@@ -115,9 +115,12 @@ export function RoomEmbedBody({
   active,
   onRelease,
   addedBy,
+  actions,
 }: {
   readonly embed: RoomEmbed;
   readonly url: string;
+  /** More buttons beside Open, such as bringing it in with an agent. */
+  readonly actions?: ReactNode;
   /** Who put it on the board, as the card's footer shows them. */
   readonly addedBy: ReactNode;
   /** Whether its page loads now; the board loads only a few, in view. */
@@ -150,10 +153,11 @@ export function RoomEmbedBody({
   }, [active, release]);
   return (
     <div ref={bodyRef} className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center gap-2 px-3 pb-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 pb-2">
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-2xs text-muted-foreground">
           {addedBy}
         </div>
+        {actions}
         <Button
           size="micro"
           variant="outline"

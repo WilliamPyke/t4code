@@ -1,18 +1,18 @@
-import { UserButton, useUser } from "@clerk/react";
+import { useClerk, useUser } from "@clerk/react";
 import { GUEST_NAME_MAX_LENGTH } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
-import { LogInIcon, UserRoundIcon, XIcon } from "lucide-react";
+import { LogInIcon, LogOutIcon, SettingsIcon, UserRoundIcon, XIcon } from "lucide-react";
 import { type FormEvent, useState } from "react";
 
-import { boardAccountsEnabled, useBoardAccount } from "~/guest/boardAccount";
-import { accountNameParts } from "~/guest/boardAccount.logic";
-import { rememberBoardName, useRememberedBoardName } from "~/guest/cloudBoards";
+import { boardAccountsEnabled, saveBoardAccountName, useBoardAccount } from "~/guest/boardAccount";
+import { useAccountNameSeed } from "~/guest/browserIdentity";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { toastManager } from "../ui/toast";
 
 /**
@@ -64,24 +64,61 @@ function ConfiguredBoardsAccount() {
   return <AccountMenu name={account.name} />;
 }
 
-/** The person's name and avatar; the avatar opens Clerk's menu with their account page in it. */
+/**
+ * The person's name and avatar, opening a menu that says who they are (their name first, their
+ * email under it, which only they see), their account page, and the way out.
+ */
 function AccountMenu({ name }: { readonly name: string | null }) {
   const navigate = useNavigate();
+  const clerk = useClerk();
+  const { user } = useUser();
+  const email = user?.primaryEmailAddress?.emailAddress ?? null;
+  const initial = Array.from((name ?? email ?? "?").trim())[0]?.toUpperCase() ?? "?";
   return (
-    <span className="flex min-w-0 items-center gap-2" data-boards-account>
-      {name === null ? null : <span className="max-w-40 truncate text-sm font-medium">{name}</span>}
-      <UserButton>
-        <UserButton.MenuItems>
-          <UserButton.Action
-            label="Your account"
-            labelIcon={<UserRoundIcon className="size-4" />}
-            onClick={() => void navigate({ to: "/account" })}
+    <Menu>
+      <MenuTrigger
+        render={<Button variant="ghost" aria-label="Your account" data-boards-account />}
+      >
+        {name === null ? null : <span className="max-w-40 truncate">{name}</span>}
+        {user?.hasImage === true ? (
+          <img
+            src={user.imageUrl}
+            alt=""
+            referrerPolicy="no-referrer"
+            className="size-6 shrink-0 rounded-full object-cover"
           />
-          <UserButton.Action label="manageAccount" />
-          <UserButton.Action label="signOut" />
-        </UserButton.MenuItems>
-      </UserButton>
-    </span>
+        ) : (
+          <span
+            aria-hidden
+            className="grid size-6 shrink-0 place-items-center rounded-full bg-muted text-2xs font-semibold"
+          >
+            {initial}
+          </span>
+        )}
+      </MenuTrigger>
+      <MenuPopup align="end">
+        <div className="flex max-w-64 flex-col px-2 py-1.5" data-account-identity>
+          <span className="truncate text-sm font-medium">{name ?? "No name yet"}</span>
+          {email === null ? null : (
+            <span className="truncate text-xs text-muted-foreground">{email}</span>
+          )}
+        </div>
+        <MenuSeparator />
+        <MenuItem onClick={() => void navigate({ to: "/account" })}>
+          <UserRoundIcon />
+          Your account
+        </MenuItem>
+        <MenuItem onClick={() => clerk.openUserProfile()}>
+          <SettingsIcon />
+          Sign-in and security
+        </MenuItem>
+        <MenuSeparator />
+        <MenuItem onClick={() => void clerk.signOut()}>
+          <LogOutIcon />
+          Sign out
+        </MenuItem>
+      </MenuPopup>
+    </Menu>
   );
 }
 
@@ -107,8 +144,8 @@ const rememberNameAsked = (userId: string) => {
 
 /**
  * Once per account, when it has no name of its own (signed up with only an email): what everyone
- * should call them, kept on the account so it follows them. Until then the name this browser
- * already joined boards under stands in, never anything from their email.
+ * should call them, kept on the account so it follows them. The field starts with the name typed
+ * here signed out only when no other account ever signed in here; never anything from an email.
  */
 export function AccountNameAsk() {
   if (!boardAccountsEnabled()) return null;
@@ -118,13 +155,13 @@ export function AccountNameAsk() {
 function ConfiguredAccountNameAsk() {
   const account = useBoardAccount();
   const { user } = useUser();
-  const browserName = useRememberedBoardName();
+  const seed = useAccountNameSeed(user?.id ?? null);
   const [asked, setAsked] = useState(readNameAsked);
   const [typed, setTyped] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   if (account.status !== "signed-in" || account.realName || user == null) return null;
   if (asked.includes(user.id)) return null;
-  const name = typed ?? browserName ?? "";
+  const name = typed ?? seed ?? "";
   const done = () => {
     rememberNameAsked(user.id);
     setAsked((before) => [...before, user.id]);
@@ -134,12 +171,8 @@ function ConfiguredAccountNameAsk() {
     const trimmed = name.trim().slice(0, GUEST_NAME_MAX_LENGTH).trim();
     if (trimmed === "" || saving) return;
     setSaving(true);
-    rememberBoardName(trimmed);
-    // Kept on the account when its sign-in settings allow a name; on this browser regardless.
-    const saved = await user.update(accountNameParts(trimmed)).then(
-      () => true,
-      () => false,
-    );
+    // On this browser at once; on the account when it takes it.
+    const saved = (await saveBoardAccountName(trimmed)) ?? false;
     setSaving(false);
     if (!saved) {
       toastManager.add({

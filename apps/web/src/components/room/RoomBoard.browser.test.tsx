@@ -197,7 +197,7 @@ describe("RoomBoard sections", () => {
 });
 
 describe("RoomBoard selection", () => {
-  it("duplicates the selection with Ctrl+D, as new notes clear of the originals", async () => {
+  it("duplicates the selection with Ctrl+D, a small step right and down from the originals", async () => {
     const board = renderBoard([
       { id: "a", text: "First", x: 0, y: 0 },
       { id: "b", text: "Second", x: 300, y: 0 },
@@ -219,10 +219,11 @@ describe("RoomBoard selection", () => {
       );
       expect(added.map((change) => change.text).toSorted()).toEqual(["First", "Second"]);
       for (const change of added) expect(["a", "b"]).not.toContain(change.noteId);
-      // Clear of the originals, which sit in a row 492 wide and a note high from the origin.
-      for (const change of added) {
-        expect(change.y + 100 <= 0 || change.y >= 100 || change.x >= 492).toBe(true);
-      }
+      // As in FigJam: each copy just off its original, the view left where it was.
+      expect(added.map(({ x, y }) => ({ x, y })).toSorted((p, q) => p.x - q.x)).toEqual([
+        { x: 24, y: 24 },
+        { x: 324, y: 24 },
+      ]);
     });
     await expect.element(screen.getByRole("status")).toHaveTextContent("2 selected");
   });
@@ -372,16 +373,27 @@ describe("RoomBoard clicks", () => {
     await expect.element(screen.getByRole("status")).toHaveTextContent("1 selected");
   });
 
-  it("deletes the one card a click selected with Delete, asked twice", async () => {
+  it("deletes a note a click selected with Delete at once, and Ctrl+Z brings it back", async () => {
     const board = renderBoard(notes);
     const { onChange } = board;
     await using screen = await board.screen;
     await userEvent.click(headerIn(screen.container, "b"));
     await userEvent.keyboard("{Delete}");
-    expect(onChange).not.toHaveBeenCalled();
-    await userEvent.keyboard("{Delete}");
     await vi.waitFor(() =>
       expect(onChange).toHaveBeenCalledWith({ type: "note.remove", noteId: "b" }),
+    );
+    expect(screen.container.querySelector('[data-board-item="note:b"]')).toBeNull();
+    await userEvent.keyboard("{Control>}z{/Control}");
+    await vi.waitFor(() =>
+      expect(onChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: "note.put", noteId: "b", text: "Second", x: 300, y: 0 }),
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(
+        screen.container.querySelector<HTMLTextAreaElement>('[data-board-item="note:b"] textarea')
+          ?.value,
+      ).toBe("Second"),
     );
   });
 });
@@ -734,10 +746,27 @@ describe("RoomBoard controls", () => {
       { onTakeTask: () => {} },
     );
     await using screen = await board.screen;
+    // A task's actions are in its menu, not buttons on the card a click could land on.
     await expect
-      .element(screen.getByRole("button", { name: "Take it to my agent" }).nth(1))
-      .toBeVisible();
-    expect(screen.getByRole("button", { name: "Take it to my agent" }).elements()).toHaveLength(2);
+      .element(screen.getByRole("button", { name: "Take it to my agent" }))
+      .not.toBeInTheDocument();
+    const offered = async (id: string) => {
+      const trigger = screen.container.querySelector(
+        `[data-board-item="note:${id}"] [aria-label="Card actions"]`,
+      );
+      if (!(trigger instanceof HTMLElement)) throw new Error(`No menu on task ${id}`);
+      await userEvent.click(trigger);
+      await expect.element(page.getByRole("menuitem", { name: "Delete card" })).toBeVisible();
+      const take = page.getByRole("menuitem", { name: "Take it to my agent" }).query() !== null;
+      await userEvent.keyboard("{Escape}");
+      await expect.element(page.getByRole("menu")).not.toBeInTheDocument();
+      return take;
+    };
+    expect([await offered("open"), await offered("mine"), await offered("theirs")]).toEqual([
+      true,
+      true,
+      false,
+    ]);
   });
 
   it("says why Artifact is off on a board that holds all the artifacts it can", async () => {

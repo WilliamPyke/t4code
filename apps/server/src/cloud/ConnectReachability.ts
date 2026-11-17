@@ -21,6 +21,7 @@ import { HttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as ServerConfig from "../config.ts";
 import { CLOUD_ENDPOINT_RUNTIME_CONFIG } from "./config.ts";
 import * as ManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
 
@@ -237,6 +238,11 @@ const make = Effect.gen(function* () {
   });
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const scope = yield* Scope.Scope;
+  // Tinkjam Sync says how connecting goes in its own words; a tunnel still starting is not an error.
+  const quiet = Option.exists(
+    yield* Effect.serviceOption(ServerConfig.ServerConfig),
+    (config) => config.startupPresentation === "sync",
+  );
   const readExitNode = readTailscaleExitNode.pipe(
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     Effect.orElseSucceed(() => null),
@@ -400,7 +406,8 @@ const make = Effect.gen(function* () {
     if (result.status === "unreachable") {
       // A connector that has not connected yet is usually still starting; the
       // runtime restarts it, and an unreachable edge is reported as its own cause.
-      const log = result.cause === "connector_not_ready" ? Effect.logWarning : Effect.logError;
+      const log =
+        quiet || result.cause === "connector_not_ready" ? Effect.logWarning : Effect.logError;
       yield* log(`\n${formatReachabilityFailure(result)}`).pipe(
         Effect.annotateLogs({ cause: result.cause }),
       );

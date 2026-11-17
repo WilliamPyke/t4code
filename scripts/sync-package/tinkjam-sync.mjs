@@ -6,7 +6,14 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
+import { readSyncRelease, syncUpdateNotice } from "./update-check.mjs";
+
 const HOSTED_APP_URL = "__TINKJAM_HOSTED_APP_URL__";
+const SYNC_VERSION = "__TINKJAM_SYNC_VERSION__";
+const SYNC_MANIFEST_URL = "__TINKJAM_SYNC_MANIFEST_URL__";
+const SYNC_URL = "__TINKJAM_SYNC_URL__";
+// Long enough for a slow connection, short enough that nobody waits on it.
+const UPDATE_CHECK_TIMEOUT_MS = 1500;
 
 const [major = 0, minor = 0] = process.versions.node.split(".").map(Number);
 const supported =
@@ -22,10 +29,44 @@ if (!supported) {
   process.exit(1);
 }
 
+const args = process.argv.slice(2);
+// The server's own help would name its command and flags in its own words.
+if (args.includes("--help") || args.includes("-h")) {
+  console.log(
+    [
+      "Tinkjam Sync connects the agents on this computer, such as Claude Code or Codex, to your",
+      "Tinkjam boards. They run here, on your own sign-in, and only you can send them work.",
+      "",
+      "Usage",
+      `  npx -y ${SYNC_URL} [options]`,
+      "",
+      "Options",
+      "  --disconnect      Disconnect this computer from your Tinkjam account and sign out.",
+      "  --base-dir <dir>  Where Tinkjam Sync keeps its data on this computer.",
+      `                    Default: ${NodePath.join(NodeOS.homedir(), ".tinkjam")}`,
+      "  --version         Show which version of Tinkjam Sync this is.",
+      "  --help            Show this help.",
+      "",
+      "Keep the window open while you work. Press Ctrl+C to stop.",
+    ].join("\n"),
+  );
+  process.exit(0);
+}
+if (args.includes("--version") || args.includes("-v")) {
+  console.log(`Tinkjam Sync ${SYNC_VERSION}`);
+  process.exit(0);
+}
+
+const notice = syncUpdateNotice(
+  SYNC_VERSION,
+  await readSyncRelease(SYNC_MANIFEST_URL, UPDATE_CHECK_TIMEOUT_MS),
+);
+if (notice !== null) console.log(notice);
+
 const entry = NodeURL.fileURLToPath(new URL("../dist/bin.mjs", import.meta.url));
 const child = NodeChildProcess.spawn(
   process.execPath,
-  [...process.execArgv, entry, "sync", ...process.argv.slice(2)],
+  [...process.execArgv, entry, "sync", ...args],
   {
     stdio: "inherit",
     env: {

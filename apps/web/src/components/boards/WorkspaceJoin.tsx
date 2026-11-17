@@ -60,7 +60,8 @@ function Notice({ title, detail }: { readonly title: string; readonly detail: st
 
 function WorkspaceJoin({ code }: { readonly code: string }) {
   const account = useBoardAccount();
-  const { openAuthPrompt } = useT3ConnectAuthPrompt();
+  // A page of its own rather than a pop-up: joining needs the new account's session for certain.
+  const { redirectToAuth } = useT3ConnectAuthPrompt();
   const navigate = useNavigate();
   const [preview, setPreview] = useState<{
     readonly code: string;
@@ -128,7 +129,7 @@ function WorkspaceJoin({ code }: { readonly code: string }) {
           </Button>
         ) : account.status === "signed-out" ? (
           <>
-            <Button onClick={openAuthPrompt} data-workspace-join-sign-in>
+            <Button onClick={redirectToAuth} data-workspace-join-sign-in>
               <LogInIcon />
               Sign in to join
             </Button>

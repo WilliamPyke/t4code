@@ -8,12 +8,16 @@ import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import { CheckIcon, CopyIcon } from "lucide-react";
 import { type ReactNode, useEffect, useEffectEvent, useState } from "react";
 
 import { TINKJAM_SYNC_COMMAND } from "~/branding";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { environmentCatalog } from "~/connection/catalog";
 import { boardAccountsEnabled, useBoardAccount } from "~/guest/boardAccount";
+import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import { cn } from "~/lib/utils";
 import { useProjects } from "~/state/entities";
 import { useEnvironments, useRelayEnvironmentDiscovery } from "~/state/environments";
@@ -21,7 +25,6 @@ import { relayEnvironmentDiscovery } from "~/state/relay";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
-import { CommandBlock } from "../CommandBlock";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
@@ -37,10 +40,16 @@ import {
 } from "../ui/dialog";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
-import { type BringAgentComputer, bringAgentComputers } from "./bringAgent.logic";
+import {
+  type BringAgentComputer,
+  type DiscoveredComputer,
+  bringAgentComputers,
+  steadyDiscovered,
+} from "./bringAgent.logic";
 
-// Discovery lists the account's computers; refreshed only while the dialog waits for one.
-const DISCOVERY_REFRESH_MS = 5_000;
+// Discovery lists the account's computers; asked again while the dialog is open, so one that
+// just connected shows up without a reload.
+const DISCOVERY_REFRESH_MS = 4_000;
 
 type BringAgent = (
   environmentId: EnvironmentId,
@@ -56,11 +65,14 @@ export function BringAgentDialog({
   open,
   onOpenChange,
   onBring,
+  onBrought,
 }: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   /** Brings the agent from that computer onto this board. Resolves to what went wrong, or null. */
   readonly onBring: BringAgent;
+  /** Once the dialog has closed after an agent came: the board shows it, ready to prompt. */
+  readonly onBrought: () => void;
 }) {
   const account = useBoardAccount();
   const withAccount = boardAccountsEnabled() && hasCloudPublicConfig();
@@ -73,6 +85,27 @@ export function BringAgentDialog({
   const registerEnvironment = useAtomCommand(environmentCatalog.register, {
     reportFailure: false,
   });
+  const [discovered, setDiscovered] = useState<ReadonlyArray<DiscoveredComputer>>([]);
+  const steady =
+    withAccount && signedIn
+      ? steadyDiscovered(discovered, {
+          listed: discovery.listed,
+          computers: [...discovery.environments.values()].map(
+            ({ environment, availability, status }) => {
+              const descriptor = Option.getOrNull(status)?.descriptor;
+              return {
+                environmentId: environment.environmentId,
+                name: environment.label,
+                availability,
+                unsupported:
+                  descriptor !== undefined &&
+                  orchestrationProtocolCompatibilityError(descriptor) !== null,
+              };
+            },
+          ),
+        })
+      : [];
+  if (JSON.stringify(steady) !== JSON.stringify(discovered)) setDiscovered(steady);
   const computers = bringAgentComputers({
     saved: environments
       .filter((entry) => !isGuestEnvironment(entry.environmentId))
@@ -82,25 +115,13 @@ export function BringAgentDialog({
         phase: entry.connection.phase,
         hasConfig: entry.serverConfig !== null,
       })),
-    discovered:
-      withAccount && signedIn
-        ? [...discovery.environments.values()].map(({ environment, availability, status }) => {
-            const descriptor = Option.getOrNull(status)?.descriptor;
-            return {
-              environmentId: environment.environmentId,
-              name: environment.label,
-              availability,
-              unsupported:
-                descriptor !== undefined &&
-                orchestrationProtocolCompatibilityError(descriptor) !== null,
-            };
-          })
-        : [],
+    discovered: steady,
   });
-  const hasReady = computers.some((computer) => computer.status === "ready");
 
   const [busy, setBusy] = useState<EnvironmentId | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // An agent came: once the dialog has closed, the board shows it.
+  const [brought, setBrought] = useState(false);
   // A computer this browser is still connecting to: its agent comes once it is ready.
   const [pending, setPending] = useState<{
     readonly environmentId: EnvironmentId;
@@ -113,7 +134,10 @@ export function BringAgentDialog({
     const failed = await onBring(environmentId, project);
     setBusy(null);
     setError(failed);
-    if (failed === null) onOpenChange(false);
+    if (failed !== null) return;
+    rememberBringProject(environmentId, project);
+    setBrought(true);
+    onOpenChange(false);
   };
   const bringWhenReady = useEffectEvent(
     (target: {
@@ -157,18 +181,27 @@ export function BringAgentDialog({
   const refreshWhileWaiting = useEffectEvent(() => {
     if (document.visibilityState === "visible" && !discovery.refreshing) void refreshDiscovery();
   });
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- polls the account's computer list while the dialog waits for one to come online
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- polls the account's computer list while the dialog is open, so a computer that just connected appears
   useEffect(() => {
-    if (!open || !withAccount || !signedIn || hasReady) return;
+    if (!open || !withAccount || !signedIn) return;
     refreshWhileWaiting();
     const timer = setInterval(refreshWhileWaiting, DISCOVERY_REFRESH_MS);
     return () => clearInterval(timer);
-  }, [open, withAccount, signedIn, hasReady]);
+  }, [open, withAccount, signedIn]);
 
   const setup = <ConnectComputerRoutes withAccount={withAccount} signedIn={signedIn} />;
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup className="max-w-2xl">
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      onOpenChangeComplete={(isOpen) => {
+        if (isOpen || !brought) return;
+        setBrought(false);
+        onBrought();
+      }}
+    >
+      {/* After an agent came, the caret goes to its box on the board, not back to a button. */}
+      <DialogPopup className="max-w-2xl" finalFocus={brought ? false : undefined}>
         <DialogHeader>
           <DialogTitle>Bring your agent to this board</DialogTitle>
           <DialogDescription>
@@ -260,7 +293,14 @@ function ComputerRow({
       project.isScratch !== true &&
       project.archivedAt == null,
   );
-  const [projectId, setProjectId] = useState<string>(NO_PROJECT);
+  // The project last picked for this computer here, else none: an agent in no project cannot
+  // change anyone's code until the person picks one.
+  const [projectId, setProjectId] = useState<string>(() => {
+    const remembered = readBringProject(computer.environmentId);
+    return remembered !== null && projects.some((project) => project.id === remembered)
+      ? remembered
+      : NO_PROJECT;
+  });
   const items = [
     { value: NO_PROJECT, label: "No project" },
     ...projects.map((project) => ({ value: project.id, label: project.title })),
@@ -356,8 +396,8 @@ function ConnectComputerRoutes({
             )}
           </Step>
           <Step number={2}>
-            Paste this and press {enter}:
-            <CommandBlock command={TINKJAM_SYNC_COMMAND} className="mt-1.5" />
+            Copy this, paste it there and press {enter}:
+            <SyncCommand />
           </Step>
           <Step number={3}>
             Open the link it prints and press Connect. Keep that window open while you work.
@@ -396,6 +436,49 @@ function ConnectComputerRoutes({
       </section>
     </div>
   );
+}
+
+/** The Tinkjam Sync command, with a Copy button anyone can find. */
+function SyncCommand() {
+  const { copyToClipboard, isCopied } = useCopyToClipboard({ timeout: 2000, target: "command" });
+  return (
+    <div className="mt-1.5 flex items-center gap-2" data-sync-command>
+      <code className="min-w-0 flex-1 truncate rounded-lg border border-border bg-muted/50 px-3 py-2 font-mono text-sm">
+        {TINKJAM_SYNC_COMMAND}
+      </code>
+      <Button size="sm" onClick={() => copyToClipboard(TINKJAM_SYNC_COMMAND, undefined)}>
+        {isCopied ? <CheckIcon /> : <CopyIcon />}
+        {isCopied ? "Copied" : "Copy"}
+      </Button>
+    </div>
+  );
+}
+
+// Per browser: the project each computer's agent last came to a board in.
+const BRING_PROJECT_KEY = "t3code:bring-agent-project:v1";
+const BringProjects = Schema.Record(Schema.String, Schema.String);
+
+const readBringProjects = (): Readonly<Record<string, string>> => {
+  try {
+    return getLocalStorageItem(BRING_PROJECT_KEY, BringProjects) ?? {};
+  } catch {
+    return {};
+  }
+};
+
+const readBringProject = (environmentId: EnvironmentId) =>
+  readBringProjects()[environmentId] ?? null;
+
+function rememberBringProject(environmentId: EnvironmentId, project: EnvironmentProject | null) {
+  try {
+    setLocalStorageItem(
+      BRING_PROJECT_KEY,
+      { ...readBringProjects(), [environmentId]: project?.id ?? NO_PROJECT },
+      BringProjects,
+    );
+  } catch {
+    // Blocked storage only means no project is picked first next time.
+  }
 }
 
 function SignInHere() {

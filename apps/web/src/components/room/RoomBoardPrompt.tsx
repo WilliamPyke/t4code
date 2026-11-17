@@ -22,20 +22,41 @@ const without = (set: ReadonlySet<string>, ref: string) => {
 };
 
 /**
+ * A prompt the board wrote for its owner to read and send, such as one bringing a link in. It only
+ * fills the field: nothing goes until they press Send, and they can change or drop it.
+ */
+export interface BoardPromptDraft {
+  /** New each time it is prepared, so preparing it again puts its text back. */
+  readonly key: string;
+  readonly text: string;
+  /** The cards that go with it, in place of the box's connected ones. */
+  readonly cards: ReadonlyArray<BoardPromptCard>;
+  /** What it is for, said above the field. */
+  readonly title: string;
+  /** Where the reply goes, said below the field. */
+  readonly fills: string;
+  readonly onSend: (prompt: BoardPrompt) => Promise<boolean>;
+  readonly onCancel: () => void;
+}
+
+/**
  * The prompt box on a thread box. Connected cards that are new, changed since they were last
  * sent, or pinned show as chips and go; one left out by hand stays out until the prompt goes.
  * Cards already sent wait under "N already sent", where one can be put back for this prompt or
  * pinned. Only the chips shown when Send is pressed go.
  */
 export function BoardPromptBox({
-  cards,
+  cards: connected,
   artifact,
   label,
   placeholder,
   model,
   onPrompt,
   onPin,
+  draft,
 }: {
+  /** A prompt prepared for this box, shown in its field until sent or dropped. */
+  readonly draft?: BoardPromptDraft | undefined;
   readonly cards: ReadonlyArray<BoardPromptCard>;
   /** The artifact the box has a line to, which the reply rewrites, or null. */
   readonly artifact: { readonly id: string; readonly title: string } | null;
@@ -52,6 +73,15 @@ export function BoardPromptBox({
   const [putBack, setPutBack] = useState(NONE);
   const [showSent, setShowSent] = useState(false);
   const [sending, setSending] = useState(false);
+  // A prepared prompt fills the field once per preparation; dropping it empties the field.
+  const [draftKey, setDraftKey] = useState<string | null>(null);
+  if ((draft?.key ?? null) !== draftKey) {
+    setDraftKey(draft?.key ?? null);
+    setText(draft?.text ?? "");
+    setLeftOut(NONE);
+    setPutBack(NONE);
+  }
+  const cards = draft?.cards ?? connected;
   const goes = (card: BoardPromptCard) =>
     boardPromptCardGoes(card) ? !leftOut.has(card.ref) : putBack.has(card.ref);
   const attached = cards.filter(goes).slice(0, BOARD_PROMPT_MAX_CARDS);
@@ -61,10 +91,10 @@ export function BoardPromptBox({
     const message = text.trim();
     if (message === "" || sending) return;
     setSending(true);
-    const sent = await onPrompt({
+    const sent = await (draft?.onSend ?? onPrompt)({
       text: message,
       cards: attached,
-      artifactId: artifact?.id ?? null,
+      artifactId: draft === undefined ? (artifact?.id ?? null) : null,
     }).catch(() => false);
     setSending(false);
     if (sent) {
@@ -106,6 +136,14 @@ export function BoardPromptBox({
   const shown = attached.length + hidden + waiting.length;
   return (
     <div className="flex flex-col gap-1.5" data-board-prompt onPointerDown={stopPointer}>
+      {draft === undefined ? null : (
+        <div className="flex min-w-0 items-center gap-1" data-board-prompt-draft>
+          <p className="min-w-0 flex-1 truncate text-2xs font-medium">{draft.title}</p>
+          <Button size="micro" variant="ghost-muted" onClick={draft.onCancel}>
+            Drop
+          </Button>
+        </div>
+      )}
       {shown === 0 ? null : (
         <div className="flex flex-col gap-1">
           <p className="text-2xs text-muted-foreground">
@@ -211,7 +249,7 @@ export function BoardPromptBox({
       )}
       <Textarea
         size="sm"
-        rows={2}
+        rows={draft === undefined ? 2 : 6}
         aria-label={label}
         placeholder={placeholder}
         value={text}
@@ -228,7 +266,9 @@ export function BoardPromptBox({
           }
         }}
       />
-      {artifact === null ? null : (
+      {draft !== undefined ? (
+        <p className="truncate text-2xs text-muted-foreground">{draft.fills}</p>
+      ) : artifact === null ? null : (
         <p className="truncate text-2xs text-muted-foreground">
           {`Replies rewrite "${artifact.title.trim() === "" ? "Untitled artifact" : artifact.title.trim()}"`}
         </p>

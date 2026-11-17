@@ -9,6 +9,7 @@ import {
   boardPlanIndexAmong,
   boardPlanMove,
   boardPlanMoveAll,
+  boardPlanPick,
   boardPlanShows,
   boardPlanSorted,
   boardPlanTaskPlace,
@@ -189,9 +190,41 @@ describe("boardPlanTaskPlace", () => {
     expect(fifth).toEqual({ x: 464, y: 592, grow: { id: "s", size: { w: 1000, h: 472 } } });
   });
 
-  it("goes right of everything on a board with no task", () => {
-    const board: RoomBoard = { positions: {}, notes: [{ id: "n", text: "", x: 0, y: 0 }] };
-    expect(boardPlanTaskPlace(board, []).x).toBeGreaterThan(192);
+  it("goes beside the middle of the board's notes on a board with no task, over none", () => {
+    const notes = [
+      { id: "a", text: "", x: 0, y: 0 },
+      { id: "b", text: "", x: 1000, y: 0 },
+      { id: "c", text: "", x: 0, y: 800 },
+      { id: "d", text: "", x: 1000, y: 800 },
+    ];
+    const at = boardPlanTaskPlace({ positions: {}, notes }, []);
+    // Near the middle, at (596, 476) for a 192 by 184 task, not right of everything.
+    expect(Math.abs(at.x + 96 - 596)).toBeLessThan(200);
+    expect(Math.abs(at.y + 92 - 476)).toBeLessThan(200);
+  });
+
+  it("goes next to the newest task when the rows beside it are taken, never far off", () => {
+    // A wall of notes under and beside the newest task fills every row a pile would use.
+    const wall = Array.from({ length: 40 }, (_, index) => ({
+      id: `w${index}`,
+      text: "",
+      x: (index % 8) * 216,
+      y: 208 + Math.floor(index / 8) * 208,
+    }));
+    const row = [216, 432, 648].map((x) => ({ id: `r${x}`, text: "", x, y: 0 }));
+    const notes = [task("t", { x: 0, y: 0 }), ...wall, ...row];
+    const at = boardPlanTaskPlace({ positions: {}, notes }, []);
+    expect(Math.hypot(at.x, at.y)).toBeLessThan(1200);
+    const rects = notes.map((note) => ({ x: note.x, y: note.y, w: 192, h: 184 }));
+    expect(
+      rects.some(
+        (rect) =>
+          at.x < rect.x + rect.w &&
+          at.x + 192 > rect.x &&
+          at.y < rect.y + rect.h &&
+          at.y + 184 > rect.y,
+      ),
+    ).toBe(false);
   });
 });
 
@@ -238,6 +271,36 @@ describe("Plan filters and sorts", () => {
     expect(boardPlanIndexAmong(column, shown, "x", 2)).toBe(3);
     expect(boardPlanIndexAmong(column, shown, "a", 0)).toBe(1);
     expect(boardPlanIndexAmong(column, [], "x", 0)).toBe(4);
+  });
+});
+
+describe("boardPlanPick", () => {
+  const plain = { shiftKey: false, ctrlKey: false, metaKey: false };
+  const order = ["a", "b", "c", "d"];
+  const set = (...items: ReadonlyArray<string>) => new Set(items);
+
+  it("selects with a click, adds with Ctrl, Cmd or Shift, and opens the one selected alone", () => {
+    expect(boardPlanPick(set("a", "b"), "a", "c", plain, order)).toEqual({
+      picked: set("c"),
+      open: false,
+    });
+    expect(boardPlanPick(set("c"), "c", "c", plain, order)).toEqual({
+      picked: set("c"),
+      open: true,
+    });
+    expect(boardPlanPick(set("a"), "a", "c", { ...plain, ctrlKey: true }, order).picked).toEqual(
+      set("a", "c"),
+    );
+    expect(
+      boardPlanPick(set("a", "c"), "a", "c", { ...plain, metaKey: true }, order).picked,
+    ).toEqual(set("a"));
+    // Shift takes every task shown between the last one clicked and this one, either way.
+    expect(boardPlanPick(set("d"), "d", "b", { ...plain, shiftKey: true }, order).picked).toEqual(
+      set("b", "c", "d"),
+    );
+    expect(boardPlanPick(set(), null, "b", { ...plain, shiftKey: true }, order).picked).toEqual(
+      set("b"),
+    );
   });
 });
 

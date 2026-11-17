@@ -388,3 +388,66 @@ export function roomEmbedOf(value: string): RoomEmbed | null {
   const found = known(host, raw, parts, url);
   return found === null ? site : { ...found, address };
 }
+
+const TRACKED_ITEM =
+  "its status, assignee, priority and description, and the latest comments with who wrote them";
+const DOCUMENT = "its outline, and the full text if it is short";
+
+/**
+ * What a snapshot of a link should hold, for its source: what the person reading it on the board
+ * would look for first. Each only asks the agent to read; none asks it to change the source.
+ */
+export function roomEmbedReadHint(embed: Pick<RoomEmbed, "source" | "kind">): string {
+  switch (embed.source) {
+    case "linear":
+      return embed.kind === "Linear issue"
+        ? TRACKED_ITEM
+        : embed.kind === "Linear document"
+          ? DOCUMENT
+          : "its title, status and description, and what it lists";
+    case "jira":
+    case "asana":
+      return TRACKED_ITEM;
+    case "github":
+      return embed.kind === "GitHub pull request"
+        ? "its state, description, a summary of the changed files, and its review status"
+        : embed.kind === "GitHub issue" || embed.kind === "GitHub discussion"
+          ? "its state, labels, assignees and description, and the latest comments"
+          : "what it is and its main content";
+    case "google-sheets":
+      return "its sheet names, each sheet's headers, its first rows as a Markdown table, and totals where they are obvious";
+    case "figma":
+    case "miro":
+      return "its page and frame names, and what each frame shows";
+    case "google-slides":
+      return "each slide's title and text, in order";
+    case "google-docs":
+    case "superhuman":
+    case "coda":
+    case "notion":
+    case "claude-artifact":
+      return DOCUMENT;
+    case "youtube":
+    case "loom":
+    case "vimeo":
+      return "its title, who made it and how long it is, and a summary or transcript if your tools can read one";
+    case "web":
+      return "its title and main content";
+  }
+}
+
+/**
+ * The prompt that asks a person's own agent to bring a link onto the board: open it with the
+ * tools the agent has, and reply with a faithful snapshot, which fills an artifact card.
+ */
+export function roomEmbedBringInPrompt(url: string): string {
+  const embed = roomEmbedOf(url);
+  const what = embed === null || embed.source === "web" ? "page" : embed.kind;
+  const hint = embed === null ? "its title and main content" : roomEmbedReadHint(embed);
+  return [
+    "Open this link with the tools you have connected and write a faithful snapshot of it: title, key fields, the full body where reasonable, and the date you read it. If you cannot open it, say exactly what access is missing.",
+    url,
+    `For this ${what}, include ${hint}.`,
+    "Only read it: change nothing in the source. Your reply becomes the snapshot on the board, in Markdown, starting with the document's title as a heading.",
+  ].join("\n\n");
+}

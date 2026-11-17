@@ -15,6 +15,7 @@ import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { isElectron } from "../env";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { boardsToClaim, sharesOfOtherAccounts } from "./boardAccount.logic";
+import { noteSignedInAccount, rememberAccountSavedName } from "./browserIdentity";
 import { cloudBoardsHost, cloudBoardsOrigin } from "./cloudBoardsHost";
 import {
   type JoinedGuestShare,
@@ -35,6 +36,8 @@ interface BoardAccountSession {
   /** Its picture, which its workspaces show beside its name. */
   readonly imageUrl?: string | undefined;
   readonly readToken: () => Promise<string | null>;
+  /** Keeps a name on the account itself. Resolves to whether the account took it. */
+  readonly saveName: (name: string) => Promise<boolean>;
 }
 
 const boardAccountAtom = Atom.make<BoardAccountSession | null>(null).pipe(
@@ -86,8 +89,16 @@ export function useBoardAccount(): BoardAccountState {
     : { status: "signed-in", name: account.name, realName: account.realName, listed };
 }
 
-/** The signed-in account's name, or null signed out or with none. */
-export const readBoardAccountName = () => readBoardAccount()?.name ?? null;
+/**
+ * Keeps a typed name as the signed-in account's: on this browser at once, and on the account so
+ * it follows them, resolving to whether the account took it. Null when nobody is signed in.
+ */
+export function saveBoardAccountName(name: string): Promise<boolean> | null {
+  const account = readBoardAccount();
+  if (account === null) return null;
+  rememberAccountSavedName(account.userId, name);
+  return account.saveName(name);
+}
 
 /** Who is signed in: their id and how others see them, or null. */
 export const readBoardAccountProfile = () => {
@@ -185,18 +196,33 @@ async function claimLocalBoards(): Promise<void> {
       }),
     );
     if (listed === null) return;
-    if (readBoardAccount() !== null) appAtomRegistry.set(accountBoardsAtom, listed.boards);
+    const account = readBoardAccount();
+    if (account === null) return;
+    appAtomRegistry.set(accountBoardsAtom, listed.boards);
+    // The account's now: they go from this browser when it signs out, like any of its boards.
+    const taken = new Set<string>(listed.boards.map((board) => board.shareId));
+    for (const share of claim) {
+      if (taken.has(share.shareId)) {
+        const current = readGuestShares().find((kept) => kept.shareId === share.shareId);
+        if (current !== undefined && current.accountId === undefined) {
+          rememberGuestShare({ ...current, accountId: account.userId });
+        }
+      }
+    }
   }
 }
 
 /**
- * Follows who is signed in: their boards are read and this browser's are added to them; a board
- * opened under an account no longer signed in goes from this browser.
+ * Follows who is signed in: their boards are read and this browser's are added to them. When an
+ * account signs out or another signs in, everything of the last one's goes from this browser:
+ * its boards, their previews, its names and the name typed here before it signed in.
  */
 export function syncBoardAccount(session: BoardAccountSession | null): void {
   appAtomRegistry.set(boardAccountLoadedAtom, true);
   const before = readBoardAccount();
-  if (before?.userId === session?.userId) {
+  const listedBefore = appAtomRegistry.get(accountBoardsAtom) ?? [];
+  const clear = noteSignedInAccount(session?.userId ?? null);
+  if (before?.userId === session?.userId && !clear) {
     if (session !== null) appAtomRegistry.set(boardAccountAtom, session);
     return;
   }
@@ -204,9 +230,10 @@ export function syncBoardAccount(session: BoardAccountSession | null): void {
   appAtomRegistry.set(accountBoardsAtom, null);
   appAtomRegistry.set(accountListSettledAtom, false);
   triedClaims.clear();
-  for (const shareId of sharesOfOtherAccounts(readGuestShares(), session?.userId ?? null)) {
-    forgetGuestShare(shareId);
-  }
+  const leaving = new Set(sharesOfOtherAccounts(readGuestShares(), session?.userId ?? null));
+  // Claimed before claims were marked: known as the last account's only by its list.
+  if (clear) for (const board of listedBefore) leaving.add(board.shareId);
+  for (const shareId of leaving) forgetGuestShare(shareId);
   if (session === null || cloudBoardsOrigin() === null) return;
   void refreshAccountBoards().then(claimLocalBoards);
 }

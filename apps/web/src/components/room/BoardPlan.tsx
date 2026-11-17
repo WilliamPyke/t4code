@@ -78,6 +78,7 @@ import {
   NO_PLAN_FILTER,
   boardPlanAttachedLine,
   boardPlanIndexAmong,
+  boardPlanPick,
   boardPlanShows,
   boardPlanSorted,
   boardPlanToday,
@@ -209,6 +210,7 @@ export function BoardPlan({
   onChange,
   onMove,
   onMoveAll,
+  onDeleteAll,
   actionsOf,
 }: {
   readonly layout: "columns" | "list";
@@ -232,6 +234,8 @@ export function BoardPlan({
   readonly onMove: (taskId: string, to: RoomTaskStatus, index: number) => void;
   /** Moves several tasks to the bottom of a column, together. */
   readonly onMoveAll: (taskIds: ReadonlySet<string>, to: RoomTaskStatus) => void;
+  /** Deletes several tasks at once, as one step to undo. */
+  readonly onDeleteAll: (taskIds: ReadonlyArray<string>) => void;
   readonly actionsOf: (task: RoomBoardNote) => PlanTaskActions;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
@@ -240,6 +244,8 @@ export function BoardPlan({
   const [sorts, setSorts] = useState(MANUAL_SORTS);
   const [listSort, setListSort] = useState<BoardPlanSort>("manual");
   const [pickedIds, setPicked] = useState<ReadonlySet<string>>(NO_PICKS);
+  // The task last clicked without Shift, where a Shift-click's range starts.
+  const anchor = useRef<string | null>(null);
   const [lifted, setLifted] = useState<{ readonly id: string; readonly width: number } | null>(
     null,
   );
@@ -276,12 +282,35 @@ export function BoardPlan({
   };
   const editingTask = editing === null ? undefined : all.find((task) => task.id === editing);
   const liftedTask = lifted === null ? undefined : all.find((task) => task.id === lifted.id);
+  const pickedTasks = all.filter((task) => picked.has(task.id));
+  const changePicked = (update: (task: RoomBoardNote) => RoomBoardNote) => {
+    for (const task of pickedTasks) onChange(task, update);
+  };
+  // Only this person's own tasks go, or any for the owner; the rest stay selected.
+  const deletePicked = () => {
+    const removable = pickedTasks.filter((task) => actionsOf(task).onDelete !== undefined);
+    if (removable.length === 0) return;
+    onDeleteAll(removable.map((task) => task.id));
+    setPicked(
+      new Set(pickedTasks.filter((task) => !removable.includes(task)).map((task) => task.id)),
+    );
+  };
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a drag's window listeners outlive the Plan unless it ends them as it closes
   useEffect(() => () => endDrag.current?.(), []);
   const quickAdd = useStableCallback((event: KeyboardEvent) => {
     if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.key === "Escape" && pickedIds.size > 0 && !typingIn(event.target)) {
       setPicked(NO_PICKS);
+      return;
+    }
+    if (
+      (event.key === "Delete" || event.key === "Backspace") &&
+      pickedIds.size > 0 &&
+      editing === null &&
+      !typingIn(event.target)
+    ) {
+      event.preventDefault();
+      deletePicked();
       return;
     }
     const key = event.key.toLowerCase();
@@ -304,7 +333,12 @@ export function BoardPlan({
 
   const press = (event: ReactPointerEvent<HTMLElement>, task: RoomBoardNote) => {
     if (!canEdit || event.button !== 0 || endDrag.current !== null || isPicking(event)) return;
-    if (event.target instanceof Element && event.target.closest("[data-plan-no-drag]") !== null) {
+    // A press in the card's menu, drawn elsewhere on the page, still bubbles here through React.
+    if (
+      !(event.target instanceof Element) ||
+      !event.currentTarget.contains(event.target) ||
+      event.target.closest("[data-plan-no-drag]") !== null
+    ) {
       return;
     }
     const pointerId = event.pointerId;
@@ -429,18 +463,25 @@ export function BoardPlan({
     endDrag.current = end;
   };
 
-  // Shift, Ctrl or Cmd and a click picks a task, or takes it out; a plain click opens it.
+  const listRows = boardPlanSorted(
+    BOARD_PLAN_COLUMNS.flatMap(({ status }) =>
+      columns[status].filter((task) => boardPlanShows(task, filter)),
+    ),
+    listSort,
+  );
+  // The order Shift-click selects along: down each column in turn, or down the list.
+  const shownOrder = (
+    layout === "list" ? listRows : BOARD_PLAN_COLUMNS.flatMap(({ status }) => shownColumns[status])
+  ).map((task) => task.id);
+  // A click selects a task, Ctrl, Cmd or Shift adds to the selection, and a click on the task
+  // selected alone, or a double-click, opens it.
   const open = (event: ReactMouseEvent, task: RoomBoardNote) => {
     if (clickBlocked.current) return;
-    if (isPicking(event) && canEdit) {
-      setPicked((current) => {
-        const next = new Set(current);
-        if (!next.delete(task.id)) next.add(task.id);
-        return next;
-      });
-      return;
-    }
-    setEditing(task.id);
+    if (!canEdit) return setEditing(task.id);
+    const next = boardPlanPick(picked, anchor.current, task.id, event, shownOrder);
+    if (!event.shiftKey) anchor.current = task.id;
+    setPicked(next.picked);
+    if (next.open) setEditing(task.id);
   };
   const moveTo = (task: RoomBoardNote, to: RoomTaskStatus) => {
     if (picked.has(task.id) && picked.size > 1) return onMoveAll(picked, to);
@@ -469,10 +510,22 @@ export function BoardPlan({
       viewer={viewer}
       ownerAssignable={ownerAssignable}
       picked={picked}
-      onMoveAll={(to) => {
-        onMoveAll(picked, to);
-        setPicked(NO_PICKS);
-      }}
+      onMoveAll={(to) => onMoveAll(picked, to)}
+      onPriority={(priority) =>
+        changePicked(({ priority: _priority, ...rest }) =>
+          priority === undefined ? rest : { ...rest, priority },
+        )
+      }
+      onAssign={(assignee) =>
+        changePicked(({ assignee: _assignee, ...rest }) =>
+          assignee === undefined ? rest : { ...rest, assignee },
+        )
+      }
+      onDelete={
+        pickedTasks.some((task) => actionsOf(task).onDelete !== undefined)
+          ? deletePicked
+          : undefined
+      }
       onClearPicked={() => setPicked(NO_PICKS)}
     />
   );
@@ -521,12 +574,7 @@ export function BoardPlan({
     );
 
   if (layout === "list") {
-    const rows = boardPlanSorted(
-      BOARD_PLAN_COLUMNS.flatMap(({ status }) =>
-        columns[status].filter((task) => boardPlanShows(task, filter)),
-      ),
-      listSort,
-    );
+    const rows = listRows;
     return (
       <PlanFrame toolbar={toolbar}>
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 pb-3 scrollbar-gutter-both">
@@ -711,6 +759,9 @@ function PlanToolbar({
   ownerAssignable,
   picked,
   onMoveAll,
+  onPriority,
+  onAssign,
+  onDelete,
   onClearPicked,
 }: {
   readonly history: ReactNode;
@@ -724,6 +775,11 @@ function PlanToolbar({
   readonly ownerAssignable: boolean;
   readonly picked: ReadonlySet<string>;
   readonly onMoveAll: (to: RoomTaskStatus) => void;
+  /** Undefined clears it. */
+  readonly onPriority: (priority: RoomTaskPriority | undefined) => void;
+  readonly onAssign: (assignee: RoomBoardAssignee | undefined) => void;
+  /** Absent when none of the selected tasks is this person's to delete. */
+  readonly onDelete: (() => void) | undefined;
   readonly onClearPicked: () => void;
 }) {
   const person = filter.person;
@@ -743,9 +799,9 @@ function PlanToolbar({
   return (
     <div className="flex flex-wrap items-center gap-2 px-3 pt-1 pb-2">
       {picked.size > 0 ? (
-        <div role="status" className="flex items-center gap-2">
-          <span className="text-xs font-medium">
-            {picked.size === 1 ? "1 task picked" : `${picked.size} tasks picked`}
+        <div className="flex flex-wrap items-center gap-2">
+          <span role="status" className="text-xs font-medium">
+            {picked.size} selected
           </span>
           <Menu>
             <MenuTrigger render={<Button size="xs" variant="outline" />}>Move to</MenuTrigger>
@@ -758,6 +814,40 @@ function PlanToolbar({
               ))}
             </MenuPopup>
           </Menu>
+          <Menu>
+            <MenuTrigger render={<Button size="xs" variant="outline" />}>Priority</MenuTrigger>
+            <MenuPopup align="start">
+              {BOARD_PLAN_PRIORITIES.map((one) => (
+                <MenuItem key={one.priority} onClick={() => onPriority(one.priority)}>
+                  <TaskPriorityIcon priority={one.priority} />
+                  {one.title}
+                </MenuItem>
+              ))}
+              <MenuSeparator />
+              <MenuItem onClick={() => onPriority(undefined)}>No priority</MenuItem>
+            </MenuPopup>
+          </Menu>
+          <Menu>
+            <MenuTrigger render={<Button size="xs" variant="outline" />}>Assign</MenuTrigger>
+            <MenuPopup align="start">
+              {ownerAssignable ? (
+                <MenuItem onClick={() => onAssign({})}>{nameOf(OWNER)}</MenuItem>
+              ) : null}
+              {guests.map((guest) => (
+                <MenuItem key={guest.id} onClick={() => onAssign({ guestId: guest.id })}>
+                  {nameOf(guest.id)}
+                </MenuItem>
+              ))}
+              <MenuSeparator />
+              <MenuItem onClick={() => onAssign(undefined)}>No one</MenuItem>
+            </MenuPopup>
+          </Menu>
+          {onDelete === undefined ? null : (
+            <Button size="xs" variant="ghost-destructive" onClick={onDelete}>
+              <Trash2Icon />
+              Delete
+            </Button>
+          )}
           <Button size="xs" variant="ghost" onClick={onClearPicked}>
             Clear
           </Button>
@@ -995,6 +1085,8 @@ function PlanCardMenu({
   actions,
   onMoveTo,
   onMoveBy,
+  open,
+  onOpenChange,
 }: {
   readonly label: string;
   readonly status: RoomTaskStatus;
@@ -1005,9 +1097,12 @@ function PlanCardMenu({
   readonly actions: PlanTaskActions;
   readonly onMoveTo: (to: RoomTaskStatus) => void;
   readonly onMoveBy: ((by: number) => void) | undefined;
+  /** Held by the card, so a right-click on it opens this menu too. */
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
 }) {
   return (
-    <Menu>
+    <Menu open={open} onOpenChange={onOpenChange}>
       <MenuTrigger
         render={<Button size="icon-xs" variant="ghost" aria-label={`Actions for ${label}`} />}
       >
@@ -1081,6 +1176,7 @@ function PlanCard({
   readonly onPress: (event: ReactPointerEvent<HTMLElement>) => void;
 }) {
   const label = shows.task.text.trim() || "Untitled task";
+  const [menuOpen, setMenuOpen] = useState(false);
   return (
     <div
       data-plan-card={shows.task.id}
@@ -1089,12 +1185,17 @@ function PlanCard({
         placeholder && "opacity-40",
       )}
       onPointerDown={onPress}
+      onContextMenu={(event) => {
+        if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
+        event.preventDefault();
+        setMenuOpen(true);
+      }}
     >
       <PlanCardBody {...shows} picked={picked} />
       <button
         type="button"
-        aria-label={`Open task: ${label}`}
-        aria-pressed={picked ? true : undefined}
+        aria-label={`Task: ${label}`}
+        aria-pressed={picked}
         className="absolute inset-0 cursor-pointer rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
         onClick={onOpen}
       />
@@ -1112,6 +1213,8 @@ function PlanCard({
           actions={actions}
           onMoveTo={onMoveTo}
           onMoveBy={onMoveBy}
+          open={menuOpen}
+          onOpenChange={setMenuOpen}
         />
       </div>
     </div>
@@ -1140,12 +1243,18 @@ function PlanListRow({
   const done = task.done === true;
   const label = task.text.trim() || "Untitled task";
   const assignee = task.assignee;
+  const [menuOpen, setMenuOpen] = useState(false);
   return (
     <li
       className={cn(
         "group/plan relative flex min-h-10 items-center gap-2 border-b border-board-hairline px-3 py-1.5 last:border-b-0 hover:bg-accent/40",
         picked && "bg-primary/8",
       )}
+      onContextMenu={(event) => {
+        if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
+        event.preventDefault();
+        setMenuOpen(true);
+      }}
     >
       <PlanStatusMark status={status} />
       <span
@@ -1178,8 +1287,8 @@ function PlanListRow({
       </span>
       <button
         type="button"
-        aria-label={`Open task: ${label}`}
-        aria-pressed={picked ? true : undefined}
+        aria-label={`Task: ${label}`}
+        aria-pressed={picked}
         className="absolute inset-0 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
         onClick={onOpen}
       />
@@ -1194,6 +1303,8 @@ function PlanListRow({
           actions={actions}
           onMoveTo={onMoveTo}
           onMoveBy={undefined}
+          open={menuOpen}
+          onOpenChange={setMenuOpen}
         />
       </span>
     </li>
