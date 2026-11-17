@@ -59,6 +59,23 @@ export const syncNeedsApproval = (link: {
 
 const FALLBACK_COMPUTER_NAME = "This computer";
 
+/**
+ * The line Tinkjam Sync for Mac reads the approval link from (`sync --app`). The app opens the
+ * link itself and keeps an "Open again" item, so the words around it may change freely.
+ */
+export const appApprovalLine = (url: string) => `TINKJAM_SYNC_APPROVE_URL ${url}`;
+
+/**
+ * Under the Mac app, stdin is a pipe the app holds open. It closes when the app quits or is
+ * killed, and then Sync shuts down as on Ctrl+C, so it never outlives the app.
+ */
+const stopWhenAppQuits = () => {
+  const stop = () => process.kill(process.pid, "SIGTERM");
+  process.stdin.once("end", stop);
+  process.stdin.once("error", stop);
+  process.stdin.resume();
+};
+
 // Over SSH or without a terminal the browser is somewhere else, so the link is only printed.
 const canOpenBrowser = Config.all({
   sshConnection: Config.String("SSH_CONNECTION").pipe(Config.option),
@@ -96,6 +113,7 @@ const approveIfNeeded = Effect.fn("cli.sync.approve_if_needed")(function* (input
   readonly computerName: string;
   readonly openBrowser: (url: string) => Effect.Effect<void>;
   readonly background: boolean;
+  readonly app: boolean;
 }) {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const tokens = yield* CliTokenManager.CloudCliTokenManager;
@@ -132,7 +150,10 @@ const approveIfNeeded = Effect.fn("cli.sync.approve_if_needed")(function* (input
     present: (url) =>
       Console.log(
         `\nTo connect ${input.computerName} to Tinkjam, open this link. It says what connecting does, then asks you to sign in to approve it:\n\n  ${url}\n`,
-      ).pipe(Effect.andThen(input.openBrowser(url))),
+      ).pipe(
+        Effect.andThen(input.app ? Console.log(appApprovalLine(url)) : Effect.void),
+        Effect.andThen(input.openBrowser(url)),
+      ),
   });
   yield* tokens.store(token);
   yield* CliState.setCliDesiredCloudLink(true, "managed");
@@ -170,6 +191,14 @@ export const syncCommand = Command.make("sync", {
   ),
   processes: Flag.Boolean("processes").pipe(
     Flag.withDescription("List the processes of the Tinkjam Sync of this home."),
+    Flag.withDefault(false),
+  ),
+  // Tinkjam Sync for Mac runs Sync as its child: the app opens the approval link, shows the
+  // state from sync-status.json, restarts Sync after a crash and ends it when it quits.
+  app: Flag.Boolean("app").pipe(
+    Flag.withDescription(
+      "Run as the Tinkjam Sync app's child: print the approval link for it, end any other Sync of this home, and stop when the app does.",
+    ),
     Flag.withDefault(false),
   ),
 }).pipe(
@@ -219,6 +248,7 @@ export const syncCommand = Command.make("sync", {
           return;
         }
 
+        if (flags.app) yield* Effect.sync(stopWhenAppQuits);
         const run = Effect.gen(function* () {
           let starts: ReadonlyArray<number> | undefined;
           if (flags.background) {
@@ -238,14 +268,19 @@ export const syncCommand = Command.make("sync", {
             }
           }
           const holder = yield* readSyncHolder(home.statePath);
-          if (holder !== undefined && !flags.background) {
+          if (holder !== undefined && !flags.background && !flags.app) {
+            if (holder.mode === "app")
+              return yield* Console.log(
+                "Tinkjam Sync is already running from the Tinkjam Sync app on this Mac. Use its menu bar icon.",
+              );
             if (holder.mode === "background")
               return yield* Console.log(
                 `Tinkjam Sync is already running in the background on this computer. To stop it, run: ${yield* syncCommandWith("--uninstall")}`,
               );
             return yield* new SyncAlreadyRunningError({ cause: holder.pid });
           }
-          const takeover = takeoverDecision(holder);
+          // The app has already removed any login item, so whatever else holds this home goes.
+          const takeover = flags.app ? "take-over" : takeoverDecision(holder);
           if (holder !== undefined && takeover === "yield") {
             return yield* Console.log(
               `Tinkjam Sync is already running in the background (pid ${holder.pid}).`,
@@ -266,22 +301,28 @@ export const syncCommand = Command.make("sync", {
           );
           const launcher = yield* ExternalLauncher.ExternalLauncher;
           const openBrowser =
-            !flags.background && (yield* canOpenBrowser)
+            !flags.background && !flags.app && (yield* canOpenBrowser)
               ? (url: string) => launcher.launchBrowser(url).pipe(Effect.ignore)
               : () => Effect.void;
           const digest = yield* Digest.Digest;
           const connected = yield* runCloudCommand(
             flags,
-            approveIfNeeded({ computerName, openBrowser, background: flags.background }).pipe(
-              Effect.provideService(Digest.Digest, digest),
-            ),
+            approveIfNeeded({
+              computerName,
+              openBrowser,
+              background: flags.background,
+              app: flags.app,
+            }).pipe(Effect.provideService(Digest.Digest, digest)),
             { quietLogs: true },
           );
           if (!connected) return;
           if (flags.connectOnly) {
             return yield* Console.log("This computer is connected to your Tinkjam account.");
           }
-          yield* writeOwnerRecord(home.stateDir, flags.background ? "background" : "foreground");
+          yield* writeOwnerRecord(
+            home.stateDir,
+            flags.app ? "app" : flags.background ? "background" : "foreground",
+          );
           // Loopback only: the account's tunnel is the one way in, and no pairing code is printed.
           return yield* runServerCommand(
             {

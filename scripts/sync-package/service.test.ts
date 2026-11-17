@@ -8,6 +8,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   autostartEntry,
   classifyLoginItem,
+  installedMacApp,
   launchAgentPlist,
   leftoverMarkers,
   parseSyncArgs,
@@ -38,6 +39,22 @@ describe("Tinkjam Sync's arguments", () => {
   it("refuses flags that contradict each other", () => {
     expect(() => parseSyncArgs(["--install", "--uninstall"])).toThrow("cannot be used together");
     expect(() => parseSyncArgs(["--install", "--disconnect"])).toThrow("cannot be used together");
+  });
+});
+
+describe("Tinkjam Sync for Mac", () => {
+  it("is found in /Applications or ~/Applications, and otherwise not at all", () => {
+    const found = (paths: ReadonlyArray<string>) => (path: string) => paths.includes(path);
+    expect(installedMacApp("/Users/a", found(["/Users/a/Applications/Tinkjam Sync.app"]))).toBe(
+      "/Users/a/Applications/Tinkjam Sync.app",
+    );
+    expect(
+      installedMacApp(
+        "/Users/a",
+        found(["/Applications/Tinkjam Sync.app", "/Users/a/Applications/Tinkjam Sync.app"]),
+      ),
+    ).toBe("/Applications/Tinkjam Sync.app");
+    expect(installedMacApp("/Users/a", found([]))).toBeUndefined();
   });
 });
 

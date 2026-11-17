@@ -23,7 +23,8 @@ const STARTS_FILE = "sync-starts.json";
 const LEGACY_SUPERVISOR_PID_FILE = "sync-service.pid";
 const LEGACY_SUPERVISOR_STOP_FILE = "sync-service.stop";
 
-export type SyncMode = "background" | "foreground";
+/** "app": the child of Tinkjam Sync for Mac, which starts, restarts and stops it itself. */
+export type SyncMode = "background" | "foreground" | "app";
 
 export interface SyncHolder {
   readonly pid: number;
@@ -32,11 +33,15 @@ export interface SyncHolder {
   readonly mode: SyncMode | "unknown";
 }
 
-/** A background Sync leaves another background one alone and ends any other. */
+/** A background Sync leaves another background one, or the Mac app's, alone and ends any other. */
 export const takeoverDecision = (
   holder: SyncHolder | undefined,
 ): "start" | "yield" | "take-over" =>
-  holder === undefined ? "start" : holder.mode === "background" ? "yield" : "take-over";
+  holder === undefined
+    ? "start"
+    : holder.mode === "background" || holder.mode === "app"
+      ? "yield"
+      : "take-over";
 
 /** Starts counted toward giving up: this many within the window and a broken install stops. */
 export const RESTART_LIMIT = 5;
@@ -151,7 +156,10 @@ export const readSyncHolder = Effect.fn("cli.sync.read_holder")(function* (state
   return {
     pid,
     parentPid: typeof record?.parentPid === "number" ? record.parentPid : undefined,
-    mode: record?.mode === "background" || record?.mode === "foreground" ? record.mode : "unknown",
+    mode:
+      record?.mode === "background" || record?.mode === "foreground" || record?.mode === "app"
+        ? record.mode
+        : "unknown",
   } satisfies SyncHolder;
 });
 

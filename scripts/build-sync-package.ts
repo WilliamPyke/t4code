@@ -7,6 +7,7 @@
  * build's version, which every copy already out checks at start; publish both, at the same URL.
  */
 import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
@@ -61,6 +62,8 @@ function syncPackageManifest(input: {
     files: ["bin", "dist"],
     engines: { node: input.nodeEngine },
     dependencies: input.dependencies,
+    // Tinkjam Sync for Mac reads this to know it may run `sync --app`; older copies lack it.
+    tinkjamSync: { features: ["app"] },
   };
 }
 
@@ -143,9 +146,11 @@ function main() {
   );
   NodeFS.rmSync(stageRoot, { recursive: true, force: true });
 
+  // Tinkjam Sync for Mac checks the tarball against this before installing it.
+  const sha256 = NodeCrypto.createHash("sha256").update(NodeFS.readFileSync(tarball)).digest("hex");
   NodeFS.writeFileSync(
     NodePath.join(outputDir, "sync.json"),
-    `${JSON.stringify({ version, url: syncUrl }, null, 2)}
+    `${JSON.stringify({ version, url: syncUrl, sha256 }, null, 2)}
 `,
   );
 

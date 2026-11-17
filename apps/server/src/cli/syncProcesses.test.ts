@@ -10,9 +10,10 @@ import {
 } from "./syncProcesses.ts";
 
 describe("Tinkjam Sync's single instance", () => {
-  it("starts alone, leaves a background Sync running, and ends a foreground or unknown one", () => {
+  it("starts alone, leaves a background or Mac app Sync running, and ends a foreground or unknown one", () => {
     expect(takeoverDecision(undefined)).toBe("start");
     expect(takeoverDecision({ pid: 7, parentPid: 6, mode: "background" })).toBe("yield");
+    expect(takeoverDecision({ pid: 7, parentPid: 6, mode: "app" })).toBe("yield");
     expect(takeoverDecision({ pid: 7, parentPid: 6, mode: "foreground" })).toBe("take-over");
     // A Sync from before these records, such as an older foreground `npx` run.
     expect(takeoverDecision({ pid: 7, parentPid: undefined, mode: "unknown" })).toBe("take-over");

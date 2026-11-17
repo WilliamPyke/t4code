@@ -7,6 +7,7 @@ import * as NodeOS from "node:os";
 import * as NodeURL from "node:url";
 
 import {
+  installedMacApp,
   logTail,
   parseSyncArgs,
   resolveBaseDir,
@@ -138,12 +139,21 @@ const printUpdateNotice = async (options) => {
 
 const uninstallCommand = `npx -y ${SYNC_URL} --uninstall`;
 
+// The Mac app runs the default home's Sync and is its own login item.
+const macApp =
+  // oxlint-disable-next-line t3code/no-global-process-runtime -- The plain-Node launcher has no Effect runtime to inject it.
+  process.platform === "darwin" && baseDir === resolveBaseDir(undefined, undefined)
+    ? installedMacApp(NodeOS.homedir())
+    : undefined;
+
 if (parsed.action === "status") {
   const items = service.installed();
   console.log(
-    items.length === 0
-      ? "Tinkjam Sync is not set up to start when you log in."
-      : `Tinkjam Sync starts when you log in: ${items.map((item) => item.location).join(", ")}`,
+    items.length > 0
+      ? `Tinkjam Sync starts when you log in: ${items.map((item) => item.location).join(", ")}`
+      : macApp !== undefined
+        ? `Tinkjam Sync for Mac (${macApp}) runs Tinkjam Sync; its menu bar icon shows whether it is connected.`
+        : "Tinkjam Sync is not set up to start when you log in.",
   );
   await runSync(ownEntry, ["--processes", ...homeArgs]);
   console.log(`Log: ${service.paths.log}`);
@@ -163,6 +173,13 @@ if (parsed.action === "uninstall" || parsed.serverArgs.includes("--disconnect"))
 }
 
 if (parsed.action === "install") {
+  if (macApp !== undefined) {
+    console.log(
+      `Tinkjam Sync for Mac is installed (${macApp}). It runs Tinkjam Sync and starts it when you log in, so nothing else is needed. Opening it.`,
+    );
+    NodeChildProcess.spawnSync("open", [macApp]);
+    process.exit(0);
+  }
   await printUpdateNotice({ install: true });
   if (!service.supported) {
     console.error(

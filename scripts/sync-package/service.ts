@@ -55,6 +55,20 @@ export function parseSyncArgs(args: ReadonlyArray<string>): SyncArgs {
 
 export const defaultBaseDir = () => NodePath.join(NodeOS.homedir(), ".tinkjam");
 
+/**
+ * Tinkjam Sync for Mac, if this Mac has it: the app runs Sync itself and is its own login item,
+ * so `--install` leaves the Mac to it instead of adding a second Sync at log-in.
+ */
+export function installedMacApp(
+  home: string,
+  exists: (path: string) => boolean = NodeFS.existsSync,
+): string | undefined {
+  // Only ever a Mac's paths, whatever machine runs this.
+  return ["/Applications", NodePath.posix.join(home, "Applications")]
+    .map((dir) => NodePath.posix.join(dir, "Tinkjam Sync.app"))
+    .find(exists);
+}
+
 export function resolveBaseDir(flag: string | undefined, envHome: string | undefined): string {
   const chosen = flag?.trim() || envHome?.trim() || defaultBaseDir();
   const expanded =
