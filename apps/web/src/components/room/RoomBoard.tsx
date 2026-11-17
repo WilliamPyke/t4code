@@ -1497,8 +1497,9 @@ export function RoomBoard({
     }
   };
   // On a cloud board a box runs only on its person's machine: theirs is away while they are not on
-  // the board, and the viewer's own until they bring their agent.
+  // the board, and the viewer's own until they bring their agent. A viewer cannot prompt anyway.
   const boxOffline = (box: Pick<BoardThreadBox, "guestId">) =>
+    !viewOnly &&
     cloud !== undefined &&
     box.guestId !== undefined &&
     (box.guestId === viewer
