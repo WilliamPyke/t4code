@@ -6,17 +6,20 @@ import Layout from "../layouts/Layout.astro";
 import { APP_URL, SAMPLE_BOARD_URL, SYNC_COMMAND, UPSTREAM_REPO_URL } from "../lib/site";
 
 const today = [
-  "Accounts: sign in and your boards follow you to any device",
-  "Workspaces, with invites by link",
+  "Accounts and workspaces, with invites by link",
   "Boards in the cloud that stay open when your computer is off",
-  "Starter templates: Project kickoff and Design review",
+  "Share links that can edit or only view; viewers need no account",
+  "Starter templates, and copies of boards their makers allow",
   "Tinkjam Sync: connect your computer's agents with one command",
   "Bring your own Claude or Codex agent",
   "Sticky notes, and lines with handles on every side",
-  "Link embeds with live previews",
+  "Link embeds, and readable snapshots your agent brings in",
   "Artifacts that change live as agents edit them",
-  "Plan view: kanban and list, with priority, due dates and assignees",
-  "Live cursors for everyone on the board",
+  "Plan view, filled in by people or by their agents",
+  "Mentions, an inbox and My tasks, in the app",
+  "Live cursors, and a catch-up of what changed while you were away",
+  "Command menu, keyboard shortcuts and right-click menus",
+  "Export to Markdown and PNG",
   "Nothing reaches your agent until you press Send",
 ];
 
@@ -36,6 +39,10 @@ const faqs = [
   {
     q: "Who pays for the AI?",
     a: "Each person's agent uses that person's own Claude or Codex account. Tinkjam itself is free while in beta.",
+  },
+  {
+    q: "Do people need an account to see a board?",
+    a: "Not to look. A Can view link opens without an account, and a viewer can ask for edit access. To edit, people sign in.",
   },
   {
     q: "Can others run my agent?",
@@ -262,7 +269,10 @@ const faqs = [
             </div>
           </dl>
           <p class="context__how">
-            Your agent opens the link itself, using the tools you have connected to it.
+            <b>Can't be embedded?</b> For a private Google Doc, a Notion page or a Linear issue, ask
+            your own agent to bring it in. It reads the link with the tools you connected and puts a
+            readable snapshot on the board, which any agent can then use as context. It only runs
+            when you press Send.
           </p>
         </div>
 
@@ -291,8 +301,10 @@ const faqs = [
               <div class="s-link__head">
                 <span class="embed__icon" style="background:var(--agent)"><Icon name="issue" /></span>
                 <span class="s-card__owner">linear.app</span>
+                <span class="snap">Snapshot</span>
               </div>
               <div class="link-card__title">Make onboarding feel personal</div>
+              <span class="link-card__by">Brought in by Maya's Claude</span>
             </div>
           </div>
           <svg class="context-wires" viewBox="0 0 80 386" preserveAspectRatio="none">
@@ -313,7 +325,7 @@ const faqs = [
                 <span class="chip"><Icon name="wire" />Linear issue</span>
               </div>
               <p class="context-agent__text">
-                Opening the Figma file and the checklist with Maya's connected tools.
+                Working from the Figma file, the checklist and the issue snapshot.
               </p>
             </div>
           </div>
@@ -329,14 +341,15 @@ const faqs = [
           <p class="kicker">Plan</p>
           <h2 id="plan-title">The same work, as a plan.</h2>
           <p class="section__lede">
-            Every task on the board is also a card in the Plan. Move it in one place and it moves in
-            the other, so the PM's view and the board never drift apart.
+            Every task on the board is also a card in the Plan, so the PM's view and the board
+            never drift apart. Or tell your agent to break a goal into tasks: it creates,
+            prioritises and assigns them for you.
           </p>
         </div>
         <ul class="ticks">
-          <li><Icon name="check" />Kanban and list views</li>
-          <li><Icon name="check" />Priority, due dates and filters</li>
+          <li><Icon name="check" />Kanban and list views, with priority, due dates and filters</li>
           <li><Icon name="check" />Assign tasks to people or to agents</li>
+          <li><Icon name="check" />Agents plan with you; one undo takes a whole turn back</li>
           <li><Icon name="check" />Hand a task to an agent; its owner presses Send</li>
         </ul>
       </div>
@@ -346,7 +359,11 @@ const faqs = [
           <span class="seg"><span>Board</span><span class="is-active">Plan</span><span>List</span></span>
           <span class="chip">Assignee: anyone</span>
           <span class="chip">Priority: all</span>
-          <span class="plan__due chip">Due this week</span>
+          <span class="plan__agent">
+            <span class="agent-glyph agent-glyph--sm"><Icon name="spark" /></span>
+            Claude added 4 tasks
+            <span class="plan__undo">Undo</span>
+          </span>
         </div>
         <div class="plan__cols">
           <div class="pcol">
@@ -474,23 +491,24 @@ const faqs = [
     <div class="wrap">
       <div class="section__split">
         <div class="section__head">
-          <p class="kicker">Simple on top, powerful underneath</p>
+          <p class="kicker">Simple by default, Advanced on demand</p>
           <h2 id="depth-title">Same box, two depths.</h2>
           <p class="section__lede">
-            Most of the team sees a clear summary of what an agent did. Engineers can open the very
-            same box into a full coding-agent workbench.
+            Tinkjam opens as a plain boards product, and most of the team never needs more. One
+            Advanced switch opens the same boxes into a full coding-agent workbench: chats, diffs,
+            terminals and pull requests.
           </p>
         </div>
         <div class="aside-note aside-note--mint" aria-hidden="true">
           <span class="tape"></span>
-          Engineers: models, diffs, branches and approvals are all still there.
+          Engineers: flip Advanced on. Chats, diffs, terminals and pull requests are all there.
           <span class="aside-note__by"><span class="s-dot" style="background:var(--sam)"></span>Sam</span>
         </div>
       </div>
 
       <div class="depth">
         <div class="depth__glance">
-          <p class="depth__tag">What everyone sees</p>
+          <p class="depth__tag">Simple: what everyone sees</p>
           <div class="s-card">
             <div class="s-card__head">
               <span class="agent-glyph"><Icon name="spark" /></span>
@@ -520,12 +538,13 @@ const faqs = [
             <span class="agent-glyph"><Icon name="spark" /></span>
             <span class="workbench__title">Claude <span>Maya's agent</span></span>
             <span class="chip"><Icon name="branch" />onboarding-greeting</span>
-            <span class="chip">Model and effort: Maya's choice</span>
+            <span class="switch"><span class="switch__track"><i></i></span>Advanced</span>
           </div>
           <div class="workbench__tabs">
+            <span>Chat</span>
             <span class="is-active">Changes <b>2</b></span>
             <span>Terminal</span>
-            <span>Approvals <b>1</b></span>
+            <span>Pull request</span>
           </div>
           <div class="workbench__files">
             <span class="is-active">Welcome.tsx <em>+9 &minus;3</em></span>
@@ -560,6 +579,17 @@ const faqs = [
           </div>
         </div>
       </div>
+
+      <div class="power">
+        <p class="power__title">Fast for people who live in it</p>
+        <ul class="power__list">
+          <li><kbd>Ctrl</kbd><kbd>K</kbd> or <kbd>&#8984;</kbd><kbd>K</kbd> command menu</li>
+          <li>FigJam-style keys</li>
+          <li>Right-click menus</li>
+          <li>While you were away</li>
+          <li>Export to Markdown and PNG</li>
+        </ul>
+      </div>
     </div>
   </section>
 
@@ -570,13 +600,16 @@ const faqs = [
           <p class="kicker">For teams</p>
           <h2 id="teams-title">Everyone's boards, in one place.</h2>
           <p class="section__lede">
-            Make a workspace for your team and invite people with a link. Every member sees the
-            workspace's boards, and because you sign in, your boards follow you to any device.
+            Make a workspace and invite people with a link. Every member sees its boards, and your
+            boards follow you to any device. Share a board with anyone, and keep up with what needs
+            you from one inbox in the app.
           </p>
           <ul class="ticks">
-            <li><Icon name="check" />Workspaces with invites by link</li>
-            <li><Icon name="check" />Every member sees every board in the workspace</li>
-            <li><Icon name="check" />Starter templates: Project kickoff and Design review</li>
+            <li><Icon name="check" />Can edit and Can view links; viewers need no account</li>
+            <li><Icon name="check" />Viewers can ask for edit access; makers can allow copies</li>
+            <li><Icon name="check" />@mention teammates in notes, tasks and comments</li>
+            <li><Icon name="check" />An inbox for mentions, assignments, replies and access requests</li>
+            <li><Icon name="check" />My tasks, across every board</li>
           </ul>
         </div>
 
@@ -606,6 +639,23 @@ const faqs = [
             <div class="thumb thumb--new">
               <div class="thumb__img"><span>+</span></div>
               <b>New board</b><span>Blank or template</span>
+            </div>
+          </div>
+          <div class="inbox">
+            <span class="tape"></span>
+            <b class="inbox__title">Inbox</b>
+            <div class="inbox__item">
+              <span class="avatar avatar--sm" style="background:var(--priya)">P</span>
+              <span><b>Priya</b> mentioned you in Onboarding v2</span>
+            </div>
+            <div class="inbox__item">
+              <span class="avatar avatar--sm" style="background:var(--sam)">S</span>
+              <span><b>Sam</b> assigned you Pick the welcome photo</span>
+            </div>
+            <div class="inbox__item">
+              <span class="avatar avatar--sm" style="background:var(--agent)">V</span>
+              <span>A viewer asked to edit Q3 launch</span>
+              <span class="mini-btn mini-btn--send">Allow</span>
             </div>
           </div>
         </div>

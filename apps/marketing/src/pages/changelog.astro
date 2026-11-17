@@ -1,6 +1,33 @@
 ---
 import Layout from "../layouts/Layout.astro";
 
+const latest = [
+  {
+    title: "Agents plan the work",
+    text: "Tell your own agent to break a goal into tasks, and it creates, prioritises and assigns them on the board and in the Plan. One undo takes a whole agent turn back.",
+  },
+  {
+    title: "Bring documents in with your agent",
+    text: "On any link card, such as a Linear issue, a private Google Doc or a Notion page, your agent reads it with the tools you connected and puts a readable snapshot on the board that any agent can use as context. It only runs when you press Send.",
+  },
+  {
+    title: "Sharing",
+    text: "Can edit and Can view links. Viewers need no account and can ask for edit access, and a board's maker can allow copies.",
+  },
+  {
+    title: "Mentions and an inbox",
+    text: "Mention teammates in notes, tasks and comments. An inbox in the app gathers mentions, assignments, replies and access requests, and My tasks lists your tasks across boards.",
+  },
+  {
+    title: "Faster for people who live in it",
+    text: "A command menu (Ctrl or Cmd and K), FigJam-style keys, right-click menus, a catch-up of what changed while you were away, and export to Markdown and PNG.",
+  },
+  {
+    title: "Simple by default, Advanced on demand",
+    text: "The app opens as a plain boards product. One switch reveals the full coding-agent workbench: chats, diffs, terminals and pull requests.",
+  },
+];
+
 const entries = [
   {
     title: "We're called Tinkjam now",
@@ -46,7 +73,19 @@ const entries = [
       <h1>Changelog</h1>
       <p>What is new in Tinkjam, in plain words.</p>
 
-      <h2>This week</h2>
+      <h2>17 November</h2>
+      <ul class="changelog__list">
+        {
+          latest.map((entry) => (
+            <li>
+              <b>{entry.title}</b>
+              <span>{entry.text}</span>
+            </li>
+          ))
+        }
+      </ul>
+
+      <h2>Earlier this week</h2>
       <ul class="changelog__list">
         {
           entries.map((entry) => (
