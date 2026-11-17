@@ -62,11 +62,14 @@ export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
         // Signed in, the account's and its workspaces' boards too, before any is opened here.
         joined: withWorkspaceBoards(
           joinedBoardSources({
-            local: joined.map((share) => ({
-              ...share,
-              cloud: isCloudShare(share),
-              maker: share.made === true,
-            })),
+            // A board only looked at from a view link is not one of theirs: it is under Viewed.
+            local: joined
+              .filter((share) => share.viewOnly !== true)
+              .map((share) => ({
+                ...share,
+                cloud: isCloudShare(share),
+                maker: share.made === true,
+              })),
             listed: accountBoards,
           }),
           workspaces,

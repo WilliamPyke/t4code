@@ -67,6 +67,7 @@ import { AccountNameAsk, BoardsAccount } from "./BoardsAccount";
 import { BoardsWelcome } from "./BoardsWelcome";
 import { InboxBell } from "./InboxBell";
 import { MyTasks } from "./MyTasks";
+import { ViewedBoards } from "./ViewedBoards";
 import { SignInNudge } from "./SignInNudge";
 import { BoardThumbnail } from "./BoardThumbnail";
 import {
@@ -156,12 +157,15 @@ export function BoardsHome() {
     threads,
     joined: withWorkspaceBoards(
       joinedBoardSources({
-        local: joined.map((share) => ({
-          ...share,
-          cloud: isCloudShare(share),
-          maker: share.made === true,
-          preview: localPreviews[share.shareId],
-        })),
+        // A board only looked at from a view link is not one of theirs: it is under Viewed.
+        local: joined
+          .filter((share) => share.viewOnly !== true)
+          .map((share) => ({
+            ...share,
+            cloud: isCloudShare(share),
+            maker: share.made === true,
+            preview: localPreviews[share.shareId],
+          })),
         listed: accountBoards,
       }),
       workspaces,
@@ -182,7 +186,7 @@ export function BoardsHome() {
   const showWorkspace = searching || scope === "all";
   const content = homeContent({
     // A board only looked at from a view link (the sample) leaves the welcome in place.
-    boards: all.length - joined.filter((share) => share.viewOnly === true).length,
+    boards: all.length,
     workspaces: workspaces?.length ?? 0,
     machinesLoaded: bootstrapped,
     accountLoaded: accountSettled,
@@ -381,6 +385,7 @@ export function BoardsHome() {
               {shown.map(tile)}
             </ul>
           )}
+          {searching ? null : <ViewedBoards />}
         </div>
       )}
     </SidebarInset>

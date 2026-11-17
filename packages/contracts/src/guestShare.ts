@@ -935,6 +935,12 @@ export const RoomBoard = Schema.Struct({
   ),
   /** The room thread's own box's model, once the owner picked one. Only `box.model` sets it. */
   roomBoxModel: Schema.optional(RoomBoxModel),
+  /**
+   * The card or section someone opening the board for the first time starts at, when the whole
+   * board is too big to read at once. Only `board.start` sets it; one no longer on the board is
+   * ignored. Absent: the top-left section.
+   */
+  start: Schema.optional(RoomBoardNoteId),
 });
 export type RoomBoard = typeof RoomBoard.Type;
 
@@ -1066,6 +1072,14 @@ export const RoomBoardChange = Schema.Union([
     type: Schema.Literal("task.run"),
     noteId: RoomBoardNote.fields.id,
     boxId: Schema.NullOr(RoomBoardNoteId),
+  }),
+  /**
+   * Marks the card or section new visitors start at, or clears it (`null`). For the room's owner
+   * and a cloud board's maker.
+   */
+  Schema.Struct({
+    type: Schema.Literal("board.start"),
+    noteId: Schema.NullOr(RoomBoardNoteId),
   }),
 ]);
 export type RoomBoardChange = typeof RoomBoardChange.Type;
@@ -1934,3 +1948,24 @@ export const CloudBoardRole = Schema.Literals(["edit", "view"]);
 export type CloudBoardRole = typeof CloudBoardRole.Type;
 export const CloudBoardRoleRequest = Schema.Struct({ guestId: GuestId, role: CloudBoardRole });
 export type CloudBoardRoleRequest = typeof CloudBoardRoleRequest.Type;
+
+/**
+ * Lets anyone who can see a board make their own copy of it, or stops that: `?share=`, as the
+ * link route. Off on every board until its maker turns it on.
+ */
+export const CLOUD_BOARD_COPIES_ROUTE = `${CLOUD_BOARD_ROUTE}/copies`;
+export const CloudBoardCopiesRequest = Schema.Struct({ on: Schema.Boolean });
+export type CloudBoardCopiesRequest = typeof CloudBoardCopiesRequest.Type;
+
+/**
+ * Makes a new board of the caller's own from one that allows copies (POST), answered as
+ * `CloudBoardCreateResult`. `source` is the caller's session on that board or its view link; a
+ * signed-in caller's bearer is their account, as when making a board. Only what everyone sees is
+ * copied, as the caller's own cards; never an agent, its conversation or a prompt.
+ */
+export const CLOUD_BOARD_COPY_ROUTE = `${CLOUD_BOARD_ROUTE}/copy`;
+export const CloudBoardCopyRequest = Schema.Struct({
+  name: CloudBoardCreateRequest.fields.name,
+  source: TrimmedNonEmptyString,
+});
+export type CloudBoardCopyRequest = typeof CloudBoardCopyRequest.Type;

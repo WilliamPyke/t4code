@@ -327,12 +327,16 @@ function Sidebar({
             }
           >
             <SheetHeader className="sr-only">
-              <SheetTitle>{props["aria-label"] ?? "Sidebar"}</SheetTitle>
-              <SheetDescription>Displays the mobile sidebar.</SheetDescription>
+              {/* The app's drawer is its menu, whatever its sidebar is called on a wide screen. */}
+              <SheetTitle>
+                {side === "left" ? "Menu" : (props["aria-label"] ?? "Sidebar")}
+              </SheetTitle>
+              <SheetDescription>Boards, settings and your account.</SheetDescription>
             </SheetHeader>
             <div
               className={cn(
-                "flex h-full w-full flex-col pb-safe pt-safe",
+                // Rows a finger can hit: at least 40px tall.
+                "flex h-full w-full flex-col pb-safe pt-safe [&_[data-sidebar=menu-button]]:min-h-10 [&_[data-sidebar=menu-sub-button]]:min-h-10",
                 SIDEBAR_TITLEBAR_CONTROL_SIZE,
                 side === "left" ? "pl-safe" : "pr-safe",
               )}

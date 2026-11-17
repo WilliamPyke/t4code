@@ -177,7 +177,7 @@ export function useMentionPicker(onPick: (picked: MentionPick) => void) {
     }, 0);
   };
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>): boolean => {
-    if (!open) return false;
+    if (!open || event.nativeEvent.isComposing) return false;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       const step = event.key === "ArrowDown" ? 1 : -1;
       setActive((shown + step + options.length) % options.length);
@@ -194,6 +194,14 @@ export function useMentionPicker(onPick: (picked: MentionPick) => void) {
     return true;
   };
   const below = state === null || state.rect.bottom < window.innerHeight - 220;
+  // Inside a dialog, the list goes in it: a modal dialog takes no pointer outside itself.
+  const dialog = state?.field.closest<HTMLElement>('[role="dialog"], [role="alertdialog"]') ?? null;
+  const container = dialog ?? document.body;
+  // A dialog that moves itself with a transform places fixed children from its own corner.
+  const corner =
+    dialog === null || getComputedStyle(dialog).transform === "none"
+      ? null
+      : dialog.getBoundingClientRect();
   const popup =
     !open || state === null
       ? null
@@ -202,12 +210,16 @@ export function useMentionPicker(onPick: (picked: MentionPick) => void) {
             role="listbox"
             aria-label="Mention someone"
             className="fixed z-[200] max-h-52 w-56 overflow-y-auto rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-lg"
-            style={{
-              left: Math.min(state.rect.left, window.innerWidth - 232),
-              ...(below
-                ? { top: state.rect.bottom + 4 }
-                : { bottom: window.innerHeight - state.rect.top + 4 }),
-            }}
+            style={
+              corner === null
+                ? {
+                    left: Math.min(state.rect.left, window.innerWidth - 232),
+                    ...(below
+                      ? { top: state.rect.bottom + 4 }
+                      : { bottom: window.innerHeight - state.rect.top + 4 }),
+                  }
+                : { left: state.rect.left - corner.left, top: state.rect.bottom + 4 - corner.top }
+            }
             // Keeps the caret in the field while a name is picked with the pointer.
             onPointerDown={(event) => event.preventDefault()}
             onMouseDown={(event) => event.preventDefault()}
@@ -223,7 +235,12 @@ export function useMentionPicker(onPick: (picked: MentionPick) => void) {
                   index === shown && "bg-accent text-accent-foreground",
                 )}
                 onPointerEnter={() => setActive(index)}
-                onClick={() => pick(person)}
+                // On press: the field's blur, or a dialog around it, can come before a click.
+                onPointerDown={(event) => {
+                  if (event.button !== 0) return;
+                  event.preventDefault();
+                  pick(person);
+                }}
               >
                 <span
                   aria-hidden
@@ -241,7 +258,7 @@ export function useMentionPicker(onPick: (picked: MentionPick) => void) {
               </li>
             ))}
           </ul>,
-          document.body,
+          container,
         );
   return { open, track, keyDown, close: () => setState(null), popup };
 }

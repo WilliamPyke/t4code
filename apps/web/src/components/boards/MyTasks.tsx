@@ -1,7 +1,7 @@
 import type { CloudMyTask } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { ListTodoIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useBoardAccount } from "~/guest/boardAccount";
 import { loadMyTasks, openInboxBoard } from "~/guest/inbox";
@@ -39,6 +39,9 @@ function myTasksByBoard(tasks: ReadonlyArray<CloudMyTask>): ReadonlyArray<{
   }));
 }
 
+const myOpenTaskCount = (tasks: ReadonlyArray<CloudMyTask>) =>
+  tasks.filter((task) => task.status !== "done").length;
+
 const statusTitle = (task: CloudMyTask) =>
   BOARD_PLAN_COLUMNS.find((column) => column.status === task.status)?.title ?? "";
 const priorityTitle = (task: CloudMyTask) =>
@@ -50,7 +53,21 @@ export function MyTasks() {
   const [open, setOpen] = useState(false);
   const [tasks, setTasks] = useState<ReadonlyArray<CloudMyTask> | string | null>(null);
   const navigate = useNavigate();
-  if (account.status !== "signed-in") return null;
+  const signedIn = account.status === "signed-in";
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the button says how many tasks are open for this person, which only the board host knows
+  useEffect(() => {
+    if (!signedIn) return;
+    let stopped = false;
+    void loadMyTasks().then((read) => {
+      if (!stopped) setTasks(read);
+    });
+    return () => {
+      stopped = true;
+    };
+  }, [signedIn]);
+  if (!signedIn) return null;
+  // The button counts open tasks only; unread news is the bell's.
+  const openCount = Array.isArray(tasks) ? myOpenTaskCount(tasks) : 0;
   const openTask = async (task: CloudMyTask) => {
     setOpen(false);
     const target = await openInboxBoard({
@@ -76,9 +93,17 @@ export function MyTasks() {
         if (next) void loadMyTasks().then(setTasks);
       }}
     >
-      <PopoverTrigger render={<Button variant="ghost-muted" data-my-tasks />}>
+      <PopoverTrigger
+        render={<Button variant="ghost-muted" data-my-tasks />}
+        aria-label={openCount === 0 ? "My tasks" : `My tasks, ${openCount} open`}
+      >
         <ListTodoIcon />
         My tasks
+        {openCount === 0 ? null : (
+          <span aria-hidden className="text-muted-foreground tabular-nums">
+            {openCount > 99 ? "99+" : openCount}
+          </span>
+        )}
       </PopoverTrigger>
       <PopoverPopup width="lg" align="end" padding="compact">
         <PopoverTitle className="mb-2">My tasks</PopoverTitle>

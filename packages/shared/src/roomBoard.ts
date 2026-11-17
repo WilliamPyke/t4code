@@ -72,6 +72,8 @@ export interface RoomBoardScope {
   readonly hasPerson: (guestId: GuestId) => boolean;
   /** Members of the board's workspace someone may `@` mention. Absent: a board in no workspace. */
   readonly hasMember?: ((memberId: string) => boolean) | undefined;
+  /** Who besides the room's owner manages the board: a cloud board's maker. Absent: nobody. */
+  readonly manages?: ((guestId: GuestId) => boolean) | undefined;
 }
 
 /** Names one mentioned person, whichever way they are named. */
@@ -934,7 +936,35 @@ export function applyRoomBoardChange(
         }),
       );
     }
+    case "board.start": {
+      if (author !== null && scope.manages?.(author) !== true) {
+        return Result.fail("Only whoever made this board can say where visitors start.");
+      }
+      const { start: _start, ...rest } = board;
+      if (change.noteId === null) return Result.succeed(board.start === undefined ? board : rest);
+      const note = board.notes.find((candidate) => candidate.id === change.noteId);
+      if (note === undefined || note.kind === "comment") {
+        return Result.fail("This card is not on the board.");
+      }
+      return Result.succeed(board.start === note.id ? board : { ...rest, start: note.id });
+    }
   }
+}
+
+/**
+ * Where someone opening the board for the first time starts: the card or section it marks, else
+ * its top-left section, else nothing (null), when the whole board shows.
+ */
+export function roomBoardStartNote(
+  board: Pick<RoomBoard, "notes" | "start">,
+): RoomBoardNote | null {
+  const marked = board.notes.find((note) => note.id === board.start && note.kind !== "comment");
+  if (marked !== undefined) return marked;
+  return (
+    board.notes
+      .filter((note) => note.section === true)
+      .sort((left, right) => left.y + left.x - (right.y + right.x) || left.y - right.y)[0] ?? null
+  );
 }
 
 /**

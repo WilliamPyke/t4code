@@ -27,7 +27,7 @@ import {
 import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 
-import { formatRecentTimestamp } from "../../timestampFormat";
+import { boardTimeLabel } from "../boards/boardsHome.logic";
 import ChatMarkdown from "../ChatMarkdown";
 import { useInlineActionConfirm } from "../pullRequest/useInlineActionConfirm";
 import { Button } from "../ui/button";
@@ -166,7 +166,7 @@ export function CommentPin({
       <button
         type="button"
         data-board-grip
-        aria-label={`Comment thread from ${author}${replies === 0 ? "" : `, ${replies} ${replies === 1 ? "reply" : "replies"}`}${unread ? ", new replies" : ""}${note.resolved === true ? ", resolved" : ""}`}
+        aria-label={`Comment from ${author}${replies === 0 ? "" : `, ${replies} ${replies === 1 ? "reply" : "replies"}`}${unread ? ", new since you last looked" : ""}${note.resolved === true ? ", resolved" : ""}`}
         aria-expanded={open}
         className={cn(
           "size-8 cursor-pointer touch-none overflow-hidden rounded-full rounded-bl-none border-2 border-white shadow-paint focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset focus-visible:outline-none",
@@ -271,7 +271,7 @@ function CommentEntry({
         </span>
         {at === undefined ? null : (
           <time dateTime={at} className="shrink-0 text-2xs text-muted-foreground">
-            {formatRecentTimestamp(at, "locale", now)}
+            {boardTimeLabel(at, now) ?? ""}
           </time>
         )}
         {onRemove === undefined ? null : (

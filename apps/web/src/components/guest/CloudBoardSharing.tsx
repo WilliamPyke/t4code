@@ -18,6 +18,7 @@ import type { BoardLinks } from "~/guest/boardLinks.logic";
 import {
   cloudBoardLink,
   removeFromCloudBoard,
+  setCloudBoardCopies,
   setCloudBoardLink,
   setCloudBoardRole,
 } from "~/guest/cloudBoards";
@@ -41,6 +42,7 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
+import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 
 const LINK_WORDS: Record<
@@ -77,6 +79,7 @@ export function CloudBoardSharing({
   manage,
   viewers,
   viewing,
+  copies = false,
 }: {
   readonly share: JoinedGuestShare;
   readonly title: string;
@@ -91,6 +94,8 @@ export function CloudBoardSharing({
   readonly viewers: ReadonlyArray<string>;
   /** How many look on from the view link now. */
   readonly viewing: number;
+  /** Anyone who can see the board may make their own copy. */
+  readonly copies?: boolean;
 }) {
   const editLink = links.edit == null ? null : cloudBoardLink(share, links.edit);
   const { copyToClipboard, isCopied } = useCopyToClipboard({
@@ -221,6 +226,27 @@ export function CloudBoardSharing({
               onChange={(on) => changeLink("view", on, links.view)}
             />
           </div>
+          {manage ? (
+            <label className="mb-4 flex items-center justify-between gap-3">
+              <span className="flex min-w-0 flex-col">
+                <span className="text-sm font-medium">Allow copies</span>
+                <span className="text-xs text-muted-foreground">
+                  Anyone who can see the board can make their own copy of it.
+                </span>
+              </span>
+              <Switch
+                checked={copies}
+                disabled={busy}
+                onCheckedChange={(on) =>
+                  void run(
+                    () => setCloudBoardCopies(share, on),
+                    on ? "Copies allowed" : "Copies turned off",
+                  )
+                }
+                data-cloud-board-copies
+              />
+            </label>
+          ) : null}
           <p className="mb-2 text-xs font-medium text-muted-foreground">
             On this board · {here.length <= 1 ? "only you here now" : `${here.length} here now`}
             {viewing > 0 ? ` · ${viewingLabel(viewing)}` : ""}

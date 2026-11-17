@@ -3,6 +3,11 @@ import {
   CLOUD_BOARD_ACCOUNT_CLAIM_ROUTE,
   CLOUD_BOARD_ACCOUNT_OPEN_ROUTE,
   CLOUD_BOARD_ACCOUNT_ROUTE,
+  CLOUD_BOARD_COPIES_ROUTE,
+  CLOUD_BOARD_COPY_ROUTE,
+  CloudBoardCopiesRequest,
+  CloudBoardCopyRequest,
+  type RoomBoard,
   CLOUD_WORKSPACES_ROUTE,
   CLOUD_BOARD_LINK_ROUTE,
   CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
@@ -107,6 +112,7 @@ import {
   roomOfChunks,
   sseFrame,
   viewFor,
+  withCopies,
   withLink,
   withRole,
   withoutPerson,
@@ -127,7 +133,20 @@ import {
   withAccountSession,
   withoutAccountBoard,
 } from "./account.ts";
-import { accessAnswerItem, accessRequestItem, answerAccess, askAccess } from "./accessRequests.ts";
+import {
+  accessAnswerItem,
+  accessRequestItem,
+  answerAccess,
+  askAccess,
+  openRequestOf,
+} from "./accessRequests.ts";
+import {
+  BOARD_MAKING_WINDOW_MS,
+  copiedBoard,
+  copyRefusal,
+  copyTitle,
+  takeBoardMaking,
+} from "./copy.ts";
 import { clerkKeys, verifyClerkSession, type ClerkKeyLookup } from "./clerk.ts";
 import {
   inboxAfter,
@@ -136,6 +155,7 @@ import {
   inboxRead,
   taskIndexChanges,
   withInboxAt,
+  withNotified,
   type InboxDelivery,
 } from "./inbox.ts";
 import { inboxRoute } from "./inboxRoutes.ts";
@@ -169,8 +189,6 @@ interface Env {
 const NO_STORE = { "cache-control": "no-store" };
 // Cloudflare closes idle streams after about 100 seconds.
 const HEARTBEAT_MS = 20_000;
-const BOARD_CREATE_LIMIT = 30;
-const HOUR_MS = 60 * 60_000;
 
 const failureResponse = (failure: RoomFailure) =>
   Response.json(
@@ -191,6 +209,8 @@ const decodeRemove = Schema.decodeUnknownOption(
 );
 const decodeLink = Schema.decodeUnknownOption(Schema.fromJsonString(CloudBoardLinkRequest));
 const decodeRole = Schema.decodeUnknownOption(Schema.fromJsonString(CloudBoardRoleRequest));
+const decodeCopies = Schema.decodeUnknownOption(Schema.fromJsonString(CloudBoardCopiesRequest));
+const decodeCopy = Schema.decodeUnknownOption(Schema.fromJsonString(CloudBoardCopyRequest));
 const decodeInvite = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ credential: Schema.String })),
 );
@@ -388,6 +408,37 @@ async function route(request: Request, env: Env): Promise<Response> {
     const target = new URL(CLOUD_BOARD_ROUTE, url);
     target.searchParams.set(GUEST_SHARE_PARAM, shareId);
     const created = await forward(env, shareId, request, target, JSON_MAX_BODY_BYTES);
+    return account === null
+      ? created
+      : linkedResponse(env, account, created, (text) => Option.getOrNull(decodeCreated(text)));
+  }
+  if (path === CLOUD_BOARD_COPY_ROUTE && request.method === "POST") {
+    const account = await optionalAccountOf(request, env);
+    if (account !== null && typeof account !== "string") return failureResponse(account);
+    const body = await readBody(request, JSON_MAX_BODY_BYTES);
+    if (typeof body !== "string") return failureResponse(body);
+    const copy = decodeCopy(body);
+    if (Option.isNone(copy)) return failureResponse(roomFailure("bad_request"));
+    const sourceId = shareOfSecret(copy.value.source);
+    if (sourceId === null) return failureResponse(roomFailure("invalid"));
+    // The copier's id is made here, so the source writes the copy's cards as theirs.
+    const copier = GuestId.make(crypto.randomUUID());
+    const source = await boardOf(env, sourceId).copyFor(copy.value.source, copier, nowIso());
+    if ("failure" in source) return failureResponse(source.failure);
+    // A copy is a new board: it counts against the same limit as making one.
+    const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+    const limit = env.CREATE_LIMITS.get(env.CREATE_LIMITS.idFromName(ip));
+    if (!(await limit.take(Date.now()))) return failureResponse(roomFailure("too_fast"));
+    const shareId = crypto.randomUUID();
+    const made = await boardOf(env, shareId).createCopy({
+      shareId,
+      name: copy.value.name,
+      copier,
+      title: source.title,
+      board: source.board,
+    });
+    if ("failure" in made) return failureResponse(made.failure);
+    const created = Response.json(made.result, { headers: NO_STORE });
     return account === null
       ? created
       : linkedResponse(env, account, created, (text) => Option.getOrNull(decodeCreated(text)));
@@ -699,6 +750,15 @@ export class BoardRoom extends DurableObject<Env> {
         if (body.value.kind === "view") this.endOldViews();
         const result: CloudBoardLinkResult = { credential };
         return Response.json(result, { headers: NO_STORE });
+      }
+      case CLOUD_BOARD_COPIES_ROUTE: {
+        const body = decodeCopies(await request.text());
+        if (Option.isNone(body)) return failureResponse(roomFailure("bad_request"));
+        const manages = await this.manages(this.room ?? room, guest);
+        const next = withCopies(this.room ?? room, manages, body.value.on, nowIso());
+        if (Result.isFailure(next)) return failureResponse(next.failure);
+        await this.save(next.success);
+        return noContent();
       }
       case SESSION_ROUTE:
         return noContent();
@@ -1029,6 +1089,55 @@ export class BoardRoom extends DurableObject<Env> {
     };
   }
 
+  /**
+   * Called by the Worker for someone copying this board with `token`, their session here or its
+   * view link: the copy's title and cards, written as `copier`'s, or why they may not.
+   */
+  async copyFor(
+    token: string,
+    copier: GuestId,
+    at: string,
+  ): Promise<
+    { readonly title: string; readonly board: RoomBoard } | { readonly failure: RoomFailure }
+  > {
+    const room = this.room;
+    const hash = await hashSecret(token);
+    const refused = copyRefusal(room, guestBySession(room, hash), isViewLink(room, hash));
+    if (refused !== null || room === null) return { failure: refused ?? roomFailure("ended") };
+    return { title: copyTitle(room.title), board: copiedBoard(room, copier, at) };
+  }
+
+  /** Called by the Worker to make a copy here: a new board whose maker is `copier`, with `board`. */
+  async createCopy(input: {
+    readonly shareId: string;
+    readonly name: string;
+    readonly copier: GuestId;
+    readonly title: string;
+    readonly board: RoomBoard;
+  }): Promise<{ readonly result: CloudBoardCreateResult } | { readonly failure: RoomFailure }> {
+    if (!isShareId(input.shareId) || this.room !== null) return { failure: roomFailure("exists") };
+    const credential = makeSecret(input.shareId);
+    const token = makeSecret(input.shareId);
+    const [inviteHash, sessionHash] = await Promise.all([
+      hashSecret(credential),
+      hashSecret(token),
+    ]);
+    const made = createRoom({
+      shareId: GuestShareId.make(input.shareId),
+      threadId: ThreadId.make(`board-${input.shareId}`),
+      title: input.title,
+      inviteHash,
+      editLink: credential,
+      maker: { id: input.copier, name: input.name, sessionHash },
+      now: nowIso(),
+    });
+    await this.save({ ...made, board: input.board });
+    await this.keepAlarm();
+    return {
+      result: { token, shareId: made.shareId, threadId: made.threadId, credential },
+    };
+  }
+
   /** Called by the Worker once it verified `account`: the account's person leaves the board. */
   async leaveAsAccount(account: string): Promise<void> {
     const guest = accountGuestOf(this.room, account);
@@ -1111,11 +1220,9 @@ export class BoardRoom extends DurableObject<Env> {
   private async saveChange(before: CloudRoom, next: CloudRoom): Promise<void> {
     if (next === before) return;
     const at = nowIso();
-    const told = await this.deliver(
-      next,
-      inboxDeliveries(before, next, { at, newId: () => crypto.randomUUID() }),
-    );
-    await this.save(withInboxAt(next, told, at));
+    const deliveries = inboxDeliveries(before, next, { at, newId: () => crypto.randomUUID() });
+    const told = await this.deliver(next, deliveries);
+    await this.save(withNotified(withInboxAt(next, told, at), deliveries, at));
   }
 
   /**
@@ -1201,6 +1308,11 @@ export class BoardRoom extends DurableObject<Env> {
         ...owners,
       ]),
     ];
+  }
+
+  /** Called by the Worker once it verified `account`: the id of its request still open, or null. */
+  async openAccessRequest(account: string): Promise<string | null> {
+    return openRequestOf(this.room, account)?.id ?? null;
   }
 
   /**
@@ -1653,11 +1765,11 @@ export class BoardAccount extends DurableObject<Env> {
 export class CreateLimit extends DurableObject<Env> {
   async take(now: number): Promise<boolean> {
     const stored = (await this.ctx.storage.get<ReadonlyArray<number>>("recent")) ?? [];
-    const recent = stored.filter((at) => at > now - HOUR_MS);
-    if (recent.length >= BOARD_CREATE_LIMIT) return false;
-    await this.ctx.storage.put("recent", [...recent, now]);
+    const recent = takeBoardMaking(stored, now);
+    if (recent === null) return false;
+    await this.ctx.storage.put("recent", recent);
     // Nothing is kept for an address that made no board for an hour.
-    await this.ctx.storage.setAlarm(now + HOUR_MS);
+    await this.ctx.storage.setAlarm(now + BOARD_MAKING_WINDOW_MS);
     return true;
   }
 

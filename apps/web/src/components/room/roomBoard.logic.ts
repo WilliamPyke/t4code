@@ -3342,6 +3342,7 @@ export type BoardMenuEntry =
   | "duplicate"
   | "copy"
   | "copy-link"
+  | "start-here"
   | "tidy"
   | "sort-votes"
   | "vote"
@@ -3373,6 +3374,8 @@ export interface BoardMenuRights {
   readonly canAddArtifact: boolean;
   /** The browser lets the page read the clipboard without asking. */
   readonly canPaste: boolean;
+  /** The viewer says where new visitors start: the room's owner, or a cloud board's maker. */
+  readonly marksStart?: boolean | undefined;
 }
 
 /**
@@ -3420,6 +3423,7 @@ export function boardMenuEntries(
   add("copy", copies);
   if (on.kind === "card") {
     add("copy-link", on.note.url !== undefined);
+    add("start-here", rights.marksStart === true && on.note.kind !== "comment");
     return entries;
   }
   add("tidy", rights.canEdit && on.count > 1);

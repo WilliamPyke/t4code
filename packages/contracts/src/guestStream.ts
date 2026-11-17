@@ -95,6 +95,8 @@ export const GuestShareView = Schema.Struct({
    * the last few minutes. The page that asked finds its own and opens the board as its account.
    */
   granted: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  /** With `cloud`: anyone who can see the board may make their own copy of it. */
+  copies: Schema.optional(Schema.Literal(true)),
 });
 export type GuestShareView = typeof GuestShareView.Type;
 

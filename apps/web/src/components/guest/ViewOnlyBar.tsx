@@ -1,9 +1,15 @@
 import { CLOUD_ACCESS_MESSAGE_MAX_LENGTH } from "@t3tools/contracts";
-import { EyeIcon } from "lucide-react";
+import { CopyIcon, EyeIcon } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 
 import { useBoardAccount } from "~/guest/boardAccount";
-import { askEditAccess, forgetAskedAccess, takeGrantedAccess, useAskedAccess } from "~/guest/inbox";
+import {
+  askEditAccess,
+  forgetAskedAccess,
+  loadAskedAccess,
+  takeGrantedAccess,
+  useAskedAccess,
+} from "~/guest/inbox";
 
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { Button } from "../ui/button";
@@ -22,9 +28,12 @@ export function ViewOnlyBar({
   shareId,
   viewCredential,
   granted,
+  copy,
 }: {
   readonly viewing: number;
   readonly shareId: string;
+  /** Makes the viewer's own copy, where the board's maker allows copies. */
+  readonly copy?: (() => Promise<void>) | undefined;
   /** The view link this page opened the board with; absent for someone on the board. */
   readonly viewCredential: string | undefined;
   /** Requests the board approved lately, as its view says. */
@@ -47,6 +56,11 @@ export function ViewOnlyBar({
       }
     });
   }, [approved, shareId, viewCredential]);
+  const signedIn = account.status === "signed-in";
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a request asked before this page loaded is on the board host; the bar says Asked while it is open
+  useEffect(() => {
+    if (signedIn) void loadAskedAccess(shareId);
+  }, [signedIn, shareId]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a seat that can edit again leaves this bar; its request is answered
   useEffect(() => () => forgetAskedAccess(shareId), [shareId]);
   return (
@@ -56,7 +70,9 @@ export function ViewOnlyBar({
         View only
       </span>
       {viewing > 1 ? <span className="shrink-0">· {viewingLabel(viewing)}</span> : null}
-      {account.status === "signed-out" ? (
+      {copy !== undefined ? (
+        <MakeACopy copy={copy} />
+      ) : account.status === "signed-out" ? (
         <Button size="xs" variant="ghost-muted" onClick={openAuthPrompt} data-view-only-sign-in>
           Sign in to ask for edit access
         </Button>
@@ -70,6 +86,27 @@ export function ViewOnlyBar({
         <AskForAccess shareId={shareId} viewCredential={viewCredential} />
       )}
     </span>
+  );
+}
+
+function MakeACopy({ copy }: { readonly copy: () => Promise<void> }) {
+  const [copying, setCopying] = useState(false);
+  return (
+    <>
+      <span className="truncate">· Make a copy to try it yourself</span>
+      <Button
+        size="xs"
+        disabled={copying}
+        onClick={() => {
+          setCopying(true);
+          void copy().finally(() => setCopying(false));
+        }}
+        data-make-copy
+      >
+        <CopyIcon />
+        Make a copy
+      </Button>
+    </>
   );
 }
 

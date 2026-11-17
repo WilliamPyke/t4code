@@ -4,7 +4,7 @@
  * changes `scripts/sample-board.mjs` posts, each by the person who makes it. Kept free of imports
  * other than types so Node runs the script with this file as it is.
  */
-import type { RoomBoardChange, RoomBoardNote } from "@t3tools/contracts";
+import type { GuestTurnRequest, RoomBoardChange, RoomBoardNote } from "@t3tools/contracts";
 
 export interface SampleCard {
   readonly id: string;
@@ -49,6 +49,31 @@ export interface SampleBoard {
     readonly by: string;
     readonly emoji: string;
   }>;
+  /** The card or section someone opening the board for the first time starts at. */
+  readonly start?: string;
+  /**
+   * Finished agent turns the sample shows, each posted by its person's seat through the board
+   * host's own machine routes, exactly as their Tinkjam would post a turn its agent ran. They are
+   * shown, never run: no agent reads or answers anything on the sample.
+   */
+  readonly agentTurns?: ReadonlyArray<SampleAgentTurn>;
+}
+
+export interface SampleAgentTurn {
+  /** Stable, so posting it again changes nothing. */
+  readonly id: string;
+  readonly by: string;
+  readonly prompt: string;
+  readonly reply: string;
+  /** The person's own thread box it shows on; without one it is among the board's turns. */
+  readonly box?: string;
+  readonly model?: string;
+  /** With `box`: the cards that went with the prompt, shown as its chips. */
+  readonly context?: ReadonlyArray<string>;
+  /** A task of theirs it answers. */
+  readonly task?: string;
+  /** An artifact it wrote, from a file beside the description. */
+  readonly artifact?: { readonly card: string; readonly body: string };
 }
 
 export interface SampleChange {
@@ -68,6 +93,7 @@ export function sampleChanges(input: {
   readonly guestOf: (person: string) => string;
   readonly bodyOf: (file: string) => string;
   readonly notes: ReadonlyArray<Pick<RoomBoardNote, "id" | "artifact" | "reactions">>;
+  readonly start?: string | undefined;
   readonly now: number;
 }): ReadonlyArray<SampleChange> {
   const { sample, guestOf } = input;
@@ -98,7 +124,9 @@ export function sampleChanges(input: {
     });
     if (card.body !== undefined) {
       const body = input.bodyOf(card.body);
-      if (existing.get(card.id)?.artifact?.body !== body) {
+      const shown = existing.get(card.id)?.artifact;
+      // Kept as the version an agent's turn replaced, it is written already.
+      if (shown?.body !== body && shown?.previous?.body !== body) {
         changes.push({ by: card.by, change: { type: "artifact.write", noteId: card.id, body } });
       }
     }
@@ -120,6 +148,9 @@ export function sampleChanges(input: {
       },
     });
   }
+  if (sample.start !== undefined && input.start !== sample.start) {
+    changes.push({ by: sample.maker, change: { type: "board.start", noteId: sample.start } });
+  }
   for (const reaction of sample.reactions) {
     const has = existing
       .get(reaction.card)
@@ -137,4 +168,41 @@ export function sampleChanges(input: {
     });
   }
   return changes;
+}
+
+const cardLabel = (sample: SampleBoard, id: string): string => {
+  const text = sample.cards.find((card) => card.id === id)?.text ?? "";
+  return text.split("\n")[0]?.trim().slice(0, 200) || id;
+};
+
+/** The finished agent turns the sample shows, each with the seat that posts it. */
+export function sampleTurns(input: {
+  readonly sample: SampleBoard;
+  readonly bodyOf: (file: string) => string;
+}): ReadonlyArray<{ readonly by: string; readonly turn: GuestTurnRequest }> {
+  const { sample } = input;
+  return (sample.agentTurns ?? []).map((one) => ({
+    by: one.by,
+    turn: {
+      id: one.id,
+      prompt: one.prompt,
+      reply: one.reply,
+      ...(one.task === undefined ? {} : { taskId: one.task }),
+      ...(one.artifact === undefined
+        ? {}
+        : { artifact: { noteId: one.artifact.card, body: input.bodyOf(one.artifact.body) } }),
+      ...(one.box === undefined
+        ? {}
+        : {
+            boxId: one.box,
+            ...(one.model === undefined ? {} : { model: one.model }),
+            ...(one.context === undefined || one.context.length === 0
+              ? {}
+              : {
+                  cards: one.context.map((id) => cardLabel(sample, id)),
+                  cardRefs: one.context.map((id) => `note:${id}`),
+                }),
+          }),
+    } as GuestTurnRequest,
+  }));
 }

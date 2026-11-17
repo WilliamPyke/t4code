@@ -5,7 +5,7 @@ import {
 } from "@t3tools/contracts";
 import { type PointerEvent, useRef, useState } from "react";
 
-import { formatDayAwareTimestamp } from "~/timestampFormat";
+import { boardTimeLabel } from "../boards/boardsHome.logic";
 
 import ChatMarkdown from "../ChatMarkdown";
 import { Button } from "../ui/button";
@@ -272,6 +272,8 @@ function RoomArtifactMeta({
   readonly people: BoardPeople;
 }) {
   const [restoring, setRestoring] = useState(false);
+  // When the card was drawn: how long ago it was written is said in words, never a clock time.
+  const [now] = useState(() => Date.now());
   const restore = async () => {
     if (onRestore === undefined || restoring) return;
     setRestoring(true);
@@ -284,7 +286,7 @@ function RoomArtifactMeta({
     <div className="flex shrink-0 flex-col gap-0.5 px-3 pb-1.5">
       <div className="flex min-w-0 items-center gap-1.5">
         <p className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">
-          {[author, artifact.model, formatDayAwareTimestamp(artifact.updatedAt, "locale")]
+          {[author, artifact.model, boardTimeLabel(artifact.updatedAt, now)?.toLowerCase()]
             .filter((part) => part !== undefined && part !== "")
             .join(" · ")}
         </p>

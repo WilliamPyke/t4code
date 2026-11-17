@@ -14,7 +14,7 @@ import {
 import * as Result from "effect/Result";
 import { describe, expect, it } from "vite-plus/test";
 
-import { answerAccess, askAccess } from "./accessRequests.ts";
+import { answerAccess, askAccess, openRequestOf } from "./accessRequests.ts";
 import {
   inboxAfter,
   inboxCountOf,
@@ -22,6 +22,7 @@ import {
   inboxRead,
   taskIndexChanges,
   withInboxAt,
+  withNotified,
 } from "./inbox.ts";
 import { inboxRoute, type InboxEnv } from "./inboxRoutes.ts";
 import { changeBoard, viewFor, withRole, type CloudRoom } from "./room.ts";
@@ -175,6 +176,50 @@ describe("inbox items from board changes", () => {
     expect(deliveries(locked, named)).toEqual([]);
   });
 
+  it("tells nobody twice when a card is deleted and put back, or a change undone and redone", () => {
+    const start = board();
+    const put = {
+      type: "note.put",
+      noteId: "t1",
+      text: "@Sam ship it",
+      x: 0,
+      y: 0,
+      kind: "task",
+      assignee: { guestId: sam },
+      mentions: [{ guestId: sam, name: "Sam" }],
+    } as const;
+    const made = change(start, ada, put);
+    const first = deliveries(start, made);
+    // Once per card: the task given says it all.
+    expect(first.map(({ item }) => item.kind)).toEqual(["assign"]);
+    const told = withNotified(made, first, NOW);
+    const gone = change(told, ada, { type: "note.remove", noteId: "t1" });
+    const back = change(gone, ada, put);
+    expect(inboxDeliveries(gone, back, { at: "2026-11-17T10:05:00.000Z", newId })).toEqual([]);
+    // A reply is new words each time, so it always tells.
+    const comment = change(back, sam, {
+      type: "note.put",
+      noteId: "c",
+      text: "Hm",
+      x: 0,
+      y: 0,
+      kind: "comment",
+    });
+    const replied = change(comment, ada, {
+      type: "comment.reply",
+      noteId: "c",
+      replyId: "r",
+      text: "Yes",
+    });
+    expect(deliveries(comment, replied).map(({ item }) => item.kind)).toEqual(["reply"]);
+    // A day on, the same task given again tells again.
+    expect(
+      inboxDeliveries(gone, back, { at: "2026-11-18T10:05:00.000Z", newId }).map(
+        ({ item }) => item.kind,
+      ),
+    ).toEqual(["assign"]);
+  });
+
   it("tells a page on the board its inbox changed", () => {
     const told = withInboxAt(board(), [sam], NOW);
     const samGuest = told.guests.find((guest) => guest.id === sam)!;
@@ -282,6 +327,10 @@ describe("asking for edit access", () => {
     ).toBe(true);
     expect(declined.request.status).toBe("declined");
     expect(Result.isSuccess(ask(declined.room, "user_sam"))).toBe(true);
+    // A page loaded again still says Asked while the request is open, and only to who asked.
+    expect(openRequestOf(asked.room, "user_sam")?.id).toBe(asked.request.id);
+    expect(openRequestOf(asked.room, "user_ada")).toBeUndefined();
+    expect(openRequestOf(declined.room, "user_sam")).toBeUndefined();
   });
 
   it("gives someone looking on from the view link a seat, which their page finds", () => {

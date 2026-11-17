@@ -27,6 +27,10 @@ const MAX_REQUESTS = 20;
  * Asks for edit access as `account`: someone on the board who can only look, or someone looking
  * on from its view link (`viewing`). One open request per person.
  */
+/** The request this account asked on the board that is still open, which its pages show as asked. */
+export const openRequestOf = (room: CloudRoom | null, account: string) =>
+  room?.requests?.find((request) => request.account === account && request.status === "open");
+
 export function askAccess(
   room: CloudRoom | null,
   input: {

@@ -83,7 +83,8 @@ import {
   reopeningSharesAtom,
 } from "~/guest/guestShares";
 import { boardLinksOf } from "~/guest/boardLinks.logic";
-import { renameCloudBoard } from "~/guest/cloudBoards";
+import { cloudBoardsHost } from "~/guest/cloudBoardsHost";
+import { copyCloudBoard, renameCloudBoard } from "~/guest/cloudBoards";
 import { useIncrementalTimelineEntries } from "~/hooks/useIncrementalTimelineEntries";
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -138,6 +139,7 @@ import {
   roomCodePatchRead,
 } from "../room/RoomBoardCode";
 import { RoomReplyProvider, revealRoomReply } from "../room/RoomReplyComments";
+import { useAccountBoardOpen } from "./useAccountBoardOpen";
 import {
   BOARD_THREAD_MESSAGES,
   type BoardPresence,
@@ -163,7 +165,12 @@ import { ViewOnlyBar } from "./ViewOnlyBar";
 import { GuestHtmlRender } from "./GuestHtmlRender";
 import { openGuestFile, useGuestFiles } from "./guestFiles";
 import { linkEndsLabel } from "../chat/guestLinkTiming";
-import { guestFilesProblem, nextAwaitingRowIds, unplacedGuestMessages } from "./guestStream.logic";
+import {
+  guestFilesProblem,
+  guestShareIdOfEnvironment,
+  nextAwaitingRowIds,
+  unplacedGuestMessages,
+} from "./guestStream.logic";
 import { guestTurnItemSource } from "./guestTurnItemSource";
 import { useJoinBoardOnComputer } from "./joinBoardOnComputer";
 import {
@@ -369,9 +376,16 @@ export function GuestThreadRoute({ threadRef }: { readonly threadRef: ScopedThre
   const reopening = [...useAtomValue(reopeningSharesAtom)].some(
     (shareId) => guestEnvironmentId(shareId) === threadRef.environmentId,
   );
+  // A bookmark or a pasted link on a new device: the account may open it as its own.
+  const step = useAccountBoardOpen({
+    shareId: guestShareIdOfEnvironment(threadRef.environmentId),
+    hasSession: share !== null,
+    reopening,
+    cloud: share === null && cloudBoardsHost() !== null,
+  });
   return (
     <SidebarInset className="flex h-svh min-h-0 flex-col overflow-hidden overscroll-y-none md:h-dvh">
-      {share === null && reopening ? (
+      {share === null && step === "opening" ? (
         <GuestNotice title="Opening the board..." />
       ) : share === null || share.threadId !== threadRef.threadId ? (
         <GuestNotice
@@ -839,6 +853,7 @@ function GuestThreadSession({
         manage={view.manage === true}
         viewers={view.viewers ?? NO_VIEWERS}
         viewing={viewing ?? 0}
+        copies={view.copies === true}
       />
     );
   return (
@@ -896,6 +911,28 @@ function GuestThreadSession({
                             shareId={share.shareId}
                             viewCredential={share.viewOnly === true ? share.token : undefined}
                             granted={view.granted}
+                            copy={
+                              view.copies === true
+                                ? async () => {
+                                    const made = await copyCloudBoard(share, view.title);
+                                    if (typeof made === "string") {
+                                      toastManager.add({
+                                        type: "error",
+                                        title: "Could not make a copy",
+                                        description: made,
+                                      });
+                                      return;
+                                    }
+                                    void navigate({
+                                      to: "/$environmentId/$threadId",
+                                      params: {
+                                        environmentId: guestEnvironmentId(made.shareId),
+                                        threadId: made.threadId,
+                                      },
+                                    });
+                                  }
+                                : undefined
+                            }
                           />
                         ) : null}
                         <InboxBell nudge={view.inboxAt} />
@@ -905,6 +942,7 @@ function GuestThreadSession({
                   }
                 : {})}
               viewOnly={viewOnly}
+              marksStart={cloud ? guestId !== undefined && view.maker === guestId : false}
               viewer={boardViewer}
               ownerName={view.ownerName}
               cursorLayer={

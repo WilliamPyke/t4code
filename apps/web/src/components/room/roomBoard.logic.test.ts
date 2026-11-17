@@ -9,12 +9,18 @@ import {
   ROOM_BOARD_NOTE_MAX_LENGTH,
   ROOM_BOARD_QUOTE_MAX_LENGTH,
   type RoomBoard,
+  type RoomBoardChange,
   type RoomBoardEdge,
   type RoomBoardNote,
   type RoomBoardReply,
   type ThreadGuestMessage,
 } from "@t3tools/contracts";
-import { roomBoardWithCardsSent, roomBoxReply } from "@t3tools/shared/roomBoard";
+import {
+  applyRoomBoardChange,
+  roomBoardWithCardsSent,
+  roomBoxReply,
+} from "@t3tools/shared/roomBoard";
+import * as Result from "effect/Result";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -3281,6 +3287,10 @@ describe("boardMenuEntries", () => {
     ]);
     expect(boardMenuEntries({ kind: "card", note: evesBox }, guest)).toEqual(["connect"]);
     expect(boardMenuEntries({ kind: "card", note: evesLink }, looker)).toEqual(["copy-link"]);
+    // Only whoever made the board says where new visitors start.
+    expect(
+      boardMenuEntries({ kind: "card", note: evesBox }, { ...guest, marksStart: true }),
+    ).toEqual(["connect", "start-here"]);
   });
 
   it("deletes a selection only when some of it is the viewer's own, and votes only on a room's", () => {
@@ -3324,5 +3334,63 @@ describe("boardKeyEditsNote", () => {
     { key: "Escape", modifiers: plain, edits: false },
   ])("edits a selected note on $key: $edits", ({ key, modifiers, edits }) => {
     expect(boardKeyEditsNote({ key, ...modifiers })).toBe(edits);
+  });
+});
+
+describe("undoing a delete, through the room's own rules", () => {
+  const ana = GuestId.make("guest-ana");
+  const sam = GuestId.make("guest-sam");
+  const scope = { hasCard: () => false, hasPerson: () => true };
+  const at = "2026-11-17T10:00:00.000Z";
+  const mentioned: RoomBoardNote = {
+    id: "n",
+    text: "Ship it @Sam",
+    x: 100,
+    y: 100,
+    guestId: ana,
+    mentions: [{ guestId: sam, name: "Sam" }],
+    changed: { at, guestId: ana },
+  };
+  const other: RoomBoardNote = { id: "o", text: "Other", x: 400, y: 100, guestId: ana };
+  const comment: RoomBoardNote = {
+    id: "c",
+    text: "Is this right?",
+    x: 160,
+    y: 90,
+    kind: "comment",
+    guestId: sam,
+    createdAt: at,
+    replies: [{ id: "r", text: "Yes", guestId: ana, at }],
+  };
+  const pin = { id: "pin", from: "note:c", to: "note:n" };
+  const full: RoomBoard = { positions: {}, notes: [mentioned, other, comment], edges: [pin] };
+  const applyAll = (start: RoomBoard, changes: ReadonlyArray<RoomBoardChange>) =>
+    changes.reduce((current, change) => {
+      const next = applyRoomBoardChange(current, scope, ana, change, at);
+      if (Result.isFailure(next)) throw new Error(`${change.type}: ${next.failure}`);
+      return next.success;
+    }, start);
+
+  it("brings a note back with its mentions and the comment thread pinned to it", () => {
+    const { edgeIds } = boardDeletion(full, ["n", "o"]);
+    const entry: BoardHistoryEntry = [
+      ...edgeIds.map((id) => ({ target: { kind: "edge", id } as const, after: null })),
+      { target: { kind: "note", id: "n" } as const, after: null },
+      { target: { kind: "note", id: "o" } as const, after: null },
+    ].map((step) => ({ ...step, before: boardStepBefore(new Map(), full, step.target) }));
+    const deleted = applyAll(
+      full,
+      entry.map(({ target, after }) => boardChangeOf(target, after)),
+    );
+    expect(deleted.notes.map((note) => note.id)).toEqual(["c"]);
+    const undo = boardHistoryChanges(deleted, entry, "undo");
+    expect(undo).not.toBeNull();
+    const back = applyAll(
+      deleted,
+      (undo ?? []).map(({ target, value }) => boardChangeOf(target, value)),
+    );
+    expect(back.notes.find((note) => note.id === "n")?.mentions).toEqual(mentioned.mentions);
+    expect(back.notes.find((note) => note.id === "o")).toBeDefined();
+    expect(back.edges).toEqual([pin]);
   });
 });

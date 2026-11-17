@@ -5,7 +5,7 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
 // Node (23.6 or newer) runs this TypeScript file as it is: it imports only types.
-import { sampleChanges } from "../src/sampleBoard.ts";
+import { sampleChanges, sampleTurns } from "../src/sampleBoard.ts";
 
 const USAGE = `Builds Tinkjam's public sample board from infra/boards/sample/onboarding-v2.json,
 through the board host's own routes, and prints its view link.
@@ -20,7 +20,7 @@ through the board host's own routes, and prints its view link.
 
 No account or secret is needed: an anonymous maker makes the board and the state file keeps its
 session. Running again updates the same board and keeps its view link. The edit link is turned
-off at the end, so nobody else can change the board.`;
+off at the end, so nobody else can change the board; viewers may make their own copy of it.`;
 
 const { mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync } = NodeFS;
 const { dirname, join } = NodePath;
@@ -244,16 +244,65 @@ async function main() {
     await change(by, { type: "note.remove", noteId: note.id }, `Removing ${note.id}`);
   }
 
+  const bodyOf = (file) => readFileSync(join(dirname(SAMPLE), file), "utf8");
   const changes = sampleChanges({
     sample,
     guestOf,
-    bodyOf: (file) => readFileSync(join(dirname(SAMPLE), file), "utf8"),
+    bodyOf,
     notes: board.notes,
+    start: board.start,
     now: Date.now(),
   });
   for (const { by, change: one } of changes) {
     await change(by, one, `${one.type} ${one.noteId ?? one.edgeId ?? ""}`.trim());
   }
+
+  // The finished agent turns the sample shows, posted as each person's own Tinkjam posts a turn
+  // its agent ran: a handoff from their seat opens the export, whose room token posts the turn.
+  // Nothing runs an agent. Each turn has a fixed id, so posting it again changes nothing.
+  const roomTokenOf = async (key) => {
+    if (state.people[key].room) return state.people[key].room;
+    const handoff = await must(
+      "POST",
+      "/api/guest/handoff",
+      { token: tokenOf(key), share, body: {} },
+      `Opening ${key}'s seat to post the sample's agent turns`,
+    );
+    const exported = await must(
+      "GET",
+      "/api/guest/export",
+      { token: handoff.token },
+      `Reading the board for ${key}'s turns`,
+    );
+    state.people[key].room = exported.room.token;
+    saveState(state);
+    return state.people[key].room;
+  };
+  for (const { by, turn } of sampleTurns({ sample, bodyOf })) {
+    let posted = await call("POST", "/api/guest/room/turns", {
+      token: await roomTokenOf(by),
+      body: turn,
+    });
+    if (posted.status === 410 || posted.status === 403) {
+      // The board forgot that token: make a new one and post once more.
+      delete state.people[by].room;
+      posted = await call("POST", "/api/guest/room/turns", {
+        token: await roomTokenOf(by),
+        body: turn,
+      });
+    }
+    if (!posted.ok) {
+      throw new Error(`Posting ${turn.id}: ${posted.status} ${posted.json?.message ?? ""}`.trim());
+    }
+    await sleep(80);
+  }
+
+  await must(
+    "POST",
+    "/api/boards/copies",
+    { token: maker, share, body: { on: true } },
+    "Letting viewers make their own copy",
+  );
 
   // Nobody else joins to change it; anyone with the view link looks.
   await must(

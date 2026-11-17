@@ -1,4 +1,5 @@
 import {
+  CLOUD_BOARD_COPIES_ROUTE,
   CLOUD_BOARD_LINK_ROUTE,
   CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
   CLOUD_BOARD_PEOPLE_ROLE_ROUTE,
@@ -288,6 +289,7 @@ describe("cloud room", () => {
         CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
         CLOUD_BOARD_PEOPLE_ROLE_ROUTE,
         CLOUD_BOARD_LINK_ROUTE,
+        CLOUD_BOARD_COPIES_ROUTE,
       ].includes(route);
       expect([route, checkAccess("edit", route)]).toEqual([route, null]);
       expect([route, checkAccess("link", route)?.status ?? null]).toEqual([

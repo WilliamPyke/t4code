@@ -198,6 +198,7 @@ import {
   buildCommandPaletteRows,
   enumerateCommandPaletteItems,
   newThreadNoProjectIndex,
+  commandPaletteEnterItem,
   findHighlightedCommandPaletteItem,
   type CommandPaletteActionItem,
   type CommandPaletteOpenIntent,
@@ -445,6 +446,8 @@ function OpenCommandPaletteDialog(props: {
   const { query, views: viewStack } = searchState;
   const setQuery = (query: string) => dispatchSearch({ type: "query", query });
   const deferredQuery = useDeferredValue(query);
+  // An Enter pressed before the list caught up with the typing, run once it has.
+  const enterPendingRef = useRef(false);
   const isActionsOnly = deferredQuery.startsWith(">");
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
   const resultListRef = useRef<LegendListRef | null>(null);
@@ -2851,9 +2854,20 @@ function OpenCommandPaletteDialog(props: {
 
     // Virtualization may unmount the highlighted row; handle Enter directly instead of Base UI's click.
     if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
-      const highlightedItem = findHighlightedCommandPaletteItem(
+      // The list still shows what was typed before: the Enter runs once it shows the rest, so the
+      // first press runs the row for what was typed, never a row of the list before it.
+      if (query !== deferredQuery && autoHighlightsFirstRow) {
+        (event as typeof event & { preventBaseUIHandler?: () => void }).preventBaseUIHandler?.();
+        event.preventDefault();
+        event.stopPropagation();
+        enterPendingRef.current = true;
+        return;
+      }
+      const highlightedItem = commandPaletteEnterItem(
         displayedGroups,
-        highlightedItemValue ?? firstItemValue ?? null,
+        resultRows.itemValues,
+        highlightedItemValue,
+        autoHighlightsFirstRow,
       );
       if (highlightedItem) {
         (event as typeof event & { preventBaseUIHandler?: () => void }).preventBaseUIHandler?.();
@@ -2888,6 +2902,18 @@ function OpenCommandPaletteDialog(props: {
       );
     });
   }
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- an Enter pressed while the filtered list lagged the typing runs once React has drawn the list for what was typed
+  useEffect(() => {
+    if (!enterPendingRef.current || query !== deferredQuery) return;
+    enterPendingRef.current = false;
+    const item = commandPaletteEnterItem(
+      displayedGroups,
+      resultRows.itemValues,
+      highlightedItemValue,
+      autoHighlightsFirstRow,
+    );
+    if (item) executeItem(item);
+  });
 
   const handleOpenProjectFromFileManager = async () => {
     if (!canOpenProjectFromFileManager || isPickingProjectFolder) {

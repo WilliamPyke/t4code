@@ -1,4 +1,5 @@
 import {
+  CLOUD_BOARD_COPIES_ROUTE,
   CLOUD_BOARD_LINK_ROUTE,
   CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
   CLOUD_BOARD_PEOPLE_ROLE_ROUTE,
@@ -27,6 +28,7 @@ export const SESSION_ROUTES: Readonly<Record<string, { method: string; maxBytes:
   [CLOUD_BOARD_PEOPLE_REMOVE_ROUTE]: { method: "POST", maxBytes: JSON_MAX_BODY_BYTES },
   [CLOUD_BOARD_PEOPLE_ROLE_ROUTE]: { method: "POST", maxBytes: JSON_MAX_BODY_BYTES },
   [CLOUD_BOARD_LINK_ROUTE]: { method: "POST", maxBytes: JSON_MAX_BODY_BYTES },
+  [CLOUD_BOARD_COPIES_ROUTE]: { method: "POST", maxBytes: JSON_MAX_BODY_BYTES },
   [CLOUD_BOARD_TITLE_ROUTE]: { method: "POST", maxBytes: JSON_MAX_BODY_BYTES },
   [SESSION_ROUTE]: { method: "GET", maxBytes: 0 },
   [STREAM_ROUTE]: { method: "GET", maxBytes: 0 },
@@ -48,6 +50,7 @@ const ON_THE_BOARD: ReadonlySet<string> = new Set([
   CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
   CLOUD_BOARD_PEOPLE_ROLE_ROUTE,
   CLOUD_BOARD_LINK_ROUTE,
+  CLOUD_BOARD_COPIES_ROUTE,
 ]);
 
 /** Whether a session with `access` may use a session route at all, or why not. */

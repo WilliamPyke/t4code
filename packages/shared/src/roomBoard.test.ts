@@ -39,6 +39,7 @@ import {
   roomBoardWithCardsSent,
   roomBoardCardChangedAt,
   roomBoardCardIdentity,
+  roomBoardStartNote,
   roomBoxCodeWindows,
   roomBoxExcerpt,
   roomBoxRequestOf,
@@ -921,6 +922,60 @@ describe("applyRoomBoardChange", () => {
       isRoomBoard({ ...old, notes: [{ ...old.notes[0]!, due: "1 December" }] }),
       "a due day is a date",
     ).toBe(false);
+  });
+});
+
+describe("where new visitors start", () => {
+  const maya = GuestId.make("guest:maya");
+  const sam = GuestId.make("guest:sam");
+  const scope: RoomBoardScope = {
+    hasCard: () => false,
+    hasPerson: () => true,
+    manages: (guestId) => guestId === maya,
+  };
+  const at = "2026-11-15T10:00:00.000Z";
+  const board: RoomBoard = {
+    positions: {},
+    notes: [
+      { id: "later", text: "Decisions", x: 900, y: 0, section: true, guestId: maya },
+      { id: "goals", text: "Goals", x: 0, y: 40, section: true, guestId: maya },
+      { id: "n", text: "A note", x: -400, y: -400, guestId: sam },
+      { id: "c", text: "Hmm?", x: 0, y: 0, kind: "comment", guestId: sam },
+    ],
+  };
+  const mark = (noteId: string | null, author: GuestId | null, on: RoomBoard = board) =>
+    applyRoomBoardChange(on, scope, author, { type: "board.start", noteId }, at);
+
+  it("is the top-left section until the board's maker or owner marks a card", () => {
+    expect(roomBoardStartNote(board)?.id).toBe("goals");
+    expect(roomBoardStartNote({ notes: [board.notes[2]!] })).toBeNull();
+    const marked = Result.getOrThrow(mark("later", maya));
+    expect(marked.start).toBe("later");
+    expect(roomBoardStartNote(marked)?.id).toBe("later");
+    expect(Result.getOrThrow(mark("n", null)).start).toBe("n");
+    expect(Result.getOrThrow(mark("later", maya, marked))).toBe(marked);
+    expect("start" in Result.getOrThrow(mark(null, maya, marked))).toBe(false);
+    // A start whose card went is the top-left section again.
+    expect(roomBoardStartNote({ ...board, start: "gone" })?.id).toBe("goals");
+  });
+
+  it("refuses anyone else, a comment, and a card that is not there", () => {
+    expect(Result.isFailure(mark("goals", sam))).toBe(true);
+    expect(Result.isFailure(mark(null, sam))).toBe(true);
+    expect(Result.isFailure(mark("c", maya))).toBe(true);
+    expect(Result.isFailure(mark("gone", maya))).toBe(true);
+    expect(
+      Result.isFailure(
+        applyRoomBoardChange(
+          board,
+          { hasCard: () => false, hasPerson: () => true },
+          maya,
+          { type: "board.start", noteId: "goals" },
+          at,
+        ),
+      ),
+      "a room's guest never",
+    ).toBe(true);
   });
 });
 

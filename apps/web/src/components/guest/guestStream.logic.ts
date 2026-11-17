@@ -87,6 +87,35 @@ export function guestEntryStep<
 }
 
 /**
+ * What a board's plain address (no invite in it) shows on a browser with no session for it: the
+ * board once a session is here; for a cloud board, the signed-in account opening it as its own
+ * seat or workspace access, which bookmarks and pasted links need on a new device; and only when
+ * that is not possible or the host refused, that the board ended or the link is not valid.
+ */
+export function guestBoardOpenStep(input: {
+  readonly hasSession: boolean;
+  readonly reopening: boolean;
+  readonly cloud: boolean;
+  readonly account: "off" | "loading" | "signed-out" | "signed-in";
+  /** The account already asked the host, and it refused. */
+  readonly accountRefused: boolean;
+}): "board" | "opening" | "account" | "invalid" {
+  if (input.hasSession) return "board";
+  if (input.reopening) return "opening";
+  if (!input.cloud || input.accountRefused) return "invalid";
+  if (input.account === "loading") return "opening";
+  return input.account === "signed-in" ? "account" : "invalid";
+}
+
+const GUEST_ENVIRONMENT_PREFIX = "guest-share-";
+
+/** The share a board's address names by its environment, or null for any other address. */
+export const guestShareIdOfEnvironment = (environmentId: string): string | null =>
+  environmentId.startsWith(GUEST_ENVIRONMENT_PREFIX)
+    ? environmentId.slice(GUEST_ENVIRONMENT_PREFIX.length) || null
+    : null;
+
+/**
  * Why these files cannot go with one message, or null. The server checks the same limits; this
  * only says so before the upload.
  */

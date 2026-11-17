@@ -366,6 +366,9 @@ import { BoardEdgeLine, boardStroke } from "./RoomBoardEdge";
 import { TaskAssigneeDot, TaskDueChip, TaskPriorityMark } from "./BoardTaskMarks";
 import { MentionChips, useMentionPicker } from "./BoardMentions";
 import { useBoardFocusRequest } from "./boardFocus";
+import { boardStartRect } from "./boardFirstView";
+import { holdCaretIn, useNotePlacement } from "./boardTypeIn";
+import { firstBoardView } from "./boardFirstView.logic";
 import {
   CLICK_SLOP,
   boardPressKind,
@@ -564,13 +567,12 @@ const ToolLabel = ({ children }: { readonly children: ReactNode }) => (
   <span className="sr-only @5xl/board:not-sr-only">{children}</span>
 );
 
-// Every count of resolved threads a board can hold fits in the room this one takes.
-const RESOLVED_WIDEST_COUNT = Number("8".repeat(String(ROOM_BOARD_MAX_NOTES).length));
-
+// One text, read the same at every width: a narrow board shows only the number.
 const ResolvedCount = ({ count }: { readonly count: number }) => (
   <span className="tabular-nums">
-    <span className="hidden @5xl/board:inline">Resolved ({count})</span>
-    <span className="@5xl/board:hidden">{count}</span>
+    <span className="sr-only @5xl/board:not-sr-only">Resolved (</span>
+    {count}
+    <span className="sr-only @5xl/board:not-sr-only">)</span>
   </span>
 );
 
@@ -862,6 +864,7 @@ export function RoomBoard({
   onViewChange,
   onToggleChat,
   viewOnly = false,
+  marksStart,
 }: {
   readonly title: string;
   /** Null when the thread is not shared, so there is no room to arrange a board for. */
@@ -996,6 +999,11 @@ export function RoomBoard({
   readonly onToggleChat?: (() => void) | undefined;
   /** The viewer can only look: the tools to add, undo and redo are not shown at all. */
   readonly viewOnly?: boolean | undefined;
+  /**
+   * The viewer says where new visitors start: a cloud board's maker. Absent: the room's owner
+   * (no `viewer`) does.
+   */
+  readonly marksStart?: boolean | undefined;
 }) {
   const board = room?.board ?? EMPTY_ROOM_BOARD;
   const [pickedView, pickView] = useBoardViewMode(viewMode, onViewChange);
@@ -1020,6 +1028,8 @@ export function RoomBoard({
   const unsavedView = useRef<BoardView | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const fitted = useRef(false);
+  // The view the board opened on when it showed only its start; a hint offers the rest until it moves.
+  const [firstView, setFirstView] = useState<BoardView | null>(null);
   const canEdit = room !== null && onChange !== undefined;
   // Each board the room sends retires the edits it moved past, before any can show again.
   const settledEdits = settleBoardEdits(board, edits);
@@ -1245,10 +1255,19 @@ export function RoomBoard({
     fitted.current = true;
     if (viewKey !== undefined) forgetRoomBoardFitOnOpen(viewKey);
     const rects = drawnRectsIn(surfaceRef.current);
+    // Readable from the first moment: a board too big to read whole opens on its start.
+    const first = firstBoardView({
+      rects,
+      start: boardStartRect(surfaceRef.current, shown),
+      area,
+      covered: chromeCoverOf(surfaceRef.current),
+      margin: FIT_MARGIN,
+    });
+    setFirstView(first.whole ? null : first.view);
     setView((current) =>
       current === INITIAL_BOARD_VIEW ||
       (current === remembered && openingBoardView(current, area, rects) === null)
-        ? fitBoardOnSurface(rects, area, chromeCoverOf(surfaceRef.current), FIT_MARGIN)
+        ? first.view
         : current,
     );
   });
@@ -2304,12 +2323,30 @@ export function RoomBoard({
   // Draws the card added at once and puts the caret in its text, so what is typed next goes there
   // and never to the button that added it.
   const typeIn = (id: string) => {
-    const item = drawnItem(noteRef(id));
-    // The text first: a task's checkbox comes before its text.
-    (
-      item?.querySelector<HTMLElement>("textarea:not([data-box-prompt])") ??
-      item?.querySelector<HTMLElement>("input:not([type=checkbox])")
-    )?.focus({ preventScroll: true });
+    holdCaretIn(() => {
+      const item = drawnItem(noteRef(id));
+      // The text first: a task's checkbox comes before its text.
+      return (
+        item?.querySelector<HTMLElement>("textarea:not([data-box-prompt])") ??
+        item?.querySelector<HTMLElement>("input:not([type=checkbox])") ??
+        null
+      );
+    });
+  };
+  // The Note tool's note goes where the board is clicked next, while it is still empty.
+  const notePlacement = useNotePlacement();
+  const placeNoteAt = (id: string, event: PointerEvent<HTMLElement>) => {
+    const note = shown.notes.find((candidate) => candidate.id === id);
+    const at = pointerOnBoard(event);
+    if (note === undefined || note.text !== "" || at === null || !canEdit) return false;
+    const size = note.size ?? boardNewNoteSize(note.kind);
+    send(
+      { kind: "note", id },
+      settleBoardValue({ ...note, x: at.x - size.w / 2, y: at.y - size.h / 2 }),
+    );
+    setSelection(new Set([noteRef(id)]));
+    typeIn(id);
+    return true;
   };
   const addAndType = (add: () => string | null) => {
     const id = flushSync(add);
@@ -3674,6 +3711,7 @@ export function RoomBoard({
         canAddThread: cannotAddThread === null,
         canAddArtifact: cannotAddArtifact === null,
         canPaste: contextMenu.canPaste,
+        marksStart: canEdit && (marksStart ?? viewer === null),
       },
     );
     const near = (kind: RoomBoardNote["kind"]) =>
@@ -3777,6 +3815,16 @@ export function RoomBoard({
         run: () => {
           const text = copyCards();
           if (text !== null) void writeTextToClipboard(text).catch(() => undefined);
+        },
+      },
+      "start-here": {
+        label:
+          note !== undefined && shown.start === note.id
+            ? "Stop starting new visitors here"
+            : "Start here for new visitors",
+        run: () => {
+          if (note === undefined) return;
+          onChange?.({ type: "board.start", noteId: shown.start === note.id ? null : note.id });
         },
       },
       "copy-link": {
@@ -4169,6 +4217,8 @@ export function RoomBoard({
   const planColumns = planShown ? boardPlanColumns(shown.notes) : null;
   const planAttachments = planShown ? boardPlanAttachments(shown) : null;
   // A task an inbox item opened in the Plan.
+  // Each new stamp opens a new task to write in the Plan, as the command menu asks.
+  const [planAdd, setPlanAdd] = useState(0);
   const [planTask, setPlanTask] = useState<{ readonly id: string; readonly stamp: number } | null>(
     null,
   );
@@ -4284,6 +4334,11 @@ export function RoomBoard({
   const power = useBoardPower({
     surfaceRef,
     onBoard: !planShown,
+    viewOnly,
+    onAddTaskInPlan:
+      planShown && canEdit && cannotAdd === null
+        ? () => setPlanAdd((stamp) => stamp + 1)
+        : undefined,
     title,
     board: shown,
     people,
@@ -4300,7 +4355,7 @@ export function RoomBoard({
       const element = drawnItem(ref);
       if (element !== null) reveal(drawnRect(element));
     },
-    ...(cannotAdd === null
+    ...(cannotAdd === null && !viewOnly
       ? {
           onAddNote: () => addAndType(() => addCard({})),
           onAddTask: () => addAndType(() => addCard({ kind: "task" })),
@@ -4310,13 +4365,13 @@ export function RoomBoard({
         }
       : {}),
     onAddAgentBox:
-      cards === undefined && holds.agents
+      cards === undefined && holds.agents && !viewOnly
         ? (bringAgent ??
           (cannotAddThread === null
             ? () => addAndType(() => addCard({ kind: "thread" }))
             : undefined))
         : undefined,
-    onLineTool: cannotAddLine === null ? startLineTool : undefined,
+    onLineTool: cannotAddLine === null && !viewOnly ? startLineTool : undefined,
     onSelectTool: () => {
       stopLinking();
       setLineTool(false);
@@ -4345,7 +4400,7 @@ export function RoomBoard({
           return id === null ? null : noteRef(id);
         }
       : undefined,
-    onBringAgent: cards === undefined ? bringAgent : undefined,
+    onBringAgent: cards === undefined && !viewOnly ? bringAgent : undefined,
     onToggleChat,
   });
 
@@ -4392,6 +4447,14 @@ export function RoomBoard({
           ) : null}
           {/* Passing states sit under the header's right end, never squeezing the title. */}
           <div className="pointer-events-auto absolute end-0 top-full mt-2 flex flex-col items-end gap-2">
+            {firstView === null || view !== firstView || planShown ? null : (
+              <BoardFloat className="gap-2 py-1 ps-3 pe-1 text-xs" data-board-first-view>
+                Showing where to start
+                <Button size="xs" variant="outline" onClick={() => thenBoard(fitAll)}>
+                  Fit all
+                </Button>
+              </BoardFloat>
+            )}
             {notice === null ? null : (
               <BoardFloat className="px-3 py-1.5">
                 <span role="status" className="text-xs text-muted-foreground">
@@ -4471,321 +4534,321 @@ export function RoomBoard({
             )}
           </div>
         </header>
-        <div
-          data-board-chrome="bottom"
-          inert={planShown || viewOnly}
-          className={cn(
-            "pointer-events-none absolute inset-x-3 bottom-3 z-30 flex justify-center",
-            planShown && "invisible",
-            viewOnly && "hidden",
-          )}
-        >
-          <BoardFloat className="pointer-events-auto max-w-full gap-0.5 overflow-x-auto rounded-xl p-1">
-            {linkDraft === null ? (
-              <>
-                <WhyNot reason={cannotAdd}>
-                  <BoardTool
-                    label="Note"
-                    hint="Sticky note"
-                    disabled={cannotAdd !== null}
-                    onClick={() => addAndType(() => addCard({}))}
-                  >
-                    <span
-                      aria-hidden
-                      className={cn(
-                        "size-4 rounded-sm ring-1 ring-foreground/15",
-                        paintSwatchClassName(noteColor ?? undefined),
-                      )}
-                    />
-                  </BoardTool>
-                </WhyNot>
-                <WhyNot reason={cannotAdd}>
-                  <BoardTool
-                    label="Task"
-                    disabled={cannotAdd !== null}
-                    onClick={() => addAndType(() => addCard({ kind: "task" }))}
-                  >
-                    <ListTodoIcon />
-                  </BoardTool>
-                </WhyNot>
-                {cards === undefined ? (
+        {/* Someone who can only look gets no tools at all, not hidden ones. */}
+        {viewOnly ? null : (
+          <div
+            data-board-chrome="bottom"
+            inert={planShown}
+            className={cn(
+              "pointer-events-none absolute inset-x-3 bottom-3 z-30 flex justify-center",
+              planShown && "invisible",
+            )}
+          >
+            <BoardFloat className="pointer-events-auto max-w-full gap-0.5 overflow-x-auto rounded-xl p-1">
+              {linkDraft === null ? (
+                <>
+                  <WhyNot reason={cannotAdd}>
+                    <BoardTool
+                      label="Note"
+                      hint="Sticky note"
+                      disabled={cannotAdd !== null}
+                      onClick={() =>
+                        addAndType(() => {
+                          const id = addCard({});
+                          notePlacement.arm(id);
+                          return id;
+                        })
+                      }
+                    >
+                      <span
+                        aria-hidden
+                        className={cn(
+                          "size-4 rounded-sm ring-1 ring-foreground/15",
+                          paintSwatchClassName(noteColor ?? undefined),
+                        )}
+                      />
+                    </BoardTool>
+                  </WhyNot>
+                  <WhyNot reason={cannotAdd}>
+                    <BoardTool
+                      label="Task"
+                      disabled={cannotAdd !== null}
+                      onClick={() => addAndType(() => addCard({ kind: "task" }))}
+                    >
+                      <ListTodoIcon />
+                    </BoardTool>
+                  </WhyNot>
+                  {cards === undefined ? (
+                    <span className="contents @max-2xl/board:hidden">
+                      <WhyNot reason={cannotAdd}>
+                        <BoardTool
+                          label="Section"
+                          disabled={cannotAdd !== null}
+                          onClick={() => addAndType(() => addSection())}
+                        >
+                          <SquareDashedIcon />
+                        </BoardTool>
+                      </WhyNot>
+                    </span>
+                  ) : null}
                   <span className="contents @max-2xl/board:hidden">
                     <WhyNot reason={cannotAdd}>
                       <BoardTool
-                        label="Section"
+                        label="Link"
                         disabled={cannotAdd !== null}
-                        onClick={() => addAndType(() => addSection())}
+                        onClick={startLinkDraft}
                       >
-                        <SquareDashedIcon />
+                        <LinkIcon />
                       </BoardTool>
                     </WhyNot>
                   </span>
-                ) : null}
-                <span className="contents @max-2xl/board:hidden">
-                  <WhyNot reason={cannotAdd}>
-                    <BoardTool label="Link" disabled={cannotAdd !== null} onClick={startLinkDraft}>
-                      <LinkIcon />
-                    </BoardTool>
-                  </WhyNot>
-                </span>
-                {cards !== undefined ? null : <BoardToolDivider />}
-                {cards !== undefined || !holds.agents ? null : onAddThread === undefined ? (
-                  <WhyNot reason={cannotAddThread}>
-                    <BoardTool
-                      label="Thread"
-                      hint="Thread box: an agent the room can prompt"
-                      disabled={cannotAddThread !== null}
-                      onClick={bringAgent ?? (() => addAndType(() => addCard({ kind: "thread" })))}
-                    >
-                      <BotIcon />
-                    </BoardTool>
-                  </WhyNot>
-                ) : (
-                  <Menu>
+                  {cards !== undefined ? null : <BoardToolDivider />}
+                  {cards !== undefined || !holds.agents ? null : onAddThread === undefined ? (
                     <WhyNot reason={cannotAddThread}>
-                      <MenuTrigger
+                      <BoardTool
+                        label="Thread"
+                        hint="Thread box: an agent the room can prompt"
                         disabled={cannotAddThread !== null}
-                        render={<Button size="sm" variant="ghost" aria-label="Thread" />}
+                        onClick={
+                          bringAgent ?? (() => addAndType(() => addCard({ kind: "thread" })))
+                        }
                       >
                         <BotIcon />
-                        <ChevronDownIcon className="-ms-1.5 size-3 opacity-60" />
-                      </MenuTrigger>
-                    </WhyNot>
-                    {/* The new box's name field keeps the caret it took. */}
-                    <MenuPopup align="start" finalFocus={() => isBoardKey(document.activeElement)}>
-                      <MenuItem onClick={() => addAndType(() => addCard({ kind: "thread" }))}>
-                        New thread box
-                      </MenuItem>
-                      <MenuItem
-                        onClick={() => {
-                          const at = freeSpot("thread");
-                          const size = boardNewNoteSize("thread");
-                          reveal({ ...at, width: size.w, height: size.h }, true);
-                          onAddThread(at);
-                        }}
-                      >
-                        Add one of your threads…
-                      </MenuItem>
-                    </MenuPopup>
-                  </Menu>
-                )}
-                {cards === undefined ? (
-                  <WhyNot reason={cannotAddArtifact}>
-                    <BoardTool
-                      label="Artifact"
-                      disabled={cannotAddArtifact !== null}
-                      onClick={() => addAndType(() => addCard({ kind: "artifact" }))}
-                    >
-                      <AppWindowIcon />
-                    </BoardTool>
-                  </WhyNot>
-                ) : null}
-                {machineTools ? (
-                  <span className="contents @max-2xl/board:hidden">
-                    <WhyNot reason={cannotAddCode}>
-                      <BoardTool
-                        label="Code"
-                        hint="A code window shows the changes of the thread box you draw a line from it. Everyone in the room sees its files and diffs."
-                        disabled={cannotAddCode !== null}
-                        onClick={() => addAndType(() => addCard({ kind: "code" }))}
-                      >
-                        <CodeXmlIcon />
                       </BoardTool>
                     </WhyNot>
-                  </span>
-                ) : null}
-                {machineTools ? (
-                  <span className="contents @max-2xl/board:hidden">
-                    <WhyNot reason={cannotAddPullRequest}>
-                      <BoardTool
-                        label="Pull request"
-                        hint="Shows a GitHub pull request to the room, kept up to date by the board owner's GitHub sign-in."
-                        disabled={cannotAddPullRequest !== null}
-                        onClick={startPullRequest}
+                  ) : (
+                    <Menu>
+                      <WhyNot reason={cannotAddThread}>
+                        <MenuTrigger
+                          disabled={cannotAddThread !== null}
+                          render={<Button size="sm" variant="ghost" aria-label="Thread" />}
+                        >
+                          <BotIcon />
+                          <ChevronDownIcon className="-ms-1.5 size-3 opacity-60" />
+                        </MenuTrigger>
+                      </WhyNot>
+                      {/* The new box's name field keeps the caret it took. */}
+                      <MenuPopup
+                        align="start"
+                        finalFocus={() => isBoardKey(document.activeElement)}
                       >
-                        <PullRequestGlyph.pullRequest />
+                        <MenuItem onClick={() => addAndType(() => addCard({ kind: "thread" }))}>
+                          New thread box
+                        </MenuItem>
+                        <MenuItem
+                          onClick={() => {
+                            const at = freeSpot("thread");
+                            const size = boardNewNoteSize("thread");
+                            reveal({ ...at, width: size.w, height: size.h }, true);
+                            onAddThread(at);
+                          }}
+                        >
+                          Add one of your threads…
+                        </MenuItem>
+                      </MenuPopup>
+                    </Menu>
+                  )}
+                  {cards === undefined ? (
+                    <WhyNot reason={cannotAddArtifact}>
+                      <BoardTool
+                        label="Artifact"
+                        disabled={cannotAddArtifact !== null}
+                        onClick={() => addAndType(() => addCard({ kind: "artifact" }))}
+                      >
+                        <AppWindowIcon />
                       </BoardTool>
                     </WhyNot>
-                  </span>
-                ) : null}
-                {cards !== undefined ? null : <BoardToolDivider />}
-                <WhyNot reason={cannotAddLine}>
-                  <BoardTool
-                    label="Line"
-                    hint="Draw a line: click a card, then another. Or drag from the dot on any side of a card."
-                    variant={lineTool ? "default" : "ghost"}
-                    aria-pressed={lineTool}
-                    disabled={cannotAddLine !== null}
-                    onClick={startLineTool}
-                  >
-                    <SplineIcon />
-                  </BoardTool>
-                </WhyNot>
-                {cards === undefined ? (
-                  <WhyNot reason={cannotAdd}>
-                    <BoardTool
-                      label="Comment"
-                      variant={placingComment ? "default" : "ghost"}
-                      aria-pressed={placingComment}
-                      disabled={cannotAdd !== null}
-                      onClick={() => thenBoard(startComment)}
-                    >
-                      <MessageCirclePlusIcon />
-                    </BoardTool>
-                  </WhyNot>
-                ) : null}
-                {cards === undefined ? (
-                  // As wide as its widest count, and kept while nothing is resolved, so the tools
-                  // never move. A narrow board keeps it in More.
-                  <span className="grid @max-2xl/board:hidden">
-                    <span aria-hidden className="invisible col-start-1 row-start-1 flex">
-                      <Button size="sm" variant="ghost" tabIndex={-1}>
-                        <CircleCheckIcon />
-                        <ResolvedCount count={RESOLVED_WIDEST_COUNT} />
-                      </Button>
+                  ) : null}
+                  {machineTools ? (
+                    <span className="contents @max-2xl/board:hidden">
+                      <WhyNot reason={cannotAddCode}>
+                        <BoardTool
+                          label="Code"
+                          hint="A code window shows the changes of the thread box you draw a line from it. Everyone in the room sees its files and diffs."
+                          disabled={cannotAddCode !== null}
+                          onClick={() => addAndType(() => addCard({ kind: "code" }))}
+                        >
+                          <CodeXmlIcon />
+                        </BoardTool>
+                      </WhyNot>
                     </span>
-                    <span
-                      className={cn(
-                        "col-start-1 row-start-1 flex",
-                        resolvedComments === 0 && "invisible",
-                      )}
+                  ) : null}
+                  {machineTools ? (
+                    <span className="contents @max-2xl/board:hidden">
+                      <WhyNot reason={cannotAddPullRequest}>
+                        <BoardTool
+                          label="Pull request"
+                          hint="Shows a GitHub pull request to the room, kept up to date by the board owner's GitHub sign-in."
+                          disabled={cannotAddPullRequest !== null}
+                          onClick={startPullRequest}
+                        >
+                          <PullRequestGlyph.pullRequest />
+                        </BoardTool>
+                      </WhyNot>
+                    </span>
+                  ) : null}
+                  {cards !== undefined ? null : <BoardToolDivider />}
+                  <WhyNot reason={cannotAddLine}>
+                    <BoardTool
+                      label="Line"
+                      hint="Draw a line: click a card, then another. Or drag from the dot on any side of a card."
+                      variant={lineTool ? "default" : "ghost"}
+                      aria-pressed={lineTool}
+                      disabled={cannotAddLine !== null}
+                      onClick={startLineTool}
                     >
+                      <SplineIcon />
+                    </BoardTool>
+                  </WhyNot>
+                  {cards === undefined ? (
+                    <WhyNot reason={cannotAdd}>
+                      <BoardTool
+                        label="Comment"
+                        variant={placingComment ? "default" : "ghost"}
+                        aria-pressed={placingComment}
+                        disabled={cannotAdd !== null}
+                        onClick={() => thenBoard(startComment)}
+                      >
+                        <MessageCirclePlusIcon />
+                      </BoardTool>
+                    </WhyNot>
+                  ) : null}
+                  {cards === undefined && resolvedComments > 0 ? (
+                    // Only while something is resolved; a narrow board keeps it in More.
+                    <span className="flex @max-2xl/board:hidden">
                       <Button
                         size="sm"
                         variant={showResolved ? "secondary" : "ghost"}
                         aria-pressed={showResolved}
-                        aria-label={`Resolved (${resolvedComments})`}
-                        aria-hidden={resolvedComments === 0 || undefined}
-                        tabIndex={resolvedComments === 0 ? -1 : undefined}
                         onClick={() => thenBoard(() => setShowResolved((shown) => !shown))}
                       >
                         <CircleCheckIcon />
                         <ResolvedCount count={resolvedComments} />
                       </Button>
                     </span>
+                  ) : null}
+                  <span className="contents @2xl/board:hidden">
+                    <Menu>
+                      <MenuTrigger
+                        render={<BoardAgentsMoreButton entries={agentEntries} viewer={viewer} />}
+                      >
+                        <EllipsisIcon />
+                      </MenuTrigger>
+                      <MenuPopup side="top" align="end">
+                        {cards === undefined ? (
+                          <MenuItem
+                            disabled={cannotAdd !== null}
+                            onClick={() => addAndType(() => addSection())}
+                          >
+                            <SquareDashedIcon />
+                            Section
+                          </MenuItem>
+                        ) : null}
+                        <MenuItem disabled={cannotAdd !== null} onClick={startLinkDraft}>
+                          <LinkIcon />
+                          Link
+                        </MenuItem>
+                        {machineTools ? (
+                          <MenuItem
+                            disabled={cannotAddCode !== null}
+                            onClick={() => addAndType(() => addCard({ kind: "code" }))}
+                          >
+                            <CodeXmlIcon />
+                            Code window
+                          </MenuItem>
+                        ) : null}
+                        {machineTools ? (
+                          <MenuItem
+                            disabled={cannotAddPullRequest !== null}
+                            onClick={startPullRequest}
+                          >
+                            <PullRequestGlyph.pullRequest />
+                            Pull request
+                          </MenuItem>
+                        ) : null}
+                        {cards === undefined && resolvedComments > 0 ? (
+                          <MenuItem
+                            onClick={() => thenBoard(() => setShowResolved((shown) => !shown))}
+                          >
+                            <CircleCheckIcon />
+                            {showResolved
+                              ? "Hide resolved comments"
+                              : `Show resolved comments (${resolvedComments})`}
+                          </MenuItem>
+                        ) : null}
+                        {cards === undefined && room !== null ? (
+                          <MenuItem onClick={() => setAgentsOpen(true)}>
+                            <BotIcon />
+                            Agents
+                            <BoardAgentsNeedsBadge entries={agentEntries} viewer={viewer} />
+                          </MenuItem>
+                        ) : null}
+                      </MenuPopup>
+                    </Menu>
                   </span>
-                ) : null}
-                <span className="contents @2xl/board:hidden">
-                  <Menu>
-                    <MenuTrigger
-                      render={<BoardAgentsMoreButton entries={agentEntries} viewer={viewer} />}
-                    >
-                      <EllipsisIcon />
-                    </MenuTrigger>
-                    <MenuPopup side="top" align="end">
-                      {cards === undefined ? (
-                        <MenuItem
-                          disabled={cannotAdd !== null}
-                          onClick={() => addAndType(() => addSection())}
-                        >
-                          <SquareDashedIcon />
-                          Section
-                        </MenuItem>
-                      ) : null}
-                      <MenuItem disabled={cannotAdd !== null} onClick={startLinkDraft}>
-                        <LinkIcon />
-                        Link
-                      </MenuItem>
-                      {machineTools ? (
-                        <MenuItem
-                          disabled={cannotAddCode !== null}
-                          onClick={() => addAndType(() => addCard({ kind: "code" }))}
-                        >
-                          <CodeXmlIcon />
-                          Code window
-                        </MenuItem>
-                      ) : null}
-                      {machineTools ? (
-                        <MenuItem
-                          disabled={cannotAddPullRequest !== null}
-                          onClick={startPullRequest}
-                        >
-                          <PullRequestGlyph.pullRequest />
-                          Pull request
-                        </MenuItem>
-                      ) : null}
-                      {cards === undefined && resolvedComments > 0 ? (
-                        <MenuItem
-                          onClick={() => thenBoard(() => setShowResolved((shown) => !shown))}
-                        >
-                          <CircleCheckIcon />
-                          {showResolved
-                            ? "Hide resolved comments"
-                            : `Show resolved comments (${resolvedComments})`}
-                        </MenuItem>
-                      ) : null}
-                      {cards === undefined && room !== null ? (
-                        <MenuItem onClick={() => setAgentsOpen(true)}>
-                          <BotIcon />
-                          Agents
-                          <BoardAgentsNeedsBadge entries={agentEntries} viewer={viewer} />
-                        </MenuItem>
-                      ) : null}
-                    </MenuPopup>
-                  </Menu>
-                </span>
-              </>
-            ) : (
-              <form
-                className="flex items-center gap-1.5 ps-1"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  submitLinkDraft();
-                }}
-              >
-                <Input
-                  size="sm"
-                  aria-label={draftKind === "pull-request" ? "Pull request address" : "Link"}
-                  placeholder={
-                    draftKind === "pull-request"
-                      ? "Paste a GitHub pull request link"
-                      : "Paste or type a link"
-                  }
-                  autoFocus
-                  value={linkDraft}
-                  aria-invalid={linkDraft.trim() !== "" && draftUrl(linkDraft) === null}
-                  onChange={(event) => setLinkDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape") thenBoard(() => setLinkDraft(null));
+                </>
+              ) : (
+                <form
+                  className="flex items-center gap-1.5 ps-1"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    submitLinkDraft();
                   }}
-                />
-                <Button size="sm" type="submit" disabled={draftUrl(linkDraft) === null}>
-                  Add
-                </Button>
-                {draftKind === "link" && cards === undefined && holds.agents ? (
-                  <WhatItDoes hint="Adds the link and writes a prompt in your thread box asking your agent to read it onto the board. Nothing runs until you press Send.">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={draftUrl(linkDraft) === null}
-                      onClick={() => submitLinkDraft(true)}
-                    >
-                      Add and bring in
-                    </Button>
-                  </WhatItDoes>
-                ) : null}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => thenBoard(() => setLinkDraft(null))}
                 >
-                  Cancel
-                </Button>
-              </form>
-            )}
-            <BoardToolDivider />
-            <BoardHistoryButtons
-              canUndo={
-                canEdit &&
-                (history.undo.length > 0 ||
-                  boardAgentTurnToUndo(shown, viewer, undefined) !== undefined)
-              }
-              canRedo={canEdit && history.redo.length > 0}
-              onUndo={() => thenBoard(() => travel("undo"))}
-              onRedo={() => thenBoard(() => travel("redo"))}
-            />
-          </BoardFloat>
-        </div>
+                  <Input
+                    size="sm"
+                    aria-label={draftKind === "pull-request" ? "Pull request address" : "Link"}
+                    placeholder={
+                      draftKind === "pull-request"
+                        ? "Paste a GitHub pull request link"
+                        : "Paste or type a link"
+                    }
+                    autoFocus
+                    value={linkDraft}
+                    aria-invalid={linkDraft.trim() !== "" && draftUrl(linkDraft) === null}
+                    onChange={(event) => setLinkDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") thenBoard(() => setLinkDraft(null));
+                    }}
+                  />
+                  <Button size="sm" type="submit" disabled={draftUrl(linkDraft) === null}>
+                    Add
+                  </Button>
+                  {draftKind === "link" && cards === undefined && holds.agents ? (
+                    <WhatItDoes hint="Adds the link and writes a prompt in your thread box asking your agent to read it onto the board. Nothing runs until you press Send.">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={draftUrl(linkDraft) === null}
+                        onClick={() => submitLinkDraft(true)}
+                      >
+                        Add and bring in
+                      </Button>
+                    </WhatItDoes>
+                  ) : null}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => thenBoard(() => setLinkDraft(null))}
+                  >
+                    Cancel
+                  </Button>
+                </form>
+              )}
+              <BoardToolDivider />
+              <BoardHistoryButtons
+                canUndo={
+                  canEdit &&
+                  (history.undo.length > 0 ||
+                    boardAgentTurnToUndo(shown, viewer, undefined) !== undefined)
+                }
+                canRedo={canEdit && history.redo.length > 0}
+                onUndo={() => thenBoard(() => travel("undo"))}
+                onRedo={() => thenBoard(() => travel("redo"))}
+              />
+            </BoardFloat>
+          </div>
+        )}
         <div
           data-board-corner
           inert={planShown}
@@ -4967,9 +5030,11 @@ export function RoomBoard({
             delete event.currentTarget.dataset.boardBusy;
             const held = press.current;
             press.current = null;
+            const placing = notePlacement.take();
             if (held === null || held.moved) return;
             const distance = Math.hypot(event.clientX - held.x, event.clientY - held.y);
             if (distance >= pressSlop(event.pointerType)) return;
+            if (placing !== null && held.on === null && placeNoteAt(placing, event)) return;
             setSelection(held.on === null ? NO_SELECTION : new Set([held.on]));
             if (held.on !== null) lastCard.current = held.on;
           }}
@@ -5903,6 +5968,7 @@ export function RoomBoard({
             onDeleteAll={deleteNotes}
             actionsOf={planActions}
             openTask={planTask}
+            addStamp={planAdd}
           />
         )}
         {contextMenu === null ? null : (

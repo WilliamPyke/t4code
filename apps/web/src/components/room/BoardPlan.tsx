@@ -216,7 +216,10 @@ export function BoardPlan({
   onDeleteAll,
   actionsOf,
   openTask = null,
+  addStamp = 0,
 }: {
+  /** Each new stamp opens a new task to write in To do, as the command menu asks. */
+  readonly addStamp?: number;
   /** A task to open, as an inbox item asks; each new `stamp` opens it again. */
   readonly openTask?: { readonly id: string; readonly stamp: number } | null;
   readonly layout: "columns" | "list";
@@ -251,6 +254,11 @@ export function BoardPlan({
     setEditing(openTask.id);
   }
   const [adding, setAdding] = useState<RoomTaskStatus | null>(null);
+  const [addedStamp, setAddedStamp] = useState(addStamp);
+  if (addStamp !== addedStamp) {
+    setAddedStamp(addStamp);
+    if (canEdit && cannotAdd === null) setAdding("todo");
+  }
   const [filter, setFilter] = useState<BoardPlanFilter>(NO_PLAN_FILTER);
   const [sorts, setSorts] = useState(MANUAL_SORTS);
   const [listSort, setListSort] = useState<BoardPlanSort>("manual");
@@ -568,15 +576,22 @@ export function BoardPlan({
           <EmptyHeader>
             <EmptyTitle>Plan the work</EmptyTitle>
             <EmptyDescription>
-              The Plan shows this board's tasks to move through, and every task you add here is a
-              card on the board too. Press C to add one.
+              {canEdit
+                ? "The Plan shows this board's tasks to move through, and every task you add here is a card on the board too. Press C to add one."
+                : "The Plan shows this board's tasks to move through. This board has none yet."}
             </EmptyDescription>
           </EmptyHeader>
-          <Button disabled={cannotAdd !== null} onClick={() => setAdding("todo")}>
-            <PlusIcon />
-            Add a task
-          </Button>
-          {cannotAdd === null ? null : <p className="text-xs text-muted-foreground">{cannotAdd}</p>}
+          {canEdit ? (
+            <>
+              <Button disabled={cannotAdd !== null} onClick={() => setAdding("todo")}>
+                <PlusIcon />
+                Add a task
+              </Button>
+              {cannotAdd === null ? null : (
+                <p className="text-xs text-muted-foreground">{cannotAdd}</p>
+              )}
+            </>
+          ) : null}
         </Empty>
       </PlanFrame>
     );
@@ -637,16 +652,18 @@ export function BoardPlan({
                 No task matches. Clear the filters to see every task.
               </p>
             ) : null}
-            <div className="border-t border-board-hairline">
-              <PlanAdd
-                status="todo"
-                open={adding !== null}
-                cannotAdd={cannotAdd}
-                onOpen={() => setAdding("todo")}
-                onClose={() => setAdding(null)}
-                onAdd={(text) => onAdd("todo", text)}
-              />
-            </div>
+            {canEdit ? (
+              <div className="border-t border-board-hairline">
+                <PlanAdd
+                  status="todo"
+                  open={adding !== null}
+                  cannotAdd={cannotAdd}
+                  onOpen={() => setAdding("todo")}
+                  onClose={() => setAdding(null)}
+                  onAdd={(text) => onAdd("todo", text)}
+                />
+              </div>
+            ) : null}
           </div>
         </div>
         {dialog}
@@ -726,14 +743,16 @@ export function BoardPlan({
                   </li>
                 ) : null}
               </ol>
-              <PlanAdd
-                status={status}
-                open={adding === status}
-                cannotAdd={cannotAdd}
-                onOpen={() => setAdding(status)}
-                onClose={() => setAdding((current) => (current === status ? null : current))}
-                onAdd={(text) => onAdd(status, text)}
-              />
+              {canEdit ? (
+                <PlanAdd
+                  status={status}
+                  open={adding === status}
+                  cannotAdd={cannotAdd}
+                  onOpen={() => setAdding(status)}
+                  onClose={() => setAdding((current) => (current === status ? null : current))}
+                  onAdd={(text) => onAdd(status, text)}
+                />
+              ) : null}
             </section>
           );
         })}

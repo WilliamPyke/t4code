@@ -334,6 +334,25 @@ export function findHighlightedCommandPaletteItem(
   return null;
 }
 
+/**
+ * The item Enter runs: the row highlighted on screen while it is still listed (`rows`, in order),
+ * else the first row when the list highlights it by itself. Never a row that is no longer shown.
+ */
+export function commandPaletteEnterItem(
+  groups: ReadonlyArray<CommandPaletteGroup>,
+  rows: ReadonlyArray<string>,
+  highlightedItemValue: string | null,
+  autoHighlightsFirstRow: boolean,
+): CommandPaletteActionItem | CommandPaletteSubmenuItem | null {
+  const shown =
+    highlightedItemValue !== null && rows.includes(highlightedItemValue)
+      ? highlightedItemValue
+      : autoHighlightsFirstRow
+        ? (rows[0] ?? null)
+        : null;
+  return findHighlightedCommandPaletteItem(groups, shown);
+}
+
 export function enumerateCommandPaletteItems(
   items: ReadonlyArray<CommandPaletteActionItem>,
 ): CommandPaletteActionItem[] {

@@ -325,7 +325,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   );
 });
 
-/** Simple mode's one way to a person's own agents, until they have a computer here. */
+/** The way to a person's own agents, in both modes, until they have a computer here. */
 function SidebarConnectComputer() {
   const { isMobile, setOpenMobile } = useSidebar();
   const hasComputer = useEnvironments().environments.some(
@@ -354,7 +354,8 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const simple = useShellMode() === "simple";
   return (
     <SidebarFooter>
-      {simple ? <SidebarConnectComputer /> : <SidebarProviderUpdatePill />}
+      <SidebarConnectComputer />
+      {simple ? null : <SidebarProviderUpdatePill />}
       <SidebarUpdateArchitectureWarning />
       <SidebarUtilityMenu />
     </SidebarFooter>

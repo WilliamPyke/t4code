@@ -34,6 +34,7 @@ import { BoardBackdrop } from "../room/BoardChrome";
 import { TinkjamWordmark } from "../TinkjamLogo";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { useAccountBoardOpen } from "./useAccountBoardOpen";
 import { GuestNotice, noteGuestSignInFailure } from "./GuestThreadView";
 import { guestEntryStep, inviteShareId } from "./guestStream.logic";
 
@@ -135,6 +136,13 @@ export function GuestPage() {
   const [joined, setJoined] = useState<JoinedGuestShare | null>(null);
   const step = guestEntryStep(shares, entry);
   const checking = joined === null && step.step === "check" ? step.share : null;
+  // A plain address with no invite, on a browser with no session: the account may open it.
+  const accountStep = useAccountBoardOpen({
+    shareId: entry.shareId,
+    hasSession: step.step !== "invalid",
+    reopening: false,
+    cloud: credential === null && (host === null || isCloudBoardsHost(host)),
+  });
   // Pasting another guest link into this tab changes only the hash, which does not reload the
   // page; reload so the new invite is read instead of the one already captured.
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- hashchange listener reloads the page when another guest link is pasted into this tab
@@ -175,7 +183,7 @@ export function GuestPage() {
           params={{ environmentId: guestEnvironmentId(open.shareId), threadId: open.threadId }}
           replace
         />
-      ) : checking !== null ? (
+      ) : checking !== null || (step.step === "invalid" && accountStep === "opening") ? (
         <GuestNotice title="Opening the board..." />
       ) : step.step === "invalid" || host === null || credential === null ? (
         INVALID

@@ -688,6 +688,17 @@ describe("RoomBoard keys and pointer", () => {
     expect(puts(onChange)[1]).toMatchObject({ noteId: "a", x: 0, y: 0 });
   });
 
+  it("says nothing of resolved comments until one is resolved, and then counts it once", async () => {
+    const comment = { id: "c", text: "Hm", x: 300, y: 300, kind: "comment" as const };
+    {
+      await using screen = await renderBoard([comment]).screen;
+      expect(screen.container.textContent).not.toMatch(/Resolved|\(8+\)/);
+    }
+    await using screen = await renderBoard([{ ...comment, resolved: true }]).screen;
+    expect(screen.container.textContent).not.toMatch(/\(8+\)/);
+    expect(screen.container.textContent?.match(/Resolved \(1\)/g) ?? []).toHaveLength(1);
+  });
+
   it("adds a note where the empty board is double-clicked, ready to write in", async () => {
     const board = renderBoard([{ id: "a", text: "First", x: 0, y: 0 }]);
     const { onChange } = board;

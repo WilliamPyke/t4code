@@ -13,8 +13,10 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { makeThreadProjectionFixture } from "../../test-fixtures";
 import {
+  guestBoardOpenStep,
   guestEntryStep,
   guestFilesProblem,
+  guestShareIdOfEnvironment,
   inviteShareId,
   nextAwaitingRowIds,
   unplacedGuestMessages,
@@ -175,6 +177,30 @@ describe("guestEntryStep", () => {
     expect(guestEntryStep(looking, { credential: "board-3.v.secret", shareId: "board-3" })).toEqual(
       { step: "join" },
     );
+  });
+});
+
+describe("guestBoardOpenStep", () => {
+  const cold = {
+    hasSession: false,
+    reopening: false,
+    cloud: true,
+    account: "signed-in",
+    accountRefused: false,
+  } as const;
+  it("opens a cloud board's plain address as the signed-in account before calling it ended", () => {
+    expect(guestBoardOpenStep(cold)).toBe("account");
+    expect(guestBoardOpenStep({ ...cold, account: "loading" })).toBe("opening");
+    expect(guestBoardOpenStep({ ...cold, accountRefused: true })).toBe("invalid");
+    expect(guestBoardOpenStep({ ...cold, account: "signed-out" })).toBe("invalid");
+    expect(guestBoardOpenStep({ ...cold, cloud: false })).toBe("invalid");
+    expect(guestBoardOpenStep({ ...cold, hasSession: true, accountRefused: true })).toBe("board");
+    expect(guestBoardOpenStep({ ...cold, reopening: true })).toBe("opening");
+  });
+  it("reads the share from a board's address", () => {
+    expect(guestShareIdOfEnvironment("guest-share-abc-123")).toBe("abc-123");
+    expect(guestShareIdOfEnvironment("guest-share-")).toBeNull();
+    expect(guestShareIdOfEnvironment("local")).toBeNull();
   });
 });
 

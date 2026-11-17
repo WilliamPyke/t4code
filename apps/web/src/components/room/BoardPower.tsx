@@ -60,6 +60,7 @@ import {
 import { toastManager } from "../ui/toast";
 import { BoardFloat } from "./BoardChrome";
 import {
+  boardAskQuery,
   boardCardKindName,
   boardCardLabel,
   boardNextCard,
@@ -85,6 +86,10 @@ export interface BoardPowerProps {
   readonly surfaceRef: RefObject<HTMLDivElement | null>;
   /** The board, not the Plan, is on screen. */
   readonly onBoard: boolean;
+  /** The viewer can only look: nothing that changes the board, or asks an agent, is offered. */
+  readonly viewOnly?: boolean | undefined;
+  /** Opens a new task to write in the Plan, while the Plan is on screen. */
+  readonly onAddTaskInPlan?: (() => void) | undefined;
   readonly title: string;
   readonly board: RoomBoard;
   readonly people: BoardPeople;
@@ -282,7 +287,35 @@ export function useBoardPower(props: BoardPowerProps): {
 
   useBoardPalette(() => {
     const onBoard = props.onBoard;
+    const looks = props.viewOnly === true;
+    // From the Plan, a note goes on the board, which shows first; a task is added in the Plan.
+    const onTheBoard = (run: () => void) =>
+      onBoard
+        ? run
+        : () => {
+            props.onView?.("board");
+            window.requestAnimationFrame(() => window.requestAnimationFrame(run));
+          };
     const commands: Array<BoardCommand> = [
+      ...(!onBoard && !looks
+        ? [
+            ...has(props.onAddNote, (run) => ({
+              id: "add-note",
+              title: "Add note",
+              keywords: ["sticky"],
+              description: "On the board",
+              icon: icon(StickyNoteIcon),
+              run: onTheBoard(run),
+            })),
+            ...has(props.onAddTaskInPlan ?? props.onAddTask, (run) => ({
+              id: "add-task",
+              title: "Add task",
+              keywords: ["todo"],
+              icon: icon(ListTodoIcon),
+              run: props.onAddTaskInPlan ?? onTheBoard(run),
+            })),
+          ]
+        : []),
       ...(onBoard
         ? [
             ...has(props.onAddNote, (run) => ({
@@ -449,20 +482,24 @@ export function useBoardPower(props: BoardPowerProps): {
         icon: icon(MessagesSquareIcon),
         run,
       })),
-      ...has(props.onBringAgent, (run) => ({
+      ...has(looks ? undefined : props.onBringAgent, (run) => ({
         id: "bring-agent",
         title: "Bring my agent",
         keywords: ["connect", "machine"],
         icon: icon(BotIcon),
         run,
       })),
-      {
-        id: "ask-agent",
-        title: "Ask my agent…",
-        keywords: ["prompt", "question"],
-        icon: icon(SparklesIcon),
-        run: () => askMyAgent(""),
-      },
+      ...(looks
+        ? []
+        : [
+            {
+              id: "ask-agent",
+              title: "Ask my agent…",
+              keywords: ["prompt", "question"],
+              icon: icon(SparklesIcon),
+              run: () => askMyAgent(""),
+            },
+          ]),
       {
         id: "export-copy",
         title: "Copy board as Markdown",
@@ -537,6 +574,7 @@ export function useBoardPower(props: BoardPowerProps): {
       commands,
       finds,
       typed: (query) => {
+        if (looks) return [];
         const url = boardUrlIn(query);
         const addLink = props.onAddLink;
         if (url !== null) {
@@ -552,17 +590,20 @@ export function useBoardPower(props: BoardPowerProps): {
                 },
               ];
         }
-        return [
-          {
-            id: "ask-agent-typed",
-            title: `Ask my agent: ${query}`,
-            keywords: [query],
-            description: "Puts it in your agent box to send",
-            secondary: true,
-            icon: icon(SparklesIcon),
-            run: () => askMyAgent(query),
-          },
-        ];
+        const asked = boardAskQuery(query);
+        return asked === ""
+          ? []
+          : [
+              {
+                id: "ask-agent-typed",
+                title: `Ask my agent: ${asked}`,
+                keywords: [query],
+                description: "Puts it in your agent box to send",
+                secondary: true,
+                icon: icon(SparklesIcon),
+                run: () => askMyAgent(asked),
+              },
+            ];
       },
     };
   });

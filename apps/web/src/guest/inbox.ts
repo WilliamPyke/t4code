@@ -197,6 +197,20 @@ export async function askEditAccess(
   return null;
 }
 
+/**
+ * Reads whether the account asked for edit access on this board and is still waiting, so a page
+ * loaded again says Asked instead of offering to ask once more.
+ */
+export async function loadAskedAccess(shareId: string): Promise<void> {
+  const response = await accountRequest(
+    `${CLOUD_BOARD_ACCESS_ROUTE}?${GUEST_SHARE_PARAM}=${encodeURIComponent(shareId)}`,
+  );
+  if (response?.status !== 200) return;
+  const asked = Option.getOrNull(decodeAsked(await response.json().catch(() => null)));
+  if (asked === null) return;
+  appAtomRegistry.update(askedAtom, (current) => ({ ...current, [shareId]: asked.request }));
+}
+
 /** Forgets a request this page asked once it was answered. */
 export const forgetAskedAccess = (shareId: string) =>
   appAtomRegistry.update(askedAtom, ({ [shareId]: _gone, ...rest }) => rest);

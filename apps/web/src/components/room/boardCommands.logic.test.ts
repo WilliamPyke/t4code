@@ -6,6 +6,7 @@ import {
   filterCommandPaletteGroups,
 } from "../CommandPalette.logic";
 import {
+  boardAskQuery,
   boardCardLabel,
   boardCommandsByRecent,
   boardNextCard,
@@ -148,5 +149,15 @@ describe("boardKeyAction", () => {
     [{ key: "d", ctrlKey: true }, null],
   ] as const)("reads %j as %s", (event, action) => {
     expect(key(event)).toBe(action);
+  });
+});
+
+describe("boardAskQuery", () => {
+  it("asks what was typed, without an Ask my agent typed before it", () => {
+    expect(boardAskQuery("Ask my agent: hello")).toBe("hello");
+    expect(boardAskQuery("ask agent, sum up the board")).toBe("sum up the board");
+    expect(boardAskQuery("hello")).toBe("hello");
+    expect(boardAskQuery("Ask my agent:")).toBe("");
+    expect(boardAskQuery("asking for agents")).toBe("asking for agents");
   });
 });

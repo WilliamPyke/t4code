@@ -87,3 +87,9 @@ export function boardNextCard(
   if (at === -1) return (direction === 1 ? ordered[0] : ordered.at(-1)) ?? null;
   return ordered[(at + direction + ordered.length) % ordered.length] ?? null;
 }
+
+// "Ask my agent: …" typed in full, as the command menu's own entry reads.
+const ASK_PREFIX = /^\s*ask\s+(?:my\s+)?agent\b\s*[:,-]?\s*/i;
+
+/** What a question typed in the command menu asks, without an "Ask my agent:" typed before it. */
+export const boardAskQuery = (query: string): string => query.replace(ASK_PREFIX, "").trim();

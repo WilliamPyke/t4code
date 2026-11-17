@@ -54,6 +54,10 @@ export interface CloudRoom {
   readonly viewLink?: { readonly credential: string; readonly hash: string };
   /** Requests for edit access, open ones and the last few answered. */
   readonly requests?: ReadonlyArray<AccessRequest>;
+  /** Anyone who can see the board may make their own copy of it, as its maker allowed. */
+  readonly allowCopies?: true;
+  /** The task and mention items the board sent lately, so it never sends one twice. */
+  readonly notified?: ReadonlyArray<{ readonly key: string; readonly at: string }>;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -132,6 +136,7 @@ const FAILURES = {
     message: "As many people are looking at this board as it holds. Try again in a while.",
   },
   asked: { status: 409, message: "You already asked. The answer will come to your inbox." },
+  copies_off: { status: 403, message: "Whoever made this board has not allowed copies." },
 } as const;
 
 export type RoomFailureReason = keyof typeof FAILURES;
@@ -337,6 +342,8 @@ export const roomScope = (
     ),
   hasPerson: (guestId) => room.guests.some((guest) => guest.id === guestId),
   hasMember: (memberId) => room.workspaceId !== undefined && members.has(memberId),
+  manages: (guestId) =>
+    room.maker === guestId && room.guests.some((guest) => guest.id === guestId && !guest.locked),
 });
 
 /** The workspace members a change names with `@`, which the board asks its workspace about. */
@@ -425,11 +432,12 @@ const ALARM_STEP_MS = DAY_MS;
  * made; any other goes once nobody used it for `IDLE_BOARD_MS`.
  */
 export function boardAlarmAt(
-  room: Pick<CloudRoom, "createdAt" | "updatedAt">,
+  room: Pick<CloudRoom, "createdAt" | "updatedAt" | "board">,
   now: number,
   scheduled: number | null,
 ): number | null {
-  if (room.updatedAt === room.createdAt) {
+  // A copy is made with its cards: it was never changed, but it is not empty.
+  if (room.updatedAt === room.createdAt && room.board === undefined) {
     const at = Date.parse(room.createdAt) + UNTOUCHED_BOARD_MS;
     return scheduled === at ? null : at;
   }
@@ -480,7 +488,21 @@ export function viewFor(
     model: CLOUD_MODEL,
     ...(guest?.inboxAt === undefined ? {} : { inboxAt: guest.inboxAt }),
     ...(guest === null ? grantedOf(room) : {}),
+    ...(room.allowCopies === true ? { copies: true } : {}),
   };
+}
+
+/** Lets anyone who can see the board copy it, or stops that. Only someone who manages it may. */
+export function withCopies(
+  room: CloudRoom,
+  manages: boolean,
+  on: boolean,
+  now: string,
+): Result.Result<CloudRoom, RoomFailure> {
+  if (!manages) return Result.fail(roomFailure("not_maker"));
+  if ((room.allowCopies === true) === on) return Result.succeed(room);
+  const { allowCopies: _old, ...rest } = room;
+  return Result.succeed({ ...rest, ...(on ? { allowCopies: true as const } : {}), updatedAt: now });
 }
 
 // An approval shows to pages on the view link this long after the board last changed.

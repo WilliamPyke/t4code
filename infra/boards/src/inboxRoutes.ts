@@ -74,6 +74,17 @@ export async function inboxRoute(
       const tasks: CloudMyTasks = { tasks: await index.tasks() };
       return Response.json(tasks, { headers: NO_STORE });
     }
+    case `GET ${CLOUD_BOARD_ACCESS_ROUTE}`: {
+      // The open request this account asked on the board, so a page reloaded still says Asked.
+      const shareId = url.searchParams.get(GUEST_SHARE_PARAM);
+      if (!isShareId(shareId)) return failureResponse(roomFailure("bad_request"));
+      const open = await env.BOARDS.get(env.BOARDS.idFromName(shareId)).openAccessRequest(
+        context.account,
+      );
+      if (open === null) return new Response(null, { status: 204, headers: NO_STORE });
+      const result: CloudBoardAccessResult = { request: open };
+      return Response.json(result, { headers: NO_STORE });
+    }
     case `POST ${CLOUD_BOARD_ACCESS_ROUTE}`:
     case `POST ${CLOUD_BOARD_ACCESS_ANSWER_ROUTE}`: {
       const shareId = url.searchParams.get(GUEST_SHARE_PARAM);

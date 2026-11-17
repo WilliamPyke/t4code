@@ -43,9 +43,48 @@ const accountOf = (guest: CloudGuest | undefined) =>
   guest === undefined || guest.locked === true ? undefined : guest.accountId;
 
 /**
+ * How long a task given or a mention made stays told: the same item again for the same person and
+ * card in this time is not sent, so an undo and a redo, or a card deleted and put back, tell nobody
+ * twice.
+ */
+const INBOX_REPEAT_MS = 24 * 60 * 60_000;
+// The items a board remembers having sent, newest last.
+const NOTIFIED_MAX = 200;
+
+// A task given and a mention on one card are one item, as each person hears once per card.
+const deliveryKey = (to: Pick<RoomBoardMention, "guestId" | "memberId">, noteId: string) =>
+  `${roomMentionKey(to)} ${noteId}`;
+
+/** The board once it remembers the task and mention items it sent at `at`. */
+export function withNotified(
+  room: CloudRoom,
+  deliveries: ReadonlyArray<InboxDelivery>,
+  at: string,
+): CloudRoom {
+  const sent = deliveries.flatMap(({ item, ...to }) =>
+    item.kind === "reply" || item.noteId === undefined
+      ? []
+      : [
+          {
+            key: deliveryKey(
+              "memberId" in to ? { memberId: to.memberId } : { guestId: to.guestId },
+              item.noteId,
+            ),
+            at,
+          },
+        ],
+  );
+  if (sent.length === 0) return room;
+  const since = Date.parse(at) - INBOX_REPEAT_MS;
+  const kept = (room.notified ?? []).filter((one) => Date.parse(one.at) > since);
+  return { ...room, notified: [...kept, ...sent].slice(-NOTIFIED_MAX) };
+}
+
+/**
  * The items a change from `before` to `after` gives, each person once per card: a task given to
  * them, a new `@` mention of them, or a reply to a comment thread they started. Never for the
- * person who made the change, nor anyone the board knows no account for.
+ * person who made the change, nor anyone the board knows no account for, nor a task or mention
+ * the board already told them of lately (`INBOX_REPEAT_MS`).
  */
 export function inboxDeliveries(
   before: CloudRoom,
@@ -55,6 +94,10 @@ export function inboxDeliveries(
   const old = new Map((before.board?.notes ?? []).map((note) => [note.id, note]));
   const deliveries: Array<InboxDelivery> = [];
   const sent = new Set<string>();
+  const since = Date.parse(input.at) - INBOX_REPEAT_MS;
+  const told = new Set(
+    (before.notified ?? []).flatMap((one) => (Date.parse(one.at) > since ? [one.key] : [])),
+  );
   const add = (
     to: Pick<RoomBoardMention, "guestId" | "memberId">,
     author: GuestId | undefined,
@@ -65,6 +108,10 @@ export function inboxDeliveries(
     if (to.guestId !== undefined && to.guestId === author) return;
     const key = `${roomMentionKey(to)} ${note.id}`;
     if (sent.has(key)) return;
+    if (kind !== "reply" && told.has(deliveryKey(to, note.id))) {
+      sent.add(key);
+      return;
+    }
     const item: CloudInboxItem = {
       id: input.newId(),
       kind,

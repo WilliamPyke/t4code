@@ -1,5 +1,7 @@
 import { guestShareRequest } from "@t3tools/client-runtime/rpc";
 import {
+  CLOUD_BOARD_COPIES_ROUTE,
+  CLOUD_BOARD_COPY_ROUTE,
   CLOUD_BOARD_LINK_ROUTE,
   CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
   CLOUD_BOARD_PEOPLE_ROLE_ROUTE,
@@ -39,6 +41,7 @@ import {
   guestShareEndpointOf,
   guestShareOrigin,
   isCloudShare,
+  rememberGuestShare,
 } from "./guestShares";
 import { placeNewBoard } from "./workspaces";
 
@@ -134,6 +137,79 @@ export async function createCloudBoard(input: {
       made: true,
       ...(account === null ? {} : { accountId: account.userId }),
     };
+  } catch {
+    return "Could not reach the board service.";
+  }
+}
+
+/**
+ * Makes the caller's own copy of a board whose maker allows it, from their session on it or its
+ * view link, and keeps it in this browser as a board they made. Resolves to it, or a message.
+ */
+export async function copyCloudBoard(
+  source: JoinedGuestShare,
+  title: string,
+): Promise<JoinedGuestShare | string> {
+  const origin = cloudBoardsOrigin();
+  const host = cloudBoardsHost();
+  if (origin === null || host === null) return "Could not reach the board service.";
+  try {
+    const account = await boardAccountAuth();
+    const response = await fetch(`${origin}${CLOUD_BOARD_COPY_ROUTE}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(account === null ? {} : { authorization: account.authorization }),
+      },
+      body: JSON.stringify({ name: suggestedBoardName(), source: source.token }),
+      credentials: "omit",
+    });
+    if (response.status === 429) return "You made many boards in the last hour. Try again later.";
+    if (response.status === 403) return "Whoever made this board has not allowed copies.";
+    const created = response.ok
+      ? Option.getOrNull(decodeCreated(await response.json().catch(() => null)))
+      : null;
+    if (created === null) return "Could not make the copy. Try again.";
+    if (account !== null) void refreshAccountBoards();
+    const copy: JoinedGuestShare = {
+      host,
+      shareId: created.shareId,
+      threadId: created.threadId,
+      token: created.token,
+      credential: created.credential,
+      title: `Copy of ${title}`.slice(0, CLOUD_BOARD_TITLE_MAX_LENGTH),
+      joinedAt: new Date().toISOString(),
+      made: true,
+      ...(account === null ? {} : { accountId: account.userId }),
+    };
+    rememberGuestShare(copy);
+    return copy;
+  } catch {
+    return "Could not reach the board service.";
+  }
+}
+
+/** Lets anyone who can see the board copy it, or stops that. Resolves to null, or a message. */
+export async function setCloudBoardCopies(
+  share: JoinedGuestShare,
+  on: boolean,
+): Promise<string | null> {
+  try {
+    const response = await guestShareRequest(
+      guestShareEndpointOf(share),
+      CLOUD_BOARD_COPIES_ROUTE,
+      {
+        init: {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ on }),
+        },
+      },
+    );
+    if (response.ok) return null;
+    return response.status === 403
+      ? "Only the person who made this board can change this."
+      : "The board service did not take that. Try again.";
   } catch {
     return "Could not reach the board service.";
   }

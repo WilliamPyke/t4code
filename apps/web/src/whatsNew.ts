@@ -13,6 +13,24 @@ export interface WhatsNewEntry {
 export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
   {
     date: "2026-11-17",
+    title: "Simple and Advanced",
+    items: [
+      "Tinkjam starts Simple: boards, your tasks, sharing and settings, with nothing you need a terminal for.",
+      "Switch to Advanced from the menu with your name, or from the command menu, to see threads, projects, pull requests and usage. Switch back the same way.",
+    ],
+  },
+  {
+    date: "2026-11-17",
+    title: "Mentions, an inbox, and My tasks",
+    items: [
+      "Type @ in a note, a task or a comment to name someone. They hear about it in their inbox, behind the bell at the top of your boards.",
+      "The inbox also tells you when someone gives you a task, or replies to a comment you started. Open an item to go straight to that card.",
+      "My tasks lists every task given to you, across all your boards and workspaces.",
+      "Looking at a board you can only view? Ask for edit access from the top of the board. Whoever made it answers from their inbox, and the board opens for you to edit.",
+    ],
+  },
+  {
+    date: "2026-11-17",
     title: "View-only links, a command menu, and export",
     items: [
       "Every board has two links in Share: Can edit and Can view. People with the view link see the board live but cannot change it, and the board's maker can move anyone between the two.",
