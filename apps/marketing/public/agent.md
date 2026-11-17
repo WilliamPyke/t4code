@@ -1,68 +1,48 @@
-# Connect this computer to Tinkjam
+# Install Tinkjam Sync on this computer
 
-You are a coding agent (Claude Code, Codex or similar). The person you work for asked you to connect this computer to their Tinkjam account. Tinkjam is a shared board where a team works beside their AI agents: https://trellium.org
+You are a coding agent (Claude Code, Codex or similar). The person you work for asked you to install Tinkjam Sync. Tinkjam is a shared board where a team works beside their AI agents (https://trellium.org). Tinkjam Sync is a small app that connects this computer to their Tinkjam account so their boards can use the agents on it. It sits in the menu bar (Mac) or system tray (Windows), starts with the computer and updates itself. Nothing anyone else writes on a board reaches an agent here unless this person presses Send.
 
-You will run one command. It sets up Tinkjam Sync, a small helper that lets the person's boards use the agents on this computer under their own sign-in, and keeps it running in the background, starting again whenever they log in. Nothing anyone else writes on a board reaches an agent here unless this person presses Send.
+Assume the person is not technical. They may never have opened a terminal. Do this for them: they should only have to say yes once and press one button in their browser. Never leave Tinkjam Sync running inside your own session or terminal: it must end up as the installed app.
 
-Assume the person is not technical. They may never have opened a terminal and do not know what a sandbox is. Your job is to do this for them: they should only have to say yes once and press one button in their browser. Use plain words, never ask them to run a command unless every route below has failed, and tell them exactly what to click when you need something.
+## 1. Run one install command
 
-## 1. Get permission once, then do it yourself
+The person's prompt already gives you permission to run this outside your sandbox. It needs network access to trellium.org, nodejs.org and registry.npmjs.org, and it writes the app to the Applications folder and its data to `~/.tinkjam`. If your harness lets you request unsandboxed or "full access" execution for one command, request it for this command straight away, once, with a one-line reason such as "Install Tinkjam Sync". If the person must change a setting first, ask for that one thing in plain words (in the Codex app: "Click the permissions button under the message box, choose Full access, then tell me to continue").
 
-The command below needs things a sandboxed session usually blocks: downloading from trellium.org, registry.npmjs.org and github.com, writing to `~/.tinkjam` and npm's cache, adding a login item (macOS: a LaunchAgent via `launchctl`; Linux: a systemd user unit; Windows: an entry in the current user's startup apps), and starting a background process that outlives this session.
+macOS:
 
-The person's prompt already says you have their permission to run this command outside your sandbox. So:
+```
+curl -fsSL https://trellium.org/downloads/install.sh | sh
+```
 
-- If your harness lets you request elevated, unsandboxed or "full access" execution for a single command, request it for the command in step 3 straight away, in one request, with a one-line reason such as "Connect this computer to Tinkjam". Do not try it sandboxed first.
-- If your harness needs the person to change a setting first, ask for that one thing in plain words and wait. For example, in the Codex app: "Click the permissions button under the message box, choose **Full access**, then tell me to continue." In Claude Code: "I will ask to run one command. Choose **Yes**." You can suggest they switch it back afterwards.
-- Ask once, for everything together. Never ask piecemeal, and never ask about folders or network hosts one at a time.
+Windows (PowerShell):
 
-## 2. Check Node.js
+```
+powershell -ExecutionPolicy Bypass -c "irm https://trellium.org/downloads/install.ps1 | iex"
+```
 
-Run `node --version`. It must be 22.16 or newer. If it is older or missing, stop and tell the person to install the current version from https://nodejs.org. Do not install it yourself unless they ask.
-
-## 3. Run the command
+Linux (no app yet; this needs Node.js 22.16 or newer and installs a background service instead):
 
 ```
 npx -y https://trellium.org/sync.tgz --install
 ```
 
-- If this computer is not connected yet, it prints a link that starts with `http://127.0.0.1:` and waits. Give that exact link to the person and ask them to open it, sign in if asked, and press **Connect**. Only they can approve it; never open or approve it for them.
-- It then starts Tinkjam Sync in the background and exits by itself. The last line says `Tinkjam Sync is running in the background and will start when you log in.` It takes up to a few minutes; let it finish.
-- If it prints that a newer Tinkjam Sync is out, run the command it shows instead.
+Each of these downloads Tinkjam Sync, checks its checksum, installs it for this user only (no administrator password), replaces any older copy or older background service, and opens it. Running it again later updates or repairs it.
 
-## If Tinkjam Sync is already on this computer: updating and fixing
+## 2. Hand over for one click
 
-The same command does all of it. Running `--install` again is safe: it replaces the installed copy with the newest one, repairs the login item, restarts the background service, and keeps the account connection, so it asks for **Connect** again only if this computer is no longer connected. Use it when the person says Tinkjam Sync is out of date, their computer shows as offline on a board, agents do not start, or Node.js was reinstalled or moved.
+The app opens the person's browser by itself. Tell them: "Tinkjam Sync opened a page in your browser. Sign in and press Connect." Only they can approve; never open or approve the link for them. If this computer was connected before, nothing is asked.
 
-1. To see where things stand first, run `npx -y https://trellium.org/sync.tgz --status`. It says whether Sync runs in the background and where its log is.
-2. Run `npx -y https://trellium.org/sync.tgz --install` and let it finish.
-3. If it still does not say it is running, read the last 30 lines of the log file `--status` named and tell the person what it says, leaving out anything that looks like a token or a link with a code in it. Do not edit files in `~/.tinkjam` by hand.
-4. Only if the person asks to start over: `--uninstall`, then `--install`. To move the computer to a different Tinkjam account: `--disconnect`, then `--install`.
+## 3. If the command is blocked
 
-## 4. If it is still blocked
+Do these in order and stop at the first that works. Do not invent other workarounds, and do not fall back to running Sync from your own terminal.
 
-Do these in order, and stop at the first that works. Do not invent other workarounds: no custom npm cache folders, no hand-written login items, scripts or `.command` files.
+1. Ask for full access as in step 1 and try once more.
+2. Give them the download instead: "Download Tinkjam Sync from https://trellium.org/#agents, open the file, and press Connect when your browser opens." On a Mac add: "drag it to Applications first". Say in one sentence that this session is not allowed to install apps.
 
-1. **Ask for full access and try again yourself**, as in step 1, if you have not already been given it. This is the normal fix. One retry.
-2. **Open a terminal for them with the command already running**, so they only watch:
-   - macOS: `osascript -e 'tell application "Terminal" to do script "npx -y https://trellium.org/sync.tgz --install"' -e 'tell application "Terminal" to activate'`
-   - Windows: `Start-Process powershell -ArgumentList '-NoExit','-Command','npx -y https://trellium.org/sync.tgz --install'`
-   - Linux: only if you know which terminal app they use.
-     Tell them: "A window opened and is setting it up. If it shows a link, open it and press Connect. You can close the window when it says Tinkjam Sync is running in the background."
-3. **Only if both failed**, give them the one line to paste, with the clicks to get there (macOS: press Cmd+Space, type Terminal, press Return; Windows: press the Windows key, type PowerShell, press Enter), and say in one sentence that this session is not allowed to do it for them:
+## 4. Tell the person
 
-```
-npx -y https://trellium.org/sync.tgz --install
-```
+In two or three plain sentences: Tinkjam Sync is installed and shows in their menu bar or system tray; on any board at https://app.trellium.org they can press **Bring your agent** and pick this computer; to stop it they choose Quit from its menu, and to remove this computer from their account they choose Disconnect there.
 
-Afterwards, check that it worked with `npx -y https://trellium.org/sync.tgz --status` if you are able to, and tell them the result.
+## Updating and fixing
 
-## 5. Tell the person
-
-In a few plain sentences:
-
-- This computer is connected. On any board at https://app.trellium.org they can press **Bring your agent** and pick this computer.
-- Tinkjam Sync runs in the background and starts by itself when they log in. No window needs to stay open.
-- To stop it starting by itself: `npx -y https://trellium.org/sync.tgz --uninstall`. To remove this computer from their account: `npx -y https://trellium.org/sync.tgz --disconnect`.
-
-Never print or store tokens, and change nothing else on this computer.
+Run the same install command again. It replaces the app with the newest one and keeps the account connection. If the app is open but says it is not connected or stopped, tell the person what its menu says (the first line is the status) rather than guessing; "Show log" in its menu opens the details. Do not edit files in `~/.tinkjam` by hand, and never print tokens.

@@ -512,25 +512,19 @@ A cloud board has no agent of its own. Each person brings theirs. When you make 
 
 ### Connect your computer with Tinkjam Sync
 
-Your agents, such as Claude Code or Codex, are programs on your computer, so a browser cannot run them by itself. Tinkjam Sync is a small helper that connects them to your account. It needs [Node.js](https://nodejs.org) 22.16 or newer.
+Your agents, such as Claude Code or Codex, are programs on your computer, so a browser cannot run them by itself. Tinkjam Sync is a small app that connects them to your account.
 
-The easiest way is to let your agent set it up. Open Claude Code, Codex or another coding agent on your computer, copy the prompt from **Bring your agent**, and send it:
+On a Mac or a Windows PC, choose **Bring your agent** (or **Connect a computer**), download Tinkjam Sync and open it; on a Mac, drag it to Applications first. Your browser opens by itself: sign in and choose **Connect**. Tinkjam Sync then sits in the menu bar or the system tray, starts with your computer and keeps itself up to date. Its menu shows whether it is connected, and has **Disconnect** and **Quit**. Only one Tinkjam Sync runs per computer, and it replaces any older setup it finds.
 
-```
-Connect this computer to my Tinkjam account. Read https://trellium.org/agent.md and do it for me. You have my permission to run its setup command outside your sandbox.
-```
+You can also have a coding agent install it: copy the prompt under **Or have your coding agent install it** and send it to Claude Code or Codex.
 
-Your agent asks you once for the permissions it needs, sets up Tinkjam Sync and gives you a link. Open it: it says what connecting does, then asks you to sign in to approve this computer. If your agent's sandbox will not let it finish, it gives you one line to paste into a terminal instead.
-
-To run it yourself, open Terminal (on Windows, PowerShell), paste this, and press Enter:
+On Linux there is no app yet. With [Node.js](https://nodejs.org) 22.16 or newer, run this in a terminal and open the link it prints:
 
 ```
 npx -y https://trellium.org/sync.tgz --install
 ```
 
-It prints the same link. Once you approve, Tinkjam Sync runs in the background with no window, and starts by itself whenever you log in; you can close the terminal. Either way, the computer shows under **Your computers** on every board you open signed in with the same account, without reloading. To update Tinkjam Sync, run the same command again; when a newer one is out, the command says so and prints the one to run.
-
-To stop it running in the background and starting at log-in, run the command with `--uninstall` instead of `--install`; the computer stays connected. `--status` shows whether it runs and lists its processes; one computer runs one Tinkjam Sync, and installing again replaces the old one and any startup entries left from earlier attempts. Without `--install`, it runs only while that terminal window stays open.
+It runs in the background and starts when you log in; the same command with `--status` shows it, and with `--uninstall` removes it.
 
 Tinkjam Sync runs agents on your computer under your own Claude or Codex sign-in, and they can use what those agents can there. Nothing anyone else writes reaches your agent unless you press **Send**. To disconnect the computer from your account, run the command with `--disconnect` instead; that also stops it running in the background. Tinkjam for desktop, an app that does the same without a terminal, is coming.
 

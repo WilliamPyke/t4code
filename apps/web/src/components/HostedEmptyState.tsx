@@ -6,8 +6,9 @@ import { type ReactNode, useState } from "react";
 
 import {
   APP_DISPLAY_NAME,
-  TINKJAM_AGENT_PROMPT,
   TINKJAM_SYNC_COMMAND,
+  TINKJAM_SYNC_MAC_DOWNLOAD,
+  TINKJAM_SYNC_WINDOWS_DOWNLOAD,
   TINKJAM_SYNC_URL,
 } from "~/branding";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
@@ -92,19 +93,17 @@ function T3ConnectSteps() {
         )}
       </SetupStep>
       <SetupStep number={2}>
-        <p>
-          Send this prompt to Claude Code or Codex on your computer, then open the link it gives
-          you:
-        </p>
-        <p className="mt-2 rounded-lg border border-border bg-muted/50 px-3 py-2.5 text-sm select-all">
-          {TINKJAM_AGENT_PROMPT}
-        </p>
-        <p className="mt-3 text-muted-foreground">Or run this in a terminal yourself:</p>
+        <p>Download Tinkjam Sync, open it, and press Connect when your browser opens:</p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Button size="sm" render={<a href={TINKJAM_SYNC_MAC_DOWNLOAD} download />}>
+            Download for Mac
+          </Button>
+          <Button size="sm" render={<a href={TINKJAM_SYNC_WINDOWS_DOWNLOAD} download />}>
+            Download for Windows
+          </Button>
+        </div>
+        <p className="mt-3 text-muted-foreground">On Linux, run this in a terminal instead:</p>
         <CommandBlock command={TINKJAM_SYNC_COMMAND} className="mt-2" />
-        <p className="mt-2 text-xs text-muted-foreground">
-          It then runs in the background and starts by itself when you log in. To stop that, run the
-          same command with --uninstall instead of --install.
-        </p>
         {isSignedIn ? (
           <div className="mt-4 space-y-1.5">
             <CloudEnvironmentConnectRows

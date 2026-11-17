@@ -9,13 +9,14 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { CheckIcon, CopyIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, DownloadIcon } from "lucide-react";
 import { type ReactNode, useEffect, useEffectEvent, useState } from "react";
 
 import {
   TINKJAM_AGENT_PROMPT,
   TINKJAM_SYNC_COMMAND,
-  TINKJAM_SYNC_UNINSTALL_COMMAND,
+  TINKJAM_SYNC_MAC_DOWNLOAD,
+  TINKJAM_SYNC_WINDOWS_DOWNLOAD,
 } from "~/branding";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { environmentCatalog } from "~/connection/catalog";
@@ -29,7 +30,6 @@ import { relayEnvironmentDiscovery } from "~/state/relay";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
-import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
@@ -359,11 +359,14 @@ function ComputerRow({
   );
 }
 
-type Os = "unix" | "windows";
-const detectOs = (): Os =>
-  typeof navigator !== "undefined" && /win/i.test(navigator.userAgent) ? "windows" : "unix";
+type Os = "mac" | "windows" | "linux";
+const detectOs = (): Os => {
+  const agent = typeof navigator === "undefined" ? "" : navigator.userAgent;
+  if (/mac/i.test(agent)) return "mac";
+  return /win/i.test(agent) ? "windows" : "linux";
+};
 
-/** The two ways to connect a computer, side by side: Tinkjam Sync now, the desktop app later. */
+/** How a computer gets connected: the Tinkjam Sync app, or an agent or a terminal installing it. */
 export function ConnectComputerRoutes({
   withAccount,
   signedIn,
@@ -372,84 +375,87 @@ export function ConnectComputerRoutes({
   readonly signedIn: boolean;
 }) {
   const [os, setOs] = useState<Os>(detectOs);
-  const enter = os === "windows" ? "Enter" : "Return";
+  const download = os === "mac" ? TINKJAM_SYNC_MAC_DOWNLOAD : TINKJAM_SYNC_WINDOWS_DOWNLOAD;
   return (
-    <div className="grid gap-3 sm:grid-cols-[3fr_2fr]" data-bring-agent-steps>
+    <div className="flex flex-col gap-3" data-bring-agent-steps>
       <section className="flex flex-col gap-3 rounded-xl border border-border p-4">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold">Ask your agent to set it up</h3>
-          <Badge variant="success">One prompt</Badge>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold">Get Tinkjam Sync for your computer</h3>
+          <ToggleGroup
+            aria-label="Your computer"
+            value={[os]}
+            onValueChange={(next) => {
+              const value = next[0];
+              if (value === "mac" || value === "windows" || value === "linux") setOs(value);
+            }}
+          >
+            <Toggle value="mac">Mac</Toggle>
+            <Toggle value="windows">Windows</Toggle>
+            <Toggle value="linux">Linux</Toggle>
+          </ToggleGroup>
         </div>
-        <ol className="flex flex-col gap-2.5 text-sm">
-          <Step number={1}>
-            Copy this prompt and paste it into Claude Code, Codex or another coding agent on your
-            computer:
-            <CopyLine text={TINKJAM_AGENT_PROMPT} />
-          </Step>
-          <Step number={2}>
-            If your agent asks for permission, say yes (in Codex, choose Full access). Then press
-            Connect on the link it gives you. That is all: Tinkjam Sync runs in the background from
-            then on, and the same prompt updates or repairs it later.
-          </Step>
-          {withAccount && !signedIn ? (
-            <Step number={3}>
-              <SignInHere />
-            </Step>
-          ) : null}
-        </ol>
-        <Collapsible>
-          <CollapsibleTrigger render={<Button size="xs" variant="ghost" />}>
-            Run it yourself in a terminal
-          </CollapsibleTrigger>
-          <CollapsiblePanel>
-            <div className="flex flex-col gap-2.5 pt-2 text-sm">
-              <ToggleGroup
-                aria-label="Your computer"
-                value={[os]}
-                onValueChange={(next) => {
-                  const value = next[0];
-                  if (value === "unix" || value === "windows") setOs(value);
-                }}
-              >
-                <Toggle value="unix">Mac or Linux</Toggle>
-                <Toggle value="windows">Windows</Toggle>
-              </ToggleGroup>
-              <p>
-                {os === "windows"
-                  ? "Open PowerShell: press the Windows key, type PowerShell, press Enter."
-                  : "Open Terminal. On a Mac, press ⌘ Space, type Terminal, press Return."}{" "}
-                Paste this and press {enter}, then open the link it prints and press Connect. You
-                can close the window once it says it runs in the background:
-              </p>
+        {os === "linux" ? (
+          <ol className="flex flex-col gap-2.5 text-sm">
+            <Step number={1}>
+              Open a terminal, paste this and press Enter. It needs Node.js 22.16 or newer:
               <CopyLine text={TINKJAM_SYNC_COMMAND} mono />
-            </div>
-          </CollapsiblePanel>
-        </Collapsible>
+            </Step>
+            <Step number={2}>
+              Open the link it prints and press Connect. It then runs in the background and starts
+              when you log in.
+            </Step>
+          </ol>
+        ) : (
+          <ol className="flex flex-col gap-2.5 text-sm">
+            <Step number={1}>
+              <span className="flex flex-wrap items-center gap-2">
+                Download it and open it.
+                <Button size="sm" render={<a href={download} download />} data-sync-download>
+                  <DownloadIcon />
+                  {os === "mac" ? "Download for Mac" : "Download for Windows"}
+                </Button>
+              </span>
+              <span className="mt-1 block text-xs text-muted-foreground">
+                {os === "mac"
+                  ? "Open the file and drag Tinkjam Sync to Applications, then open it from there. If your Mac says it cannot be opened, go to System Settings, Privacy & Security, and choose Open Anyway."
+                  : "Open the file. If Windows says it protected your PC, choose More info, then Run anyway."}
+              </span>
+            </Step>
+            <Step number={2}>
+              Your browser opens by itself. Sign in and press Connect. That is all: Tinkjam Sync
+              sits in your {os === "mac" ? "menu bar" : "system tray"}, starts with your computer
+              and keeps itself up to date.
+            </Step>
+            {withAccount && !signedIn ? (
+              <Step number={3}>
+                <SignInHere />
+              </Step>
+            ) : null}
+          </ol>
+        )}
+        {os === "linux" ? null : (
+          <Collapsible>
+            <CollapsibleTrigger render={<Button size="xs" variant="ghost" />}>
+              Or have your coding agent install it
+            </CollapsibleTrigger>
+            <CollapsiblePanel>
+              <div className="flex flex-col gap-2 pt-2 text-sm">
+                <p>Paste this into Claude Code, Codex or another coding agent on your computer:</p>
+                <CopyLine text={TINKJAM_AGENT_PROMPT} />
+              </div>
+            </CollapsiblePanel>
+          </Collapsible>
+        )}
         <p className="text-xs text-muted-foreground">
-          Needs Node.js 22.16 or newer from{" "}
-          <a className="underline" href="https://nodejs.org" target="_blank" rel="noreferrer">
-            nodejs.org
-          </a>
-          . Tinkjam Sync lets your boards use the agents on this computer, such as Claude Code or
+          Tinkjam Sync lets your boards use the agents on this computer, such as Claude Code or
           Codex, under your own account; they can use what those agents can on it. Nothing anyone
-          else writes reaches your agent unless you press Send. To stop it starting by itself, run{" "}
-          <code>{TINKJAM_SYNC_UNINSTALL_COMMAND}</code>.
+          else writes reaches your agent unless you press Send. Quit it from its menu to stop it.
         </p>
         {withAccount ? null : (
           <Button size="sm" variant="outline" render={<Link to="/settings/connections" />}>
             Add my computer
           </Button>
         )}
-      </section>
-      <section className="flex flex-col gap-2 rounded-xl border border-dashed border-border p-4 text-muted-foreground">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-foreground">Tinkjam for desktop</h3>
-          <Badge variant="outline">Coming soon</Badge>
-        </div>
-        <p className="text-sm">
-          An app for your computer that does the same, with nothing to paste. Until then, your agent
-          sets it up.
-        </p>
       </section>
     </div>
   );

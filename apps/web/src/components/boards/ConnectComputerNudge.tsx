@@ -1,10 +1,8 @@
 import { isGuestEnvironment } from "@t3tools/client-runtime/environment";
 import * as Schema from "effect/Schema";
-import { BotIcon, CheckIcon, CopyIcon, XIcon } from "lucide-react";
+import { BotIcon, DownloadIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 
-import { TINKJAM_AGENT_PROMPT } from "~/branding";
-import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import { useEnvironments } from "~/state/environments";
 
@@ -23,29 +21,25 @@ const readDismissed = () => {
   }
 };
 
-/** On the boards home until a computer is connected: the prompt that connects one, one click away. */
+/** On the boards home until a computer is connected: the way to Tinkjam Sync, one click away. */
 export function ConnectComputerNudge() {
   const hasComputer = useEnvironments().environments.some(
     (environment) => !isGuestEnvironment(environment.environmentId),
   );
   const [dismissed, setDismissed] = useState(readDismissed);
-  const { copyToClipboard, isCopied } = useCopyToClipboard({ timeout: 2500, target: "prompt" });
   if (hasComputer || dismissed) return null;
   return (
     <Alert variant="info" data-connect-computer-nudge>
       <BotIcon />
       <AlertTitle>Bring your AI agents onto your boards</AlertTitle>
       <AlertDescription>
-        Copy the prompt, paste it into Claude Code or Codex on your computer, and press Connect on
-        the link it gives you. That is all.
+        Get Tinkjam Sync for your computer: download it, open it, press Connect. It then lives in
+        your menu bar and your boards can use Claude Code or Codex on it.
       </AlertDescription>
       <AlertAction>
-        <Button size="sm" onClick={() => copyToClipboard(TINKJAM_AGENT_PROMPT, undefined)}>
-          {isCopied ? <CheckIcon /> : <CopyIcon />}
-          {isCopied ? "Copied. Paste it to your agent" : "Copy prompt"}
-        </Button>
-        <Button size="sm" variant="outline" onClick={openConnectComputer}>
-          Other ways
+        <Button size="sm" onClick={openConnectComputer}>
+          <DownloadIcon />
+          Get Tinkjam Sync
         </Button>
         <Button
           size="icon-sm"

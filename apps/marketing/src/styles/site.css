@@ -3146,6 +3146,11 @@ p {
   overflow-wrap: anywhere;
 }
 
+.cmd__body--get {
+  flex-wrap: wrap;
+  padding-bottom: 4px;
+}
+
 .cmd__body code.cmd__say {
   font-family: var(--font-body);
   font-size: 16px;

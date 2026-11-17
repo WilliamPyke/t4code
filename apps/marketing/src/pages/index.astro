@@ -3,14 +3,22 @@ import BoardScene from "../components/BoardScene.astro";
 import Cursor from "../components/Cursor.astro";
 import Icon from "../components/Icon.astro";
 import Layout from "../layouts/Layout.astro";
-import { AGENT_PROMPT, APP_URL, SAMPLE_BOARD_URL, SYNC_COMMAND, UPSTREAM_REPO_URL } from "../lib/site";
+import {
+  AGENT_PROMPT,
+  APP_URL,
+  MAC_DOWNLOAD,
+  SAMPLE_BOARD_URL,
+  SYNC_COMMAND,
+  UPSTREAM_REPO_URL,
+  WINDOWS_DOWNLOAD,
+} from "../lib/site";
 
 const today = [
   "Accounts and workspaces, with invites by link",
   "Boards in the cloud that stay open when your computer is off",
   "Share links that can edit or only view; viewers need no account",
   "Starter templates, and copies of boards their makers allow",
-  "Tinkjam Sync: your own agent connects your computer from one prompt",
+  "Tinkjam Sync: a small app for Mac and Windows that connects your computer",
   "Bring your own Claude or Codex agent",
   "Sticky notes, and lines with handles on every side",
   "Link embeds, and readable snapshots your agent brings in",
@@ -30,7 +38,7 @@ const faqs = [
   },
   {
     q: "Do I need a terminal?",
-    a: "No. To bring an agent, you send it one prompt and it connects your computer itself; then everything happens in the browser. Teammates who just join boards never need one. A desktop app is coming soon.",
+    a: "No. To bring an agent, you download the Tinkjam Sync app, open it and press Connect; everything else happens in the browser. Teammates who just join boards need nothing at all.",
   },
   {
     q: "Where do my boards live?",
@@ -218,7 +226,7 @@ const faqs = [
           <span class="step__num" aria-hidden="true">3</span>
           <h3>Bring your agents</h3>
           <p>
-            Send your agent one prompt and click Connect. Your Claude or Codex agent shows
+            Open the Tinkjam Sync app and click Connect. Your Claude or Codex agent shows
             up as a box everyone can follow.
           </p>
         </li>
@@ -242,7 +250,6 @@ const faqs = [
             ))
           }
         </ul>
-        <p class="today__soon"><span class="soon">Coming soon</span>A desktop app, for connecting your agents without a terminal.</p>
       </div>
     </div>
   </section>
@@ -441,15 +448,15 @@ const faqs = [
       <div class="agents">
         <div class="section__head">
           <p class="kicker">Bring your own agents</p>
-          <h2 id="agents-title">One prompt, one click, and your agent is on the board.</h2>
+          <h2 id="agents-title">Download, open, connect. Your agent is on the board.</h2>
           <ol class="agent-steps">
             <li>
-              <b>Send your agent the prompt</b>
-              <span>Paste it into Claude Code or Codex on your computer. It sets itself up.</span>
+              <b>Get Tinkjam Sync</b>
+              <span>A small app for your Mac or PC. No terminal, nothing else to install.</span>
             </li>
             <li>
-              <b>Click Connect</b>
-              <span>Open the link your agent gives you and approve this computer.</span>
+              <b>Press Connect</b>
+              <span>Your browser opens by itself. Sign in and approve this computer.</span>
             </li>
             <li>
               <b>Bring your agent onto a board</b>
@@ -462,17 +469,21 @@ const faqs = [
           <div class="cmd">
             <div class="cmd__bar">
               <i></i><i></i><i></i>
-              <span>Your coding agent</span>
+              <span>Tinkjam Sync</span>
             </div>
+            <div class="cmd__body cmd__body--get">
+              <a class="btn btn--primary" href={MAC_DOWNLOAD} download>Download for Mac</a>
+              <a class="btn btn--cream" href={WINDOWS_DOWNLOAD} download>Download for Windows</a>
+            </div>
+            <p class="cmd__note">
+              It lives in your menu bar or system tray, starts with your computer and updates
+              itself. Rather have your coding agent install it? Paste this to it:
+            </p>
             <div class="cmd__body">
               <code class="cmd__say"><span class="cmd__prompt" aria-hidden="true">&gt;</span> {AGENT_PROMPT}</code>
               <button class="cmd__copy" type="button" data-copy={AGENT_PROMPT}>Copy</button>
             </div>
-            <p class="cmd__note">
-              Prefer a terminal? Run <code>{SYNC_COMMAND}</code>. Needs Node 22.16 or newer. It
-              then runs in the background and starts when you log in; <code>--uninstall</code> stops
-              that.
-            </p>
+            <p class="cmd__note">On Linux: <code>{SYNC_COMMAND}</code> (needs Node 22.16 or newer).</p>
           </div>
 
           <div class="connect" aria-hidden="true">
