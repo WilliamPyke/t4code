@@ -186,8 +186,8 @@ describe("Tinkjam Sync's background copy", () => {
     write({
       status: "unreachable",
       cause: "not_linked",
-      reason: "The server has not set up a T3 Connect tunnel.",
-      fix: "Run `t3 connect`.",
+      reason: "The server has not set up a Tinkjam tunnel.",
+      fix: "Nothing to do: Tinkjam Sync keeps trying.",
     });
     // Written before this start: an earlier run's word, not this one's.
     expect(

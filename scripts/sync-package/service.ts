@@ -615,7 +615,7 @@ export function syncService(baseDir: string, platform: NodeJS.Platform) {
      * Writes the login item and starts it. A login item does not get the shell's PATH, and the
      * agents Sync starts (claude, codex) are found on PATH, so this install's PATH and node go in.
      */
-    start: (hostedAppUrl: string) => {
+    start: (urls: { readonly hostedAppUrl: string; readonly syncUrl: string }) => {
       if (items === undefined) throw new Error("this system has no supported login items");
       for (const path of [paths.starts, paths.status]) remove(path);
       return items.register({
@@ -632,7 +632,8 @@ export function syncService(baseDir: string, platform: NodeJS.Platform) {
             NodePath.delimiter,
           ),
           T3CODE_HOME: baseDir,
-          T3CODE_HOSTED_APP_URL: hostedAppUrl,
+          T3CODE_HOSTED_APP_URL: urls.hostedAppUrl,
+          TINKJAM_SYNC_URL: urls.syncUrl,
         },
       });
     },
@@ -668,11 +669,10 @@ export function readConnectionState(
     const status: unknown = JSON.parse(NodeFS.readFileSync(paths.status, "utf8"));
     if (typeof status !== "object" || status === null || !("status" in status)) return undefined;
     if (status.status === "reachable") return { kind: "connected" };
-    // The server shares these words with T3 Code, whose suggested fixes name T3 commands.
     const cause = "cause" in status && typeof status.cause === "string" ? ` (${status.cause})` : "";
     const reason =
       "reason" in status && typeof status.reason === "string"
-        ? `${status.reason.replaceAll("T3 Connect", "Tinkjam").replaceAll("T3 Code", "Tinkjam Sync")}${cause}`
+        ? `${status.reason}${cause}`
         : undefined;
     return { kind: "waiting", reason };
   } catch {

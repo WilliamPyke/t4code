@@ -40,6 +40,10 @@ const RECHECK_INTERVAL = Duration.minutes(5);
 // own readiness watch never restarts it. A 530 can also be brief, so restart only once it
 // lasts, and wait longer after each restart that did not help.
 const DEAD_CONNECTOR_RESTART_AFTER = Duration.minutes(2);
+// Tinkjam Sync waits far less: right after an install, the first connector of a tunnel often
+// registers yet stays unrouted (530/1033) until it reconnects, while the person waits on it.
+// Doubling from here (20 s, 40 s, 80 s...) up to the same hour keeps a dead tunnel from storming.
+const SYNC_DEAD_CONNECTOR_RESTART_AFTER = Duration.seconds(20);
 const DEAD_CONNECTOR_RESTART_AFTER_MAX = Duration.hours(1);
 
 export type EndpointProbe =
@@ -211,6 +215,14 @@ const make = Effect.gen(function* () {
   // Checks update this as they finish, even when a newer check already did. A dead streak
   // or a restart backoff that began before a healthy check no longer counts.
   const lastHealthyOrder = yield* Ref.make(0);
+  // Tinkjam Sync says how connecting goes in its own words; a tunnel still starting is not an error.
+  const quiet = Option.exists(
+    yield* Effect.serviceOption(ServerConfig.ServerConfig),
+    (config) => config.startupPresentation === "sync",
+  );
+  const firstRestartAfterMillis = Duration.toMillis(
+    quiet ? SYNC_DEAD_CONNECTOR_RESTART_AFTER : DEAD_CONNECTOR_RESTART_AFTER,
+  );
   const deadConnectorRef = yield* SynchronizedRef.make<{
     readonly streak: {
       readonly pid: number;
@@ -221,16 +233,11 @@ const make = Effect.gen(function* () {
     readonly restartOrder: number;
   }>({
     streak: null,
-    restartAfterMillis: Duration.toMillis(DEAD_CONNECTOR_RESTART_AFTER),
+    restartAfterMillis: firstRestartAfterMillis,
     restartOrder: 0,
   });
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const scope = yield* Scope.Scope;
-  // Tinkjam Sync says how connecting goes in its own words; a tunnel still starting is not an error.
-  const quiet = Option.exists(
-    yield* Effect.serviceOption(ServerConfig.ServerConfig),
-    (config) => config.startupPresentation === "sync",
-  );
   const readExitNode = readTailscaleExitNode.pipe(
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     Effect.orElseSucceed(() => null),
@@ -320,9 +327,7 @@ const make = Effect.gen(function* () {
         const state = {
           streak: current.streak && current.streak.order > healthy ? current.streak : null,
           restartAfterMillis:
-            current.restartOrder > healthy
-              ? current.restartAfterMillis
-              : Duration.toMillis(DEAD_CONNECTOR_RESTART_AFTER),
+            current.restartOrder > healthy ? current.restartAfterMillis : firstRestartAfterMillis,
           restartOrder: current.restartOrder,
         };
         if (!(yield* isLatest(order))) return [null, state] as const;

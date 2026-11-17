@@ -89,6 +89,7 @@ const serverEnv = {
   // Its own home, apart from any other copy of this server on the computer.
   T3CODE_HOME: baseDir,
   T3CODE_HOSTED_APP_URL: hostedAppUrl,
+  TINKJAM_SYNC_URL: SYNC_URL,
 };
 const exitCodeOf = (code, signal) =>
   code ?? (signal === null ? 1 : 128 + (NodeOS.constants.signals[signal] ?? 0));
@@ -187,7 +188,7 @@ if (parsed.action === "install") {
   const startedAt = Date.now();
   let location;
   try {
-    location = service.start(hostedAppUrl);
+    location = service.start({ hostedAppUrl, syncUrl: SYNC_URL });
   } catch (error) {
     console.error(`Tinkjam Sync could not start in the background: ${error.message}`);
     process.exit(1);

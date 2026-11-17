@@ -4,6 +4,7 @@ import * as NodePath from "node:path";
 
 import type { EnvironmentConnectReachability } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as Config from "effect/Config";
 import * as Console from "effect/Console";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -14,6 +15,11 @@ import * as ConnectReachability from "./ConnectReachability.ts";
 
 /** The latest answer to "can boards reach this computer?", with the pid that answered. */
 const SYNC_STATUS_FILE = "sync-status.json";
+
+/** Where Tinkjam Sync is published; its launcher passes it on. */
+export const SYNC_URL = Config.String("TINKJAM_SYNC_URL").pipe(
+  Config.withDefault("https://trellium.org/sync.tgz"),
+);
 
 export const SYNC_CONNECTING_MESSAGE = "Connecting this computer to Tinkjam...";
 export const SYNC_CONNECTED_MESSAGE =
@@ -59,6 +65,30 @@ export const announceWhenReachable = Effect.fn("sync.announceWhenReachable")(fun
   }
 });
 
+const T3_WORDS = /\bT3\b|`t3 /;
+
+/**
+ * The reachability answer in Tinkjam Sync's words. The reasons are shared with T3 Code, and
+ * their fixes name T3 Code and `t3` commands, which nobody using Sync has; Sync keeps trying by
+ * itself, and installing again is the one thing a person can do.
+ */
+export const inSyncWords = (
+  result: EnvironmentConnectReachability,
+  installCommand: string,
+): EnvironmentConnectReachability =>
+  result.status === "reachable"
+    ? result
+    : {
+        ...result,
+        reason: result.reason
+          .replaceAll("T3 Connect", "Tinkjam")
+          .replaceAll("T3 server", "Tinkjam Sync")
+          .replaceAll("T3 Code", "Tinkjam Sync"),
+        fix: T3_WORDS.test(result.fix)
+          ? `Nothing to do: Tinkjam Sync keeps trying. If it stays like this, run ${installCommand} again.`
+          : result.fix,
+      };
+
 /** Runs only for `t3 sync`; other presentations print their own access details. */
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -74,8 +104,11 @@ export const layer = Layer.effectDiscard(
           // The installer then reports that it timed out instead of the state.
         }
       });
-    yield* announceWhenReachable({ check: reachability.check, say: Console.log, record }).pipe(
-      Effect.forkScoped,
-    );
+    const installCommand = `npx -y ${yield* SYNC_URL} --install`;
+    yield* announceWhenReachable({
+      check: reachability.check.pipe(Effect.map((result) => inSyncWords(result, installCommand))),
+      say: Console.log,
+      record,
+    }).pipe(Effect.forkScoped);
   }),
 );

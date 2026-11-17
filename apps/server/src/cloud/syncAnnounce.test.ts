@@ -5,8 +5,10 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 
+import { classifyReachability, type ReachabilityFacts } from "./ConnectReachability.ts";
 import {
   announceWhenReachable,
+  inSyncWords,
   SYNC_CONNECTED_MESSAGE,
   SYNC_CONNECTING_MESSAGE,
   SYNC_SLOW_MESSAGE,
@@ -81,4 +83,38 @@ describe("announceWhenReachable", () => {
       expect(said).toEqual([SYNC_CONNECTING_MESSAGE, SYNC_CONNECTED_MESSAGE]);
     }),
   );
+});
+
+describe("inSyncWords", () => {
+  it("never shows T3 Code or a t3 command, for any reason a check can give", () => {
+    const connector = {
+      pid: 1,
+      readyConnections: 4,
+      hostname: "env.example.test",
+      protocol: "quic",
+    };
+    const base = {
+      managedTunnelConfigured: true,
+      connector,
+      endpoint: null,
+      edgeReachable: null,
+      exitNode: null,
+    };
+    const results = [
+      { ...base, managedTunnelConfigured: false },
+      { ...base, connector: null },
+      { ...base, endpoint: { kind: "status", status: 502 } },
+      { ...base, endpoint: { kind: "status", status: 530 } },
+      { ...base, endpoint: { kind: "status", status: 418 } },
+      { ...base, endpoint: { kind: "dns_failed" } },
+    ] as const satisfies ReadonlyArray<ReachabilityFacts>;
+    for (const facts of results) {
+      const said = inSyncWords(
+        classifyReachability(facts, checkedAt),
+        "npx -y https://x/sync.tgz --install",
+      );
+      if (said.status === "reachable") continue;
+      expect(`${said.reason} ${said.fix}`).not.toMatch(/\bT3\b|`t3 /);
+    }
+  });
 });

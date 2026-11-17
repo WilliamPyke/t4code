@@ -9,6 +9,7 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
@@ -19,6 +20,7 @@ import { vi } from "vite-plus/test";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ConnectReachability from "./ConnectReachability.ts";
 import { classifyReachability, type ReachabilityFacts } from "./ConnectReachability.ts";
+import * as ServerConfig from "../config.ts";
 import * as ManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
 import * as TunnelEndpointProbe from "./tunnelEndpointProbe.ts";
 
@@ -116,10 +118,23 @@ const cloudflareErrorPage = (code: number) =>
 const reachabilityLayer = (
   respond: Effect.Effect<ServedResponse>,
   restartConnector: (pid: number, stillDead: Effect.Effect<boolean>) => Effect.Effect<boolean>,
+  options?: { readonly sync?: boolean },
 ) =>
   ConnectReachability.layerWithoutTunnelEndpoint.pipe(
     Layer.provide(
       Layer.mergeAll(
+        options?.sync === true
+          ? Layer.effect(
+              ServerConfig.ServerConfig,
+              Effect.map(ServerConfig.ServerConfig, (config) => ({
+                ...config,
+                startupPresentation: "sync" as const,
+              })),
+            ).pipe(
+              Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-reachability-" })),
+              Layer.provide(NodeServices.layer),
+            )
+          : Layer.empty,
         Layer.mock(ManagedEndpointRuntime.CloudManagedEndpointRuntime)({
           inspectConnector: Effect.succeed(connected),
           readinessChanged: Stream.never,
@@ -202,6 +217,33 @@ describe("ConnectReachability stale connector recovery", () => {
         body = { cloudflareError: 1033 };
         yield* reachability.check;
         yield* TestClock.adjust(Duration.minutes(2));
+        expect(yield* Queue.take(restarts)).toBe(connected.pid);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("restarts a Tinkjam Sync connector the edge never routed after 20 s, then 40 s", () =>
+    Effect.gen(function* () {
+      using _connect = mockEdgeConnect();
+      const restarts = yield* Queue.unbounded<number>();
+      const layer = reachabilityLayer(
+        Effect.succeed({ status: 530, body: { cloudflareError: 1033 } }),
+        (pid, stillDead) =>
+          stillDead.pipe(Effect.tap((dead) => (dead ? Queue.offer(restarts, pid) : Effect.void))),
+        { sync: true },
+      );
+      yield* Effect.gen(function* () {
+        const reachability = yield* ConnectReachability.ConnectReachability;
+        expect(yield* reachability.check).toMatchObject({ cause: "no_connector" });
+        yield* TestClock.adjust(Duration.seconds(19));
+        expect(yield* Queue.size(restarts)).toBe(0);
+        yield* TestClock.adjust(Duration.seconds(1));
+        expect(yield* Queue.take(restarts)).toBe(connected.pid);
+
+        yield* reachability.check;
+        yield* TestClock.adjust(Duration.seconds(39));
+        expect(yield* Queue.size(restarts)).toBe(0);
+        yield* TestClock.adjust(Duration.seconds(1));
         expect(yield* Queue.take(restarts)).toBe(connected.pid);
       }).pipe(Effect.provide(layer));
     }),

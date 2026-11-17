@@ -29,6 +29,7 @@ import {
   requireConnectAllowed,
   runCloudCommand,
 } from "./connect.ts";
+import { SYNC_URL } from "../cloud/syncAnnounce.ts";
 import { runServerCommand } from "./server.ts";
 import {
   describeProcesses,
@@ -83,8 +84,9 @@ const silentConsole: Console.Console = {
   warn: () => {},
 };
 
-const SYNC_NOT_CONNECTED_MESSAGE =
-  "This computer is not connected to Tinkjam, so Tinkjam Sync stopped. To connect it, run the Tinkjam Sync command again with --install.";
+const syncCommandWith = Effect.fn("cli.sync.command_with")(function* (flag: string) {
+  return `npx -y ${yield* SYNC_URL} ${flag}`;
+});
 
 /**
  * Asks the browser to connect this computer to the person's account, unless it already is.
@@ -109,7 +111,9 @@ const approveIfNeeded = Effect.fn("cli.sync.approve_if_needed")(function* (input
   });
   if (!needsApproval) return true;
   if (input.background) {
-    yield* Console.log(SYNC_NOT_CONNECTED_MESSAGE);
+    yield* Console.log(
+      `This computer is not connected to Tinkjam, so Tinkjam Sync stopped. To connect it, run: ${yield* syncCommandWith("--install")}`,
+    );
     return false;
   }
 
@@ -143,9 +147,6 @@ const disconnect = Effect.fn("cli.sync.disconnect")(function* () {
   );
   yield* Console.log("This computer is no longer connected to Tinkjam.");
 });
-
-const ALREADY_IN_BACKGROUND_MESSAGE =
-  "Tinkjam Sync is already running in the background on this computer. To stop it, run the Tinkjam Sync command with --uninstall.";
 
 export const syncCommand = Command.make("sync", {
   ...projectLocationFlags,
@@ -227,7 +228,7 @@ export const syncCommand = Command.make("sync", {
             );
             if (decision.kind === "give-up") {
               return yield* Console.log(
-                `Tinkjam Sync did not start: it stopped ${RESTART_LIMIT} times in 10 minutes. It tries again when you log in; to try now, run the Tinkjam Sync command with --install.`,
+                `Tinkjam Sync did not start: it stopped ${RESTART_LIMIT} times in 10 minutes. It tries again when you log in; to try now, run: ${yield* syncCommandWith("--install")}`,
               );
             }
             starts = decision.starts;
@@ -239,7 +240,9 @@ export const syncCommand = Command.make("sync", {
           const holder = yield* readSyncHolder(home.statePath);
           if (holder !== undefined && !flags.background) {
             if (holder.mode === "background")
-              return yield* Console.log(ALREADY_IN_BACKGROUND_MESSAGE);
+              return yield* Console.log(
+                `Tinkjam Sync is already running in the background on this computer. To stop it, run: ${yield* syncCommandWith("--uninstall")}`,
+              );
             return yield* new SyncAlreadyRunningError({ cause: holder.pid });
           }
           const takeover = takeoverDecision(holder);
