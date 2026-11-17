@@ -444,12 +444,12 @@ const EDGE_STROKE_COLORS: Readonly<Record<EdgeStroke, string>> = {
   selected: "var(--color-primary)",
 };
 const EDGE_STROKE_WIDTHS: Readonly<Record<EdgeStroke, number>> = {
-  plain: 1.5,
-  context: 1.5,
-  sent: 1.5,
-  pinned: 2.5,
-  artifact: 1.5,
-  selected: 2,
+  plain: 2.5,
+  context: 2.5,
+  sent: 2.5,
+  pinned: 3.5,
+  artifact: 2.5,
+  selected: 3.5,
 };
 const EDGE_STROKES = Object.entries(EDGE_STROKE_COLORS);
 
@@ -929,6 +929,8 @@ export function RoomBoard({
     readonly label: string;
   } | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
+  // The layer above the cards, where each line draws a faint copy of itself.
+  const [edgesOver, setEdgesOver] = useState<SVGGElement | null>(null);
   // The right-click menu: where it opened on screen and on the board, and the note it is for.
   const [contextMenu, setContextMenu] = useState<{
     readonly x: number;
@@ -4440,8 +4442,8 @@ export function RoomBoard({
                       viewBox="0 0 10 10"
                       refX="9"
                       refY="5"
-                      markerWidth="7"
-                      markerHeight="7"
+                      markerWidth="4.5"
+                      markerHeight="4.5"
                       orient="auto"
                     >
                       <path d="M0 0 L10 5 L0 10 z" fill={color} />
@@ -4454,8 +4456,8 @@ export function RoomBoard({
                       viewBox="0 0 10 10"
                       refX="9"
                       refY="5"
-                      markerWidth="7"
-                      markerHeight="7"
+                      markerWidth="4.5"
+                      markerHeight="4.5"
                       orient="auto"
                     >
                       <path d="M0 0 L10 5 L0 10 z" fill={color} />
@@ -4473,8 +4475,8 @@ export function RoomBoard({
                         d={boardConnector(from, to).path}
                         fill="none"
                         stroke="var(--color-muted-foreground)"
-                        strokeOpacity={0.45}
-                        strokeWidth="1.5"
+                        strokeOpacity={0.6}
+                        strokeWidth="2"
                         strokeDasharray="4 5"
                       />
                     );
@@ -4505,6 +4507,7 @@ export function RoomBoard({
                         }
                         selectable={canEdit}
                         onSelect={() => setSelectedEdge(selected ? null : edge.id)}
+                        over={edgesOver}
                       />
                     );
                   })}
@@ -4513,8 +4516,8 @@ export function RoomBoard({
                       d={boardConnector(linking.box, { ...linking.to, width: 0, headerY: 0 }).path}
                       fill="none"
                       stroke="var(--color-primary)"
-                      strokeWidth="1.5"
-                      strokeDasharray="4 4"
+                      strokeWidth="2.5"
+                      strokeDasharray="6 5"
                       markerEnd={`url(#${markerId}-selected)`}
                     />
                   )}
@@ -4846,6 +4849,15 @@ export function RoomBoard({
                   </div>
                 );
               })}
+              <svg
+                aria-hidden
+                className="pointer-events-none absolute overflow-visible"
+                style={{ left: edgeArea.x, top: edgeArea.y }}
+                width={edgeArea.width}
+                height={edgeArea.height}
+              >
+                <g ref={setEdgesOver} transform={`translate(${-edgeArea.x} ${-edgeArea.y})`} />
+              </svg>
               <BoardFollowContext value={follow}>{cursorLayer}</BoardFollowContext>
             </div>
           </BoardSelectionContext>

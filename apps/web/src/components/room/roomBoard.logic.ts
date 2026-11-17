@@ -871,11 +871,13 @@ const SIDE_PAIRS: ReadonlyArray<readonly [BoardSide, BoardSide]> = [
 
 /**
  * A curve from the header of one box to the header of another, leaving and arriving level from
- * the sides of each that are nearest the other, and the point halfway along it.
+ * the sides of each that are nearest the other, and the point halfway along it. `sway` pulls its
+ * belly off its resting course while it springs back.
  */
 export function boardConnector(
   from: BoardBox,
   to: BoardBox,
+  sway?: BoardPoint,
 ): { readonly path: string; readonly middle: BoardPoint } {
   const toRight = from.x + from.width / 2 <= to.x + to.width / 2;
   const pairs = toRight ? SIDE_PAIRS : SIDE_PAIRS.map(([a, b]) => [b, a] as const);
@@ -891,9 +893,17 @@ export function boardConnector(
   const bend = Math.max(40, Math.abs(end.x - start.x) / 2);
   const c1 = start.x + (fromSide === "right" ? bend : -bend);
   const c2 = end.x + (toSide === "right" ? bend : -bend);
+  const middle = { x: (start.x + 3 * c1 + 3 * c2 + end.x) / 8, y: (start.y + end.y) / 2 };
+  if (sway === undefined) {
+    return {
+      path: `M${start.x} ${start.y} C${c1} ${start.y}, ${c2} ${end.y}, ${end.x} ${end.y}`,
+      middle,
+    };
+  }
+  const round = (value: number) => Math.round(value * 10) / 10;
   return {
-    path: `M${start.x} ${start.y} C${c1} ${start.y}, ${c2} ${end.y}, ${end.x} ${end.y}`,
-    middle: { x: (start.x + 3 * c1 + 3 * c2 + end.x) / 8, y: (start.y + end.y) / 2 },
+    path: `M${start.x} ${start.y} C${round(c1 + sway.x)} ${round(start.y + sway.y)}, ${round(c2 + sway.x)} ${round(end.y + sway.y)}, ${end.x} ${end.y}`,
+    middle,
   };
 }
 
