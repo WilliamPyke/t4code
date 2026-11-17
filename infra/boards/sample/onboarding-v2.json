@@ -562,7 +562,7 @@
       "id": "sample-maya-welcome-1",
       "by": "maya",
       "box": "maya-agent",
-      "model": "Claude Sonnet 4.5",
+      "model": "Claude Sonnet 5.5",
       "prompt": "Write the first-run copy for the welcome screen. Short, friendly, no jargon, and make it clear that bringing an agent is optional.",
       "context": ["g3", "yt"],
       "reply": "Done: the welcome screen in the artifact now has a one-line promise, three first steps and a clear Skip on the agent step. It's under 60 words, so it reads at a glance. Following the talk, it shows value before asking for any setup, which is why the agent step comes last.",

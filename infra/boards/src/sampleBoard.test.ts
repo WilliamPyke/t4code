@@ -87,7 +87,7 @@ describe("the public sample board", () => {
     expect(box.thread?.turns).toHaveLength(1);
     expect(box.thread?.turns[0]).toMatchObject({
       guestId: guestOf("maya"),
-      model: "Claude Sonnet 4.5",
+      model: "Claude Sonnet 5.5",
       cards: [
         "Nobody needs a terminal to get value on day one",
         "Krystal Higgins: User Onboarding for the Long Run",
