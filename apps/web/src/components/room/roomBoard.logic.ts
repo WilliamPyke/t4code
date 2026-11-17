@@ -3139,6 +3139,51 @@ export function boardHistoryChanges(
 }
 
 /**
+ * `entry` with what goes with the cards an undo or redo of it takes off, as deleting them takes
+ * it: this viewer's comment threads on them and the lines undo can draw again. They join the
+ * entry as they are now, so the same step put the other way brings them back.
+ */
+export function boardEntryWithAttached(
+  board: RoomBoard,
+  entry: BoardHistoryEntry,
+  direction: "undo" | "redo",
+  viewer: string | null,
+  drawnHeight?: (noteId: string) => number | undefined,
+): BoardHistoryEntry {
+  const going = entry.flatMap(({ target, before, after }) => {
+    const [from, to] = direction === "undo" ? [after, before] : [before, after];
+    return target.kind === "note" && from !== null && to === null ? [target.id] : [];
+  });
+  if (going.length === 0) return entry;
+  const inEntry = new Set(entry.map(({ target }) => boardEditKey(target)));
+  const comments = boardCommentsOn(board, going, drawnHeight).filter((id) => {
+    const comment = board.notes.find((note) => note.id === id);
+    return (
+      comment !== undefined &&
+      isRoomCardOwnedBy(comment, viewer) &&
+      !inEntry.has(boardEditKey({ kind: "note", id }))
+    );
+  });
+  const lines = boardDeletion(board, [...going, ...comments]).edgeIds.filter(
+    (id) => !inEntry.has(boardEditKey({ kind: "edge", id })),
+  );
+  const targets: ReadonlyArray<BoardTarget> = [
+    ...comments.map((id) => ({ kind: "note", id }) as const),
+    ...lines.map((id) => ({ kind: "edge", id }) as const),
+  ];
+  if (targets.length === 0) return entry;
+  const now = targets.map((target) => ({ target, value: boardValueOf(board, target) }));
+  // Taken back, they were added with the cards: lines last, so they go first. Made again, they
+  // are deleted with them: lines first, as a delete sends them.
+  return direction === "undo"
+    ? [...entry, ...now.map(({ target, value }) => ({ target, before: null, after: value }))]
+    : [
+        ...now.toReversed().map(({ target, value }) => ({ target, before: value, after: null })),
+        ...entry,
+      ];
+}
+
+/**
  * The queues each change of an undo or redo waits in, undefined for its own: a line drawn again
  * waits until every card it joins that the same step puts back is there, so a line between two
  * cards deleted together comes back with them.

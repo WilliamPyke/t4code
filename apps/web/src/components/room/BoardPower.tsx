@@ -101,10 +101,10 @@ export interface BoardPowerProps {
   readonly onSelect: (refs: ReadonlySet<string>) => void;
   /** Selects a card alone and brings it into view. */
   readonly onShowCard: (ref: string) => void;
-  /** Each absent where the viewer may not. */
-  readonly onAddNote?: (() => void) | undefined;
-  readonly onAddTask?: (() => void) | undefined;
-  readonly onAddSection?: (() => void) | undefined;
+  /** Each absent where the viewer may not; a key passes `atPointer`, to add under the pointer. */
+  readonly onAddNote?: ((atPointer?: boolean) => void) | undefined;
+  readonly onAddTask?: ((atPointer?: boolean) => void) | undefined;
+  readonly onAddSection?: ((atPointer?: boolean) => void) | undefined;
   /** Adds a link card for an address, or opens the link field when there is none. */
   readonly onAddLink?: ((url: string | null) => void) | undefined;
   /** Adds the viewer's own agent box, or says how to bring their agent. */
@@ -689,10 +689,10 @@ export function useBoardPower(props: BoardPowerProps): {
     if (action === null) return;
     // Held down, a letter would add a card for each repeat.
     if (event.repeat && !action.startsWith("zoom")) return;
-    const run = (go: (() => void) | undefined) => {
+    const run = (go: ((atPointer?: boolean) => void) | undefined) => {
       if (go === undefined) return;
       event.preventDefault();
-      go();
+      go(true);
     };
     switch (action) {
       case "note":

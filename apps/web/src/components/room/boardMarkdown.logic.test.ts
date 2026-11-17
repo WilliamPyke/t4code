@@ -1,7 +1,12 @@
 import { GuestId, type RoomBoard, type RoomBoardNote } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { boardExportFileName, boardMarkdown, boardPlanMarkdown } from "./boardMarkdown.logic";
+import {
+  boardExportFileName,
+  boardHtmlText,
+  boardMarkdown,
+  boardPlanMarkdown,
+} from "./boardMarkdown.logic";
 import type { BoardPeople } from "./roomBoard.logic";
 
 const maya = GuestId.make("maya");
@@ -92,6 +97,25 @@ describe("boardMarkdown", () => {
       edges: [{ id: "e", from: "note:l", to: "note:s" }],
       markdown:
         "# Launch\n\n## Snapshot of Spec [v2]\n\nThe spec says hi.\n\n## Plan\n\n### Steps\n\n1. Go\n\n## Loose notes\n\n- [Spec \\[v2\\]](https://x.dev/spec)\n",
+    },
+    {
+      name: "an HTML artifact as the text it shows, never its markup",
+      notes: [
+        {
+          id: "w",
+          text: "Welcome screen",
+          x: 0,
+          y: 0,
+          kind: "artifact",
+          artifact: {
+            body: "<!doctype html><html><body><h1>Hi</h1><button>Go</button></body></html>",
+            turnId: "t",
+            updatedAt: "2026-11-01T00:00:00.000Z",
+          },
+        },
+      ],
+      markdown:
+        "# Launch\n\n## Welcome screen\n\nHTML page: 71 characters, exported as text\n\nHi\n\nGo\n",
     },
     {
       name: "each section over the cards on it, then loose cards under a heading of their own",
@@ -193,6 +217,59 @@ describe("boardPlanMarkdown", () => {
     expect(boardPlanMarkdown(board(notes), "Launch", people)).toBe(
       "# Launch: Plan\n\n## To do\n\n- [ ] First (To do, Urgent priority, no due date, unassigned)\n- [ ] Second (To do, no priority, no due date, unassigned)\n\n## In progress\n\n_No tasks_\n\n## Done\n\n- [x] Done one (Done, no priority, no due date, unassigned)\n",
     );
+  });
+});
+
+describe("boardHtmlText", () => {
+  const welcome = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Welcome to Tinkjam</title>
+  <style>body { font-family: Inter; } .cta { color: #DB2D55; }</style>
+  <script>window.addEventListener("load", () => console.log("hi"));</script>
+</head>
+<body>
+  <!-- first-run copy -->
+  <header><nav><a href="/">Home</a></nav></header>
+  <main>
+    <h1>Your board,   your team</h1>
+    <p>Bring notes, tasks &amp; agents
+       into one place.</p>
+    <ul>
+      <li>Sticky notes</li>
+      <li>Agents that <strong>work</strong> beside you</li>
+    </ul>
+    <button class="cta">Get started &rarr;</button>
+    <script type="module">import "./app.js";</script>
+  </main>
+</body>
+</html>`;
+
+  it.each<{
+    readonly name: string;
+    readonly html: string;
+    readonly max?: number;
+    readonly text: string;
+  }>([
+    {
+      name: "a first-run page as its title, headings, paragraphs, list items and buttons",
+      html: welcome,
+      text: "Welcome to Tinkjam\n\nHome\n\nYour board, your team\n\nBring notes, tasks & agents into one place.\n\n- Sticky notes\n- Agents that work beside you\n\nGet started →",
+    },
+    {
+      name: "text past the cap, cut and marked",
+      html: "<!doctype html><p>One two three four</p>",
+      max: 7,
+      text: "One two…(cut)",
+    },
+    {
+      name: "a page's text that would read as Markdown, kept as text",
+      html: "<!doctype html><p># not a heading</p><p>&#62; nor a quote &#x2014; ok</p>",
+      text: "\\# not a heading\n\n\\> nor a quote — ok",
+    },
+  ])("exports $name", ({ html, max, text }) => {
+    expect(boardHtmlText(html, max)).toBe(text);
   });
 });
 

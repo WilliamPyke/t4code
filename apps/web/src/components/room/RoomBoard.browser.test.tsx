@@ -12,6 +12,9 @@ import { commands, page, userEvent } from "vite-plus/test/browser";
 
 import { render } from "../../../test/render";
 import "../../index.css";
+import { openCommandPalette } from "../../commandPaletteBus";
+import { useCommandPaletteStore } from "../../commandPaletteStore";
+import { CommandPalette } from "../CommandPalette";
 
 import { RoomBoard, RoomCursors } from "./RoomBoard";
 import { rememberRoomBoardView } from "./roomBoardNavigation";
@@ -32,7 +35,10 @@ function renderBoard(
     onTakeTask,
     edges = [],
     takes = async () => true,
+    withCommandMenu = false,
   }: {
+    /** Renders the app's command menu around the board, as the app does. */
+    readonly withCommandMenu?: boolean;
     readonly messages?: ComponentProps<typeof RoomBoard>["messages"];
     readonly onCursor?: ComponentProps<typeof RoomBoard>["onCursor"];
     readonly onUseNote?: ComponentProps<typeof RoomBoard>["onUseNote"];
@@ -43,7 +49,7 @@ function renderBoard(
   } = {},
 ) {
   const onChange = vi.fn(takes);
-  const screen = render(
+  const element = (
     <RoomBoard
       title="Launch"
       room={{ messages: [], board: { positions: {}, notes: [...notes], edges: [...edges] } }}
@@ -59,9 +65,11 @@ function renderBoard(
       onCursor={onCursor}
       onUseNote={onUseNote}
       onTakeTask={onTakeTask}
-    />,
-    { container: sizedContainer() },
+    />
   );
+  const screen = render(withCommandMenu ? <CommandPalette>{element}</CommandPalette> : element, {
+    container: sizedContainer(),
+  });
   return { screen, onChange };
 }
 
@@ -715,19 +723,65 @@ describe("RoomBoard keys and pointer", () => {
       .toHaveFocus();
   });
 
-  it("puts the caret in a note added from the toolbar, so a space typed adds no other note", async () => {
-    const board = renderBoard([]);
-    const { onChange } = board;
-    await using screen = await board.screen;
-    await userEvent.click(screen.getByRole("button", { name: "Note", exact: true }));
-    const field = screen.getByRole("textbox", { name: "Note", exact: true });
-    await expect.element(field).toHaveFocus();
-    await userEvent.keyboard("Ship it now");
-    await expect.element(field).toHaveValue("Ship it now");
-    expect(new Set(puts(onChange).map((change) => change.noteId)).size).toBe(1);
+  it("adds the Note tool's note centred where the board is clicked next, at any zoom, ready to write in", async () => {
+    await using _viewport = await boardSizedViewport();
+    rememberRoomBoardView("place-test:zoomed", { x: 300, y: 120, zoom: 0.5 });
+    for (const viewKey of [undefined, "place-test:zoomed"]) {
+      const board = renderBoard([{ id: "a", text: "First", x: 0, y: 0 }], viewKey);
+      const { onChange } = board;
+      await using screen = await board.screen;
+      const surface = screen.getByRole("application", { name: "Room board" }).element();
+      const drawnAt = (noteId: string) => {
+        const card = screen.container.querySelector(`[data-board-item="note:${noteId}"]`);
+        if (card === null) throw new Error(`The board did not draw note ${noteId}`);
+        return card.getBoundingClientRect();
+      };
+      const expectUnder = (rect: DOMRect, point: { x: number; y: number }) => {
+        expect(point.x).toBeGreaterThan(rect.left);
+        expect(point.x).toBeLessThan(rect.right);
+        expect(point.y).toBeGreaterThan(rect.top);
+        expect(point.y).toBeLessThan(rect.bottom);
+      };
+
+      // Picking the tool adds nothing; the next click adds the note there.
+      await userEvent.click(screen.getByRole("button", { name: "Note", exact: true }));
+      expect(onChange).not.toHaveBeenCalled();
+      const layer = screen.container.querySelector<HTMLElement>('[data-board-place="note"]');
+      if (layer === null) throw new Error("The Note tool did not wait for a click");
+      const box = layer.getBoundingClientRect();
+      const clicked = { x: box.left + 600, y: box.top + 250 };
+      await userEvent.click(layer, { position: { x: 600, y: 250 } });
+      await vi.waitFor(() => expect(puts(onChange)).toHaveLength(1));
+      const placed = puts(onChange)[0]!.noteId;
+      expectUnder(drawnAt(placed), clicked);
+      const field = screen.getByRole("textbox", { name: "Note", exact: true }).last();
+      await expect.element(field).toHaveFocus();
+      await userEvent.keyboard("Ship it now");
+      await expect.element(field).toHaveValue("Ship it now");
+      expect(new Set(puts(onChange).map((change) => change.noteId)).size).toBe(1);
+
+      // Escape puts a picked tool down.
+      await userEvent.click(screen.getByRole("button", { name: "Task", exact: true }));
+      await userEvent.keyboard("{Escape}");
+      await vi.waitFor(() =>
+        expect(screen.container.querySelector("[data-board-place]")).toBeNull(),
+      );
+
+      // N adds a note under the pointer at once.
+      const pointed = surface.getBoundingClientRect();
+      await userEvent.click(surface, { position: { x: 150, y: 500 } });
+      await userEvent.keyboard("n");
+      await vi.waitFor(() =>
+        expect(puts(onChange).find((change) => change.noteId !== placed)).toBeDefined(),
+      );
+      expectUnder(drawnAt(puts(onChange).find((change) => change.noteId !== placed)!.noteId), {
+        x: pointed.left + 150,
+        y: pointed.top + 500,
+      });
+    }
   });
 
-  it("puts a note added from the toolbar into the section last clicked, with its title ready", async () => {
+  it("puts a note added from the toolbar by key into the section last clicked, and a Section where clicked", async () => {
     const board = renderBoard([
       // Below the thread's own card and the places kept for guests' cards.
       { id: "frame", text: "Plan", x: 500, y: 500, section: true, size: { w: 640, h: 420 } },
@@ -735,7 +789,8 @@ describe("RoomBoard keys and pointer", () => {
     const { onChange } = board;
     await using screen = await board.screen;
     await userEvent.click(headerIn(screen.container, "frame"), { position: { x: 300, y: 10 } });
-    await userEvent.click(screen.getByRole("button", { name: "Note", exact: true }));
+    screen.getByRole("button", { name: "Note", exact: true }).element().focus();
+    await userEvent.keyboard("{Enter}");
     await vi.waitFor(() => expect(puts(onChange)).toHaveLength(1));
     const note = puts(onChange)[0]!;
     expect(note.x).toBeGreaterThanOrEqual(500);
@@ -744,6 +799,9 @@ describe("RoomBoard keys and pointer", () => {
     expect(note.y).toBeLessThanOrEqual(920);
 
     await userEvent.click(screen.getByRole("button", { name: "Section", exact: true }));
+    const layer = screen.container.querySelector<HTMLElement>('[data-board-place="section"]');
+    if (layer === null) throw new Error("The Section tool did not wait for a click");
+    await userEvent.click(layer, { position: { x: 200, y: 200 } });
     await expect
       .element(screen.getByRole("textbox", { name: "Section title" }).last())
       .toHaveFocus();
@@ -1038,11 +1096,47 @@ describe("RoomBoard note colour", () => {
     const board = renderBoard([]);
     await using screen = await board.screen;
     await userEvent.click(screen.getByRole("button", { name: "Note", exact: true }));
+    const layer = screen.container.querySelector<HTMLElement>('[data-board-place="note"]');
+    if (layer === null) throw new Error("The Note tool did not wait for a click");
+    await userEvent.click(layer, { position: { x: 400, y: 300 } });
     await vi.waitFor(() =>
       expect(board.onChange).toHaveBeenCalledWith(
         expect.objectContaining({ type: "note.put", color: "blue" }),
       ),
     );
+  });
+});
+
+describe("RoomBoard command menu", () => {
+  it("runs a board command on Enter and closes on Escape, though a new card had the caret", async () => {
+    useCommandPaletteStore.setState(useCommandPaletteStore.getInitialState(), true);
+    const board = renderBoard([], undefined, { withCommandMenu: true });
+    const { onChange } = board;
+    await using screen = await board.screen;
+    const menu = page.getByTestId("command-palette");
+    const input = page.getByPlaceholder("Search commands, projects, and threads...");
+
+    await userEvent.click(screen.getByRole("button", { name: "Note", exact: true }));
+    const layer = screen.container.querySelector<HTMLElement>('[data-board-place="note"]');
+    if (layer === null) throw new Error("The Note tool did not wait for a click");
+    await userEvent.click(layer, { position: { x: 400, y: 300 } });
+    // Opened while the new note still holds the caret.
+    openCommandPalette({});
+    await expect.element(input).toHaveFocus();
+    await userEvent.keyboard("Add task");
+    await expect.element(input).toHaveValue("Add task");
+    await userEvent.keyboard("{Enter}");
+    await expect.element(menu).not.toBeInTheDocument();
+    await vi.waitFor(() =>
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "note.put", kind: "task" }),
+      ),
+    );
+
+    openCommandPalette({});
+    await expect.element(input).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    await expect.element(menu).not.toBeInTheDocument();
   });
 });
 

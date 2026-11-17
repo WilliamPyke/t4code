@@ -194,6 +194,7 @@ import {
   boardGroupMove,
   boardAgentTurnToUndo,
   boardAgentTurnsSeen,
+  boardEntryWithAttached,
   boardHistoryChanges,
   boardHistoryQueues,
   boardHistoryRemember,
@@ -370,7 +371,7 @@ import { TaskAssigneeDot, TaskDueChip, TaskPriorityMark } from "./BoardTaskMarks
 import { MentionChips, useMentionPicker } from "./BoardMentions";
 import { useBoardFocusRequest } from "./boardFocus";
 import { boardStartRect } from "./boardFirstView";
-import { holdCaretIn, useNotePlacement } from "./boardTypeIn";
+import { holdCaretIn } from "./boardTypeIn";
 import { firstBoardView } from "./boardFirstView.logic";
 import {
   CLICK_SLOP,
@@ -560,6 +561,8 @@ function BoardTool({
     </Tooltip>
   );
 }
+
+type ArmedCardTool = "note" | "task" | "section";
 
 const BoardToolDivider = () => (
   <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-board-hairline" />
@@ -1116,6 +1119,8 @@ export function RoomBoard({
   const [notice, setNotice] = useState<string | null>(null);
   // Choosing Comment, then pressing the board, starts a thread there.
   const [placingComment, setPlacingComment] = useState(false);
+  // Choosing Note, Task or Section, then clicking the board, adds that card there.
+  const [armedTool, setArmedTool] = useState<ArmedCardTool | null>(null);
   const [openComment, setOpenComment] = useState<string | null>(null);
   // A thread started here and not written yet: only this person sees it, and closing drops it.
   // `on` is the card it was dropped on, which a line from it joins once it is written.
@@ -1697,15 +1702,25 @@ export function RoomBoard({
       undoAgentTurn(turn, direction === "undo");
       return;
     }
-    const changes = boardHistoryChanges(shown, item.steps, direction);
+    const steps = boardEntryWithAttached(
+      shown,
+      item.steps,
+      direction,
+      viewer,
+      (id) =>
+        surfaceRef.current?.querySelector<HTMLElement>(
+          `[data-board-item="${CSS.escape(noteRef(id))}"]`,
+        )?.offsetHeight,
+    );
+    const changes = boardHistoryChanges(shown, steps, direction);
     setHistory((current) =>
       direction === "undo"
         ? {
             undo: current.undo.slice(0, -1),
-            redo: changes === null ? current.redo : [...current.redo, item],
+            redo: changes === null ? current.redo : [...current.redo, { ...item, steps }],
           }
         : {
-            undo: changes === null ? current.undo : [...current.undo, now],
+            undo: changes === null ? current.undo : [...current.undo, { ...now, steps }],
             redo: current.redo.slice(0, -1),
           },
     );
@@ -2348,21 +2363,6 @@ export function RoomBoard({
       );
     });
   };
-  // The Note tool's note goes where the board is clicked next, while it is still empty.
-  const notePlacement = useNotePlacement();
-  const placeNoteAt = (id: string, event: PointerEvent<HTMLElement>) => {
-    const note = shown.notes.find((candidate) => candidate.id === id);
-    const at = pointerOnBoard(event);
-    if (note === undefined || note.text !== "" || at === null || !canEdit) return false;
-    const size = note.size ?? boardNewNoteSize(note.kind);
-    send(
-      { kind: "note", id },
-      settleBoardValue({ ...note, x: at.x - size.w / 2, y: at.y - size.h / 2 }),
-    );
-    setSelection(new Set([noteRef(id)]));
-    typeIn(id);
-    return true;
-  };
   const addAndType = (add: () => string | null) => {
     const id = flushSync(add);
     if (id !== null) typeIn(id);
@@ -2392,6 +2392,22 @@ export function RoomBoard({
     lastCard.current = noteRef(id);
     reveal({ x: value.x, y: value.y, width: size.w, height: size.h }, true);
     return id;
+  };
+  /** Adds a tool's card centred on `at`, as FigJam does, or where it fits in view; caret in it. */
+  const addToolCard = (tool: ArmedCardTool, at: BoardPoint | null) => {
+    const size =
+      tool === "section"
+        ? BOARD_SECTION_SIZE
+        : boardNewNoteSize(tool === "task" ? "task" : undefined);
+    const wanted =
+      at === null
+        ? undefined
+        : { x: Math.round(at.x - size.w / 2), y: Math.round(at.y - size.h / 2) };
+    addAndType(() =>
+      tool === "section"
+        ? addSection(undefined, wanted)
+        : addCard(tool === "task" ? { kind: "task" } : {}, wanted),
+    );
   };
   const selectedNotes = selectedItems.flatMap(({ value }) => ("id" in value ? [value] : []));
   const canDuplicate =
@@ -2565,6 +2581,9 @@ export function RoomBoard({
   };
   // Whether the pointer is over the board now: a paste after it left lands mid-view.
   const pointerOver = useRef(false);
+  // N, T or S pressed with the pointer on the board adds the card under the pointer.
+  const toolPoint = (atPointer: boolean | undefined) =>
+    atPointer === true && pointerOver.current ? lastPointer.current : null;
   const pasteOnBoard = (event: ClipboardEvent<HTMLDivElement>) => {
     if (!isBoardKey(event.target)) return;
     const text = event.clipboardData.getData("text/plain");
@@ -3414,6 +3433,7 @@ export function RoomBoard({
   const startLineTool = () => {
     stopLinking();
     setPlacingComment(false);
+    setArmedTool(null);
     setLineTool((on) => !on);
     surfaceRef.current?.focus({ preventScroll: true });
   };
@@ -3427,9 +3447,26 @@ export function RoomBoard({
     closeComment();
     setLineTool(false);
     stopLinking();
+    setArmedTool(null);
     setPlacingComment((placing) => !placing);
     // Escape on the board stops placing.
     surfaceRef.current?.focus({ preventScroll: true });
+  };
+  // A card tool clicked waits for a click on the board; picked with a key, nothing points, so its
+  // card is added at once where it fits.
+  const pickCardTool = (tool: ArmedCardTool, event: MouseEvent<HTMLElement>) => {
+    if (event.detail === 0) return addToolCard(tool, null);
+    closeComment();
+    setLineTool(false);
+    stopLinking();
+    setPlacingComment(false);
+    setArmedTool((armed) => (armed === tool ? null : tool));
+    surfaceRef.current?.focus({ preventScroll: true });
+  };
+  const placeToolCard = (event: MouseEvent<HTMLElement>) => {
+    setArmedTool(null);
+    const at = pointerOnBoard(event);
+    if (armedTool !== null && at !== null) addToolCard(armedTool, at);
   };
   // On click, not on press: the press's own focus change would take the caret out of the field.
   const placeComment = (event: MouseEvent<HTMLElement>) => {
@@ -4434,9 +4471,12 @@ export function RoomBoard({
     },
     ...(cannotAdd === null && !viewOnly
       ? {
-          onAddNote: () => addAndType(() => addCard({})),
-          onAddTask: () => addAndType(() => addCard({ kind: "task" })),
-          onAddSection: cards === undefined ? () => addAndType(() => addSection()) : undefined,
+          onAddNote: (atPointer?: boolean) => addToolCard("note", toolPoint(atPointer)),
+          onAddTask: (atPointer?: boolean) => addToolCard("task", toolPoint(atPointer)),
+          onAddSection:
+            cards === undefined
+              ? (atPointer?: boolean) => addToolCard("section", toolPoint(atPointer))
+              : undefined,
           onAddLink: (url: string | null) =>
             url === null ? startLinkDraft() : selectAdded(addLink(url)),
         }
@@ -4625,15 +4665,11 @@ export function RoomBoard({
                   <WhyNot reason={cannotAdd}>
                     <BoardTool
                       label="Note"
-                      hint="Sticky note"
+                      hint="Sticky note: click the board to place it"
+                      variant={armedTool === "note" ? "default" : "ghost"}
+                      aria-pressed={armedTool === "note"}
                       disabled={cannotAdd !== null}
-                      onClick={() =>
-                        addAndType(() => {
-                          const id = addCard({});
-                          notePlacement.arm(id);
-                          return id;
-                        })
-                      }
+                      onClick={(event) => pickCardTool("note", event)}
                     >
                       <span
                         aria-hidden
@@ -4647,8 +4683,10 @@ export function RoomBoard({
                   <WhyNot reason={cannotAdd}>
                     <BoardTool
                       label="Task"
+                      variant={armedTool === "task" ? "default" : "ghost"}
+                      aria-pressed={armedTool === "task"}
                       disabled={cannotAdd !== null}
-                      onClick={() => addAndType(() => addCard({ kind: "task" }))}
+                      onClick={(event) => pickCardTool("task", event)}
                     >
                       <ListTodoIcon />
                     </BoardTool>
@@ -4658,8 +4696,10 @@ export function RoomBoard({
                       <WhyNot reason={cannotAdd}>
                         <BoardTool
                           label="Section"
+                          variant={armedTool === "section" ? "default" : "ghost"}
+                          aria-pressed={armedTool === "section"}
                           disabled={cannotAdd !== null}
-                          onClick={() => addAndType(() => addSection())}
+                          onClick={(event) => pickCardTool("section", event)}
                         >
                           <SquareDashedIcon />
                         </BoardTool>
@@ -5105,11 +5145,9 @@ export function RoomBoard({
             delete event.currentTarget.dataset.boardBusy;
             const held = press.current;
             press.current = null;
-            const placing = notePlacement.take();
             if (held === null || held.moved) return;
             const distance = Math.hypot(event.clientX - held.x, event.clientY - held.y);
             if (distance >= pressSlop(event.pointerType)) return;
-            if (placing !== null && held.on === null && placeNoteAt(placing, event)) return;
             setSelection(held.on === null ? NO_SELECTION : new Set([held.on]));
             if (held.on !== null) lastCard.current = held.on;
           }}
@@ -5145,6 +5183,7 @@ export function RoomBoard({
             if (event.key === "Escape") {
               if (dropHeldPointer()) cancelGesture();
               else if (placingComment) setPlacingComment(false);
+              else if (armedTool !== null) setArmedTool(null);
               else if (lineTool) {
                 stopLinking();
                 setLineTool(false);
@@ -6006,6 +6045,16 @@ export function RoomBoard({
               onClick={placeComment}
             />
           ) : null}
+          {armedTool === null ? null : (
+            <div
+              aria-hidden
+              data-board-overlay
+              data-board-place={armedTool}
+              className="absolute inset-0 z-20 cursor-crosshair"
+              onPointerDown={stopPointer}
+              onClick={placeToolCard}
+            />
+          )}
           {lineTool ? (
             <div
               aria-hidden

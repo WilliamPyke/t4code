@@ -85,7 +85,11 @@ function rememberUsed(id: string) {
  * closing, and the board is no longer inert behind it.
  */
 function afterCommandMenu(run: () => void) {
-  const go = () => window.requestAnimationFrame(run);
+  // A hidden tab draws no frames, so there the command runs without waiting for one.
+  const go = () =>
+    document.visibilityState === "hidden"
+      ? window.setTimeout(run, 0)
+      : window.requestAnimationFrame(run);
   if (!isCommandPaletteOpen()) {
     go();
     return;

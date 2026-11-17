@@ -38,6 +38,7 @@ import {
   type BoardRect,
   type BoardValue,
   appendNoteToDraft,
+  boardEntryWithAttached,
   BOARD_SPLIT_DIVIDER,
   besideBoardItem,
   boardBounds,
@@ -3416,5 +3417,58 @@ describe("undoing a delete, through the room's own rules", () => {
     expect(back.removed).toBeUndefined();
     // And redo deletes them all again.
     expect(boardHistoryChanges(back, entry, "redo")).not.toBeNull();
+  });
+
+  it("takes a note's comment threads with it when its adding is taken back, and redo brings both", () => {
+    const n = { kind: "note", id: "n" } as const;
+    const plain: RoomBoardNote = { id: "n", text: "Ship it", x: 100, y: 100, guestId: ana };
+    const own: RoomBoardNote = {
+      id: "c",
+      text: "Sure?",
+      x: 160,
+      y: 90,
+      kind: "comment",
+      guestId: ana,
+    };
+    const added: BoardHistoryEntry = [{ target: n, before: null, after: plain }];
+    // Ana adds a note, then a comment sitting on it, which is not a step of her undo.
+    const commented = applyAll({ positions: {}, notes: [], edges: [] }, [
+      boardChangeOf(n, plain),
+      boardChangeOf({ kind: "note", id: "c" }, own),
+    ]);
+    const ids = (board: RoomBoard) => board.notes.map((note) => note.id).toSorted();
+    // One undo or redo, as the board takes it.
+    const travel = (board: RoomBoard, entry: BoardHistoryEntry, direction: "undo" | "redo") => {
+      const steps = boardEntryWithAttached(board, entry, direction, ana);
+      const changes = boardHistoryChanges(board, steps, direction);
+      if (changes === null) throw new Error(`Skipped a ${direction}`);
+      const next = applyAll(
+        board,
+        changes.map(({ target, value }) => boardChangeOf(target, value)),
+      );
+      return { board: next, steps };
+    };
+    // Deleting the note takes its comment, and undo brings both back.
+    const deleted: BoardHistoryEntry = ["n", ...boardCommentsOn(commented, ["n"])].map((id) => {
+      const target = { kind: "note", id } as const;
+      return { target, before: boardStepBefore(new Map(), commented, target), after: null };
+    });
+    expect(deleted).toHaveLength(2);
+    const restored = travel(
+      applyAll(
+        commented,
+        deleted.map(({ target, after }) => boardChangeOf(target, after)),
+      ),
+      deleted,
+      "undo",
+    );
+    expect(ids(restored.board)).toEqual(["c", "n"]);
+    // Taking back adding the note takes the comment on it too, in one step.
+    const unadded = travel(restored.board, added, "undo");
+    expect(unadded.board.notes).toEqual([]);
+    // Redo brings back both, and the deleting after it deletes both again.
+    const readded = travel(unadded.board, unadded.steps, "redo");
+    expect(ids(readded.board)).toEqual(["c", "n"]);
+    expect(travel(readded.board, restored.steps, "redo").board.notes).toEqual([]);
   });
 });

@@ -9,6 +9,7 @@ import {
   type BoardRect,
   boardNewNoteSize,
   boardPersonName,
+  isBoardHtmlArtifact,
 } from "./roomBoard.logic";
 import { boardReadingOrder } from "./boardCommands.logic";
 
@@ -80,6 +81,75 @@ function headingsBelow(body: string, level: number): string {
     .join("\n");
 }
 
+/** How much of an HTML page's text an export keeps. */
+const BOARD_HTML_TEXT_MAX = 2_000;
+
+const ENTITIES: Readonly<Record<string, string>> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  mdash: String.fromCodePoint(0x2014),
+  ndash: "–",
+  hellip: "…",
+  rarr: "→",
+  larr: "←",
+  middot: "·",
+  bull: "•",
+  copy: "©",
+  lsquo: "‘",
+  rsquo: "’",
+  ldquo: "“",
+  rdquo: "”",
+};
+
+const decodeEntities = (text: string) =>
+  text.replace(/&(#x[\da-f]+|#\d+|[a-z]+);/gi, (whole, name: string) => {
+    const code = name.startsWith("#x")
+      ? Number.parseInt(name.slice(2), 16)
+      : name.startsWith("#")
+        ? Number.parseInt(name.slice(1), 10)
+        : undefined;
+    if (code === undefined) return ENTITIES[name.toLowerCase()] ?? whole;
+    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
+  });
+
+/**
+ * What a person reads on an HTML page, as Markdown: its title, headings, paragraphs, list items
+ * and button labels, one to a line, without its markup, scripts or styles, cut at `max`.
+ */
+export function boardHtmlText(html: string, max = BOARD_HTML_TEXT_MAX): string {
+  const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "";
+  const body = html
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<(head|script|style|noscript|template|svg)\b[\s\S]*?<\/\1\s*>/gi, "")
+    // The page's own line breaks are spaces; only its blocks start lines.
+    .replace(/\s+/g, " ")
+    .replace(/<li\b[^>]*>/gi, "\n- ")
+    .replace(/<(br|hr)\b[^>]*>/gi, "\n")
+    .replace(
+      /<\/?(p|div|h[1-6]|ul|ol|li|button|section|article|header|footer|main|nav|aside|form|label|blockquote|pre|table|tr|td|th|figcaption|dt|dd)\b[^>]*>/gi,
+      "\n",
+    )
+    .replace(/<[^>]*>/g, "");
+  const lines = [title, ...body.split("\n")]
+    .map((line) => decodeEntities(line).replace(/\s+/g, " ").trim())
+    .filter((line) => line !== "" && line !== "-")
+    // A line of the page never starts a heading or a quote of the export's own.
+    .map((line) => line.replace(/^([#>])/, "\\$1"));
+  const text = lines
+    .map((line, index) =>
+      index > 0 && line.startsWith("- ") && lines[index - 1]?.startsWith("- ")
+        ? `\n${line}`
+        : `\n\n${line}`,
+    )
+    .join("")
+    .trim();
+  return text.length <= max ? text : `${text.slice(0, max).trimEnd()}…(cut)`;
+}
+
 /** An artifact under a heading of its own at `level`, or null for any other card. */
 function artifactMarkdown(board: RoomBoard, note: RoomBoardNote, level: number): string | null {
   if (note.kind !== "artifact") return null;
@@ -87,7 +157,14 @@ function artifactMarkdown(board: RoomBoard, note: RoomBoardNote, level: number):
   const title =
     from === undefined ? note.text.trim() || "Artifact" : `Snapshot of ${boardLinkTitle(from)}`;
   const body = note.artifact?.body.trim() ?? "";
-  return `${"#".repeat(level)} ${title}\n\n${body === "" ? "_Empty_" : headingsBelow(body, level)}`;
+  const heading = `${"#".repeat(level)} ${title}`;
+  if (isBoardHtmlArtifact(body)) {
+    const text = boardHtmlText(body);
+    return [heading, `HTML page: ${body.length} characters, exported as text`, text]
+      .filter((block) => block !== "")
+      .join("\n\n");
+  }
+  return `${heading}\n\n${body === "" ? "_Empty_" : headingsBelow(body, level)}`;
 }
 
 /** One card as a list item, or null for what has no words to export (a thread box, a code window). */
