@@ -82,7 +82,12 @@ async function call(method, route, { token, share, body } = {}) {
 async function must(method, route, options, what) {
   const result = await call(method, route, options);
   if (!result.ok) {
-    throw new Error(`${what}: ${result.status} ${result.json?.message ?? ""}`.trim());
+    // An older board host answers its unknown routes with 404 "unavailable".
+    const older =
+      result.status === 404 && result.json?.reason === "unavailable"
+        ? " (this board host is older than the script: deploy infra/boards, wait a minute, run again)"
+        : "";
+    throw new Error(`${what}: ${result.status} ${result.json?.message ?? ""}${older}`.trim());
   }
   return result.json;
 }

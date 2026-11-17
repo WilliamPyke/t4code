@@ -3,7 +3,8 @@
  * hides "Look around a sample board". Keep it the same as SAMPLE_BOARD_URL in
  * apps/marketing/src/lib/site.ts.
  */
-const SAMPLE_BOARD_URL = "";
+const SAMPLE_BOARD_URL =
+  "https://app.trellium.org/guest?host=boards.trellium.org#c183a660-86b0-43c7-8cdb-8d1b6bd5e531.v.ZTzphbdwzg6agWSGaZeAxnpmkejNwSIY7s98JrXPYoI";
 
 /**
  * Where the sample board opens in this app: the link's own page and its view credential, on this
