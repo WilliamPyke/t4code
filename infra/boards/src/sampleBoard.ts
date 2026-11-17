@@ -74,6 +74,8 @@ export interface SampleAgentTurn {
   readonly task?: string;
   /** An artifact it wrote, from a file beside the description. */
   readonly artifact?: { readonly card: string; readonly body: string };
+  /** With `box`: a comment thread it answers, and the answer. */
+  readonly comment?: { readonly card: string; readonly text: string };
 }
 
 export interface SampleChange {
@@ -125,10 +127,15 @@ export function sampleChanges(input: {
     if (card.body !== undefined) {
       const body = input.bodyOf(card.body);
       const shown = existing.get(card.id)?.artifact;
-      // Kept as the version an agent's turn replaced, it is written already.
-      // The board keeps a body trimmed, so a file's last newline is no difference.
+      // Written already: it shows, or an agent's turn replaced it. A turn is posted once, so
+      // what one wrote stays. The board keeps a body trimmed, so a last newline is no difference.
       const same = (kept: string | undefined) => kept?.trim() === body.trim();
-      if (!same(shown?.body) && !same(shown?.previous?.body)) {
+      const byTurn = (sample.agentTurns ?? []).some(
+        (turn) =>
+          turn.artifact?.card === card.id &&
+          input.bodyOf(turn.artifact.body).trim() === shown?.body?.trim(),
+      );
+      if (!same(shown?.body) && !same(shown?.previous?.body) && !byTurn) {
         changes.push({ by: card.by, change: { type: "artifact.write", noteId: card.id, body } });
       }
     }
@@ -198,6 +205,9 @@ export function sampleTurns(input: {
         : {
             boxId: one.box,
             ...(one.model === undefined ? {} : { model: one.model }),
+            ...(one.comment === undefined
+              ? {}
+              : { comment: { noteId: one.comment.card, text: one.comment.text } }),
             ...(one.context === undefined || one.context.length === 0
               ? {}
               : {

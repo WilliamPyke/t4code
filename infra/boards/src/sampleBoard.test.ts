@@ -1,5 +1,5 @@
 import { GuestId, GuestShareId, ThreadId } from "@t3tools/contracts";
-import { roomTaskStatus } from "@t3tools/shared/roomBoard";
+import { ROOM_AGENT_REPLY_ID_PREFIX, roomTaskStatus } from "@t3tools/shared/roomBoard";
 import * as Result from "effect/Result";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -75,7 +75,7 @@ describe("the public sample board", () => {
     const tasks = board.notes.filter((note) => note.kind === "task");
     expect(new Set(tasks.map(roomTaskStatus))).toEqual(new Set(["todo", "doing", "done"]));
     expect(tasks.every((task) => task.assignee?.guestId !== undefined)).toBe(true);
-    expect(board.notes.filter((note) => note.artifact !== undefined)).toHaveLength(4);
+    expect(board.notes.filter((note) => note.artifact !== undefined)).toHaveLength(5);
     expect(board.start).toBe("maya-agent");
   });
 
@@ -84,7 +84,11 @@ describe("the public sample board", () => {
     const note = (id: string) => board.notes.find((one) => one.id === id)!;
     const box = note("maya-agent");
     expect(box).toMatchObject({ kind: "thread", guestId: guestOf("maya") });
-    expect(box.thread?.turns).toHaveLength(1);
+    // The welcome copy, then an answer in Sam's comment thread.
+    expect(box.thread?.turns).toHaveLength(2);
+    expect(
+      note("c1").replies?.some((reply) => reply.id.startsWith(ROOM_AGENT_REPLY_ID_PREFIX)),
+    ).toBe(true);
     expect(box.thread?.turns[0]).toMatchObject({
       guestId: guestOf("maya"),
       model: "Claude Sonnet 5.5",
@@ -105,13 +109,13 @@ describe("the public sample board", () => {
     expect(
       board.edges?.some((edge) => edge.from === "note:maya-agent" && edge.to === "note:welcome"),
     ).toBe(true);
-    // Written by Maya's agent, with Jonas's own first version kept to go back to.
+    // Two people's agents wrote the desktop version: Maya's first, then Jonas's over it.
     expect(note("welcome").artifact).toMatchObject({
-      guestId: guestOf("maya"),
-      boxId: "maya-agent",
-      previous: { guestId: guestOf("jonas"), byHand: true },
+      guestId: guestOf("jonas"),
+      boxId: "jonas-agent",
+      previous: { guestId: guestOf("maya"), boxId: "maya-agent" },
     });
-    expect(note("welcome").artifact?.byHand).toBeUndefined();
+    expect(note("welcome-mobile").artifact).toMatchObject({ boxId: "jonas-agent" });
     expect(note("t7")).toMatchObject({
       status: "doing",
       answer: { guestId: guestOf("jonas"), turnId: "sample-jonas-empty-states-1" },

@@ -52,7 +52,7 @@
       "by": "maya",
       "section": true,
       "text": "Decisions",
-      "x": 2184,
+      "x": 2758,
       "y": 0,
       "size": {
         "w": 456,
@@ -153,10 +153,10 @@
       "kind": "thread",
       "text": "Welcome copy",
       "x": 968,
-      "y": 204,
+      "y": 40,
       "size": {
-        "w": 420,
-        "h": 320
+        "w": 400,
+        "h": 300
       }
     },
     {
@@ -305,10 +305,10 @@
       "kind": "link",
       "text": "ENG-142: agent step blocks the welcome flow",
       "url": "https://linear.app/tinkjam-sample/issue/ENG-142/agent-step-blocks-the-welcome-flow",
-      "x": 2184,
-      "y": 768,
+      "x": 2504,
+      "y": 908,
       "size": {
-        "w": 456,
+        "w": 334,
         "h": 200
       }
     },
@@ -317,11 +317,11 @@
       "by": "sam",
       "kind": "artifact",
       "text": "ENG-142 snapshot",
-      "x": 2184,
-      "y": 992,
+      "x": 2858,
+      "y": 768,
       "size": {
-        "w": 456,
-        "h": 256
+        "w": 356,
+        "h": 480
       }
     },
     {
@@ -344,7 +344,7 @@
       "x": 1664,
       "y": 768,
       "size": {
-        "w": 440,
+        "w": 760,
         "h": 480
       },
       "body": "onboarding-v2/update.md"
@@ -353,7 +353,7 @@
       "id": "d1",
       "by": "maya",
       "text": "Decided: the agent step is optional. People bring one later from the toolbar.",
-      "x": 2208,
+      "x": 2782,
       "y": 64,
       "color": "purple"
     },
@@ -361,7 +361,7 @@
       "id": "d2",
       "by": "jonas",
       "text": "Decided: templates open on the Board view. Plan is one click away.",
-      "x": 2424,
+      "x": 2998,
       "y": 64,
       "color": "purple"
     },
@@ -369,7 +369,7 @@
       "id": "d4",
       "by": "maya",
       "text": "Decided: a view-only sample board, one click from the homepage",
-      "x": 2208,
+      "x": 2782,
       "y": 232,
       "color": "purple"
     },
@@ -378,7 +378,7 @@
       "by": "sam",
       "kind": "comment",
       "text": "Do we ask for a name before or after the first card? Asking first feels heavy.",
-      "x": 2470,
+      "x": 3044,
       "y": 270,
       "replies": [
         {
@@ -402,13 +402,37 @@
       "id": "welcome",
       "by": "jonas",
       "kind": "artifact",
-      "text": "Welcome screen: first-run copy",
+      "text": "Welcome screen: desktop",
       "body": "onboarding-v2/welcome.html",
-      "x": 1468,
-      "y": 104,
+      "x": 1448,
+      "y": 0,
       "size": {
-        "w": 640,
-        "h": 520
+        "w": 760,
+        "h": 640
+      }
+    },
+    {
+      "id": "jonas-agent",
+      "by": "jonas",
+      "kind": "thread",
+      "text": "Phone version",
+      "x": 968,
+      "y": 388,
+      "size": {
+        "w": 400,
+        "h": 300
+      }
+    },
+    {
+      "id": "welcome-mobile",
+      "by": "jonas",
+      "kind": "artifact",
+      "text": "Welcome screen: phone",
+      "x": 2288,
+      "y": 0,
+      "size": {
+        "w": 390,
+        "h": 728
       }
     },
     {
@@ -417,7 +441,7 @@
       "kind": "artifact",
       "text": "Onboarding v2: spec",
       "body": "onboarding-v2/spec.md",
-      "x": 2184,
+      "x": 2758,
       "y": 440,
       "size": {
         "w": 456,
@@ -439,16 +463,28 @@
       "to": "maya-agent"
     },
     {
+      "id": "l-research-jonas",
+      "by": "jonas",
+      "from": "research",
+      "to": "jonas-agent"
+    },
+    {
       "id": "l-maya-welcome",
       "by": "maya",
       "from": "maya-agent",
       "to": "welcome"
     },
     {
-      "id": "l-welcome-d1",
+      "id": "l-jonas-welcome",
       "by": "jonas",
-      "from": "welcome",
-      "to": "decisions"
+      "from": "jonas-agent",
+      "to": "welcome"
+    },
+    {
+      "id": "l-jonas-mobile",
+      "by": "jonas",
+      "from": "jonas-agent",
+      "to": "welcome-mobile"
     },
     {
       "id": "l-decisions-spec",
@@ -502,9 +538,14 @@
       "emoji": "👀"
     },
     {
-      "card": "welcome",
-      "by": "jonas",
+      "card": "welcome-mobile",
+      "by": "maya",
       "emoji": "🎉"
+    },
+    {
+      "card": "welcome",
+      "by": "priya",
+      "emoji": "👍"
     }
   ],
   "start": "maya-agent",
@@ -520,6 +561,43 @@
       "artifact": {
         "card": "welcome",
         "body": "onboarding-v2/welcome-v2.html"
+      }
+    },
+    {
+      "id": "sample-jonas-mobile-1",
+      "by": "jonas",
+      "box": "jonas-agent",
+      "model": "Claude Opus 5.5",
+      "prompt": "Make a phone version of the welcome screen. Same words, one column, buttons a thumb can reach.",
+      "context": ["r1", "r2", "r3", "r4", "fig", "gh", "yt"],
+      "reply": "The phone version is in the artifact on the right. Same three steps in one column, full-width buttons, and \"Tap +\" instead of \"Press N\" since there is no keyboard.",
+      "artifact": {
+        "card": "welcome-mobile",
+        "body": "onboarding-v2/welcome-mobile.html"
+      }
+    },
+    {
+      "id": "sample-jonas-desktop-1",
+      "by": "jonas",
+      "box": "jonas-agent",
+      "model": "Claude Opus 5.5",
+      "prompt": "Add one line to the desktop version saying it works on a phone too.",
+      "reply": "Added a single line under the buttons on the desktop version. Maya's copy above it is unchanged.",
+      "artifact": {
+        "card": "welcome",
+        "body": "onboarding-v2/welcome-v3.html"
+      }
+    },
+    {
+      "id": "sample-maya-comment-1",
+      "by": "maya",
+      "box": "maya-agent",
+      "model": "Claude Sonnet 5.5",
+      "prompt": "Answer Sam's question in the comment thread: name before or after the first card?",
+      "reply": "Answered in the thread.",
+      "comment": {
+        "card": "c1",
+        "text": "After, and the research backs it: 5 of 8 interviewees stopped at a step they thought was required before they had seen the board. Asking for a name when someone first shares costs nothing, because guests are already named when they join. I'd keep the A/B test Maya mentioned, with \"time to first card\" as the measure."
       }
     },
     {
