@@ -1163,14 +1163,19 @@ export function putBoardEdit(
 /**
  * Sends one card's, note's or arrow's changes one after another, so the room takes them in the
  * order they were made: text typed into a new note cannot land before the empty note it fills.
+ * A change in several queues waits for each, as a line put back between two cards put back.
  */
 export function boardChangeQueue() {
   const last = new Map<string, Promise<unknown>>();
-  return <A>(key: string, send: () => Promise<A>): Promise<A> => {
-    const next = (last.get(key) ?? Promise.resolve()).then(send, send);
-    last.set(key, next);
+  return <A>(keys: string | ReadonlyArray<string>, send: () => Promise<A>): Promise<A> => {
+    const all = typeof keys === "string" ? [keys] : keys;
+    const settled = () => undefined;
+    const next = Promise.all(
+      all.map((key) => (last.get(key) ?? Promise.resolve()).then(settled, settled)),
+    ).then(send);
+    for (const key of all) last.set(key, next);
     const forget = () => {
-      if (last.get(key) === next) last.delete(key);
+      for (const key of all) if (last.get(key) === next) last.delete(key);
     };
     next.then(forget, forget);
     return next;
@@ -3078,6 +3083,26 @@ export function boardHistoryChanges(
 }
 
 /**
+ * The queues each change of an undo or redo waits in, undefined for its own: a line drawn again
+ * waits until every card it joins that the same step puts back is there, so a line between two
+ * cards deleted together comes back with them.
+ */
+export function boardHistoryQueues(
+  changes: ReadonlyArray<{ readonly target: BoardTarget; readonly value: BoardValue }>,
+): ReadonlyArray<ReadonlyArray<string> | undefined> {
+  const restored = new Set(
+    changes.flatMap(({ target, value }) =>
+      target.kind === "note" && value !== null ? [boardEditKey(target)] : [],
+    ),
+  );
+  return changes.map(({ value }) => {
+    if (value === null || !("from" in value)) return undefined;
+    const waits = [value.to, value.from].filter((ref) => restored.has(ref));
+    return waits.length === 0 ? undefined : waits;
+  });
+}
+
+/**
  * What a card was before this person's change, for undo to put back, at whole pixels: as their
  * gesture found it (null for a card the gesture made, as an Alt-drag copy), else as `board` shows.
  */
@@ -3307,6 +3332,9 @@ export type BoardMenuEntry =
   | "add-section"
   | "add-thread"
   | "add-artifact"
+  | "add-link"
+  | "edit"
+  | "connect"
   | "paste"
   | "select-all"
   | "fit"
@@ -3362,6 +3390,7 @@ export function boardMenuEntries(
     add("add-note", rights.canAdd);
     add("add-task", rights.canAdd);
     add("add-section", rights.canAdd && rights.roomBoard);
+    add("add-link", rights.canAdd);
     add("add-thread", rights.canAddThread && rights.roomBoard);
     add("add-artifact", rights.canAddArtifact && rights.roomBoard);
     add("paste", rights.canEdit && rights.canPaste);
@@ -3376,6 +3405,16 @@ export function boardMenuEntries(
     rights.canEdit &&
     rights.roomBoard &&
     boardDuplicates(notes, rights.viewer, () => "").length > 0;
+  if (on.kind === "card") {
+    // Notes, tasks and sections have words anyone who may change the board can edit.
+    add(
+      "edit",
+      rights.canEdit &&
+        (on.note.section === true || on.note.kind === undefined || on.note.kind === "task") &&
+        on.note.pinnedTo === undefined,
+    );
+    add("connect", rights.canEdit && on.note.kind !== "comment");
+  }
   add("duplicate", copies);
   add("copy", copies);
   if (on.kind === "card") {

@@ -11,6 +11,7 @@ import { useOrchestrationCommand } from "~/state/use-orchestration-command";
 
 import { Input } from "../ui/input";
 import { toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { UNTITLED_BOARD } from "./boardsHome.logic";
 
 // Boards made in this tab whose name is not yet confirmed: they open with the name being edited,
@@ -39,6 +40,7 @@ export function BoardTitle({
   const [draft, setDraft] = useState<string | null>(() =>
     boardsToName.has(boardKey(threadRef)) ? UNTITLED_BOARD : null,
   );
+  const [cut, setCut] = useState(false);
   const updateMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -71,21 +73,36 @@ export function BoardTitle({
     });
   };
   if (draft === null) {
+    // Named in a tooltip only while the header cuts it short.
+    const measure = (button: HTMLElement) => {
+      const name = button.firstElementChild;
+      setCut(name !== null && name.scrollWidth > name.clientWidth);
+    };
     return (
-      <button
-        type="button"
-        className="group/title -mx-1 inline-flex max-w-full cursor-text items-center gap-1.5 rounded-md px-1 py-0.5 text-start outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-        aria-label={`Rename board ${title}`}
-        data-board-title
-        onPointerDown={(event) => event.stopPropagation()}
-        onClick={() => setDraft(title)}
-      >
-        <span className="min-w-0 truncate">{title}</span>
-        <PencilIcon
-          aria-hidden
-          className="size-3 shrink-0 text-muted-foreground opacity-60 group-hover/title:opacity-100"
-        />
-      </button>
+      <Tooltip disabled={!cut}>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              // Its negative margins come off the width the header gives it, so it may take them back.
+              className="group/title -mx-1 inline-flex max-w-[calc(100%+0.5rem)] cursor-text items-center gap-1.5 rounded-md px-1 py-0.5 text-start outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+              aria-label={`Rename board ${title}`}
+              data-board-title
+              onPointerDown={(event) => event.stopPropagation()}
+              onPointerEnter={(event) => measure(event.currentTarget)}
+              onFocus={(event) => measure(event.currentTarget)}
+              onClick={() => setDraft(title)}
+            />
+          }
+        >
+          <span className="min-w-0 truncate">{title}</span>
+          <PencilIcon
+            aria-hidden
+            className="size-3 shrink-0 text-muted-foreground opacity-60 group-hover/title:opacity-100"
+          />
+        </TooltipTrigger>
+        <TooltipPopup side="bottom">{title}</TooltipPopup>
+      </Tooltip>
     );
   }
   return (

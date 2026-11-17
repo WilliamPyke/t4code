@@ -1,17 +1,26 @@
-import type { ThreadGuest } from "@t3tools/contracts";
+import type { CloudBoardLinkKind, CloudBoardRole, ThreadGuest } from "@t3tools/contracts";
 import {
   CheckIcon,
+  ChevronDownIcon,
   CopyIcon,
   EllipsisIcon,
+  EyeIcon,
   LinkIcon,
   LogOutIcon,
+  RefreshCwIcon,
   Trash2Icon,
   UsersIcon,
 } from "lucide-react";
 import { useState } from "react";
 
 import { sharedNameIds } from "~/guest/boardAccount.logic";
-import { cloudBoardInviteLink, removeFromCloudBoard } from "~/guest/cloudBoards";
+import type { BoardLinks } from "~/guest/boardLinks.logic";
+import {
+  cloudBoardLink,
+  removeFromCloudBoard,
+  setCloudBoardLink,
+  setCloudBoardRole,
+} from "~/guest/cloudBoards";
 import type { JoinedGuestShare } from "~/guest/guestShares";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
@@ -22,14 +31,40 @@ import { PersonDot } from "../room/BoardChrome";
 import { boardCursorColor } from "../room/roomBoard.logic";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import {
+  Menu,
+  MenuItem,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuTrigger,
+} from "../ui/menu";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { toastManager } from "../ui/toast";
 
+const LINK_WORDS: Record<
+  CloudBoardLinkKind,
+  { readonly title: string; readonly hint: string; readonly off: string }
+> = {
+  edit: {
+    title: "Can edit",
+    hint: "Anyone with this link joins under a name and can change the board. Agents stay their owner's: nobody else can start yours.",
+    off: "Off. Nobody new can join to edit.",
+  },
+  view: {
+    title: "Can view",
+    hint: "Anyone with this link can watch the board as it changes, with no name or sign-in. They cannot change anything.",
+    off: "Off. Nobody can open the board just to look.",
+  },
+};
+
+export const viewingLabel = (viewing: number) => `${viewing} viewing`;
+
 /**
- * Sharing a cloud board: its invite link, copied in one click, what the link lets people do, and
- * who is on the board. Anyone on it may invite others with the link they came in on. A menu beside
- * it leaves the board, or deletes it for its maker.
+ * Sharing a cloud board: its two links, "can edit" and "can view", each copied in one click, and
+ * who is on the board. Whoever manages it turns each link on and off, makes it anew, and says who
+ * can edit. A menu beside it leaves the board, or deletes it for its maker.
  */
 export function CloudBoardSharing({
   share,
@@ -38,6 +73,10 @@ export function CloudBoardSharing({
   viewer,
   maker,
   online,
+  links,
+  manage,
+  viewers,
+  viewing,
 }: {
   readonly share: JoinedGuestShare;
   readonly title: string;
@@ -45,16 +84,18 @@ export function CloudBoardSharing({
   readonly viewer: string;
   readonly maker: string | undefined;
   readonly online: ReadonlyArray<string>;
+  readonly links: BoardLinks;
+  /** This person turns the links on and off and says who can edit. */
+  readonly manage: boolean;
+  /** The people on the board who can only look. */
+  readonly viewers: ReadonlyArray<string>;
+  /** How many look on from the view link now. */
+  readonly viewing: number;
 }) {
-  const link = cloudBoardInviteLink(share);
+  const editLink = links.edit == null ? null : cloudBoardLink(share, links.edit);
   const { copyToClipboard, isCopied } = useCopyToClipboard({
-    onCopy: () => toastManager.add({ type: "success", title: "Invite link copied" }),
-    onError: () =>
-      toastManager.add({
-        type: "error",
-        title: "Could not copy the invite link",
-        description: "Your browser did not allow it. Select the link and copy it yourself.",
-      }),
+    onCopy: () => toastManager.add({ type: "success", title: "Edit link copied" }),
+    onError: () => toastManager.add({ type: "error", title: "Could not copy the link" }),
   });
   const forget = useForgetJoinedBoard();
   const deleteBoard = useDeleteCloudBoard();
@@ -63,12 +104,54 @@ export function CloudBoardSharing({
   const isMaker = maker !== undefined && maker === viewer;
   const here = guests.filter((guest) => online.includes(guest.id));
 
+  // A confirmation never opens over this popover: closing it first leaves nothing behind.
+  const confirmed = async (question: ReadonlyArray<string>) => {
+    setOpen(false);
+    return ensureLocalApi().dialogs.confirm(question.join("\n"), { variant: "destructive" });
+  };
+  const run = async (work: () => Promise<string | null>, done?: string) => {
+    setBusy(true);
+    const failed = await work();
+    setBusy(false);
+    toastManager.add(
+      failed === null
+        ? { type: "success", title: done ?? "Done" }
+        : { type: "error", title: "Something went wrong", description: failed },
+    );
+  };
+  const changeLink = (kind: CloudBoardLinkKind, on: boolean, current: string | null) =>
+    void (async () => {
+      const words = LINK_WORDS[kind].title.toLowerCase();
+      if (current !== null) {
+        const question = on
+          ? [
+              `Make a new "${words}" link?`,
+              "The old link stops working. Everyone already on the board stays.",
+            ]
+          : [
+              `Turn off the "${words}" link?`,
+              kind === "view"
+                ? "It stops working, and anyone watching from it loses the board."
+                : "It stops working. Everyone already on the board stays.",
+            ];
+        if (!(await confirmed(question))) return;
+      }
+      await run(
+        async () => {
+          const result = await setCloudBoardLink(share, kind, on);
+          return typeof result === "string" ? result : null;
+        },
+        on ? "The new link is ready" : "Link turned off",
+      );
+      if (on) setOpen(true);
+    })();
+
   const leave = async () => {
     const question = [
       `Leave "${title}"?`,
-      "It goes from your boards. Everyone else keeps it, and the invite link brings you back.",
-    ].join("\n");
-    if (!(await ensureLocalApi().dialogs.confirm(question, { variant: "destructive" }))) return;
+      "It goes from your boards. Everyone else keeps it, and the edit link brings you back.",
+    ];
+    if (!(await confirmed(question))) return;
     setBusy(true);
     const failed = await removeFromCloudBoard(share, viewer);
     setBusy(false);
@@ -77,25 +160,27 @@ export function CloudBoardSharing({
   };
   const remove = (guest: ThreadGuest) =>
     void (async () => {
-      // A confirmation never opens over this popover: closing it first leaves nothing behind.
-      setOpen(false);
       const question = [
         `Remove ${guest.name} from this board?`,
-        "They lose it at once. The invite link would bring them back.",
-      ].join("\n");
-      if (!(await ensureLocalApi().dialogs.confirm(question, { variant: "destructive" }))) return;
-      setBusy(true);
-      const failed = await removeFromCloudBoard(share, guest.id);
-      setBusy(false);
-      toastManager.add(
-        failed === null
-          ? { type: "success", title: `${guest.name} was removed` }
-          : { type: "error", title: "Could not remove them", description: failed },
-      );
+        "They lose it at once. The edit link would bring them back.",
+      ];
+      if (!(await confirmed(question))) return;
+      await run(() => removeFromCloudBoard(share, guest.id), `${guest.name} was removed`);
     })();
+  const setRole = (guest: ThreadGuest, role: CloudBoardRole) =>
+    void run(
+      () => setCloudBoardRole(share, guest.id, role),
+      role === "view" ? `${guest.name} can only view now` : `${guest.name} can edit now`,
+    );
 
   return (
     <span className="flex min-w-0 items-center gap-1">
+      {viewing > 0 ? (
+        <span className="flex shrink-0 items-center gap-1 px-1 text-xs text-muted-foreground">
+          <EyeIcon className="size-3.5" aria-hidden />
+          {viewingLabel(viewing)}
+        </span>
+      ) : null}
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
           render={<Button size="xs" variant="ghost-muted" data-cloud-board-people />}
@@ -117,45 +202,41 @@ export function CloudBoardSharing({
           Share
         </PopoverTrigger>
         <PopoverPopup width="md" align="end">
-          <PopoverTitle className="mb-1">Share this board</PopoverTitle>
-          <p className="mb-3 text-sm text-muted-foreground">
-            Anyone with the link can join, see everything on the board and add to it. Agents stay
-            their owner's: nobody else can start yours.
-          </p>
-          {link === null ? (
-            <p className="mb-3 text-sm text-muted-foreground">
-              This browser has no invite for it. Ask whoever invited you for the link.
-            </p>
-          ) : (
-            <div className="mb-4 flex items-center gap-1.5">
-              <Input
-                readOnly
-                size="sm"
-                value={link}
-                aria-label="Invite link"
-                onFocus={(event) => event.currentTarget.select()}
-                data-cloud-board-invite-link
+          <PopoverTitle className="mb-3">Share this board</PopoverTitle>
+          <div className="mb-4 flex flex-col gap-4">
+            {links.edit === undefined ? null : (
+              <BoardLinkRow
+                kind="edit"
+                link={editLink}
+                manage={manage}
+                busy={busy}
+                onChange={(on) => changeLink("edit", on, links.edit ?? null)}
               />
-              <Button size="sm" onClick={() => copyToClipboard(link)}>
-                {isCopied ? <CheckIcon /> : <CopyIcon />}
-                {isCopied ? "Copied" : "Copy"}
-              </Button>
-            </div>
-          )}
+            )}
+            <BoardLinkRow
+              kind="view"
+              link={links.view === null ? null : cloudBoardLink(share, links.view)}
+              manage={manage}
+              busy={busy}
+              onChange={(on) => changeLink("view", on, links.view)}
+            />
+          </div>
           <p className="mb-2 text-xs font-medium text-muted-foreground">
             On this board · {here.length <= 1 ? "only you here now" : `${here.length} here now`}
+            {viewing > 0 ? ` · ${viewingLabel(viewing)}` : ""}
           </p>
           <BoardPeople
             guests={guests}
             viewer={viewer}
             maker={maker}
             online={online}
-            onRemove={isMaker && !busy ? remove : undefined}
+            viewers={viewers}
+            manage={manage && !busy ? { remove, setRole } : undefined}
           />
         </PopoverPopup>
       </Popover>
-      {link === null ? null : (
-        <Button size="xs" onClick={() => copyToClipboard(link)} data-cloud-board-invite>
+      {editLink === null ? null : (
+        <Button size="xs" onClick={() => copyToClipboard(editLink)} data-cloud-board-invite>
           {isCopied ? <CheckIcon /> : <LinkIcon />}
           {isCopied ? "Copied" : "Copy invite link"}
         </Button>
@@ -195,6 +276,103 @@ export function CloudBoardSharing({
   );
 }
 
+/** One of the board's links: what it lets people do, the link to copy, and, to manage, its switch. */
+function BoardLinkRow({
+  kind,
+  link,
+  manage,
+  busy,
+  onChange,
+}: {
+  readonly kind: CloudBoardLinkKind;
+  readonly link: string | null;
+  readonly manage: boolean;
+  readonly busy: boolean;
+  /** Turns it on with a new link (`true`), or off. */
+  readonly onChange: (on: boolean) => void;
+}) {
+  const words = LINK_WORDS[kind];
+  const { copyToClipboard, isCopied } = useCopyToClipboard({
+    onCopy: () => toastManager.add({ type: "success", title: `${words.title} link copied` }),
+    onError: () =>
+      toastManager.add({
+        type: "error",
+        title: "Could not copy the link",
+        description: "Your browser did not allow it. Select the link and copy it yourself.",
+      }),
+  });
+  return (
+    <section className="flex flex-col gap-1.5" data-cloud-board-link={kind}>
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-medium">{words.title}</h3>
+        {manage && link !== null ? (
+          <Menu>
+            <MenuTrigger
+              render={
+                <Button
+                  size="icon-xs"
+                  variant="ghost-muted"
+                  aria-label={`${words.title} link options`}
+                  disabled={busy}
+                />
+              }
+            >
+              <EllipsisIcon />
+            </MenuTrigger>
+            <MenuPopup align="end">
+              <MenuItem onClick={() => onChange(true)} data-cloud-board-link-new>
+                <RefreshCwIcon />
+                New link
+              </MenuItem>
+              <MenuSeparator />
+              <MenuItem
+                variant="destructive"
+                onClick={() => onChange(false)}
+                data-cloud-board-link-off
+              >
+                Turn off
+              </MenuItem>
+            </MenuPopup>
+          </Menu>
+        ) : null}
+      </div>
+      <p className="text-xs text-muted-foreground">{link === null ? words.off : words.hint}</p>
+      {link === null ? (
+        manage ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => onChange(true)}
+            data-cloud-board-link-on
+          >
+            Turn on
+          </Button>
+        ) : null
+      ) : (
+        <div className="flex items-center gap-1.5">
+          <Input
+            readOnly
+            size="sm"
+            value={link}
+            aria-label={`${words.title} link`}
+            onFocus={(event) => event.currentTarget.select()}
+            data-cloud-board-invite-link={kind === "edit" ? "" : undefined}
+          />
+          <Button
+            size="sm"
+            variant={kind === "edit" ? "default" : "outline"}
+            onClick={() => copyToClipboard(link)}
+          >
+            {isCopied ? <CheckIcon /> : <CopyIcon />}
+            {isCopied ? "Copied" : "Copy"}
+          </Button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 const initialOf = (name: string) => Array.from(name.trim())[0]?.toUpperCase() ?? "?";
 
 const joinedOn = (at: string) =>
@@ -202,20 +380,28 @@ const joinedOn = (at: string) =>
 
 /**
  * Everyone who has joined the board, those here now first, the viewer marked as you and the
- * maker as such, with a way to remove each other person when `onRemove` is given.
+ * maker as such. Whoever manages it switches each other person between editing and viewing, and
+ * removes them.
  */
 function BoardPeople({
   guests,
   viewer,
   maker,
   online,
-  onRemove,
+  viewers,
+  manage,
 }: {
   readonly guests: ReadonlyArray<ThreadGuest>;
   readonly viewer: string;
   readonly maker: string | undefined;
   readonly online: ReadonlyArray<string>;
-  readonly onRemove: ((guest: ThreadGuest) => void) | undefined;
+  readonly viewers: ReadonlyArray<string>;
+  readonly manage:
+    | {
+        readonly remove: (guest: ThreadGuest) => void;
+        readonly setRole: (guest: ThreadGuest, role: CloudBoardRole) => void;
+      }
+    | undefined;
 }) {
   const people = guests.toSorted(
     (left, right) => Number(online.includes(right.id)) - Number(online.includes(left.id)),
@@ -225,6 +411,8 @@ function BoardPeople({
     <ul className="flex flex-col gap-1.5" data-cloud-board-people-list>
       {people.map((guest) => {
         const isHere = online.includes(guest.id);
+        const role: CloudBoardRole = viewers.includes(guest.id) ? "view" : "edit";
+        const changeable = manage !== undefined && guest.id !== viewer && guest.id !== maker;
         return (
           <li key={guest.id} className="flex min-w-0 items-center gap-2 text-sm">
             <PersonDot
@@ -242,21 +430,54 @@ function BoardPeople({
               {sameName.has(guest.id) ? (
                 <span className="text-muted-foreground"> · joined {joinedOn(guest.joinedAt)}</span>
               ) : null}
+              {!isHere ? <span className="text-muted-foreground"> · away</span> : null}
             </span>
-            <span className="shrink-0 text-xs text-muted-foreground">
-              {isHere ? "Here now" : "Away"}
-            </span>
-            {onRemove !== undefined && guest.id !== viewer ? (
-              <Button
-                size="xs"
-                variant="ghost-destructive"
-                onClick={() => onRemove(guest)}
-                aria-label={`Remove ${guest.name}`}
-                data-cloud-board-remove-person
-              >
-                Remove
-              </Button>
-            ) : null}
+            {changeable ? (
+              <Menu>
+                <MenuTrigger
+                  render={
+                    <Button
+                      size="xs"
+                      variant="ghost-muted"
+                      aria-label={`What ${guest.name} can do`}
+                      data-cloud-board-person-role
+                    />
+                  }
+                >
+                  {role === "view" ? "Can view" : "Can edit"}
+                  <ChevronDownIcon />
+                </MenuTrigger>
+                <MenuPopup align="end">
+                  <MenuRadioGroup
+                    value={role}
+                    onValueChange={(value) => {
+                      if ((value === "edit" || value === "view") && value !== role) {
+                        manage.setRole(guest, value);
+                      }
+                    }}
+                  >
+                    <MenuRadioItem value="edit" closeOnClick>
+                      Can edit
+                    </MenuRadioItem>
+                    <MenuRadioItem value="view" closeOnClick>
+                      Can view
+                    </MenuRadioItem>
+                  </MenuRadioGroup>
+                  <MenuSeparator />
+                  <MenuItem
+                    variant="destructive"
+                    onClick={() => manage.remove(guest)}
+                    data-cloud-board-remove-person
+                  >
+                    Remove from board
+                  </MenuItem>
+                </MenuPopup>
+              </Menu>
+            ) : (
+              <span className="shrink-0 text-xs text-muted-foreground">
+                {role === "view" ? "Can view" : "Can edit"}
+              </span>
+            )}
           </li>
         );
       })}

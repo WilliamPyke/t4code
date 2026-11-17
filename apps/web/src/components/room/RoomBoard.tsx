@@ -193,6 +193,7 @@ import {
   boardAgentTurnToUndo,
   boardAgentTurnsSeen,
   boardHistoryChanges,
+  boardHistoryQueues,
   boardHistoryRemember,
   boardHistoryWith,
   boardStepBefore,
@@ -342,6 +343,9 @@ import {
 import { BoardPromptBox } from "./RoomBoardPrompt";
 import { useBoardBringIn } from "./BoardBringIn";
 import { boardLinkTextWithSnapshot } from "./boardSnapshot.logic";
+import { boardCopyOf, boardPastedCopies, rememberBoardCopy } from "./boardClipboard";
+import { useBoardPower } from "./BoardPower";
+import { boardKeyLabel } from "./boardShortcuts";
 import { BoardPlan, BoardViewSwitch, useBoardViewMode } from "./BoardPlan";
 import {
   type BoardPlanSpot,
@@ -852,6 +856,8 @@ export function RoomBoard({
   ownBoxHandle,
   view: viewMode,
   onViewChange,
+  onToggleChat,
+  viewOnly = false,
 }: {
   readonly title: string;
   /** Null when the thread is not shared, so there is no room to arrange a board for. */
@@ -982,6 +988,10 @@ export function RoomBoard({
   /** Board or Plan, as the host's URL keeps it. Absent: the board keeps it in the page's URL. */
   readonly view?: BoardViewMode | undefined;
   readonly onViewChange?: ((view: BoardViewMode) => void) | undefined;
+  /** Shows or hides the conversation beside the board, where it has one. */
+  readonly onToggleChat?: (() => void) | undefined;
+  /** The viewer can only look: the tools to add, undo and redo are not shown at all. */
+  readonly viewOnly?: boolean | undefined;
 }) {
   const board = room?.board ?? EMPTY_ROOM_BOARD;
   const [pickedView, pickView] = useBoardViewMode(viewMode, onViewChange);
@@ -1362,7 +1372,7 @@ export function RoomBoard({
         ? draftNote
         : (commentNotes.find((note) => note.id === openComment) ?? null);
   const unread = useCommentUnread(shareId, openNote === draftNote ? null : openNote, viewer);
-  const catchUp = useBoardCatchUp(viewKey ?? shareId, board.notes, viewer);
+  const catchUp = useBoardCatchUp(viewKey ?? shareId, board, viewer, people);
   const catchUpLabels = new Map(
     catchUp.changes.map(({ note }) => [
       note.id,
@@ -1536,7 +1546,7 @@ export function RoomBoard({
     paintFrames();
   });
   // `after` names the queue a change waits in: a line to a new card goes once the card is there.
-  const send = (target: BoardTarget, value: BoardValue, after?: string) => {
+  const send = (target: BoardTarget, value: BoardValue, after?: string | ReadonlyArray<string>) => {
     if (onChange === undefined) return;
     const key = boardEditKey(target);
     held.current.delete(key);
@@ -1669,21 +1679,9 @@ export function RoomBoard({
       });
       return;
     }
-    // A line drawn again waits until the card it joins, put back in the same step, is there.
-    const restored = new Set(
-      changes.flatMap(({ target, value }) =>
-        target.kind === "note" && value !== null ? [boardEditKey(target)] : [],
-      ),
-    );
+    const queues = boardHistoryQueues(changes);
     withFlag(unrecorded, () => {
-      for (const { target, value } of changes) {
-        const line = value !== null && "from" in value ? value : null;
-        send(
-          target,
-          value,
-          line === null ? undefined : [line.to, line.from].find((ref) => restored.has(ref)),
-        );
-      }
+      changes.forEach(({ target, value }, index) => send(target, value, queues[index]));
     });
   };
   // A link card's title read from its source, once it arrives: only while nobody named it.
@@ -2409,12 +2407,6 @@ export function RoomBoard({
     reveal({ x: value.x, y: value.y, width: size.w, height: size.h }, true);
     return id;
   };
-  // Copied cards stay on this board only. What went on the system clipboard with them tells a
-  // paste of them from a paste of something copied since, elsewhere.
-  const copied = useRef<{
-    readonly text: string;
-    readonly copies: ReadonlyArray<{ readonly note: RoomBoardNote; readonly rect: BoardRect }>;
-  } | null>(null);
   const viewCentre = () => {
     const within = visibleBoardRect(
       view,
@@ -2427,7 +2419,7 @@ export function RoomBoard({
     const copies = canDuplicate ? copiesOf(selectedNotes) : [];
     if (copies.length === 0) return null;
     const text = copies.map(({ note }) => boardNoteMessage(note)).join("\n\n");
-    copied.current = { text, copies };
+    rememberBoardCopy(text, copies);
     sayCopied(copies.length);
     return text;
   };
@@ -2466,13 +2458,13 @@ export function RoomBoard({
    */
   const pasteText = (text: string, pointer: BoardPoint | null): boolean => {
     if (!canEdit) return false;
-    const own = copied.current;
-    if (own !== null && own.text === text) {
-      const bounds = boardBounds(own.copies.map(({ rect }) => rect));
+    const own = boardCopyOf(text);
+    if (own !== null) {
+      const bounds = boardBounds(own.map(({ rect }) => rect));
       const spot =
         bounds === null ? null : pointedSpot({ w: bounds.width, h: bounds.height }, pointer);
       landCopies(
-        own.copies.map(({ note, rect }) => ({ note: { ...note, id: randomUUID() }, rect })),
+        boardPastedCopies(own, viewer, randomUUID),
         spot === null || bounds === null
           ? undefined
           : { x: spot.x + bounds.width / 2, y: spot.y + bounds.height / 2 },
@@ -3668,16 +3660,67 @@ export function RoomBoard({
     );
     const near = (kind: RoomBoardNote["kind"]) =>
       placeBoardItem(boardNewNoteSize(kind), at, takenRects());
-    const runs: Record<BoardMenuEntry, { readonly label: string; readonly run: () => void }> = {
-      "add-note": { label: "Add note", run: () => typeAfterMenu(noteAt(at, "", true)) },
+    const runs: Record<BoardMenuEntry, CardAction> = {
+      "add-note": {
+        label: "Add note",
+        shortcut: "N",
+        run: () => typeAfterMenu(noteAt(at, "", true)),
+      },
       "add-task": {
         label: "Add task",
+        shortcut: "T",
         run: () => typeAfterMenu(addCard({ kind: "task" }, near("task"))),
       },
       "add-section": {
         label: "Add section",
+        shortcut: "S",
         run: () =>
           typeAfterMenu(addSection(undefined, { x: Math.round(at.x), y: Math.round(at.y) })),
+      },
+      "add-link": {
+        label: "Add link here",
+        run: () => {
+          // A link on the clipboard lands at once; else the link field opens.
+          void readTextFromClipboard().then(
+            (text) => {
+              const url = boardUrlIn(text);
+              if (url === null) startLinkDraft();
+              else selectAdded(addLink(url, near("link")));
+            },
+            () => startLinkDraft(),
+          );
+        },
+      },
+      edit: {
+        label: "Edit text",
+        shortcut: "Enter",
+        run: () => {
+          if (ref === null) return;
+          // Once the menu has closed, so focus stays in the text.
+          window.requestAnimationFrame(() =>
+            drawnItem(ref)
+              ?.querySelector<HTMLElement>(
+                'textarea[data-board-rest=""]:not([readonly]), input:not([type=checkbox]):not([readonly])',
+              )
+              ?.focus({ preventScroll: true }),
+          );
+        },
+      },
+      connect: {
+        label: "Connect to…",
+        shortcut: "L",
+        run: () => {
+          const box = ref === null ? undefined : boxes.get(ref);
+          if (ref === null || box === undefined || cannotAddLine !== null) return;
+          setPlacingComment(false);
+          setLineTool(true);
+          setLinking({
+            from: ref,
+            box,
+            to: { x: box.x + box.width, y: box.y + box.height / 2 },
+            press: { x: contextMenu.x, y: contextMenu.y },
+          });
+        },
       },
       "add-thread": {
         label: "Add thread box",
@@ -3695,11 +3738,24 @@ export function RoomBoard({
             () => undefined,
           ),
       },
-      "select-all": { label: "Select all", run: () => setSelection(new Set(selectableRefs())) },
-      fit: { label: "Fit to view", run: fitAll },
-      duplicate: { label: "Duplicate", run: duplicateSelection },
+      "select-all": {
+        label: "Select all",
+        shortcut: boardKeyLabel({ key: "A", mod: true }, isMacPlatform(navigator.platform)),
+        run: () => setSelection(new Set(selectableRefs())),
+      },
+      fit: {
+        label: "Fit to view",
+        shortcut: boardKeyLabel({ key: "1", shift: true }, isMacPlatform(navigator.platform)),
+        run: fitAll,
+      },
+      duplicate: {
+        label: "Duplicate",
+        shortcut: boardKeyLabel({ key: "D", mod: true }, isMacPlatform(navigator.platform)),
+        run: duplicateSelection,
+      },
       copy: {
         label: "Copy",
+        shortcut: boardKeyLabel({ key: "C", mod: true }, isMacPlatform(navigator.platform)),
         run: () => {
           const text = copyCards();
           if (text !== null) void writeTextToClipboard(text).catch(() => undefined);
@@ -3720,8 +3776,12 @@ export function RoomBoard({
           : "Vote",
         run: () => voteOn(selectedNotes),
       },
-      group: { label: "Group in a section", run: groupInSection },
-      delete: { label: "Delete", run: deleteSelection },
+      group: {
+        label: "Group in a section",
+        shortcut: boardKeyLabel({ key: "G", mod: true }, isMacPlatform(navigator.platform)),
+        run: groupInSection,
+      },
+      delete: { label: "Delete", shortcut: "Delete", run: deleteSelection },
     };
     const pick = (...wanted: ReadonlyArray<BoardMenuEntry>) =>
       entries.filter((entry) => wanted.includes(entry)).map((entry) => runs[entry]);
@@ -3748,7 +3808,8 @@ export function RoomBoard({
           ? undefined
           : { ...card, actions: card.actions.filter((action) => action.destructive !== true) },
       groups: [
-        pick("add-note", "add-task", "add-section", "add-thread", "add-artifact"),
+        pick("edit", "connect"),
+        pick("add-note", "add-task", "add-section", "add-link", "add-thread", "add-artifact"),
         // The ask and the run open once the menu has closed, so it does not take their focus back.
         [
           ...(ref !== null && canAsk
@@ -4181,6 +4242,75 @@ export function RoomBoard({
         canEdit && isRoomCardOwnedBy(task, viewer) ? () => deleteNotes([task.id]) : undefined,
     };
   };
+  const canAddOwnBox =
+    cards === undefined && holds.agents && bringAgent === undefined && cannotAddThread === null;
+  const power = useBoardPower({
+    surfaceRef,
+    onBoard: !planShown,
+    title,
+    board: shown,
+    people,
+    followable: guests
+      .filter((guest) => guest.id !== viewer && online.includes(guest.id))
+      .map((guest) => ({ id: guest.id, name: boardPersonName(people, guest.id) })),
+    onFollow: follow.onFollow,
+    zoom: view.zoom,
+    selection: selected,
+    onSelect: setSelection,
+    onShowCard: (ref) => {
+      setSelection(new Set([ref]));
+      lastCard.current = ref;
+      const element = drawnItem(ref);
+      if (element !== null) reveal(drawnRect(element));
+    },
+    ...(cannotAdd === null
+      ? {
+          onAddNote: () => addAndType(() => addCard({})),
+          onAddTask: () => addAndType(() => addCard({ kind: "task" })),
+          onAddSection: cards === undefined ? () => addAndType(() => addSection()) : undefined,
+          onAddLink: (url: string | null) =>
+            url === null ? startLinkDraft() : selectAdded(addLink(url)),
+        }
+      : {}),
+    onAddAgentBox:
+      cards === undefined && holds.agents
+        ? (bringAgent ??
+          (cannotAddThread === null
+            ? () => addAndType(() => addCard({ kind: "thread" }))
+            : undefined))
+        : undefined,
+    onLineTool: cannotAddLine === null ? startLineTool : undefined,
+    onSelectTool: () => {
+      stopLinking();
+      setLineTool(false);
+      setPlacingComment(false);
+    },
+    onFit: fitAll,
+    onZoomBy: zoomBy,
+    onPanBy: (dx, dy) => {
+      setFollowing(null);
+      setView((current) => panBoardBy(current, dx, dy));
+    },
+    onGroup: cannotAdd === null && cards === undefined ? groupInSection : undefined,
+    onSelectAll: canEdit ? () => setSelection(new Set(selectableRefs())) : undefined,
+    onUndo: canEdit ? () => travel("undo") : undefined,
+    onRedo: canEdit ? () => travel("redo") : undefined,
+    view: planShown ? pickedView : "board",
+    onView: plannable ? pickView : undefined,
+    ownBoxes: threadBoxes
+      .filter((box) => (box.guestId ?? null) === viewer)
+      .map((box) => boardBoxRef(box.id)),
+    onAddOwnBox: canAddOwnBox
+      ? () => {
+          const id = flushSync(() =>
+            addCard({ kind: "thread" }, freeSpot("thread", undefined, false)),
+          );
+          return id === null ? null : noteRef(id);
+        }
+      : undefined,
+    onBringAgent: cards === undefined ? bringAgent : undefined,
+    onToggleChat,
+  });
 
   return (
     <div className="@container/board flex min-h-0 min-w-0 flex-1 flex-col overflow-clip overscroll-none">
@@ -4191,6 +4321,7 @@ export function RoomBoard({
           planShown && "bg-board-canvas",
         )}
       >
+        {power.overlay}
         {/* Over the canvas on the board; above the columns in the Plan, which has no canvas. */}
         <header
           data-board-chrome="top"
@@ -4215,6 +4346,7 @@ export function RoomBoard({
                 </span>
               ) : null}
             </h1>
+            {power.menu}
           </BoardFloat>
           {plannable ? (
             <BoardFloat className="pointer-events-auto shrink-0 p-1">
@@ -4304,10 +4436,11 @@ export function RoomBoard({
         </header>
         <div
           data-board-chrome="bottom"
-          inert={planShown}
+          inert={planShown || viewOnly}
           className={cn(
             "pointer-events-none absolute inset-x-3 bottom-3 z-30 flex justify-center",
             planShown && "invisible",
+            viewOnly && "hidden",
           )}
         >
           <BoardFloat className="pointer-events-auto max-w-full gap-0.5 overflow-x-auto rounded-xl p-1">
@@ -4639,10 +4772,12 @@ export function RoomBoard({
               />
             </div>
           ) : null}
-          {catchUp.changes.length === 0 ? null : (
+          {catchUp.away.length === 0 ? null : (
             <CatchUpPill
               changes={catchUp.changes}
+              away={catchUp.away}
               onShow={showChange}
+              onShowCards={showCards}
               onDismiss={catchUp.dismiss}
             />
           )}
@@ -4749,8 +4884,13 @@ export function RoomBoard({
               return;
             }
             const ref = target.closest<HTMLElement>("[data-board-item]")?.dataset.boardItem ?? null;
-            // Shift and a press on a card selects it, or takes it out of the selection.
-            if (event.shiftKey) {
+            // Shift, Ctrl or Cmd and a press on a card selects it, or takes it out of the selection.
+            // A Mac's Ctrl-click is its right-click.
+            if (
+              event.shiftKey ||
+              event.metaKey ||
+              (event.ctrlKey && !isMacPlatform(navigator.platform))
+            ) {
               if (ref === null) return;
               event.stopPropagation();
               return toggleSelected(ref);
@@ -6216,21 +6356,28 @@ function BoardNote({
   // A task's actions sit in its menu, as on its Plan card: a card full of buttons is easy to
   // press by mistake. Any card drawn small folds its buttons into the menu too.
   const folded = compact || note.kind === "task";
-  // Paper's text moves the note like the rest of it; a click on the note selected alone types.
+  // A card's text moves the card like the rest of it. As in FigJam, a double-click (or Enter)
+  // types in it, and a click on a card already selected keeps it selected, so Delete still
+  // deletes the card. A finger, which a board without browser gestures gives no double-tap,
+  // types with a second tap on the card it selected alone.
   const alone = useBoardSelectedAlone(noteRef(note.id));
+  const typesAt = (on: EventTarget | null, x: number, y: number) => {
+    if (
+      (paper || titled) &&
+      on instanceof HTMLTextAreaElement &&
+      on.hasAttribute("data-board-rest")
+    ) {
+      focusTextAt(on, x, y);
+    }
+  };
   // Whether it was selected alone is kept from the press: the board selects on release before
-  // this card hears it, so `alone` then would make the click that selected it type too.
+  // this card hears it, so `alone` then would make the tap that selected it type too.
   const drag = dragHandlers(
     (dx, dy, event) => onMove(note, dx, dy, event),
     () => onDrop(note),
     (event, on) => {
-      if (
-        (paper || titled) &&
-        event.currentTarget.hasAttribute("data-pressed-alone") &&
-        on instanceof HTMLTextAreaElement &&
-        on.hasAttribute("data-board-rest")
-      ) {
-        focusTextAt(on, event.clientX, event.clientY);
+      if (event.pointerType === "touch" && event.currentTarget.hasAttribute("data-pressed-alone")) {
+        typesAt(on, event.clientX, event.clientY);
       }
       // A click on an embed's page, not a drag, hands the page the pointer.
       if (on instanceof Element && on.closest("[data-board-embed-cover]") !== null) embed?.onUse();
@@ -6268,6 +6415,17 @@ function BoardNote({
       onPointerDown={(event) => {
         event.currentTarget.toggleAttribute("data-pressed-alone", alone);
         drag.onPointerDown(event);
+      }}
+      onDoubleClick={(event) => {
+        // The card holds the pointer while pressed, so the click lands on it, not on its text.
+        const under = document.elementFromPoint(event.clientX, event.clientY);
+        const field =
+          under !== null && event.currentTarget.contains(under) && under.matches("textarea")
+            ? under
+            : paper
+              ? event.currentTarget.querySelector('textarea[data-board-rest=""]')
+              : null;
+        typesAt(field, event.clientX, event.clientY);
       }}
     >
       {changedLabel === undefined ? null : <CatchUpMark label={changedLabel} />}

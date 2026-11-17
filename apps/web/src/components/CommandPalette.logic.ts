@@ -201,6 +201,8 @@ export interface CommandPaletteItem {
   readonly titleLeadingContent?: ReactNode;
   readonly titleTrailingContent?: ReactNode;
   readonly shortcutCommand?: KeybindingCommand;
+  /** A shortcut that is not a keybinding, such as a board's own key, as shown. */
+  readonly shortcutLabel?: string;
   readonly secondary?: boolean;
 }
 
@@ -537,6 +539,9 @@ function scorePaletteItem(
   return match && (item.title === terms[0] ? match : { ...match, ranges: [] });
 }
 
+const BOARD_SEARCH_GROUP = "board-search";
+const BOARD_SEARCH_LIMIT = 8;
+
 /**
  * Equal match classes put commands before threads, so "new" runs "New thread".
  * Server message matches stay in a final group so late results cannot move earlier rows.
@@ -555,6 +560,8 @@ export function filterCommandPaletteGroups(input: {
   threadSearchItems: ReadonlyArray<CommandPaletteActionItem>;
   /** Threads whose messages match, best first; threads already listed are skipped. */
   threadMessageItems?: ReadonlyArray<CommandPaletteActionItem>;
+  /** The cards and people of the board on screen, found only by what is typed. */
+  boardSearchItems?: ReadonlyArray<CommandPaletteActionItem>;
   now?: number;
 }): CommandPaletteGroup[] {
   if (input.allOptions && input.isInSubmenu) {
@@ -591,6 +598,13 @@ export function filterCommandPaletteGroups(input: {
   // On equal match classes, groups keep this order: threads, what people search
   // for most, right after commands.
   if (searchesEverything) {
+    if (input.boardSearchItems && input.boardSearchItems.length > 0) {
+      searchableGroups.push({
+        value: BOARD_SEARCH_GROUP,
+        label: "On this board",
+        items: input.boardSearchItems,
+      });
+    }
     if (input.allOptions && input.allOptions.nestedItems.length > 0) {
       searchableGroups.push({
         value: "nested-search",
@@ -632,9 +646,11 @@ export function filterCommandPaletteGroups(input: {
     const limit =
       group.value === "threads-search"
         ? PALETTE_THREAD_LIMIT
-        : group.value === "nested-search" || (searchesEverything && threadsMatch)
-          ? PALETTE_SECONDARY_LIMIT
-          : ranked.length;
+        : group.value === BOARD_SEARCH_GROUP
+          ? BOARD_SEARCH_LIMIT
+          : group.value === "nested-search" || (searchesEverything && threadsMatch)
+            ? PALETTE_SECONDARY_LIMIT
+            : ranked.length;
     // Hints are built only for the rows shown.
     const items = ranked
       .toSorted(

@@ -5,6 +5,7 @@ import { boardAccountsEnabled, useBoardAccount } from "~/guest/boardAccount";
 import { knownBoardName, rememberBoardName, suggestedBoardName } from "~/guest/cloudBoards";
 import { cloudBoardsOrigin } from "~/guest/cloudBoardsHost";
 import { cn } from "~/lib/utils";
+import { sampleBoardHref } from "~/sampleBoard";
 
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { BoardBackdrop } from "../room/BoardChrome";
@@ -28,6 +29,7 @@ export function BoardsWelcome() {
   const startNewBoard = useStartNewBoard();
   const waiting = useNewBoardWaiting();
   const cloud = cloudBoardsOrigin() !== null;
+  const sample = cloud ? sampleBoardHref() : null;
   // Asked once, here and nowhere else: a signed-in account brings its own name.
   const [askName] = useState(() => cloud && knownBoardName() === null);
   const [name, setName] = useState(suggestedBoardName);
@@ -139,6 +141,16 @@ export function BoardsWelcome() {
               {busy ? <Spinner aria-hidden /> : null}
               Start a board
             </Button>
+            {sample === null ? null : (
+              <Button
+                variant="outline"
+                size="lg"
+                render={<a href={sample} />}
+                data-welcome-sample-board
+              >
+                Look around a sample board
+              </Button>
+            )}
             {account.status === "signed-out" && boardAccountsEnabled() ? <WelcomeSignIn /> : null}
           </div>
         </form>

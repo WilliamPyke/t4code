@@ -529,6 +529,7 @@ export function ThreadRoomBoard({
               viewKey={roomBoardViewKey(threadRef)}
               view={view}
               onViewChange={onView}
+              onToggleChat={() => (chat === null ? openPanel() : closePanel())}
               sharing={<BoardSharing threadRef={threadRef} shared={share !== null} />}
               titleEditor={<BoardTitle threadRef={threadRef} title={title} />}
               online={presence?.online ?? []}

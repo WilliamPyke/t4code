@@ -16,6 +16,9 @@ export function makeSecret(shareId: string): string {
   return `${shareId}.${random}`;
 }
 
+/** A board's view link credential, `<shareId>.v.<random>`; see `isCloudBoardViewCredential`. */
+export const makeViewSecret = (shareId: string): string => makeSecret(shareId).replace(".", ".v.");
+
 /** The board a secret names, or null when it is not one of ours. */
 export function shareOfSecret(secret: string): string | null {
   const dot = secret.indexOf(".");

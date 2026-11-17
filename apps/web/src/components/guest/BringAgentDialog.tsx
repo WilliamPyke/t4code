@@ -409,7 +409,7 @@ function ConnectComputerRoutes({
           ) : null}
         </ol>
         <p className="text-xs text-muted-foreground">
-          Needs Node.js 22 or newer from{" "}
+          Needs Node.js 22.16 or newer from{" "}
           <a className="underline" href="https://nodejs.org" target="_blank" rel="noreferrer">
             nodejs.org
           </a>

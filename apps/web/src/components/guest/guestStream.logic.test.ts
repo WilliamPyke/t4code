@@ -161,6 +161,21 @@ describe("guestEntryStep", () => {
       step: "invalid",
     });
   });
+  it("joins a board only looked at once its edit link comes, and keeps an editor editing", () => {
+    const looking = [{ shareId: "board-1", viewOnly: true }, { shareId: "board-2" }];
+    expect(guestEntryStep(looking, { credential: "board-1.secret", shareId: "board-1" })).toEqual({
+      step: "join",
+    });
+    expect(guestEntryStep(looking, { credential: "board-1.v.secret", shareId: "board-1" })).toEqual(
+      { step: "check", share: looking[0] },
+    );
+    expect(guestEntryStep(looking, { credential: "board-2.v.secret", shareId: "board-2" })).toEqual(
+      { step: "check", share: looking[1] },
+    );
+    expect(guestEntryStep(looking, { credential: "board-3.v.secret", shareId: "board-3" })).toEqual(
+      { step: "join" },
+    );
+  });
 });
 
 describe("guestFilesProblem", () => {

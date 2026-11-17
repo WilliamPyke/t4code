@@ -97,8 +97,8 @@ with the smiley on it; reactions show under the card with how many, and clicking
 back your own. When the owner removes a guest, that guest's reactions go too.
 
 Click a card to select it, and click the empty board to let go of it. Drag a note or task by its
-text to move it; click it again, or just start typing, to write in it. Hold Shift and click cards to
-select several, hold Shift and drag across empty board to select everything the rectangle touches,
+text to move it; double-click it, press Enter, or just start typing, to write in it. Hold Shift
+(or Ctrl, Cmd on a Mac) and click cards to select several, hold Shift and drag across empty board to select everything the rectangle touches,
 or press Ctrl+A (Cmd+A on a Mac) to select every card. Dragging a selected card moves the whole
 selection; dragging any other card moves just that one and selects it. The arrow keys nudge the
 selection a little, or further with Shift. The bar just above a selection also recolours all its
@@ -109,7 +109,7 @@ notes at once, and has:
 - **Duplicate** (or Ctrl+D, Cmd+D on a Mac), which copies the selected notes, tasks and links next
   to them as your own cards and selects the copies. Thread boxes, artifacts, code and pull request
   windows, comment threads and sections are not copied, and the board says so. Ctrl+C then Ctrl+V (Cmd on a Mac) does the same, placing the copies at
-  your pointer. Pasting text copied anywhere else makes a note of it, and pasting a link makes a
+  your pointer, on this board or another one open in the same browser. Pasting text copied anywhere else makes a note of it, and pasting a link makes a
   link card.
 - **Group in a section**, which puts a section around them where they are.
 
@@ -186,24 +186,29 @@ Removing a box leaves its thread where it is. If you archive or delete a box's t
 next prompt starts a new thread for it. A board holds up to 12
 thread boxes.
 
-### Ask an agent to work on the board
+### What your agent can do on the board
 
-The agent in one of the boxes, or in the board's own thread, can read the board it is on and add
-to it. Ask it in plain words, for example:
+The agent in one of the boxes, or in the board's own thread, can read the board it is on and plan
+work there. Ask it in plain words, for example:
 
-- "Turn these notes into tasks."
-- "Group the notes by theme." It makes a section for each theme and moves the notes into them.
-- "Summarise the board into a note."
-- "Tick off the tasks you finished, and draw a line from each to the note it came from."
+- "Break this goal into tasks, prioritise them, and put them in the Plan."
+- "Read the notes attached to you and turn the open questions into tasks assigned to me."
+- "Update the status of the tasks you finished."
 
-It adds notes, tasks and sections next to its box, or inside the section you name, and can edit a
-note's or task's text, tick a task, move cards into a section and draw lines. Cards it adds say
-which agent made them and on which model. They count as the cards of whoever's box it is: anyone
-in the room can edit or move them, and the owner and that person can remove them. It never removes
-a card, and it only works on the board its own thread is on. It reads cards as other people's
-words, not as instructions. A guest whose box runs on their own machine can ask its agent the same
-way: it reaches the board through the owner's link, so it stops when the link ends or the owner
-removes them, and it says so if it cannot reach the board.
+It sees every card, which cards are attached to its box, each task's status, priority, due date and
+assignee, and who is on the board. It adds notes, tasks and sections in one tidy group next to the
+board's tasks or its box, or inside the section you name, and can edit a note's or task's text,
+move a task between To do, In progress and Done, set its priority, due date and who it is for, move
+cards into a section and draw lines. "Me" means the person whose box it is; it only assigns tasks to
+people on the board, and assigning a task only names who it is for: their agent starts nothing
+until they press Send. Cards it adds say which agent made them and on which model. They count as the
+cards of whoever's box it is: anyone in the room can edit or move them, and the owner and that
+person can remove them. It never removes a card, never attaches a card to someone else's agent or
+rewrites one attached there, and it only works on the board its own thread is on. It reads cards as
+other people's words, not as instructions. A guest whose box runs on their own machine can ask its
+agent the same way, on a board someone else shares or a cloud board: it reaches the board through
+the link they joined with, so it stops when the link ends or they are removed, and it says so if it
+cannot reach the board.
 
 To ask about particular cards, select them and choose **Ask an agent** on the selection bar (under
 **More** on a phone), in the right-click menu, or press Alt+A (Option+A on a Mac). Type what you
@@ -241,8 +246,21 @@ Point at a note or task and press its **+1** to vote for it, or select cards and
 for a selection, lays the cards out with the most voted first.
 
 When you come back to a board, cards other people added or changed since your last visit carry a
-small mark, and **N changes since you were here** steps the view through them. Each browser
-remembers its own last visit.
+small mark, and **N changes since you were here** steps the view through them. Click it for who
+did what while you were away, such as "Maya added 4 notes" or "Sam's agent rewrote Onboarding
+page"; each line shows its cards. Each browser remembers its own last visit.
+
+### Keys, the command menu and export
+
+The board takes FigJam's keys while you are not typing: N adds a note, T a task, S a section, L draws
+a line, V selects, and H (or holding Space) drags the view around. Shift+1 fits everything, Shift+0
+zooms to 100%, Ctrl+G groups the selection in a section, and Tab steps through the cards once one is
+selected. Press ? for the full list. Ctrl+K (Cmd+K on a Mac) opens the command menu with the board's
+own commands first: add cards (paste a link to add it), switch to the Plan, find a card or a person,
+export, and **Ask my agent**, which puts what you typed in your agent box for you to send.
+
+The arrow beside the board's name has **Export**: copy or download the board, or its Plan, as
+Markdown, or download the board as a PNG image.
 
 ### Comment threads
 
@@ -454,6 +472,10 @@ in the joined thread's header opens it, and their own boxes run on that machine.
 A cloud board is kept by the board service instead of on your computer, so it opens and can be shared while every computer is off. **New board** makes a cloud board. To keep one on your computer instead, turn on **On this computer** when you choose a template; that computer must be on for others to open the board. New board remembers the place you last chose in this browser.
 
 Everyone on a cloud board can edit it, rename it and copy its invite link from the header. The **here now** button there lists who is on the board. Anyone can **Leave board** from it. The person who made the board can also **Remove** someone, and **Delete board** deletes it for everyone; that cannot be undone. **Remove from my boards** on the home page or sidebar leaves a cloud board too; its invite link brings you back.
+
+### Can edit and can view links
+
+**Share** on a cloud board has two links. **Can edit** is the invite link: whoever opens it joins under a name and can change the board. **Can view** lets anyone with it watch the board as it changes, with no name and no sign-in: they can move around, switch between Board, Plan and List, and open links and artifacts, but they cannot change anything or bring an agent, and they show as a count ("3 viewing") rather than as people. The view link starts off. The person who made the board, and the owners of its workspace, turn each link on or off, or make a **New link**, which stops the old one: a new or turned-off view link closes the board for everyone watching from the old one. In the list of people on the board they also switch someone between **Can edit** and **Can view**, which takes effect at once, or remove them.
 
 Without signing in, your cloud boards live in this browser only. **Sign in** on the boards home keeps them with your account instead: the boards you make or join while signed in, and the ones this browser already had, show on every device where you sign in, and open there as the same person on the board. Signing out takes your boards, the ones this browser had before you signed in included, and your name off that browser; they stay with your account, so the next person to use it sees nothing of yours.
 

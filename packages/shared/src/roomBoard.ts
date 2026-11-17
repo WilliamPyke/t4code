@@ -308,6 +308,15 @@ const agentCardState = (note: RoomBoardNote): RoomBoardAgentCardState => ({
   ...(note.size === undefined ? {} : { size: note.size }),
   ...(note.kind === undefined ? {} : { kind: note.kind }),
   ...(note.section === true ? { section: true as const } : {}),
+  ...taskPlanOf(note),
+});
+
+/** A task's plan as a card state keeps it: status (in progress only), due, priority, assignee. */
+const taskPlanOf = (note: Pick<RoomBoardNote, "status" | "due" | "priority" | "assignee">) => ({
+  ...(note.status === undefined ? {} : { status: note.status }),
+  ...(note.due === undefined ? {} : { due: note.due }),
+  ...(note.priority === undefined ? {} : { priority: note.priority }),
+  ...(note.assignee === undefined ? {} : { assignee: note.assignee }),
 });
 
 const isInState = (note: RoomBoardNote, state: RoomBoardAgentCardState) =>
@@ -315,6 +324,11 @@ const isInState = (note: RoomBoardNote, state: RoomBoardAgentCardState) =>
   note.x === state.x &&
   note.y === state.y &&
   (note.done === true) === (state.done === true) &&
+  note.status === state.status &&
+  note.due === state.due &&
+  note.priority === state.priority &&
+  (note.assignee === undefined) === (state.assignee === undefined) &&
+  note.assignee?.guestId === state.assignee?.guestId &&
   sameSize(note.size, state.size);
 
 /**
@@ -406,14 +420,26 @@ function noteInState(
   author: GuestId | null,
   at: string,
 ): RoomBoardNote {
-  const { done: _done, size: _size, ...rest } = note;
-  const edited = note.text !== state.text || (note.done === true) !== (state.done === true);
+  const {
+    done: _done,
+    size: _size,
+    status: _status,
+    due: _due,
+    priority: _priority,
+    assignee: _assignee,
+    ...rest
+  } = note;
+  const edited =
+    note.text !== state.text ||
+    (note.done === true) !== (state.done === true) ||
+    note.status !== state.status;
   return {
     ...rest,
     text: state.text,
     x: state.x,
     y: state.y,
     ...(state.done === true ? { done: true } : {}),
+    ...taskPlanOf(state),
     ...(state.size === undefined ? {} : { size: state.size }),
     ...(edited
       ? { editedAt: at, changed: { at, ...(author === null ? {} : { guestId: author }) } }
@@ -452,8 +478,6 @@ export function roomBoardAfterAgentTurn(
         !isInState(note, step.after) ||
         (step.before === undefined &&
           (note.reactions !== undefined ||
-            note.assignee !== undefined ||
-            note.priority !== undefined ||
             note.color !== undefined ||
             next.edges?.some((edge) => edge.from === ref || edge.to === ref) === true));
       if (kept) left.push(note.id);

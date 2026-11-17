@@ -64,6 +64,26 @@ export const GuestShareView = Schema.Struct({
    * its maker left.
    */
   maker: Schema.optional(GuestId),
+  /**
+   * With `cloud`: this person can only look, from the view link (no `guestId`) or because the
+   * board's maker made them a viewer. The host refuses every change from them.
+   */
+  viewOnly: Schema.optional(Schema.Literal(true)),
+  /** With `cloud`: the people on the board who can only look. */
+  viewers: Schema.optional(Schema.Array(GuestId)),
+  /** With `cloud`: this person turns the board's links on and off and says who can edit. */
+  manage: Schema.optional(Schema.Literal(true)),
+  /**
+   * With `cloud`: the board's links this person may hand on, as credentials. `edit` is null while
+   * it is off, and absent where the host does not know it (a board from before it kept it) or for
+   * someone who can only look. `view` is absent while it is off.
+   */
+  links: Schema.optional(
+    Schema.Struct({
+      edit: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+      view: Schema.optional(TrimmedNonEmptyString),
+    }),
+  ),
   model: GuestThreadModel,
 });
 export type GuestShareView = typeof GuestShareView.Type;
@@ -77,7 +97,12 @@ export const GuestStreamEvent = Schema.Union([
   Schema.Struct({ type: Schema.Literal("view"), view: GuestShareView }),
   Schema.Struct({ type: Schema.Literal("thread"), item: OrchestrationV2ThreadStreamItem }),
   /** The guests with the page open, sent when the stream opens and whenever that changes. */
-  Schema.Struct({ type: Schema.Literal("presence"), online: Schema.Array(GuestId) }),
+  Schema.Struct({
+    type: Schema.Literal("presence"),
+    online: Schema.Array(GuestId),
+    /** On a cloud board: how many look on from its view link now, never among `online`. */
+    viewing: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  }),
   // A client decodes each event on its own and skips one it does not know, so an older one
   // ignores these.
   RoomAgentsEvent,

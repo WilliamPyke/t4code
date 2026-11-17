@@ -66,7 +66,12 @@ interface JoinedGuestShare {
 export class GuestShareAccess extends Context.Reference<{
   readonly share: (shareId: string) => Effect.Effect<Option.Option<JoinedGuestShare>>;
   readonly viewed: (shareId: string, view: GuestShareView) => Effect.Effect<void>;
-  readonly presence: (shareId: string, online: ReadonlyArray<GuestId>) => Effect.Effect<void>;
+  /** `viewing`: on a cloud board, how many look on from its view link, not among `online`. */
+  readonly presence: (
+    shareId: string,
+    online: ReadonlyArray<GuestId>,
+    viewing?: number,
+  ) => Effect.Effect<void>;
   /** Whose agents run now, or where everyone else's pointer is on the board. */
   readonly live: (
     shareId: string,
@@ -564,7 +569,7 @@ export const connectGuestSession = Effect.fn("GuestSession.connect")(function* (
                 synchronized,
                 [
                   access
-                    .presence(target.shareId, event.online)
+                    .presence(target.shareId, event.online, event.viewing)
                     .pipe(Effect.as<ReadonlyArray<OrchestrationV2ThreadStreamItem>>([])),
                 ],
               ] as const;

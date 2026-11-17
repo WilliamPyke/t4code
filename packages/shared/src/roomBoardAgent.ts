@@ -11,6 +11,7 @@ import {
   type RoomBoardAgentResult,
   type RoomBoardAgentUpdateInput,
   type RoomBoardAgentView,
+  type RoomBoardAssignee,
   type RoomBoardChange,
   type RoomBoardNote,
   type RoomBoardSize,
@@ -19,7 +20,13 @@ import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 
 import { sanitizeLinkedPrompt } from "./promptLinks.ts";
-import { ROOM_BOARD_NOTE_SIZE, ROOM_BOARD_TASK_SIZE } from "./roomBoard.ts";
+import {
+  ROOM_BOARD_NOTE_SIZE,
+  ROOM_BOARD_TASK_SIZE,
+  roomBoardNoteOfRef,
+  roomBoxIdOfRef,
+  roomTaskStatus,
+} from "./roomBoard.ts";
 
 // The sizes the board draws a card at until someone resizes it.
 export const ROOM_BOARD_CARD_SIZE: RoomBoardSize = { w: 320, h: 240 };
@@ -34,6 +41,9 @@ const NOTE_SIZES: Partial<Record<NonNullable<RoomBoardNote["kind"]>, RoomBoardSi
   comment: PIN,
   task: ROOM_BOARD_TASK_SIZE,
 };
+// What one read of the board shows an agent at most, so a big board fits in its context.
+export const ROOM_BOARD_AGENT_VIEW_MAX_CARDS = 100;
+export const ROOM_BOARD_AGENT_VIEW_MAX_LINES = 150;
 // Where the board puts its own thread's card before anyone moves it.
 export const ROOM_THREAD_ORIGIN = { x: 80, y: 72 };
 
@@ -60,6 +70,13 @@ export interface RoomBoardAgentTarget {
   readonly roomTitle: string;
   readonly boxId: string;
   readonly hasRoomCard: boolean;
+  /** Who a task can be for, by the name the board shows: null for the room's owner. */
+  readonly people: ReadonlyArray<{ readonly guestId: GuestId | null; readonly name: string }>;
+  /**
+   * The person whose rights the agent has, whom "me" names: null for the room's owner, or the
+   * guest whose own box it is.
+   */
+  readonly me: GuestId | null;
   board: RoomBoard;
 }
 
@@ -121,18 +138,19 @@ function obstacles(target: RoomBoardAgentTarget, withSections: boolean): Array<R
   ];
 }
 
-/** The first free place in a grid from `origin`, row by row. */
+/** The first free place in a grid from `origin`, row by row, stepping a card of `step` at a time. */
 function freeSpot(
   size: RoomBoardSize,
   origin: { readonly x: number; readonly y: number },
   columns: number,
   taken: ReadonlyArray<Rect>,
+  step: RoomBoardSize = size,
 ): Rect | undefined {
   for (let row = 0; row < MAX_ROWS; row++) {
     for (let column = 0; column < columns; column++) {
       const spot = {
-        x: Math.round(origin.x + column * (size.w + GAP)),
-        y: Math.round(origin.y + row * (size.h + GAP)),
+        x: Math.round(origin.x + column * (step.w + GAP)),
+        y: Math.round(origin.y + row * (step.h + GAP)),
         ...size,
       };
       if (!taken.some((rect) => overlaps(spot, rect))) return spot;
@@ -198,6 +216,123 @@ const spotNearBox = (target: RoomBoardAgentTarget, size: RoomBoardSize) => {
   const box = boxRect(target);
   return freeSpot(size, { x: box.x + box.w + GAP * 2, y: box.y }, 4, obstacles(target, true));
 };
+
+const GROUP_COLUMNS = 4;
+
+/**
+ * Free places for a call's cards as one tidy grid: next to the tasks already on the board that sit
+ * in no section when it adds tasks, else next to the agent's box. Undefined when no room is left
+ * for the whole grid there.
+ */
+function spotsForGroup(
+  target: RoomBoardAgentTarget,
+  sizes: ReadonlyArray<RoomBoardSize>,
+  nearTasks: boolean,
+): ReadonlyArray<Rect> | undefined {
+  if (sizes.length === 0) return [];
+  const cell = {
+    w: Math.max(...sizes.map((size) => size.w)),
+    h: Math.max(...sizes.map((size) => size.h)),
+  };
+  const columns = Math.min(GROUP_COLUMNS, sizes.length);
+  const rows = Math.ceil(sizes.length / columns);
+  const block = {
+    w: columns * cell.w + (columns - 1) * GAP,
+    h: rows * cell.h + (rows - 1) * GAP,
+  };
+  const tasks = nearTasks
+    ? target.board.notes.filter(
+        (note) =>
+          note.kind === "task" && isCard(note) && sectionOf(target.board, note) === undefined,
+      )
+    : [];
+  const box = boxRect(target);
+  const origin =
+    tasks.length === 0
+      ? { x: box.x + box.w + GAP * 2, y: box.y }
+      : {
+          x: Math.min(...tasks.map((note) => note.x)),
+          y: Math.min(...tasks.map((note) => note.y)),
+        };
+  const at = freeSpot(block, origin, GROUP_COLUMNS * 2, obstacles(target, true), cell);
+  if (at === undefined) return undefined;
+  return sizes.map((size, index) => ({
+    x: at.x + (index % columns) * (cell.w + GAP),
+    y: at.y + Math.floor(index / columns) * (cell.h + GAP),
+    ...size,
+  }));
+}
+
+/** Who a board tool names: "me" for the agent's own person, or someone by the name the board shows. */
+function assigneeNamed(
+  target: RoomBoardAgentTarget,
+  name: string,
+): Result.Result<RoomBoardAssignee, string> {
+  const of = (guestId: GuestId | null): RoomBoardAssignee => (guestId === null ? {} : { guestId });
+  const wanted = name.trim().toLowerCase();
+  if (wanted === "me") return Result.succeed(of(target.me));
+  const found = target.people.filter((person) => person.name.trim().toLowerCase() === wanted);
+  if (found.length === 1 && found[0] !== undefined) return Result.succeed(of(found[0].guestId));
+  return Result.fail(
+    found.length === 0
+      ? `Nobody called "${name}" is on this board. Its people: ${target.people.map((person) => person.name).join(", ")}. Leave the task unassigned, or ask your user who it is for.`
+      : `More than one person on this board is called "${name}". Leave the task unassigned and say so.`,
+  );
+}
+
+const personOfBox = (board: RoomBoard, boxId: string): GuestId | null =>
+  boxId === ROOM_BOARD_ROOM_BOX
+    ? null
+    : (board.notes.find((note) => note.id === boxId)?.guestId ?? null);
+
+/**
+ * Every thread box a card at `ref` would go to with a prompt: the box itself, a box whose artifact
+ * it is, and those its lines lead to, as a prompt from a box finds its cards.
+ */
+function boxesReachedFrom(board: RoomBoard, ref: string): ReadonlySet<string> {
+  const edges = board.edges ?? [];
+  const boxes = new Set<string>();
+  const seen = new Set([ref]);
+  let frontier = [ref];
+  while (frontier.length > 0) {
+    const next: Array<string> = [];
+    for (const at of frontier) {
+      const box = roomBoxIdOfRef(board, at);
+      if (box !== undefined) {
+        boxes.add(box);
+        continue;
+      }
+      const artifact = roomBoardNoteOfRef(board, at)?.kind === "artifact";
+      for (const edge of edges) {
+        const rewriter = artifact && edge.to === at ? roomBoxIdOfRef(board, edge.from) : undefined;
+        if (rewriter !== undefined) boxes.add(rewriter);
+        if (edge.from === at && !seen.has(edge.to)) {
+          seen.add(edge.to);
+          next.push(edge.to);
+        }
+      }
+    }
+    frontier = next;
+  }
+  return boxes;
+}
+
+/**
+ * The name of someone else whose agent's box is among `boxIds`. An agent never writes into another
+ * person's agent's context: only that person, pressing Send, puts anything there.
+ */
+function someoneElsesBox(
+  target: RoomBoardAgentTarget,
+  boxIds: Iterable<string | undefined>,
+): string | undefined {
+  for (const boxId of boxIds) {
+    if (boxId === undefined || boxId === target.boxId) continue;
+    const person = personOfBox(target.board, boxId);
+    if (person === target.me) continue;
+    return target.people.find((candidate) => candidate.guestId === person)?.name ?? "someone else";
+  }
+  return undefined;
+}
 
 /** A free place in a section, which grows to take it when it is full. */
 const spotInSection = Effect.fnUntraced(function* <E, R>(
@@ -278,11 +413,42 @@ export function roomBoardAgentView(
         ? "you"
         : `${person(note.guestId)}'s agent`;
   const board = target.board;
-  const cards = board.notes.filter(isCard);
+  const yours = refOf(target.boxId);
+  const attached = new Set(
+    (board.edges ?? []).flatMap((edge) =>
+      edge.from === yours ? [edge.to] : edge.to === yours ? [edge.from] : [],
+    ),
+  );
+  // On a big board, what this box is most likely to work on stays: itself, what is attached to
+  // it, sections and open tasks, then the rest, each in board order.
+  const rank = (note: RoomBoardNote) => {
+    const ref = roomBoardNoteRef(note.id);
+    if (ref === yours || attached.has(ref)) return 0;
+    if (note.section === true) return 1;
+    if (note.kind === "task") return roomTaskStatus(note) === "done" ? 3 : 2;
+    return 4;
+  };
+  const all = board.notes.filter(isCard);
+  const kept = new Set(
+    all
+      .map((note, index) => ({ note, index }))
+      .sort((left, right) => rank(left.note) - rank(right.note) || left.index - right.index)
+      .slice(0, ROOM_BOARD_AGENT_VIEW_MAX_CARDS - (target.hasRoomCard ? 1 : 0))
+      .map(({ note }) => note),
+  );
+  const cards = all.filter((note) => kept.has(note));
   const shown = new Set([
     ...(target.hasRoomCard ? [roomBoardCardRef(ROOM_BOARD_THREAD_CARD)] : []),
     ...cards.map((note) => roomBoardNoteRef(note.id)),
   ]);
+  const lines = (board.edges ?? []).filter((edge) => shown.has(edge.from) && shown.has(edge.to));
+  const assigneeName = (note: RoomBoardNote) =>
+    note.assignee === undefined ? {} : { assignee: person(note.assignee.guestId) };
+  const room = roomCardRect(board);
+  const omitted = {
+    cards: all.length - cards.length,
+    lines: Math.max(0, lines.length - ROOM_BOARD_AGENT_VIEW_MAX_LINES),
+  };
   return {
     you: target.boxId,
     cards: [
@@ -293,6 +459,8 @@ export function roomBoardAgentView(
               kind: "thread" as const,
               text: target.roomTitle.slice(0, ROOM_BOARD_NOTE_MAX_LENGTH),
               by: person(undefined),
+              x: Math.round(room.x),
+              y: Math.round(room.y),
             },
           ]
         : []),
@@ -303,18 +471,37 @@ export function roomBoardAgentView(
           kind: note.section === true ? ("section" as const) : (note.kind ?? "note"),
           text: note.text,
           by: by(note),
-          ...(note.kind === "task" ? { done: note.done === true } : {}),
+          ...(note.kind === "task"
+            ? {
+                done: note.done === true,
+                status: roomTaskStatus(note),
+                ...(note.priority === undefined ? {} : { priority: note.priority }),
+                ...(note.due === undefined ? {} : { due: note.due }),
+                ...assigneeName(note),
+              }
+            : {}),
           ...(section === undefined ? {} : { section: section.id }),
+          x: Math.round(note.x),
+          y: Math.round(note.y),
         };
       }),
     ],
-    lines: (board.edges ?? [])
-      .filter((edge) => shown.has(edge.from) && shown.has(edge.to))
+    lines: lines
+      .slice(0, ROOM_BOARD_AGENT_VIEW_MAX_LINES)
       .map((edge) => ({ from: idOfRef(edge.from), to: idOfRef(edge.to) })),
+    attachedToYou: [...attached].filter((ref) => shown.has(ref)).map(idOfRef),
+    people: target.people.map((candidate) => ({
+      name: candidate.name,
+      ...(candidate.guestId === target.me ? { me: true } : {}),
+    })),
+    ...(omitted.cards === 0 && omitted.lines === 0 ? {} : { omitted }),
   };
 }
 
-/** Adds cards near the agent's box, or in a section it names, which is made when missing. */
+/**
+ * Adds cards as one group next to the agent's box or the board's tasks, or in a section it names,
+ * which is made when missing. Assigning a task only names who it is for: it starts nothing.
+ */
 export const roomBoardAgentAdd = Effect.fnUntraced(function* <E, R>(
   target: RoomBoardAgentTarget,
   ops: RoomBoardAgentOps<E, R>,
@@ -328,21 +515,45 @@ export const roomBoardAgentAdd = Effect.fnUntraced(function* <E, R>(
   if (section !== undefined && Result.isFailure(section)) {
     refused.push({ card: input.section ?? "", reason: section.failure });
   }
-  for (const card of input.cards) {
+  // Checked before any is placed, so the ones the board takes sit together.
+  const valid = input.cards.flatMap((card) => {
     const text = cleanText(card.text);
     if (text === "") {
       refused.push({ card: card.text, reason: "A card needs some text." });
-      continue;
+      return [];
     }
-    const size = roomBoardNoteSize(card.task === true ? { kind: "task" } : {});
-    // The cards go next to the box when their section could not be made.
+    const assignee = card.assignee === undefined ? undefined : assigneeNamed(target, card.assignee);
+    if (assignee !== undefined && Result.isFailure(assignee)) {
+      refused.push({ card: text, reason: assignee.failure });
+      return [];
+    }
+    const task =
+      card.task === true ||
+      card.status !== undefined ||
+      card.priority !== undefined ||
+      card.due !== undefined ||
+      card.assignee !== undefined;
+    const size = roomBoardNoteSize(task ? { kind: "task" } : {});
+    return [{ card, text, task, size, assignee: assignee?.success }];
+  });
+  // The cards go next to the box, or the tasks there, when they have no section.
+  const group =
+    section === undefined || Result.isFailure(section)
+      ? spotsForGroup(
+          target,
+          valid.map((card) => card.size),
+          valid.some((card) => card.task),
+        )
+      : undefined;
+  for (const [index, { card, text, task, size, assignee }] of valid.entries()) {
+    const grouped = group?.[index];
     const spot =
-      section === undefined || Result.isFailure(section)
-        ? Result.fromNullishOr(
-            spotNearBox(target, size),
+      section !== undefined && Result.isSuccess(section)
+        ? yield* spotInSection(target, ops, section.success, size)
+        : Result.fromNullishOr(
+            grouped ?? spotNearBox(target, size),
             () => "There is no free space near this thread's box.",
-          )
-        : yield* spotInSection(target, ops, section.success, size);
+          );
     if (Result.isFailure(spot)) {
       refused.push({ card: text, reason: spot.failure });
       continue;
@@ -354,7 +565,11 @@ export const roomBoardAgentAdd = Effect.fnUntraced(function* <E, R>(
       text,
       x: spot.success.x,
       y: spot.success.y,
-      ...(card.task === true ? { kind: "task" as const } : {}),
+      ...(task ? { kind: "task" as const } : {}),
+      ...(card.status === undefined ? {} : { status: card.status }),
+      ...(card.priority === undefined ? {} : { priority: card.priority }),
+      ...(card.due === undefined ? {} : { due: card.due }),
+      ...(assignee === undefined ? {} : { assignee }),
     });
     if (reason === undefined) done.push(id);
     else refused.push({ card: text, reason });
@@ -367,7 +582,10 @@ export const roomBoardAgentAdd = Effect.fnUntraced(function* <E, R>(
   return result;
 });
 
-/** Edits, ticks, moves into a section, and draws lines from, cards the agent names by id. */
+/**
+ * Edits, plans, moves into a section, and draws lines from, cards the agent names by id. It never
+ * changes what goes to another person's agent: no line toward their box, no edit of a card on one.
+ */
 export const roomBoardAgentUpdate = Effect.fnUntraced(function* <E, R>(
   target: RoomBoardAgentTarget,
   ops: RoomBoardAgentOps<E, R>,
@@ -384,8 +602,16 @@ export const roomBoardAgentUpdate = Effect.fnUntraced(function* <E, R>(
       refuse("No card with this id is on the board. Read the board for the ids.");
       continue;
     }
+    const plans =
+      change.status !== undefined ||
+      change.priority !== undefined ||
+      change.due !== undefined ||
+      change.assignee !== undefined;
     const edits =
-      change.text !== undefined || change.done !== undefined || change.section !== undefined;
+      change.text !== undefined ||
+      change.done !== undefined ||
+      change.section !== undefined ||
+      plans;
     if (edits) {
       if (note === undefined) {
         refuse("The room thread's card can only have lines drawn from it.");
@@ -398,6 +624,28 @@ export const roomBoardAgentUpdate = Effect.fnUntraced(function* <E, R>(
       }
       if (change.done !== undefined && note.kind !== "task") {
         refuse("Only a task can be ticked.");
+        continue;
+      }
+      if (plans && note.kind !== "task") {
+        refuse("Only a task has a status, priority, due date or assignee.");
+        continue;
+      }
+      const assignee =
+        change.assignee === undefined || change.assignee === null
+          ? Result.succeed(change.assignee)
+          : assigneeNamed(target, change.assignee);
+      if (Result.isFailure(assignee)) {
+        refuse(assignee.failure);
+        continue;
+      }
+      const elsewhere =
+        change.text !== undefined && cleanText(change.text) !== note.text
+          ? someoneElsesBox(target, boxesReachedFrom(target.board, roomBoardNoteRef(note.id)))
+          : undefined;
+      if (elsewhere !== undefined) {
+        refuse(
+          `This card goes to ${elsewhere}'s agent with their next message, so only a person changes what it says. Tell your user instead.`,
+        );
         continue;
       }
       if (change.section !== undefined && (note.section === true || note.kind === "comment")) {
@@ -431,6 +679,10 @@ export const roomBoardAgentUpdate = Effect.fnUntraced(function* <E, R>(
         text,
         ...at,
         ...(change.done === undefined ? {} : { done: change.done }),
+        ...(change.status === undefined ? {} : { status: change.status }),
+        ...(change.priority === undefined ? {} : { priority: change.priority }),
+        ...(change.due === undefined ? {} : { due: change.due }),
+        ...(assignee.success === undefined ? {} : { assignee: assignee.success }),
       });
       if (reason !== undefined) {
         refuse(reason);
@@ -438,11 +690,24 @@ export const roomBoardAgentUpdate = Effect.fnUntraced(function* <E, R>(
       }
     }
     if (change.lineTo !== undefined) {
+      const from = refOf(change.id);
+      const to = refOf(change.lineTo);
+      const elsewhere = someoneElsesBox(target, [
+        roomBoxIdOfRef(target.board, from),
+        roomBoxIdOfRef(target.board, to),
+        ...boxesReachedFrom(target.board, to),
+      ]);
+      if (elsewhere !== undefined) {
+        refuse(
+          `This line would send the card to ${elsewhere}'s agent. Only ${elsewhere} attaches cards to their agent: tell your user instead.`,
+        );
+        continue;
+      }
       const reason = yield* ops.apply({
         type: "edge.put",
         edgeId: yield* ops.uuid,
-        from: refOf(change.id),
-        to: refOf(change.lineTo),
+        from,
+        to,
       });
       if (reason !== undefined) {
         refuse(reason);

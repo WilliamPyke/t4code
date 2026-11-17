@@ -8,6 +8,7 @@ import {
   GUEST_SHARE_PARAM,
   GUEST_SIGN_IN_PARAM,
   GuestSignInFailure,
+  isCloudBoardViewCredential,
 } from "@t3tools/contracts";
 import { Navigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
@@ -24,7 +25,7 @@ import {
   rememberGuestShare,
 } from "~/guest/guestShares";
 import { boardAccountsEnabled, useBoardAccount } from "~/guest/boardAccount";
-import { rememberBoardName, suggestedBoardName } from "~/guest/cloudBoards";
+import { openViewLink, rememberBoardName, suggestedBoardName } from "~/guest/cloudBoards";
 import { isCloudBoardsHost } from "~/guest/cloudBoardsHost";
 import { redeemInvite } from "~/guest/redeemInvite";
 import { AccountCorner } from "../boards/BoardsAccount";
@@ -178,6 +179,15 @@ export function GuestPage() {
         <GuestNotice title="Opening the board..." />
       ) : step.step === "invalid" || host === null || credential === null ? (
         INVALID
+      ) : isCloudBoardViewCredential(credential) ? (
+        <ViewStep
+          credential={credential}
+          host={host}
+          onJoined={(share) => {
+            rememberGuestShare(share);
+            setJoined(share);
+          }}
+        />
       ) : (
         <JoinStep
           credential={credential}
@@ -237,6 +247,30 @@ function JoinAsAccount({
     };
   }, [credential, host]);
   return <GuestNotice title="Opening the board..." />;
+}
+
+/** A view link opens the board at once: no name, no sign-in, and nobody's seat. */
+function ViewStep({ credential, host, onJoined }: JoinProps) {
+  const [failed, setFailed] = useState<string | null>(null);
+  const settle = useEffectEvent((opened: JoinedGuestShare | string) => {
+    if (typeof opened === "string") setFailed(opened);
+    else onJoined(opened);
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens the board on its host once, from the view link
+  useEffect(() => {
+    let stopped = false;
+    void openViewLink({ credential, host }).then((opened) => {
+      if (!stopped) settle(opened);
+    });
+    return () => {
+      stopped = true;
+    };
+  }, [credential, host]);
+  return failed === null ? (
+    <GuestNotice title="Opening the board..." />
+  ) : (
+    <GuestNotice title="This board could not be opened" detail={failed} />
+  );
 }
 
 function NameForm({

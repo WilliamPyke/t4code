@@ -473,6 +473,27 @@ export function BoardPlan({
   const shownOrder = (
     layout === "list" ? listRows : BOARD_PLAN_COLUMNS.flatMap(({ status }) => shownColumns[status])
   ).map((task) => task.id);
+  // Ctrl or Cmd+A selects every task shown, as on the board.
+  const pickAll = useStableCallback((event: KeyboardEvent) => {
+    if (
+      !(event.ctrlKey || event.metaKey) ||
+      event.altKey ||
+      event.shiftKey ||
+      event.key.toLowerCase() !== "a" ||
+      !canEdit ||
+      event.defaultPrevented ||
+      typingIn(event.target)
+    ) {
+      return;
+    }
+    event.preventDefault();
+    setPicked(new Set(shownOrder));
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Ctrl+A selects the tasks wherever focus rests on the page, which only the window hears
+  useEffect(() => {
+    window.addEventListener("keydown", pickAll);
+    return () => window.removeEventListener("keydown", pickAll);
+  }, [pickAll]);
   // A click selects a task, Ctrl, Cmd or Shift adds to the selection, and a click on the task
   // selected alone, or a double-click, opens it.
   const open = (event: ReactMouseEvent, task: RoomBoardNote) => {

@@ -76,6 +76,7 @@ import {
   boardDeletion,
   boardDuplicateOffset,
   boardHistoryChanges,
+  boardHistoryQueues,
   boardLineSlots,
   boardHistoryRemember,
   boardStepBefore,
@@ -938,6 +939,35 @@ describe("boardChangeQueue", () => {
     roomTakesNote(true);
     expect([await added, await written]).toEqual([true, true]);
     expect(started).toEqual(["add note", "move card", "write text"]);
+  });
+
+  it("sends a change in several queues only once each of them has gone", async () => {
+    const queue = boardChangeQueue();
+    const started: Array<string> = [];
+    const release: Record<string, () => void> = {};
+    const taken = (name: string) =>
+      new Promise<boolean>((resolve) => {
+        release[name] = () => resolve(true);
+      });
+    const promises = { a: taken("a"), b: taken("b") };
+    const put = (name: "a" | "b") =>
+      queue(`note:${name}`, () => {
+        started.push(name);
+        return promises[name];
+      });
+    const first = put("a");
+    const second = put("b");
+    const line = queue(["note:a", "note:b"], async () => {
+      started.push("line");
+      return true;
+    });
+    release.a?.();
+    await first;
+    expect(started).toEqual(["a", "b"]);
+    release.b?.();
+    await second;
+    expect(await line).toBe(true);
+    expect(started).toEqual(["a", "b", "line"]);
   });
 });
 
@@ -2986,6 +3016,34 @@ describe("undo and redo", () => {
     ]);
   });
 
+  it("puts the lines between notes deleted together back once every note they join is back", () => {
+    const other = { id: "o", text: "Other", x: 400, y: 0 };
+    const between = { id: "e2", from: "note:o", to: "note:n" };
+    const full: RoomBoard = { ...board, notes: [note, other], edges: [line, between] };
+    const { edgeIds } = boardDeletion(full, ["n", "o"]);
+    // Each line once, though both its notes go.
+    expect(edgeIds).toEqual(["e", "e2"]);
+    const entry: BoardHistoryEntry = [
+      ...edgeIds.map((id) => ({ target: { kind: "edge", id } as const, after: null })),
+      { target: noteTarget, after: null },
+      { target: { kind: "note", id: "o" } as const, after: null },
+    ].map((step) => ({ ...step, before: boardStepBefore(new Map(), full, step.target) }));
+    const undo = boardHistoryChanges({ ...full, notes: [], edges: [] }, entry, "undo") ?? [];
+    expect(undo.map(({ target }) => boardEditKey(target))).toEqual([
+      "note:o",
+      "note:n",
+      "edge:e2",
+      "edge:e",
+    ]);
+    // The line between them waits for both notes; the one to the thread's card only for its note.
+    expect(boardHistoryQueues(undo)).toEqual([
+      undefined,
+      undefined,
+      ["note:n", "note:o"],
+      ["note:n"],
+    ]);
+  });
+
   it("records a card an Alt-drag made as not there before, so undo takes it off", () => {
     const copy = { ...note, id: "copy", x: 40.6, y: 12.2 };
     const copyTarget = { kind: "note", id: "copy" } as const;
@@ -3179,6 +3237,7 @@ describe("boardMenuEntries", () => {
         "add-note",
         "add-task",
         "add-section",
+        "add-link",
         "add-thread",
         "add-artifact",
         "paste",
@@ -3189,12 +3248,12 @@ describe("boardMenuEntries", () => {
     {
       name: "no thread box or artifact past their limits, and no paste without the clipboard",
       rights: { ...guest, canAddThread: false, canAddArtifact: false },
-      entries: ["add-note", "add-task", "add-section", "select-all", "fit"],
+      entries: ["add-note", "add-task", "add-section", "add-link", "select-all", "fit"],
     },
     {
       name: "notes and tasks only on a team's board",
       rights: { ...owner, roomBoard: false },
-      entries: ["add-note", "add-task", "select-all", "fit"],
+      entries: ["add-note", "add-task", "add-link", "select-all", "fit"],
     },
     {
       name: "only fitting the view for someone who may just look",
@@ -3209,15 +3268,18 @@ describe("boardMenuEntries", () => {
     // The room thread's card, a person's or an agent's: only its own actions, never the board's.
     expect(boardMenuEntries({ kind: "fixed-card" }, owner)).toEqual([]);
     expect(boardMenuEntries({ kind: "card", note: samsNote }, guest)).toEqual([
+      "edit",
+      "connect",
       "duplicate",
       "copy",
     ]);
     expect(boardMenuEntries({ kind: "card", note: evesLink }, guest)).toEqual([
+      "connect",
       "duplicate",
       "copy",
       "copy-link",
     ]);
-    expect(boardMenuEntries({ kind: "card", note: evesBox }, guest)).toEqual([]);
+    expect(boardMenuEntries({ kind: "card", note: evesBox }, guest)).toEqual(["connect"]);
     expect(boardMenuEntries({ kind: "card", note: evesLink }, looker)).toEqual(["copy-link"]);
   });
 

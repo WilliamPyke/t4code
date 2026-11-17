@@ -65,6 +65,8 @@ const JoinedGuestShare = Schema.Struct({
   made: Schema.optional(Schema.Boolean),
   /** When this browser last opened the board. */
   openedAt: Schema.optional(Schema.String),
+  /** Opened from a cloud board's view link, which is the token: it shows the board, nothing more. */
+  viewOnly: Schema.optional(Schema.Boolean),
 });
 export type JoinedGuestShare = typeof JoinedGuestShare.Type;
 
@@ -218,6 +220,8 @@ interface GuestRoomState {
   readonly view: GuestShareView | null;
   /** The guests with the thread open now, this one included. */
   readonly online: ReadonlyArray<GuestId>;
+  /** On a cloud board: how many look on from its view link now. */
+  readonly viewing?: number;
   /** The guests' agents running a turn on their own machines now. */
   readonly running: ReadonlyArray<RoomAgentActivity>;
   /** Where the owner's code is, once their server said. */
@@ -326,9 +330,14 @@ export const layerGuestShareAccess = Layer.succeed(
     presence: Effect.fn("GuestShareAccess.presence")(function (
       shareId: string,
       online: ReadonlyArray<GuestId>,
+      viewing?: number,
     ) {
       return Effect.sync(() => {
-        appAtomRegistry.update(guestRoomAtom(shareId), (room) => ({ ...room, online }));
+        appAtomRegistry.update(guestRoomAtom(shareId), (room) => ({
+          ...room,
+          online,
+          viewing: viewing ?? 0,
+        }));
       });
     }),
     // Untraced: pointers move many times a second.

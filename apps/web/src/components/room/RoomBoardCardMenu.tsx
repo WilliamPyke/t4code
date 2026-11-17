@@ -7,6 +7,7 @@ import {
   MenuItem,
   MenuPopup,
   MenuSeparator,
+  MenuShortcut,
   MenuSub,
   MenuSubPopup,
   MenuSubTrigger,
@@ -23,6 +24,8 @@ export interface CardAction {
   readonly label: string;
   readonly run: () => void;
   readonly destructive?: boolean;
+  /** The key that does the same, as the command menu shows it. */
+  readonly shortcut?: string;
 }
 
 /** What a card's menu offers: its header buttons, and reacting and colouring where it can. */
@@ -83,6 +86,7 @@ function CardMenuItems({ actions, assign, onReact, color }: CardMenu) {
           onClick={action.run}
         >
           {action.label}
+          {action.shortcut === undefined ? null : <MenuShortcut>{action.shortcut}</MenuShortcut>}
         </MenuItem>
       ))}
     </>

@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Welcome to your first board</title>
+    <style>
+      :root {
+        --ink: #1d1a22;
+        --muted: #6b6470;
+        --cream: #fff7ec;
+        --card: #ffffff;
+        --jam: #db2d55;
+        --note: #ffc83d;
+        --line: #eadfce;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font:
+          15px/1.5 Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+        color: var(--ink);
+        background: var(--cream);
+      }
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 48px 24px 56px;
+      }
+      .eyebrow {
+        display: inline-block;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--jam);
+        background: #fde4ea;
+        border-radius: 999px;
+        padding: 4px 10px;
+      }
+      h1 {
+        font-size: 36px;
+        line-height: 1.1;
+        letter-spacing: -0.02em;
+        margin: 16px 0 8px;
+      }
+      .lede {
+        font-size: 17px;
+        color: var(--muted);
+        margin: 0 0 32px;
+        max-width: 560px;
+      }
+      ol {
+        list-style: none;
+        padding: 0;
+        margin: 0 0 32px;
+        display: grid;
+        gap: 12px;
+      }
+      li {
+        display: grid;
+        grid-template-columns: 40px 1fr auto;
+        gap: 16px;
+        align-items: center;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 16px 18px;
+        box-shadow: 0 1px 2px rgb(29 26 34 / 6%);
+      }
+      .step {
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
+        display: grid;
+        place-items: center;
+        font-weight: 700;
+        background: var(--note);
+      }
+      li.done .step {
+        background: #d9f2e1;
+        color: #1e7a45;
+      }
+      li h2 {
+        font-size: 16px;
+        margin: 0;
+      }
+      li p {
+        margin: 2px 0 0;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .tag {
+        font-size: 12px;
+        color: var(--muted);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 2px 8px;
+        white-space: nowrap;
+      }
+      .actions {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .button {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 600;
+        border-radius: 12px;
+        padding: 11px 18px;
+        text-decoration: none;
+      }
+      .primary {
+        background: var(--jam);
+        color: #fff;
+      }
+      .secondary {
+        color: var(--ink);
+        border: 1px solid var(--line);
+        background: var(--card);
+      }
+      .hint {
+        margin-top: 28px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .hint b {
+        color: var(--ink);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <span class="eyebrow">Step 1 of 3 done</span>
+      <h1>Your team's board is ready</h1>
+      <p class="lede">
+        Put what you know on it, invite the people you work with, and bring an agent when you want
+        one. Nothing here needs a terminal.
+      </p>
+      <ol>
+        <li class="done">
+          <span class="step">✓</span>
+          <div>
+            <h2>Pick a starting point</h2>
+            <p>You chose the Sprint board template. Rename anything you like.</p>
+          </div>
+          <span class="tag">Done</span>
+        </li>
+        <li>
+          <span class="step">2</span>
+          <div>
+            <h2>Invite a teammate</h2>
+            <p>Send the edit link. They join under their own name, no account needed.</p>
+          </div>
+          <span class="tag">30 seconds</span>
+        </li>
+        <li>
+          <span class="step">3</span>
+          <div>
+            <h2>Bring your agent (optional)</h2>
+            <p>Your agent works on the board beside you. Only you can send it work.</p>
+          </div>
+          <span class="tag">Later is fine</span>
+        </li>
+      </ol>
+      <div class="actions">
+        <a class="button primary" href="#invite">Copy invite link</a>
+        <a class="button secondary" href="#board">Go to the board</a>
+      </div>
+      <p class="hint">
+        Tip: press <b>N</b> for a sticky note, or paste any link (Figma, YouTube, a GitHub issue)
+        straight onto the board.
+      </p>
+    </main>
+  </body>
+</html>

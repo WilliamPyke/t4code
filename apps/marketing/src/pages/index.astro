@@ -3,7 +3,7 @@ import BoardScene from "../components/BoardScene.astro";
 import Cursor from "../components/Cursor.astro";
 import Icon from "../components/Icon.astro";
 import Layout from "../layouts/Layout.astro";
-import { APP_URL, SYNC_COMMAND, UPSTREAM_REPO_URL } from "../lib/site";
+import { APP_URL, SAMPLE_BOARD_URL, SYNC_COMMAND, UPSTREAM_REPO_URL } from "../lib/site";
 
 const today = [
   "Accounts: sign in and your boards follow you to any device",
@@ -60,7 +60,17 @@ const faqs = [
           </p>
           <div class="hero__ctas">
             <a class="btn btn--primary" href={APP_URL}>Start a board</a>
-            <a class="btn btn--ghost" href="#how">See how it works</a>
+            {
+              SAMPLE_BOARD_URL === "" ? (
+                <a class="btn btn--ghost" href="#how">
+                  See how it works
+                </a>
+              ) : (
+                <a class="btn btn--ghost" href={SAMPLE_BOARD_URL} data-sample-board>
+                  See a sample board
+                </a>
+              )
+            }
           </div>
           <p class="hero__fine">Free while in beta.</p>
         </div>
@@ -679,6 +689,13 @@ const faqs = [
         <p>Free while in beta. Bring your team and the agents you already use.</p>
         <div class="hero__ctas">
           <a class="btn btn--cream" href={APP_URL}>Start a board</a>
+          {
+            SAMPLE_BOARD_URL === "" ? null : (
+              <a class="btn btn--on-jam" href={SAMPLE_BOARD_URL} data-sample-board>
+                See a sample board
+              </a>
+            )
+          }
         </div>
       </div>
     </div>

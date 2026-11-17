@@ -2,6 +2,8 @@ import {
   GUEST_NAME_MAX_LENGTH,
   roomBoardAgentCard,
   roomBoardGuestCard,
+  type CloudBoardLinkKind,
+  type CloudBoardRole,
   type GuestCursorRequest,
   type GuestId,
   type GuestShareId,
@@ -43,6 +45,13 @@ export interface CloudRoom {
   readonly maker?: GuestId;
   /** The workspace whose members may open the board without its invite. */
   readonly workspaceId?: string;
+  /**
+   * The edit link's credential, shown to those who may hand it on. Absent on boards made before it
+   * was kept, until the link is made again; `inviteHash` is empty while the link is off.
+   */
+  readonly editLink?: string;
+  /** The view link, which shows the board to anyone who has it. Absent while it is off. */
+  readonly viewLink?: { readonly credential: string; readonly hash: string };
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -63,6 +72,8 @@ export interface CloudGuest {
    * them until the workspace has them back.
    */
   readonly locked?: true;
+  /** Can only look at the board, as the maker set them. Absent: they can change it. */
+  readonly role?: "viewer";
 }
 
 export const DEFAULT_BOARD_TITLE = "Untitled board";
@@ -99,6 +110,11 @@ const FAILURES = {
   not_on_board: {
     status: 404,
     message: "This thread is not on a board. Only one of its thread boxes can use it.",
+  },
+  view_only: { status: 403, message: "You can look at this board, but not change it." },
+  viewers_full: {
+    status: 409,
+    message: "As many people are looking at this board as it holds. Try again in a while.",
   },
 } as const;
 
@@ -151,6 +167,8 @@ export function createRoom(input: {
   readonly threadId: ThreadId;
   readonly title: string | undefined;
   readonly inviteHash: string;
+  /** The edit link's credential, whose hash is `inviteHash`. */
+  readonly editLink?: string;
   readonly maker: Omit<CloudGuest, "joinedAt">;
   readonly now: string;
 }): CloudRoom {
@@ -159,6 +177,7 @@ export function createRoom(input: {
     threadId: input.threadId,
     title: input.title ?? DEFAULT_BOARD_TITLE,
     inviteHash: input.inviteHash,
+    ...(input.editLink === undefined ? {} : { editLink: input.editLink }),
     guests: [{ ...input.maker, joinedAt: input.now }],
     maker: input.maker.id,
     createdAt: input.now,
@@ -166,8 +185,97 @@ export function createRoom(input: {
   };
 }
 
+// An empty `inviteHash` is the edit link turned off: no credential hashes to it.
 export const checkInvite = (room: CloudRoom | null, inviteHash: string): RoomFailure | null =>
-  room === null || room.inviteHash !== inviteHash ? roomFailure("invalid") : null;
+  room === null || room.inviteHash === "" || room.inviteHash !== inviteHash
+    ? roomFailure("invalid")
+    : null;
+
+/** Whether `hash` is the board's view link now, which opens it to look at and nothing more. */
+export const isViewLink = (room: CloudRoom | null, hash: string): boolean =>
+  room?.viewLink !== undefined && room.viewLink.hash === hash;
+
+/** People looking on from the view link at once, on one board. */
+export const CLOUD_BOARD_MAX_VIEWERS = 200;
+
+export const checkViewerRoom = (viewing: number): RoomFailure | null =>
+  viewing >= CLOUD_BOARD_MAX_VIEWERS ? roomFailure("viewers_full") : null;
+
+export const canChange = (guest: CloudGuest): boolean => guest.role !== "viewer";
+
+/**
+ * Whether `guest` manages the board: turns its links on and off, says who can edit, and removes
+ * people. Its maker does, and an owner of the workspace it is in (`workspaceRole`, read there).
+ */
+export const managesBoard = (
+  room: CloudRoom,
+  guest: CloudGuest,
+  workspaceRole: string | null,
+): boolean =>
+  guest.locked !== true &&
+  (room.maker === guest.id || (room.workspaceId !== undefined && workspaceRole === "owner"));
+
+/**
+ * The board with one of its links made anew (`next`, the new credential and its hash), which
+ * ends the old one, or turned off (`null`). Only someone who manages the board may.
+ */
+export function withLink(
+  room: CloudRoom,
+  manages: boolean,
+  kind: CloudBoardLinkKind,
+  next: { readonly credential: string; readonly hash: string } | null,
+  now: string,
+): Result.Result<CloudRoom, RoomFailure> {
+  if (!manages) return Result.fail(roomFailure("not_maker"));
+  if (kind === "view") {
+    const { viewLink: _old, ...rest } = room;
+    return Result.succeed({
+      ...rest,
+      ...(next === null ? {} : { viewLink: next }),
+      updatedAt: now,
+    });
+  }
+  const { editLink: _old, ...rest } = room;
+  return Result.succeed({
+    ...rest,
+    inviteHash: next?.hash ?? "",
+    ...(next === null ? {} : { editLink: next.credential }),
+    updatedAt: now,
+  });
+}
+
+/**
+ * Lets someone on the board change it, or only look at it. The maker always can. Someone who can
+ * only look loses their machines' tokens, so their agent stops posting to the board at once.
+ */
+export function withRole(
+  room: CloudRoom,
+  manages: boolean,
+  guestId: GuestId,
+  role: CloudBoardRole,
+  now: string,
+): Result.Result<CloudRoom, RoomFailure> {
+  if (!manages) return Result.fail(roomFailure("not_maker"));
+  const target = room.guests.find((guest) => guest.id === guestId);
+  if (target === undefined) {
+    return Result.fail(roomFailure("rejected", "This person is no longer on the board."));
+  }
+  if (role === "view" && guestId === room.maker) {
+    return Result.fail(
+      roomFailure("rejected", "The person who made the board can always edit it."),
+    );
+  }
+  if ((role === "view") === (target.role === "viewer")) return Result.succeed(room);
+  const { role: _old, ...rest } = target;
+  const changed: CloudGuest = role === "view" ? { ...rest, role: "viewer" } : rest;
+  const machines = room.machines?.filter((token) => token.guestId !== guestId);
+  return Result.succeed({
+    ...room,
+    guests: room.guests.map((guest) => (guest === target ? changed : guest)),
+    ...(role === "view" && machines !== undefined ? { machines } : {}),
+    updatedAt: now,
+  });
+}
 
 // A machine's link holds few guests because its owner can clear them; nobody clears a cloud board.
 export const CLOUD_BOARD_MAX_GUESTS = 50;
@@ -241,18 +349,18 @@ export const checkDelete = (room: CloudRoom, by: GuestId): RoomFailure | null =>
   room.maker !== undefined && room.maker === by ? null : roomFailure("not_maker");
 
 /**
- * Takes `guestId` off the board, by the same rule as an owner removing a guest from a machine's
- * room: their cards, replies, reactions, turns and machines' tokens go with them. The maker
- * removes anyone else; anyone removes themselves (leaving), the maker too, which leaves the board
- * with no maker. Someone already gone leaves the room as it was.
+ * Takes `guestId` off the board with their cards, replies, reactions, turns and machines' tokens.
+ * Whoever manages it (`manages`; by default its maker) removes anyone but the maker; anyone leaves,
+ * the maker too, which leaves the board with no maker. Someone already gone changes nothing.
  */
 export function removePerson(
   room: CloudRoom,
   by: GuestId,
   guestId: GuestId,
   now: string,
+  manages: boolean = room.maker !== undefined && room.maker === by,
 ): Result.Result<CloudRoom, RoomFailure> {
-  if (by !== guestId && (room.maker === undefined || room.maker !== by)) {
+  if (by !== guestId && (!manages || guestId === room.maker)) {
     return Result.fail(roomFailure("not_maker"));
   }
   if (!room.guests.some((guest) => guest.id === guestId)) return Result.succeed(room);
@@ -294,12 +402,31 @@ export function boardAlarmAt(
 
 const CLOUD_MODEL = { driver: null, name: "Cloud board" } as const;
 
-export function viewFor(room: CloudRoom, guest: CloudGuest): GuestShareView {
+/** The name a view from the view link carries: it is nobody on the board. */
+export const VIEWER_NAME = "Viewer";
+
+/**
+ * The board as `guest` sees it, or as someone looking on from the view link (`null`). Whoever can
+ * only look gets no way to bring an agent; whoever can edit gets the links to hand on.
+ */
+export function viewFor(
+  room: CloudRoom,
+  guest: CloudGuest | null,
+  manages = false,
+): GuestShareView {
+  const edits = guest !== null && canChange(guest);
+  const viewers = room.guests.flatMap((person) => (canChange(person) ? [] : [person.id]));
+  const links = {
+    ...(edits && (room.inviteHash === "" || room.editLink !== undefined)
+      ? { edit: room.editLink ?? null }
+      : {}),
+    ...(guest !== null && room.viewLink !== undefined ? { view: room.viewLink.credential } : {}),
+  };
   return {
     shareId: room.shareId,
     title: room.title,
-    guestName: guest.name,
-    guestId: guest.id,
+    guestName: guest?.name ?? VIEWER_NAME,
+    ...(guest === null ? {} : { guestId: guest.id }),
     guests: room.guests.map(({ id, name, joinedAt }): ThreadGuest => ({ id, name, joinedAt })),
     direct: false,
     signIn: false,
@@ -308,8 +435,11 @@ export function viewFor(room: CloudRoom, guest: CloudGuest): GuestShareView {
     turns: room.turns ?? [],
     ...(room.board === undefined ? {} : { board: room.board }),
     cloud: true,
-    machines: true,
+    ...(edits ? { machines: true } : { viewOnly: true }),
     ...(room.maker === undefined ? {} : { maker: room.maker }),
+    ...(viewers.length === 0 ? {} : { viewers }),
+    ...(manages && guest !== null ? { manage: true } : {}),
+    ...(Object.keys(links).length === 0 ? {} : { links }),
     model: CLOUD_MODEL,
   };
 }
@@ -375,22 +505,30 @@ export function emptyThreadSnapshot(room: CloudRoom) {
 export type CloudStreamEvent =
   | { readonly type: "view"; readonly view: GuestShareView }
   | { readonly type: "thread"; readonly item: ReturnType<typeof emptyThreadSnapshot> }
-  | { readonly type: "presence"; readonly online: ReadonlyArray<GuestId> }
+  | {
+      readonly type: "presence";
+      readonly online: ReadonlyArray<GuestId>;
+      readonly viewing?: number;
+    }
   | RoomCursorsEvent
   | RoomAgentsEvent
   | { readonly type: "ended" };
 
 export const sseFrame = (event: CloudStreamEvent) => `data: ${JSON.stringify(event)}\n\n`;
 
-/** What a newly opened stream gets first, in the order a guest's client needs it. */
+/**
+ * What a newly opened stream gets first, in the order a guest's client needs it. `guest` is null
+ * for someone looking on from the view link.
+ */
 export const openingEvents = (
   room: CloudRoom,
-  guest: CloudGuest,
-  online: ReadonlyArray<GuestId>,
+  guest: CloudGuest | null,
+  presence: { readonly online: ReadonlyArray<GuestId>; readonly viewing: number },
+  manages = false,
 ): ReadonlyArray<CloudStreamEvent> => [
-  { type: "view", view: viewFor(room, guest) },
+  { type: "view", view: viewFor(room, guest, manages) },
   { type: "thread", item: emptyThreadSnapshot(room) },
-  { type: "presence", online },
+  { type: "presence", ...presence },
 ];
 
 /** The guests with a stream open, each once, in a stable order. */

@@ -736,6 +736,11 @@ export const RoomBoardAgentCardState = Schema.Struct({
   size: RoomBoardNote.fields.size,
   kind: RoomBoardNote.fields.kind,
   section: RoomBoardNote.fields.section,
+  /** A task's plan, so undoing a turn puts it back too. Absent on turns from before it was kept. */
+  status: RoomBoardNote.fields.status,
+  due: RoomBoardNote.fields.due,
+  priority: RoomBoardNote.fields.priority,
+  assignee: RoomBoardNote.fields.assignee,
 });
 export type RoomBoardAgentCardState = typeof RoomBoardAgentCardState.Type;
 
@@ -784,10 +789,26 @@ const RoomBoardAgentCardText = TrimmedNonEmptyString.check(
 /** A card as an agent names it: its id, or `thread` for the room thread's own card. */
 const RoomBoardAgentCardId = TrimmedNonEmptyString.check(Schema.isMaxLength(170));
 
+/** Someone a board tool names: "me" for the box's owner, or a person's name as the board shows it. */
+const RoomBoardAgentPerson = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(GUEST_NAME_MAX_LENGTH),
+).annotate({
+  description: '"me" (your user) or a name in `people` from t3_board_read. Never guess.',
+});
+const RoomBoardAgentDue = RoomTaskDue.annotate({ description: "YYYY-MM-DD." });
+
 /** The board tools' input and answers, which a guest's machine also sends to the room's owner. */
 export const RoomBoardAgentAddInput = Schema.Struct({
   cards: Schema.Array(
-    Schema.Struct({ text: RoomBoardAgentCardText, task: Schema.optional(Schema.Boolean) }),
+    Schema.Struct({
+      text: RoomBoardAgentCardText,
+      task: Schema.optional(Schema.Boolean),
+      /** Any of these makes the card a task. */
+      status: Schema.optional(RoomTaskStatus),
+      priority: Schema.optional(RoomTaskPriority),
+      due: Schema.optional(RoomBoardAgentDue),
+      assignee: Schema.optional(RoomBoardAgentPerson),
+    }),
   ).check(Schema.isMaxLength(ROOM_BOARD_AGENT_MAX_CHANGES)),
   /** A section's id or title. A title no section has makes a new one. */
   section: Schema.optional(RoomBoardAgentCardText),
@@ -800,6 +821,11 @@ export const RoomBoardAgentUpdateInput = Schema.Struct({
       id: RoomBoardAgentCardId,
       text: Schema.optional(RoomBoardAgentCardText),
       done: Schema.optional(Schema.Boolean),
+      status: Schema.optional(RoomTaskStatus),
+      /** null clears it. */
+      priority: Schema.optional(Schema.NullOr(RoomTaskPriority)),
+      due: Schema.optional(Schema.NullOr(RoomBoardAgentDue)),
+      assignee: Schema.optional(Schema.NullOr(RoomBoardAgentPerson)),
       section: Schema.optional(RoomBoardAgentCardText),
       lineTo: Schema.optional(RoomBoardAgentCardId),
     }),
@@ -817,10 +843,26 @@ export const RoomBoardAgentView = Schema.Struct({
       text: Schema.String,
       by: Schema.String,
       done: Schema.optional(Schema.Boolean),
+      /** A task's plan. Absent from an older server. */
+      status: Schema.optional(RoomTaskStatus),
+      priority: Schema.optional(RoomTaskPriority),
+      due: Schema.optional(Schema.String),
+      assignee: Schema.optional(Schema.String),
       section: Schema.optional(Schema.String),
+      /** Its top left corner on the board. */
+      x: Schema.optional(Schema.Number),
+      y: Schema.optional(Schema.Number),
     }),
   ),
   lines: Schema.Array(Schema.Struct({ from: Schema.String, to: Schema.String })),
+  /** Cards with a line to or from this thread's box. */
+  attachedToYou: Schema.optional(Schema.Array(Schema.String)),
+  /** Who a task can be for; `me` marks this box's user. */
+  people: Schema.optional(
+    Schema.Array(Schema.Struct({ name: Schema.String, me: Schema.optional(Schema.Boolean) })),
+  ),
+  /** Cards and lines left out to keep the answer short. */
+  omitted: Schema.optional(Schema.Struct({ cards: Schema.Number, lines: Schema.Number })),
 });
 export type RoomBoardAgentView = typeof RoomBoardAgentView.Type;
 
@@ -1827,3 +1869,41 @@ export type CloudBoardTitleRequest = typeof CloudBoardTitleRequest.Type;
 export const CLOUD_BOARD_PEOPLE_REMOVE_ROUTE = `${CLOUD_BOARD_ROUTE}/people/remove`;
 export const CloudBoardRemovePersonRequest = Schema.Struct({ guestId: GuestId });
 export type CloudBoardRemovePersonRequest = typeof CloudBoardRemovePersonRequest.Type;
+
+/**
+ * A cloud board's two links: `edit` joins it as someone who can change it, `view` only shows it,
+ * with no name and no seat. A view link's credential is `<share id>.v.<random>`, so the page that
+ * opens it knows which it was given.
+ */
+export const CloudBoardLinkKind = Schema.Literals(["edit", "view"]);
+export type CloudBoardLinkKind = typeof CloudBoardLinkKind.Type;
+export const isCloudBoardViewCredential = (credential: string): boolean =>
+  /^[^.]+\.v\.[^.]+$/.test(credential);
+
+/**
+ * Opens a cloud board from its view link (POST `{ credential }`), answered as a
+ * `GuestRedeemResult` whose token is the view link itself: it reads the board and nothing more.
+ */
+export const CLOUD_BOARD_VIEW_ROUTE = `${GUEST_ROUTE_PREFIX}/view`;
+
+/**
+ * Turns one of a board's links on with a new credential, which ends the old one, or off:
+ * `?share=`, for its maker and the owners of its workspace.
+ */
+export const CLOUD_BOARD_LINK_ROUTE = `${CLOUD_BOARD_ROUTE}/links`;
+export const CloudBoardLinkRequest = Schema.Struct({
+  kind: CloudBoardLinkKind,
+  on: Schema.Boolean,
+});
+export type CloudBoardLinkRequest = typeof CloudBoardLinkRequest.Type;
+export const CloudBoardLinkResult = Schema.Struct({
+  credential: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type CloudBoardLinkResult = typeof CloudBoardLinkResult.Type;
+
+/** Lets someone on a board change it, or only look at it: `?share=`, as the link route. */
+export const CLOUD_BOARD_PEOPLE_ROLE_ROUTE = `${CLOUD_BOARD_ROUTE}/people/role`;
+export const CloudBoardRole = Schema.Literals(["edit", "view"]);
+export type CloudBoardRole = typeof CloudBoardRole.Type;
+export const CloudBoardRoleRequest = Schema.Struct({ guestId: GuestId, role: CloudBoardRole });
+export type CloudBoardRoleRequest = typeof CloudBoardRoleRequest.Type;

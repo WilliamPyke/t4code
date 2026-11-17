@@ -146,7 +146,8 @@
     },
     "infra/boards": {
       // Wrangler loads src/worker.ts as the Worker entry and reads its default and class exports.
-      "entry": ["src/worker.ts!"],
+      // The sample board's script is run by hand.
+      "entry": ["src/worker.ts!", "scripts/sample-board.mjs"],
       // Named in tsconfig.json's `types`, never imported.
       "ignoreDependencies": ["@cloudflare/workers-types"],
     },

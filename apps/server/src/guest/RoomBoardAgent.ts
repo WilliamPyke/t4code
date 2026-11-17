@@ -117,6 +117,20 @@ const make = Effect.gen(function* () {
   const fail = (reason: RoomBoardAgentError["reason"]) => new RoomBoardAgentError({ reason });
   const uuid = random.uuidV4().pipe(Effect.orDie);
 
+  const ownerName = serverSettings.getSettings.pipe(
+    Effect.map((settings) => settings.guestOwnerName),
+    Effect.orElseSucceed(() => ""),
+  );
+
+  /** Who a task on the room's board can be for: its owner and its guests. */
+  const peopleOf = Effect.fn("RoomBoardAgent.peopleOf")(function* (room: ThreadRoom) {
+    const owner = roomPersonName(room, yield* ownerName)(undefined) ?? "the owner";
+    return [
+      { guestId: null, name: owner },
+      ...(room.guests ?? []).map((guest) => ({ guestId: guest.id, name: guest.name })),
+    ];
+  });
+
   const threadOf = (threadId: ThreadId, reason: RoomBoardAgentError["reason"]) =>
     orchestrator.getThreadRecords(threadId, []).pipe(
       Effect.map(({ thread }) => thread),
@@ -165,6 +179,8 @@ const make = Effect.gen(function* () {
         room,
         boxId: ROOM_BOARD_ROOM_BOX,
         author: null,
+        me: null,
+        people: yield* peopleOf(room),
         agent: agent(ROOM_BOARD_ROOM_BOX, room),
         hasRoomCard: true,
         board: room.board ?? EMPTY_ROOM_BOARD,
@@ -189,6 +205,8 @@ const make = Effect.gen(function* () {
       room,
       boxId: box.boxId,
       author: null,
+      me: null,
+      people: yield* peopleOf(room),
       agent: agent(box.boxId, room),
       hasRoomCard: true,
       board: room.board ?? EMPTY_ROOM_BOARD,
@@ -211,6 +229,8 @@ const make = Effect.gen(function* () {
       room,
       boxId: box.boxId,
       author: box.guestId,
+      me: box.guestId,
+      people: yield* peopleOf(room),
       agent: {
         boxId: box.boxId,
         ...(model === "" ? {} : { model }),
@@ -328,11 +348,7 @@ const make = Effect.gen(function* () {
     const away = yield* elsewhere(caller);
     if (away !== null) return yield* links.readBoard(away.threadId).pipe(Effect.mapError(fromLink));
     const target = yield* targetOf(caller);
-    const ownerName = yield* serverSettings.getSettings.pipe(
-      Effect.map((settings) => settings.guestOwnerName),
-      Effect.orElseSucceed(() => ""),
-    );
-    return roomBoardAgentView(target, roomPersonName(target.room, ownerName));
+    return roomBoardAgentView(target, roomPersonName(target.room, yield* ownerName));
   });
 
   const add = Effect.fn("RoomBoardAgent.add")(function* (

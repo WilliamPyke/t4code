@@ -207,6 +207,9 @@ function agentTarget(
     roomTitle: room.title,
     boxId,
     hasRoomCard: false,
+    // A cloud board has no owner: everyone on it is a person who joined.
+    people: room.guests.map((guest) => ({ guestId: guest.id, name: guest.name })),
+    me: guestId,
     board: room.board ?? EMPTY_ROOM_BOARD,
   });
 }

@@ -1,37 +1,52 @@
 import {
+  CLOUD_BOARD_LINK_ROUTE,
+  CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
+  CLOUD_BOARD_PEOPLE_ROLE_ROUTE,
+  GUEST_BOARD_ROUTE,
   GuestId,
   GuestShareId,
   GuestStreamEvent,
   ThreadId,
+  isCloudBoardViewCredential,
   type RoomBoardChange,
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
+import { SESSION_ROUTE, SESSION_ROUTES, STREAM_ROUTE, checkAccess } from "./access.ts";
 import { machineGuestOf } from "./machines.ts";
 import {
   CLOUD_BOARD_MAX_GUESTS,
+  CLOUD_BOARD_MAX_VIEWERS,
   EMPTY_LIVE,
   IDLE_BOARD_MS,
   UNTOUCHED_BOARD_MS,
   boardAlarmAt,
+  canChange,
   changeBoard,
   checkDelete,
+  checkInvite,
+  checkViewerRoom,
   createRoom,
   cursorsEventFor,
   guestBySession,
+  isViewLink,
   joinRoom,
+  managesBoard,
   moveCursor,
   openingEvents,
   removePerson,
   renameRoom,
+  roomFailure,
   sseFrame,
   viewFor,
+  withLink,
+  withRole,
   withoutPerson,
   type CloudRoom,
 } from "./room.ts";
-import { makeSecret, shareOfSecret } from "./secrets.ts";
+import { makeSecret, makeViewSecret, shareOfSecret } from "./secrets.ts";
 
 const NOW = "2026-11-16T10:00:00.000Z";
 const maker = GuestId.make("guest-maker");
@@ -150,13 +165,21 @@ describe("cloud room", () => {
 
   it("opens a stream with events a guest's client decodes", () => {
     const room = Result.getOrThrow(changeBoard(newRoom(), maker, notePut("note-1"), NOW));
-    const events = openingEvents(room, room.guests[0]!, [maker]).map((event) =>
-      decodeEvent(frameData(sseFrame(event))),
+    const events = openingEvents(room, room.guests[0]!, { online: [maker], viewing: 3 }).map(
+      (event) => decodeEvent(frameData(sseFrame(event))),
     );
     expect(events.map((event) => event.type)).toEqual(["view", "thread", "presence"]);
-    const [view, thread] = events;
+    const [view, thread, presence] = events;
     expect(view?.type === "view" && view.view.board?.notes[0]?.id).toBe("note-1");
     expect(thread?.type === "thread" && thread.item.kind).toBe("snapshot");
+    expect(presence).toEqual({ type: "presence", online: [maker], viewing: 3 });
+    // Someone looking on from the view link gets a view that names nobody and can change nothing.
+    const [looking] = openingEvents(room, null, { online: [maker], viewing: 1 }).map((event) =>
+      decodeEvent(frameData(sseFrame(event))),
+    );
+    expect(looking?.type === "view" && looking.view).toMatchObject({ viewOnly: true });
+    expect(looking?.type === "view" && looking.view).not.toHaveProperty("guestId");
+    expect(looking?.type === "view" && looking.view).not.toHaveProperty("machines");
   });
 
   it("lets only the maker delete the board or remove others, and anyone leave", () => {
@@ -207,6 +230,124 @@ describe("cloud room", () => {
     expect(first).toBe(made + IDLE_BOARD_MS + day);
     expect(boardAlarmAt(used, made + day - 1, first)).toBeNull();
     expect(boardAlarmAt(used, made + day, first)).toBe(made + day + IDLE_BOARD_MS + day);
+  });
+
+  it("opens to anyone with the view link, read-only, until the link is made anew or turned off", () => {
+    const room = Result.getOrThrow(join(newRoom(), "guest-two"));
+    expect(withLink(room, false, "view", null, NOW)).toStrictEqual(
+      Result.fail(roomFailure("not_maker")),
+    );
+    const viewOne = { credential: "share-one-0000.v.one", hash: "view-one" };
+    const shown = Result.getOrThrow(withLink(room, true, "view", viewOne, NOW));
+    expect([isViewLink(shown, "view-one"), isViewLink(shown, "invite-hash")]).toEqual([
+      true,
+      false,
+    ]);
+    const looking = viewFor(shown, null);
+    expect(looking).toMatchObject({ viewOnly: true, guestName: "Viewer", cloud: true });
+    expect(looking.guests.map((guest) => guest.name)).toEqual(["Ada", "Grace"]);
+    for (const field of ["guestId", "machines", "manage", "links"]) {
+      expect(looking).not.toHaveProperty(field);
+    }
+    // Everyone on the board may hand the view link on; only the maker manages it.
+    expect(viewFor(shown, shown.guests[1]!).links).toEqual({ view: viewOne.credential });
+    expect(viewFor(shown, shown.guests[0]!, true)).toMatchObject({ manage: true });
+    const remade = Result.getOrThrow(
+      withLink(shown, true, "view", { credential: "share-one-0000.v.two", hash: "view-two" }, NOW),
+    );
+    expect([isViewLink(remade, "view-one"), isViewLink(remade, "view-two")]).toEqual([false, true]);
+    const off = Result.getOrThrow(withLink(remade, true, "view", null, NOW));
+    expect(isViewLink(off, "view-two")).toBe(false);
+    expect(viewFor(off, off.guests[1]!)).not.toHaveProperty("links");
+    expect(isCloudBoardViewCredential(makeViewSecret("share-one-0000"))).toBe(true);
+    expect(isCloudBoardViewCredential(makeSecret("share-one-0000"))).toBe(false);
+    expect(shareOfSecret(makeViewSecret("share-one-0000"))).toBe("share-one-0000");
+  });
+
+  it("turns the edit link off or makes it anew, keeping everyone already on the board", () => {
+    const room = Result.getOrThrow(join(newRoom(), "guest-two"));
+    // A board made before links were kept shows no edit link; the browser keeps its own.
+    expect(viewFor(room, room.guests[1]!)).not.toHaveProperty("links");
+    const off = Result.getOrThrow(withLink(room, true, "edit", null, NOW));
+    expect(Result.isFailure(join(off, "guest-three"))).toBe(true);
+    expect(checkInvite(off, "")).toMatchObject({ reason: "invalid" });
+    expect(off.guests).toHaveLength(2);
+    expect(viewFor(off, off.guests[1]!).links).toEqual({ edit: null });
+    const remade = Result.getOrThrow(
+      withLink(off, true, "edit", { credential: "share-one-0000.new", hash: "new-hash" }, NOW),
+    );
+    expect(checkInvite(remade, "invite-hash")).not.toBeNull();
+    expect(checkInvite(remade, "new-hash")).toBeNull();
+    expect(viewFor(remade, remade.guests[1]!).links).toEqual({ edit: "share-one-0000.new" });
+  });
+
+  it("refuses every route but reading the board to whoever can only look", () => {
+    for (const route of Object.keys(SESSION_ROUTES)) {
+      const reading = route === SESSION_ROUTE || route === STREAM_ROUTE;
+      const managing = [
+        CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
+        CLOUD_BOARD_PEOPLE_ROLE_ROUTE,
+        CLOUD_BOARD_LINK_ROUTE,
+      ].includes(route);
+      expect([route, checkAccess("edit", route)]).toEqual([route, null]);
+      expect([route, checkAccess("link", route)?.status ?? null]).toEqual([
+        route,
+        reading ? null : 403,
+      ]);
+      // Someone on the board who can only look may still leave, or manage it as a workspace owner.
+      expect([route, checkAccess("view", route)?.reason ?? null]).toEqual([
+        route,
+        reading || managing ? null : "view_only",
+      ]);
+    }
+    expect(checkAccess("link", GUEST_BOARD_ROUTE)).toMatchObject({ reason: "view_only" });
+  });
+
+  it("makes someone a viewer at once, and takes their agent off the board", () => {
+    const grace = GuestId.make("guest-two");
+    const joined = Result.getOrThrow(join(newRoom(), "guest-two"));
+    const room = { ...joined, machines: [{ guestId: grace, hash: "h", kind: "room" as const }] };
+    expect(Result.isFailure(withRole(room, false, grace, "view", NOW))).toBe(true);
+    expect(withRole(room, true, maker, "view", NOW)).toMatchObject({
+      failure: { reason: "rejected" },
+    });
+    const viewing = Result.getOrThrow(withRole(room, true, grace, "view", NOW));
+    const graceNow = viewing.guests[1]!;
+    expect(canChange(graceNow)).toBe(false);
+    expect(machineGuestOf(viewing, "h", "room", 0)).toBeUndefined();
+    // The view her open page gets next says so, and everyone sees who can only look.
+    expect(viewFor(viewing, graceNow)).toMatchObject({ viewOnly: true, viewers: [grace] });
+    expect(viewFor(viewing, graceNow)).not.toHaveProperty("machines");
+    expect(viewFor(viewing, viewing.guests[0]!).viewers).toEqual([grace]);
+    expect(withRole(viewing, true, grace, "view", NOW)).toStrictEqual(Result.succeed(viewing));
+    const editing = Result.getOrThrow(withRole(viewing, true, grace, "edit", NOW));
+    expect(canChange(editing.guests[1]!)).toBe(true);
+    expect(viewFor(editing, editing.guests[1]!)).toMatchObject({ machines: true });
+    expect(viewFor(editing, editing.guests[1]!)).not.toHaveProperty("viewOnly");
+  });
+
+  it("lets the maker and the workspace's owners manage the board, never removing its maker", () => {
+    const grace = GuestId.make("guest-two");
+    const room = Result.getOrThrow(join(newRoom(), "guest-two"));
+    const [ada, graceSeat] = [room.guests[0]!, room.guests[1]!];
+    expect(managesBoard(room, ada, null)).toBe(true);
+    expect(managesBoard(room, graceSeat, "owner")).toBe(false);
+    const inWorkspace = { ...room, workspaceId: "workspace-1" };
+    expect(managesBoard(inWorkspace, graceSeat, "owner")).toBe(true);
+    expect(managesBoard(inWorkspace, graceSeat, "member")).toBe(false);
+    expect(managesBoard(inWorkspace, { ...graceSeat, locked: true }, "owner")).toBe(false);
+    const third = Result.getOrThrow(join(inWorkspace, "guest-three", "Lin"));
+    const removed = removePerson(third, grace, GuestId.make("guest-three"), NOW, true);
+    expect(Result.getOrThrow(removed).guests).toHaveLength(2);
+    expect(Result.isFailure(removePerson(third, grace, maker, NOW, true))).toBe(true);
+  });
+
+  it("holds as many people looking on at once as a board allows", () => {
+    expect(checkViewerRoom(CLOUD_BOARD_MAX_VIEWERS - 1)).toBeNull();
+    expect(checkViewerRoom(CLOUD_BOARD_MAX_VIEWERS)).toMatchObject({
+      status: 409,
+      reason: "viewers_full",
+    });
   });
 
   it("shows each guest everyone else's pointer, until they leave", () => {

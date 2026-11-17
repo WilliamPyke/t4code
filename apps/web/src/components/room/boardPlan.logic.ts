@@ -256,6 +256,11 @@ function firstClearSlot(
 export interface BoardPlanTaskPlace extends BoardPoint {
   /** The section it goes in, at the size that holds it, when that has to grow. */
   readonly grow?: { readonly id: string; readonly size: RoomBoardSize };
+  /**
+   * The size of the newest task, which it takes so a pile stays even: an agent's tasks and a
+   * template's have one, and a task without one is as tall as its text.
+   */
+  readonly size?: RoomBoardSize;
 }
 
 /**
@@ -268,6 +273,16 @@ export function boardPlanTaskPlace(
   board: RoomBoard,
   cardIds: ReadonlyArray<string>,
   heightOf: (note: RoomBoardNote) => number | undefined = () => undefined,
+): BoardPlanTaskPlace {
+  const place = boardPlanTaskSpot(board, cardIds, heightOf);
+  const size = board.notes.findLast((note) => note.kind === "task" && note.section !== true)?.size;
+  return size === undefined ? place : { ...place, size };
+}
+
+function boardPlanTaskSpot(
+  board: RoomBoard,
+  cardIds: ReadonlyArray<string>,
+  heightOf: (note: RoomBoardNote) => number | undefined,
 ): BoardPlanTaskPlace {
   const rectOf = (note: RoomBoardNote): BoardRect => {
     const rect = boardNoteRect(note);
@@ -320,6 +335,18 @@ export function boardPlanTaskPlace(
       }
     }
   }
+  const blocked = [...taken, ...sections.map(boardNoteRect)];
+  // A section that can grow no more: its next row goes under it, lined up with its tasks.
+  if (section !== undefined) {
+    const frame = boardNoteRect(section);
+    const below = firstClearSlot(
+      { x: frame.x + SECTION_INSET.x, y: frame.y + frame.height + TASK_GAP },
+      Math.max(1, Math.floor((frame.width - SECTION_INSET.x) / TASK_STEP_X)),
+      blocked,
+      FREE_ROWS,
+    );
+    if (below !== null) return below;
+  }
   // Rows with the newest task, from the leftmost task of its row, kept clear of every section.
   const free = tasks
     .map(rectOf)
@@ -327,7 +354,6 @@ export function boardPlanTaskPlace(
   const row = free.filter((rect) => Math.abs(rect.y - newestRect.y) < TASK_STEP_Y / 2);
   const left = Math.min(newestRect.x, ...row.map((rect) => rect.x));
   const columns = Math.max(FREE_ROW_TASKS, Math.round((newestRect.x - left) / TASK_STEP_X) + 1);
-  const blocked = [...taken, ...sections.map(boardNoteRect)];
   // A few rows at most: past them, a crowded board would push the task far off. The nearest
   // clear spot right of the newest task is better then.
   return (

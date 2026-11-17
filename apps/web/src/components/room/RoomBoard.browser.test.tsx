@@ -2,6 +2,7 @@ import {
   GuestId,
   ROOM_BOARD_MAX_ARTIFACTS,
   type RoomBoardChange,
+  type RoomBoardEdge,
   type RoomBoardNote,
   type RoomCursor,
 } from "@t3tools/contracts";
@@ -29,18 +30,23 @@ function renderBoard(
     onCursor,
     onUseNote,
     onTakeTask,
+    edges = [],
+    takes = async () => true,
   }: {
     readonly messages?: ComponentProps<typeof RoomBoard>["messages"];
     readonly onCursor?: ComponentProps<typeof RoomBoard>["onCursor"];
     readonly onUseNote?: ComponentProps<typeof RoomBoard>["onUseNote"];
     readonly onTakeTask?: ComponentProps<typeof RoomBoard>["onTakeTask"];
+    readonly edges?: ReadonlyArray<RoomBoardEdge>;
+    /** What the room says to each change; it takes every one by default. */
+    readonly takes?: (change: RoomBoardChange) => Promise<boolean>;
   } = {},
 ) {
-  const onChange = vi.fn(async (_change: RoomBoardChange) => true);
+  const onChange = vi.fn(takes);
   const screen = render(
     <RoomBoard
       title="Launch"
-      room={{ messages: [], board: { positions: {}, notes: [...notes] } }}
+      room={{ messages: [], board: { positions: {}, notes: [...notes], edges: [...edges] } }}
       viewKey={viewKey}
       online={[]}
       messages={messages}
@@ -151,7 +157,10 @@ describe("RoomBoard sections", () => {
     await using screen = await board.screen;
     for (const name of ["Section title", "Thread name"]) {
       const field = screen.getByRole("textbox", { name, exact: true });
-      await userEvent.click(field);
+      // A section's title is a field of its own; a card's title, like its text, takes a double-click.
+      if (name === "Section title") await userEvent.click(field);
+      else await userEvent.dblClick(field);
+      await expect.element(field).toHaveFocus();
       await userEvent.keyboard(" draft{Escape}");
       await expect.element(field).not.toHaveFocus();
       await expect.element(field).toHaveValue(name === "Section title" ? "Plan" : "Review");
@@ -354,6 +363,30 @@ describe("RoomBoard clicks", () => {
     await expect.element(screen.getByRole("status")).not.toBeInTheDocument();
   });
 
+  it("adds a card to the selection with Ctrl-click, and keeps a selected note out of its text on a click", async () => {
+    const board = renderBoard(notes);
+    await using screen = await board.screen;
+    await userEvent.click(headerIn(screen.container, "a"));
+    await userEvent.keyboard("{Control>}");
+    await userEvent.click(headerIn(screen.container, "b"));
+    await userEvent.keyboard("{/Control}");
+    await expect.element(screen.getByRole("status")).toHaveTextContent("2 selected");
+
+    // A second click on a note selected alone leaves it selected, so Delete takes the note.
+    const text = () => {
+      const field = screen.container.querySelector<HTMLTextAreaElement>(
+        '[data-board-item="note:c"] textarea',
+      );
+      if (field === null) throw new Error("The board did not draw note c's text");
+      return field;
+    };
+    await userEvent.click(text());
+    await userEvent.click(text());
+    await expect.element(text()).not.toHaveFocus();
+    await userEvent.dblClick(text());
+    await expect.element(text()).toHaveFocus();
+  });
+
   it("drags a card from outside the selection alone, and makes it the selection", async () => {
     const board = renderBoard(notes);
     const { onChange } = board;
@@ -395,6 +428,63 @@ describe("RoomBoard clicks", () => {
           ?.value,
       ).toBe("Second"),
     );
+  });
+});
+
+describe("RoomBoard undo", () => {
+  it("brings back the lines between notes deleted together, once the room has both notes", async () => {
+    // A room that takes a line only between notes it has, and is slow to take note a back.
+    const there = new Set(["a", "b"]);
+    let releaseA: () => void = () => {};
+    const aTaken = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const takes = async (change: RoomBoardChange) => {
+      if (change.type === "note.remove") there.delete(change.noteId);
+      if (change.type === "note.put" && change.noteId === "a" && !there.has("a")) {
+        await aTaken;
+        there.add("a");
+        return true;
+      }
+      if (change.type === "note.put") there.add(change.noteId);
+      if (change.type === "edge.put") {
+        return [change.from, change.to].every((ref) => there.has(ref.replace("note:", "")));
+      }
+      return true;
+    };
+    const board = renderBoard(
+      [
+        { id: "a", text: "First", x: 0, y: 0 },
+        { id: "b", text: "Second", x: 300, y: 0 },
+      ],
+      undefined,
+      { edges: [{ id: "e", from: "note:a", to: "note:b" }], takes },
+    );
+    const { onChange } = board;
+    await using screen = await board.screen;
+    await userEvent.click(screen.getByRole("application", { name: "Room board" }), {
+      position: { x: 900, y: 600 },
+    });
+    await userEvent.keyboard("{Control>}a{/Control}");
+    await userEvent.keyboard("{Delete}");
+    await vi.waitFor(() => expect(there.size).toBe(0));
+    await userEvent.keyboard("{Control>}z{/Control}");
+    await vi.waitFor(() => expect(there.has("b")).toBe(true));
+    releaseA();
+    await vi.waitFor(() =>
+      expect(onChange).toHaveBeenCalledWith({
+        type: "edge.put",
+        edgeId: "e",
+        from: "note:a",
+        to: "note:b",
+      }),
+    );
+    // Sent once, after both notes: never early, when the room would have refused it.
+    const lines = onChange.mock.calls.flatMap(([change], index) =>
+      change.type === "edge.put" ? [onChange.mock.results[index]?.value] : [],
+    );
+    expect(lines).toHaveLength(1);
+    await expect(lines[0]).resolves.toBe(true);
   });
 });
 

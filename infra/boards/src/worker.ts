@@ -4,8 +4,14 @@ import {
   CLOUD_BOARD_ACCOUNT_OPEN_ROUTE,
   CLOUD_BOARD_ACCOUNT_ROUTE,
   CLOUD_WORKSPACES_ROUTE,
+  CLOUD_BOARD_LINK_ROUTE,
   CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
+  CLOUD_BOARD_PEOPLE_ROLE_ROUTE,
   CLOUD_BOARD_ROUTE,
+  CLOUD_BOARD_VIEW_ROUTE,
+  CloudBoardLinkRequest,
+  CloudBoardRoleRequest,
+  type CloudBoardLinkResult,
   CloudBoardAccountClaimRequest,
   CloudBoardCreateResult,
   GuestRedeemResult,
@@ -26,7 +32,6 @@ import {
   GUEST_ROOM_EXPIRES_HEADER,
   GUEST_ROOM_TURN_ROUTE,
   GUEST_ROOM_UPDATES_ROUTE,
-  GUEST_ROUTE_PREFIX,
   GUEST_SHARE_PARAM,
   GuestAgentActivityRequest,
   GuestCursorRequest,
@@ -62,17 +67,30 @@ import {
   type AgentsLive,
 } from "./machines.ts";
 import {
+  INVITE_ROUTE,
+  JSON_MAX_BODY_BYTES,
+  REDEEM_ROUTE,
+  SESSION_ROUTE,
+  SESSION_ROUTES,
+  STREAM_ROUTE,
+  checkAccess,
+} from "./access.ts";
+import {
   EMPTY_LIVE,
   FAR_EXPIRY,
   ROOM_MAX_CHUNKS,
   boardAlarmAt,
+  canChange,
   changeBoard,
   checkDelete,
   checkInvite,
+  checkViewerRoom,
   createRoom,
   cursorsEventFor,
   guestBySession,
+  isViewLink,
   joinRoom,
+  managesBoard,
   moveCursor,
   onlineOf,
   openingEvents,
@@ -83,6 +101,8 @@ import {
   roomOfChunks,
   sseFrame,
   viewFor,
+  withLink,
+  withRole,
   withoutPerson,
   type CloudGuest,
   type CloudRoom,
@@ -102,7 +122,7 @@ import {
   withoutAccountBoard,
 } from "./account.ts";
 import { clerkKeys, verifyClerkSession, type ClerkKeyLookup } from "./clerk.ts";
-import { hashSecret, isShareId, makeSecret, shareOfSecret } from "./secrets.ts";
+import { hashSecret, isShareId, makeSecret, makeViewSecret, shareOfSecret } from "./secrets.ts";
 import {
   lockOutAccount,
   placeBoard,
@@ -129,15 +149,7 @@ interface Env {
   readonly CLERK_ISSUER?: string;
 }
 
-const INVITE_ROUTE = `${GUEST_ROUTE_PREFIX}/invite`;
-const REDEEM_ROUTE = `${GUEST_ROUTE_PREFIX}/redeem`;
-const SESSION_ROUTE = `${GUEST_ROUTE_PREFIX}/session`;
-const STREAM_ROUTE = `${GUEST_ROUTE_PREFIX}/stream`;
-
 const NO_STORE = { "cache-control": "no-store" };
-// As on a machine's guest routes: a name, a title or one board change, and a pointer is a few bytes.
-const JSON_MAX_BODY_BYTES = 64 * 1024;
-const CURSOR_MAX_BODY_BYTES = 256;
 // Cloudflare closes idle streams after about 100 seconds.
 const HEARTBEAT_MS = 20_000;
 const BOARD_CREATE_LIMIT = 30;
@@ -160,6 +172,8 @@ const decodeTitle = Schema.decodeUnknownOption(Schema.fromJsonString(CloudBoardT
 const decodeRemove = Schema.decodeUnknownOption(
   Schema.fromJsonString(CloudBoardRemovePersonRequest),
 );
+const decodeLink = Schema.decodeUnknownOption(Schema.fromJsonString(CloudBoardLinkRequest));
+const decodeRole = Schema.decodeUnknownOption(Schema.fromJsonString(CloudBoardRoleRequest));
 const decodeInvite = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ credential: Schema.String })),
 );
@@ -212,17 +226,6 @@ async function forward(env: Env, shareId: string, request: Request, url: URL, ma
     body,
   });
 }
-
-const SESSION_ROUTES: Readonly<Record<string, { method: string; maxBytes: number }>> = {
-  [CLOUD_BOARD_ROUTE]: { method: "DELETE", maxBytes: 0 },
-  [CLOUD_BOARD_PEOPLE_REMOVE_ROUTE]: { method: "POST", maxBytes: JSON_MAX_BODY_BYTES },
-  [CLOUD_BOARD_TITLE_ROUTE]: { method: "POST", maxBytes: JSON_MAX_BODY_BYTES },
-  [SESSION_ROUTE]: { method: "GET", maxBytes: 0 },
-  [STREAM_ROUTE]: { method: "GET", maxBytes: 0 },
-  [GUEST_BOARD_ROUTE]: { method: "POST", maxBytes: JSON_MAX_BODY_BYTES },
-  [GUEST_BOARD_CURSOR_ROUTE]: { method: "POST", maxBytes: CURSOR_MAX_BODY_BYTES },
-  [GUEST_HANDOFF_ROUTE]: { method: "POST", maxBytes: JSON_MAX_BODY_BYTES },
-};
 
 // Called by a person's own Tinkjam with a bearer handoff or room token, which names the board.
 // The same caps as a machine's guest routes.
@@ -367,7 +370,11 @@ async function route(request: Request, env: Env): Promise<Response> {
       ? created
       : linkedResponse(env, account, created, (text) => Option.getOrNull(decodeCreated(text)));
   }
-  if ((path === INVITE_ROUTE || path === REDEEM_ROUTE) && request.method === "POST") {
+  if (
+    (path === INVITE_ROUTE || path === REDEEM_ROUTE || path === CLOUD_BOARD_VIEW_ROUTE) &&
+    request.method === "POST"
+  ) {
+    // Looking on from the view link is nobody's seat: no account comes into it.
     const account = path === REDEEM_ROUTE ? await optionalAccountOf(request, env) : null;
     if (account !== null && typeof account !== "string") return failureResponse(account);
     const body = await readBody(request, JSON_MAX_BODY_BYTES);
@@ -454,7 +461,12 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 interface OpenStream {
+  /** Someone looking on from the view link gets an id of their own that names nobody. */
   readonly guestId: GuestId;
+  /** The view link the page was opened with; null for someone on the board. */
+  readonly viewHash: string | null;
+  /** Whether the person manages the board, as it was when the page opened. */
+  readonly manages: boolean;
   readonly writer: WritableStreamDefaultWriter<Uint8Array>;
   /** Whether the reader took the last ping. One that did not by the next is gone. */
   pingTaken: boolean;
@@ -576,14 +588,38 @@ export class BoardRoom extends DurableObject<Env> {
       }
       case REDEEM_ROUTE:
         return this.redeem(await request.text());
+      case CLOUD_BOARD_VIEW_ROUTE: {
+        const body = decodeInvite(await request.text());
+        if (Option.isNone(body)) return failureResponse(roomFailure("bad_request"));
+        const room = this.room;
+        if (room === null || !isViewLink(room, await hashSecret(body.value.credential))) {
+          return failureResponse(roomFailure("invalid"));
+        }
+        // The view link is its own session: changing the link ends every page opened with it.
+        const result: GuestRedeemResult = {
+          token: body.value.credential,
+          shareId: room.shareId,
+          threadId: room.threadId,
+        };
+        return Response.json(result, { headers: NO_STORE });
+      }
     }
     if (MACHINE_ROUTES[`${request.method} ${url.pathname}`] !== undefined) {
       return this.machine(request, url);
     }
-    const guest = guestBySession(this.room, await hashSecret(bearerOf(request)));
+    const hash = await hashSecret(bearerOf(request));
+    const guest = guestBySession(this.room, hash);
     const room = this.room;
+    if (room !== null && guest === undefined && isViewLink(room, hash)) {
+      const refused = checkAccess("link", url.pathname);
+      if (refused !== null) return failureResponse(refused);
+      if (url.pathname === STREAM_ROUTE) return this.openStream(room, null, request.signal, hash);
+      return noContent();
+    }
     // The board was deleted, or this person was taken off it.
     if (guest === undefined || room === null) return failureResponse(roomFailure("ended"));
+    const refused = checkAccess(canChange(guest) ? "edit" : "view", url.pathname);
+    if (refused !== null) return failureResponse(refused);
     switch (url.pathname) {
       case CLOUD_BOARD_ROUTE: {
         const refused = checkDelete(room, guest.id);
@@ -594,13 +630,60 @@ export class BoardRoom extends DurableObject<Env> {
       case CLOUD_BOARD_PEOPLE_REMOVE_ROUTE: {
         const body = decodeRemove(await request.text());
         if (Option.isNone(body)) return failureResponse(roomFailure("bad_request"));
-        const refused = await this.remove(guest.id, body.value.guestId);
+        const manages =
+          body.value.guestId !== guest.id && (await this.manages(this.room ?? room, guest));
+        const refused = await this.remove(guest.id, body.value.guestId, manages);
         return refused === null ? noContent() : failureResponse(refused);
+      }
+      case CLOUD_BOARD_PEOPLE_ROLE_ROUTE: {
+        const body = decodeRole(await request.text());
+        if (Option.isNone(body)) return failureResponse(roomFailure("bad_request"));
+        const manages = await this.manages(this.room ?? room, guest);
+        const current = this.room ?? room;
+        const next = withRole(current, manages, body.value.guestId, body.value.role, nowIso());
+        if (Result.isFailure(next)) return failureResponse(next.failure);
+        if (next.success !== current && body.value.role === "view") {
+          // Their pointer and their agent's runs go at once; their open pages stay, read-only.
+          this.live = withoutPerson(this.live, body.value.guestId);
+          this.setAgents(agentsWithoutPerson(this.agents, body.value.guestId), Date.now());
+          this.sendCursors(Date.now());
+        }
+        await this.save(next.success);
+        return noContent();
+      }
+      case CLOUD_BOARD_LINK_ROUTE: {
+        const body = decodeLink(await request.text());
+        if (Option.isNone(body)) return failureResponse(roomFailure("bad_request"));
+        const manages = await this.manages(this.room ?? room, guest);
+        const current = this.room ?? room;
+        const credential = body.value.on
+          ? body.value.kind === "view"
+            ? makeViewSecret(current.shareId)
+            : makeSecret(current.shareId)
+          : null;
+        const next = withLink(
+          current,
+          manages,
+          body.value.kind,
+          credential === null ? null : { credential, hash: await hashSecret(credential) },
+          nowIso(),
+        );
+        if (Result.isFailure(next)) return failureResponse(next.failure);
+        await this.save(next.success);
+        if (body.value.kind === "view") this.endOldViews();
+        const result: CloudBoardLinkResult = { credential };
+        return Response.json(result, { headers: NO_STORE });
       }
       case SESSION_ROUTE:
         return noContent();
       case STREAM_ROUTE:
-        return this.openStream(room, guest, request.signal);
+        return this.openStream(
+          room,
+          guest,
+          request.signal,
+          null,
+          await this.manages(this.room ?? room, guest),
+        );
       case CLOUD_BOARD_TITLE_ROUTE: {
         const body = decodeTitle(await request.text());
         if (Option.isNone(body)) return failureResponse(roomFailure("bad_request"));
@@ -645,11 +728,7 @@ export class BoardRoom extends DurableObject<Env> {
         const next = moveCursor(this.live, guest.id, body.value, now);
         if (Result.isFailure(next)) return failureResponse(next.failure);
         this.live = next.success;
-        for (const stream of this.streams) {
-          if (stream.guestId !== guest.id) {
-            this.send(stream, sseFrame(cursorsEventFor(this.live, stream.guestId, now)));
-          }
-        }
+        this.sendCursors(now, guest.id);
         return noContent();
       }
     }
@@ -673,6 +752,7 @@ export class BoardRoom extends DurableObject<Env> {
       threadId: ThreadId.make(`board-${shareId}`),
       title: body.value.title,
       inviteHash,
+      editLink: credential,
       maker: { id: GuestId.make(crypto.randomUUID()), name: body.value.name, sessionHash },
       now: nowIso(),
     });
@@ -744,8 +824,9 @@ export class BoardRoom extends DurableObject<Env> {
       return Response.json(exported.success.export, { headers: NO_STORE });
     }
     const guest = machineGuestOf(room, hash, "room", now);
-    // As a machine's room answers a removed guest's machine, so it stops posting for good.
-    if (guest === undefined) return failureResponse(roomFailure("ended"));
+    // As a machine's room answers a removed guest's machine, so it stops posting for good. Making
+    // someone a viewer drops their machines' tokens; this holds should one be left.
+    if (guest === undefined || !canChange(guest)) return failureResponse(roomFailure("ended"));
     const allow = (kind: string, limit: number) =>
       allowRequest(this.recent, `${kind}:${guest.id}`, limit, now);
     const tooFast = () => failureResponse(roomFailure("too_fast"));
@@ -818,10 +899,14 @@ export class BoardRoom extends DurableObject<Env> {
    * Takes `guestId` off the board by `by`'s say, as the remove route does: their open pages are
    * told, their agent's runs go, and their account's list drops the board.
    */
-  private async remove(by: GuestId, guestId: GuestId): Promise<RoomFailure | null> {
+  private async remove(
+    by: GuestId,
+    guestId: GuestId,
+    manages?: boolean,
+  ): Promise<RoomFailure | null> {
     const current = this.room;
     if (current === null) return roomFailure("ended");
-    const next = removePerson(current, by, guestId, nowIso());
+    const next = removePerson(current, by, guestId, nowIso(), manages);
     if (Result.isFailure(next)) return next.failure;
     if (next.success === current) return null;
     const account = accountOfGuest(current, guestId);
@@ -834,6 +919,36 @@ export class BoardRoom extends DurableObject<Env> {
       await this.tellAccounts([account], (index) => index.forget(current.shareId));
     }
     return null;
+  }
+
+  /** Whether `guest` manages the board: its maker, or an owner of its workspace as it says now. */
+  private async manages(room: CloudRoom, guest: CloudGuest): Promise<boolean> {
+    if (managesBoard(room, guest, null)) return true;
+    if (room.workspaceId === undefined || guest.accountId === undefined) return false;
+    const role = await workspaceOf(this.env, room.workspaceId)
+      .roleOf(guest.accountId)
+      .catch(() => null);
+    return managesBoard(room, guest, role);
+  }
+
+  /** Ends every page opened with a view link the board no longer has. */
+  private endOldViews() {
+    const current = this.room?.viewLink?.hash;
+    for (const stream of this.streams) {
+      if (stream.viewHash !== null && stream.viewHash !== current) this.drop(stream, true);
+    }
+  }
+
+  /** Everyone's pointers as each open page gets them; once for all who look on from the link. */
+  private sendCursors(now: number, except?: GuestId) {
+    let forViewers: string | null = null;
+    for (const stream of this.streams) {
+      if (stream.guestId === except) continue;
+      if (stream.viewHash !== null) {
+        forViewers ??= sseFrame(cursorsEventFor(this.live, stream.guestId, now));
+        this.send(stream, forViewers);
+      } else this.send(stream, sseFrame(cursorsEventFor(this.live, stream.guestId, now)));
+    }
   }
 
   private async tellAccounts(
@@ -983,10 +1098,16 @@ export class BoardRoom extends DurableObject<Env> {
       chunkKey(chunks.length + index),
     );
     await this.ctx.storage.delete(before === 0 ? [...stale, ROOM_KEY] : stale);
+    let forViewers: string | null = null;
     for (const stream of this.streams) {
+      if (stream.viewHash !== null) {
+        forViewers ??= sseFrame({ type: "view", view: viewFor(room, null) });
+        this.send(stream, forViewers);
+        continue;
+      }
       const guest = room.guests.find((candidate) => candidate.id === stream.guestId);
       if (guest !== undefined)
-        this.send(stream, sseFrame({ type: "view", view: viewFor(room, guest) }));
+        this.send(stream, sseFrame({ type: "view", view: viewFor(room, guest, stream.manages) }));
     }
   }
 
@@ -1030,7 +1151,19 @@ export class BoardRoom extends DurableObject<Env> {
   }
 
   private online() {
-    return onlineOf([...this.streams].map((stream) => stream.guestId));
+    return onlineOf(
+      [...this.streams].flatMap((stream) => (stream.viewHash === null ? [stream.guestId] : [])),
+    );
+  }
+
+  private viewing() {
+    let count = 0;
+    for (const stream of this.streams) if (stream.viewHash !== null) count++;
+    return count;
+  }
+
+  private presence(): CloudStreamEvent {
+    return { type: "presence", online: this.online(), viewing: this.viewing() };
   }
 
   private send(stream: OpenStream, frame: string) {
@@ -1060,10 +1193,30 @@ export class BoardRoom extends DurableObject<Env> {
     }
   }
 
-  private openStream(room: CloudRoom, guest: CloudGuest, signal: AbortSignal): Response {
+  /**
+   * Opens `guest`'s page on the board, or the page of someone looking on from the view link
+   * (`guest` null, with that link's `viewHash`), who counts among those viewing and has no pointer.
+   */
+  private openStream(
+    room: CloudRoom,
+    guest: CloudGuest | null,
+    signal: AbortSignal,
+    viewHash: string | null,
+    manages = false,
+  ): Response {
+    if (guest === null) {
+      const full = checkViewerRoom(this.viewing());
+      if (full !== null) return failureResponse(full);
+    }
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-    const stream: OpenStream = { guestId: guest.id, writer: writable.getWriter(), pingTaken: true };
-    const wasOnline = this.isOnline(guest.id);
+    const stream: OpenStream = {
+      guestId: guest?.id ?? GuestId.make(`viewer-${crypto.randomUUID()}`),
+      viewHash: guest === null ? viewHash : null,
+      manages,
+      writer: writable.getWriter(),
+      pingTaken: true,
+    };
+    const wasOnline = this.isOnline(stream.guestId);
     this.streams.add(stream);
     // Closed or cancelled by the reader, or the request aborted: the guest's page went.
     stream.writer.closed.then(
@@ -1071,10 +1224,12 @@ export class BoardRoom extends DurableObject<Env> {
       () => this.drop(stream),
     );
     signal.addEventListener("abort", () => this.drop(stream));
-    const online = this.online();
-    for (const event of openingEvents(room, guest, online)) this.send(stream, sseFrame(event));
+    const presence = { online: this.online(), viewing: this.viewing() };
+    for (const event of openingEvents(room, guest, presence, manages)) {
+      this.send(stream, sseFrame(event));
+    }
     const now = Date.now();
-    const cursors = cursorsEventFor(this.live, guest.id, now);
+    const cursors = cursorsEventFor(this.live, stream.guestId, now);
     if (cursors.cursors.length > 0 || (cursors.views?.length ?? 0) > 0) {
       this.send(stream, sseFrame(cursors));
     }
@@ -1082,7 +1237,7 @@ export class BoardRoom extends DurableObject<Env> {
     if (agents.running.length > 0 || (agents.boxes?.length ?? 0) > 0) {
       this.send(stream, sseFrame(agents));
     }
-    if (!wasOnline) this.broadcast({ type: "presence", online }, stream);
+    if (!wasOnline) this.broadcast(this.presence(), stream);
     this.heartbeat ??= setInterval(() => this.ping(), HEARTBEAT_MS);
     return new Response(readable, {
       headers: {
@@ -1109,12 +1264,11 @@ export class BoardRoom extends DurableObject<Env> {
     // Everyone left: the home they go back to shows the board as they left it.
     if (this.streams.size === 0 && this.previewTimer !== null) void this.sendPreview();
     if (this.isOnline(stream.guestId)) return;
+    this.broadcast(this.presence());
+    // Someone looking on from the view link had no pointer to take away.
+    if (stream.viewHash !== null) return;
     this.live = withoutPerson(this.live, stream.guestId);
-    this.broadcast({ type: "presence", online: this.online() });
-    const now = Date.now();
-    for (const open of this.streams) {
-      this.send(open, sseFrame(cursorsEventFor(this.live, open.guestId, now)));
-    }
+    this.sendCursors(Date.now());
   }
 }
 

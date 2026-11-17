@@ -212,6 +212,49 @@ describe("a person's own machine on a cloud board", () => {
       undone: true,
     });
     expect(undone.board?.notes.some((candidate) => candidate.id === "card-1")).toBe(false);
+
+    // Tasks for people on the board by name, "me" being the box's person; never to Grace's agent.
+    const graces = withBox(undone, grace, "box-grace");
+    const planned = Result.getOrThrow(
+      changeBoardAsAgent(
+        graces,
+        ada,
+        {
+          boxId: "box-ada",
+          turnId: "run-2",
+          change: {
+            add: {
+              cards: [
+                { text: "Review", assignee: "grace", priority: "high" },
+                { text: "Mine", assignee: "me" },
+              ],
+            },
+          },
+        },
+        NOW,
+        () => `card-${++id}`,
+      ),
+    );
+    expect(planned.result.refused).toEqual([]);
+    const tasks = planned.room.board?.notes.filter((note) => planned.result.done.includes(note.id));
+    expect(tasks?.map((note) => [note.kind, note.assignee, note.priority])).toEqual([
+      ["task", { guestId: grace }, "high"],
+      ["task", { guestId: ada }, undefined],
+    ]);
+    const lined = Result.getOrThrow(
+      changeBoardAsAgent(
+        planned.room,
+        ada,
+        {
+          boxId: "box-ada",
+          change: { update: { changes: [{ id: "card-2", lineTo: "box-grace" }] } },
+        },
+        NOW,
+        () => `edge-${++id}`,
+      ),
+    );
+    expect(lined.result.refused[0]?.reason).toContain("Grace's agent");
+    expect(lined.room.board?.edges ?? []).toEqual([]);
   });
 
   it("answers a task run in a box when the box's turn comes, leaving it in progress", () => {

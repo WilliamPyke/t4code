@@ -244,6 +244,7 @@ import {
   sourceControlHostIcon,
 } from "./CommandPaletteAddProject";
 import { useCommandPaletteThreadItems } from "./CommandPaletteThreadItems";
+import { useBoardPaletteEntries } from "./room/boardPalette";
 import { useCommandPaletteThemeItems } from "./CommandPaletteThemeItems";
 import {
   CommandPaletteVirtualizedResults,
@@ -908,6 +909,7 @@ function OpenCommandPaletteDialog(props: {
   const projectThreadItems = openingOrderThreadItems.map(
     (item) => projectJumpItems.get(item.value) ?? item,
   );
+  const boardEntries = useBoardPaletteEntries(deferredQuery);
 
   const {
     threadItems: allThreadItems,
@@ -1868,7 +1870,11 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
-  const rootGroups = buildRootGroups({ actionItems, recentThreadItems });
+  const rootGroups = [
+    // The board on screen leads: its own commands are what someone on it wants first.
+    ...(boardEntries.group === null ? [] : [boardEntries.group]),
+    ...buildRootGroups({ actionItems, recentThreadItems }),
+  ];
   // Every setting goes to the palette's own matcher, so settings get the same
   // word starts and typo tolerance as threads.
   const settingsSearchItems: CommandPaletteActionItem[] = settingsForThisPlatform(
@@ -1955,6 +1961,7 @@ function OpenCommandPaletteDialog(props: {
           })
         : allThreadItems,
     threadMessageItems: isLinkedThreadSearch ? [] : threadMessageItems,
+    boardSearchItems: boardEntries.finds,
     now: searchNow,
   });
 

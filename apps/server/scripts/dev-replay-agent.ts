@@ -523,19 +523,28 @@ function runAgent(): void {
       if (notes.length === 0) return say("There are no notes on this board to turn into tasks.");
       const added = (await tool("t3_board_add", {
         section: "Tasks",
-        cards: notes.map((note) => ({ text: note.text, task: true })),
+        // The first is planned too, so the Plan shows what an agent can set.
+        cards: notes.map((note, index) => ({
+          text: note.text,
+          task: true,
+          ...(index === 0 ? { priority: "high", assignee: "me" } : {}),
+        })),
       })) as { done?: ReadonlyArray<string>; refused?: ReadonlyArray<{ reason?: string }> };
       if (signal.aborted) return;
       // Changes cards that were there before the turn too, so undoing it has something to put back.
+      const first = added.done?.[0];
       const moved = (await tool("t3_board_update", {
-        changes: notes.flatMap((note) =>
-          note.id === undefined ? [] : [{ id: note.id, section: "Turned into tasks" }],
-        ),
+        changes: [
+          ...notes.flatMap((note) =>
+            note.id === undefined ? [] : [{ id: note.id, section: "Turned into tasks" }],
+          ),
+          ...(first === undefined ? [] : [{ id: first, status: "doing" }]),
+        ],
       })) as { done?: ReadonlyArray<string>; refused?: ReadonlyArray<{ reason?: string }> };
       const refused = [...(added.refused ?? []), ...(moved.refused ?? [])];
       await say(
-        `Added ${added.done?.length ?? 0} tasks to the "Tasks" section and moved ${
-          moved.done?.length ?? 0
+        `Added ${added.done?.length ?? 0} tasks to the "Tasks" section (the first is yours, high priority and in progress) and moved ${
+          moved.done?.filter((id) => id !== first).length ?? 0
         } notes into "Turned into tasks".${
           refused.length === 0 ? "" : ` The board refused ${refused.length}: ${refused[0]?.reason}`
         }`,

@@ -31,6 +31,7 @@ import {
   GUEST_SIGN_IN_ROUTE,
   type GuestAccount,
   GuestHandoff,
+  GuestId,
   GuestMessageId,
   GuestShareId,
   type GuestShareView,
@@ -80,6 +81,7 @@ import {
   type JoinedGuestShare,
   markGuestShareOpened,
 } from "~/guest/guestShares";
+import { boardLinksOf } from "~/guest/boardLinks.logic";
 import { renameCloudBoard } from "~/guest/cloudBoards";
 import { useIncrementalTimelineEntries } from "~/hooks/useIncrementalTimelineEntries";
 import { useNowMinute } from "~/hooks/useNowMinute";
@@ -154,6 +156,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { BoardTitle } from "../boards/BoardTitle";
 import { BringAgentDialog } from "./BringAgentDialog";
 import { CloudBoardSharing } from "./CloudBoardSharing";
+import { ViewOnlyBar } from "./ViewOnlyBar";
 import { GuestHtmlRender } from "./GuestHtmlRender";
 import { openGuestFile, useGuestFiles } from "./guestFiles";
 import { linkEndsLabel } from "../chat/guestLinkTiming";
@@ -385,7 +388,7 @@ function GuestThreadSession({
   const [endpoint] = useState(() => guestShareEndpointOf(share));
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- notes in this browser's storage when it last opened the board
   useEffect(() => markGuestShareOpened(share.shareId), [share.shareId]);
-  const { view, online, running, ownerCode } = useAtomValue(guestRoomAtom(share.shareId));
+  const { view, online, viewing, running, ownerCode } = useAtomValue(guestRoomAtom(share.shareId));
   // Mounting the thread opens the share's stream, which also says who is in the room.
   const thread = useEnvironmentThread(threadRef.environmentId, threadRef.threadId);
   const retrying = useEnvironment(threadRef.environmentId)?.connection.phase === "reconnecting";
@@ -479,6 +482,7 @@ function GuestThreadSession({
   const titledBoxes = useRef(new Set<string>());
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- tells the board host the title the box's thread got on this guest's machine, once per box
   useEffect(() => {
+    if (view?.viewOnly === true) return;
     for (const { note, text } of boxTitles) {
       if (titledBoxes.current.has(note.id)) continue;
       titledBoxes.current.add(note.id);
@@ -803,8 +807,27 @@ function GuestThreadSession({
       composerRef={composerRef}
     />
   );
+  // Can only look at a cloud board: no tools, no agent, no pointer, and the host refuses changes.
+  const viewOnly = cloud && view.viewOnly === true;
   // The one guest of a link made before several could join cannot sign a note, so has no board.
-  if (guestId === undefined) return conversation;
+  // Someone looking on from a view link is nobody on the board, so it names nobody as them.
+  const boardViewer = guestId ?? (viewOnly ? LINK_VIEWER : undefined);
+  if (boardViewer === undefined) return conversation;
+  const sharing =
+    guestId === undefined ? undefined : (
+      <CloudBoardSharing
+        share={share}
+        title={view.title}
+        guests={view.guests}
+        viewer={guestId}
+        maker={view.maker}
+        online={online}
+        links={boardLinksOf(view, share.credential)}
+        manage={view.manage === true}
+        viewers={view.viewers ?? NO_VIEWERS}
+        viewing={viewing ?? 0}
+      />
+    );
   return (
     <RoomLiveContext value={live}>
       <GuestBoardLive shareId={share.shareId} running={running} live={live} />
@@ -835,30 +858,30 @@ function GuestThreadSession({
             }
             ownBoxHandle={ownBox}
             ownerAssignable={!cloud}
+            onToggleChat={cloud ? undefined : () => setPanelOpen((open) => !open)}
             {...(cloud
               ? {
                   onBack: () => void navigate({ to: "/" }),
                   backLabel: "Boards",
-                  titleEditor: (
+                  titleEditor: viewOnly ? undefined : (
                     <BoardTitle
                       threadRef={threadRef}
                       title={view.title}
                       rename={(title) => renameCloudBoard(share, title)}
                     />
                   ),
-                  sharing: (
-                    <CloudBoardSharing
-                      share={share}
-                      title={view.title}
-                      guests={view.guests}
-                      viewer={guestId}
-                      maker={view.maker}
-                      online={online}
-                    />
+                  sharing: viewOnly ? (
+                    <>
+                      <ViewOnlyBar viewing={viewing ?? 0} />
+                      {sharing}
+                    </>
+                  ) : (
+                    sharing
                   ),
                 }
               : {})}
-            viewer={guestId}
+            viewOnly={viewOnly}
+            viewer={boardViewer}
             ownerName={view.ownerName}
             cursorLayer={
               <GuestBoardCursors
@@ -872,8 +895,8 @@ function GuestThreadSession({
               revealRoomReply(messageId);
               setPanelOpen(true);
             }}
-            onChange={(change) => postBoardChange(endpoint, change)}
-            onCursor={(presence) => postBoardCursor(endpoint, presence)}
+            onChange={viewOnly ? undefined : (change) => postBoardChange(endpoint, change)}
+            onCursor={viewOnly ? undefined : (presence) => postBoardCursor(endpoint, presence)}
             onPromptBox={agents ? promptBox : undefined}
             stopBox={agents ? stopBox : undefined}
             askInComments={agents && machine != null}
@@ -883,7 +906,7 @@ function GuestThreadSession({
             }
             onAddThread={!agents || machine == null ? undefined : setAddingAt}
             renderBoxModel={(boxId) =>
-              machine == null ? (
+              viewOnly ? null : machine == null ? (
                 <span className="truncate text-2xs text-muted-foreground">
                   {machine === null ? (cloud ? "Your agent is not here" : "Goes to the owner") : ""}
                 </span>
@@ -1011,6 +1034,9 @@ function GuestBoardCursors({
   return <RoomCursors cursors={cursors} views={views} guests={guests} ownerName={ownerName} />;
 }
 
+// No guest has this id: the board's own rules then treat whoever looks as nobody on it.
+const LINK_VIEWER = GuestId.make("viewer");
+const NO_VIEWERS: ReadonlyArray<GuestId> = [];
 const NO_TURN_DIFFS: ReadonlyArray<never> = [];
 const NO_OPTIMISTIC_MESSAGES: ReadonlyArray<never> = [];
 const ignore = () => {};

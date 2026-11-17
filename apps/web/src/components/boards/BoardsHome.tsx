@@ -178,7 +178,8 @@ export function BoardsHome() {
       : [];
   const showWorkspace = searching || scope === "all";
   const content = homeContent({
-    boards: all.length,
+    // A board only looked at from a view link (the sample) leaves the welcome in place.
+    boards: all.length - joined.filter((share) => share.viewOnly === true).length,
     workspaces: workspaces?.length ?? 0,
     machinesLoaded: bootstrapped,
     accountLoaded: accountSettled,

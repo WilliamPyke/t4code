@@ -1,14 +1,21 @@
 import { guestShareRequest } from "@t3tools/client-runtime/rpc";
 import {
+  CLOUD_BOARD_LINK_ROUTE,
   CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
+  CLOUD_BOARD_PEOPLE_ROLE_ROUTE,
   CLOUD_BOARD_ROUTE,
   CLOUD_BOARD_TITLE_MAX_LENGTH,
   CLOUD_BOARD_TITLE_ROUTE,
+  CLOUD_BOARD_VIEW_ROUTE,
   CloudBoardCreateResult,
+  CloudBoardLinkResult,
   GUEST_BOARD_ROUTE,
   GUEST_HANDOFF_ROUTE,
   GUEST_NAME_MAX_LENGTH,
   GuestHandoff,
+  GuestRedeemResult,
+  type CloudBoardLinkKind,
+  type CloudBoardRole,
   type RoomBoardChange,
 } from "@t3tools/contracts";
 import { buildGuestLink } from "@t3tools/shared/guestLinks";
@@ -27,11 +34,18 @@ import {
 import { friendlyName } from "./boardAccount.logic";
 import { readAccountNameSeed, readSignedOutName, rememberSignedOutName } from "./browserIdentity";
 import { cloudBoardsHost, cloudBoardsOrigin } from "./cloudBoardsHost";
-import { type JoinedGuestShare, guestShareEndpointOf, isCloudShare } from "./guestShares";
+import {
+  type JoinedGuestShare,
+  guestShareEndpointOf,
+  guestShareOrigin,
+  isCloudShare,
+} from "./guestShares";
 import { placeNewBoard } from "./workspaces";
 
 const decodeCreated = Schema.decodeUnknownOption(CloudBoardCreateResult);
 const decodeHandoff = Schema.decodeUnknownOption(GuestHandoff);
+const decodeRedeemed = Schema.decodeUnknownOption(GuestRedeemResult);
+const decodeLinkResult = Schema.decodeUnknownOption(CloudBoardLinkResult);
 
 /**
  * The name to join a board under without asking: signed in, the account's own; signed out, the
@@ -229,14 +243,105 @@ export async function putOnCloudBoard(
 }
 
 /**
- * The link that invites someone else to a cloud board: the usual guest link, opening on this app
- * (the hosted app from the desktop app, whose own pages others cannot open).
+ * A link to a cloud board with `credential`, its edit or view link: the usual guest link, opening
+ * on this app (the hosted app from the desktop app, whose own pages others cannot open).
  */
-export function cloudBoardInviteLink(share: JoinedGuestShare): string | null {
-  if (!isCloudShare(share) || share.credential === undefined) return null;
+export function cloudBoardLink(share: JoinedGuestShare, credential: string): string | null {
+  if (!isCloudShare(share)) return null;
   return buildGuestLink({
     host: share.host,
-    credential: share.credential,
+    credential,
     hostedAppUrl: isElectron ? configuredHostedAppUrl() : window.location.origin,
   });
+}
+
+/**
+ * Opens a cloud board from its view link: no name and no seat, the link itself is the session.
+ * Resolves to what the browser keeps of it, or to a message.
+ */
+export async function openViewLink(input: {
+  readonly credential: string;
+  readonly host: string;
+}): Promise<JoinedGuestShare | string> {
+  try {
+    const response = await fetch(`${guestShareOrigin(input.host)}${CLOUD_BOARD_VIEW_ROUTE}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ credential: input.credential }),
+      credentials: "omit",
+    });
+    const opened = response.ok
+      ? Option.getOrNull(decodeRedeemed(await response.json().catch(() => null)))
+      : null;
+    if (opened === null || opened.threadId === undefined) {
+      return response.status === 403 || response.status === 410 || response.ok
+        ? "This link no longer opens the board. Ask whoever shared it for a new one."
+        : "Could not reach the board service.";
+    }
+    return {
+      host: input.host,
+      shareId: opened.shareId,
+      threadId: opened.threadId,
+      token: opened.token,
+      title: "Shared board",
+      joinedAt: new Date().toISOString(),
+      viewOnly: true,
+    };
+  } catch {
+    return "Could not reach the board service.";
+  }
+}
+
+/**
+ * Makes one of a cloud board's links anew, which ends the old one, or turns it off. Resolves to
+ * the new credential, null once off, or a message.
+ */
+export async function setCloudBoardLink(
+  share: JoinedGuestShare,
+  kind: CloudBoardLinkKind,
+  on: boolean,
+): Promise<{ readonly credential: string | null } | string> {
+  try {
+    const response = await guestShareRequest(guestShareEndpointOf(share), CLOUD_BOARD_LINK_ROUTE, {
+      init: {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind, on }),
+      },
+    });
+    if (response.status === 403) return "Only the person who made this board can change its links.";
+    const result = response.ok
+      ? Option.getOrNull(decodeLinkResult(await response.json().catch(() => null)))
+      : null;
+    return result ?? "The board service did not take that. Try again.";
+  } catch {
+    return "Could not reach the board service.";
+  }
+}
+
+/** Lets someone on a cloud board edit it, or only look. Resolves to null, or what went wrong. */
+export async function setCloudBoardRole(
+  share: JoinedGuestShare,
+  guestId: string,
+  role: CloudBoardRole,
+): Promise<string | null> {
+  try {
+    const response = await guestShareRequest(
+      guestShareEndpointOf(share),
+      CLOUD_BOARD_PEOPLE_ROLE_ROUTE,
+      {
+        init: {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ guestId, role }),
+        },
+      },
+    );
+    if (response.ok) return null;
+    return response.status === 403
+      ? "Only the person who made this board can change who edits it."
+      : "The board service did not take that. Try again.";
+  } catch {
+    return "Could not reach the board service.";
+  }
 }

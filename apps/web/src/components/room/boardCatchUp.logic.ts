@@ -7,12 +7,17 @@ import type { RoomBoardNote } from "@t3tools/contracts";
 export type BoardVisit = string;
 
 /**
- * The newest change on the board, replies included as `boardCatchUp` counts them, or "" when
- * nothing on it is stamped yet.
+ * The newest change on the board, replies and artifacts' versions included, or "" when nothing on
+ * it is stamped yet.
  */
 export const boardNewestChange = (notes: ReadonlyArray<RoomBoardNote>): BoardVisit =>
   notes.reduce((newest, note) => {
-    const times = [note.changed?.at, ...(note.replies ?? []).map((reply) => reply.at)];
+    // An agent rewriting an artifact stamps only the artifact.
+    const times = [
+      note.changed?.at,
+      note.artifact?.updatedAt,
+      ...(note.replies ?? []).map((reply) => reply.at),
+    ];
     return times.reduce<string>(
       (later, at) => (at !== undefined && at > later ? at : later),
       newest,

@@ -180,7 +180,8 @@ async function claimLocalBoards(): Promise<void> {
       shares: readGuestShares(),
       listed: appAtomRegistry.get(accountBoardsAtom) ?? [],
       tried: triedClaims,
-      isCloud: isCloudShare,
+      // A board only looked at from its view link is nobody's seat to claim.
+      isCloud: (share) => isCloudShare(share) && share.viewOnly !== true,
     });
     if (claim.length === 0) return;
     for (const share of claim) triedClaims.add(share.shareId);

@@ -190,6 +190,28 @@ describe("boardPlanTaskPlace", () => {
     expect(fifth).toEqual({ x: 464, y: 592, grow: { id: "s", size: { w: 1000, h: 472 } } });
   });
 
+  it("gives a task the size of the newest one, so a pile an agent or a template made stays even", () => {
+    const size = { w: 192, h: 184 };
+    const sized = boardPlanTaskPlace({ positions: {}, notes: [task("a", { size })] }, []);
+    expect(sized).toEqual({ x: 216, y: 0, size });
+    const plain = boardPlanTaskPlace({ positions: {}, notes: [task("a")] }, []);
+    expect(plain.size).toBeUndefined();
+  });
+
+  it("goes under a section that can grow no more, lined up with its tasks", () => {
+    const full = { w: 1600, h: 1600 };
+    const board: RoomBoard = {
+      positions: {},
+      notes: [
+        { id: "s", text: "Tasks", x: 0, y: 0, section: true, size: full },
+        ...Array.from({ length: 49 }, (_, index) =>
+          task(`t${index}`, { x: 24 + (index % 7) * 216, y: 56 + Math.floor(index / 7) * 208 }),
+        ),
+      ],
+    };
+    expect(boardPlanTaskPlace(board, [])).toEqual({ x: 24, y: 1624 });
+  });
+
   it("goes beside the middle of the board's notes on a board with no task, over none", () => {
     const notes = [
       { id: "a", text: "", x: 0, y: 0 },

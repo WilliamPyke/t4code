@@ -3583,6 +3583,7 @@ p {
 
 .closing .hero__ctas {
   margin-top: 32px;
+  justify-content: center;
 }
 
 .btn--cream {
@@ -3592,6 +3593,18 @@ p {
 
 .btn--cream:hover {
   background: #fff;
+}
+
+/* A secondary action on the jam panel: outlined in cream. */
+.btn--on-jam {
+  border-color: rgb(255 247 236 / 0.6);
+  color: #fff7ec;
+  background: transparent;
+}
+
+.btn--on-jam:hover {
+  border-color: #fff7ec;
+  background: rgb(255 247 236 / 0.1);
 }
 
 .closing__sticky {
