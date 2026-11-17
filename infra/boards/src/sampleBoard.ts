@@ -126,7 +126,9 @@ export function sampleChanges(input: {
       const body = input.bodyOf(card.body);
       const shown = existing.get(card.id)?.artifact;
       // Kept as the version an agent's turn replaced, it is written already.
-      if (shown?.body !== body && shown?.previous?.body !== body) {
+      // The board keeps a body trimmed, so a file's last newline is no difference.
+      const same = (kept: string | undefined) => kept?.trim() === body.trim();
+      if (!same(shown?.body) && !same(shown?.previous?.body)) {
         changes.push({ by: card.by, change: { type: "artifact.write", noteId: card.id, body } });
       }
     }
