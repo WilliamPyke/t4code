@@ -380,7 +380,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
     Effect.scoped,
     Effect.orElseSucceed(() => false),
   );
-  // The ChatGPT app for Mac ships Codex without putting it on PATH.
+  // The ChatGPT and Codex apps for Mac ship Codex without putting it on PATH.
   const bundledInChatGpt = Effect.fn("CodexInstallation.bundledInChatGpt")(function* () {
     if (platform !== "darwin") return null;
     const home = environment.HOME;
@@ -388,11 +388,14 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
       "/Applications",
       ...(home ? [path.join(home, "Applications")] : []),
     ]) {
-      const candidate = path.join(
-        applications,
+      for (const inside of [
         "ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
-      );
-      if (yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))) return candidate;
+        "Codex.app/Contents/Resources/codex-cli/bin/codex",
+        "Codex.app/Contents/Resources/codex",
+      ]) {
+        const candidate = path.join(applications, inside);
+        if (yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))) return candidate;
+      }
     }
     return null;
   });

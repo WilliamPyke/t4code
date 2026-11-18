@@ -164,13 +164,14 @@ describe("noAgentMessage", () => {
         "Tinkjam Sync found no signed-in agent on James's Laptop. Claude Code: not signed in (open a terminal on it, run `claude` and sign in). Codex: not installed.",
     },
     {
-      name: "other installed agents are named, missing ones are not",
+      name: "other installed agents are named, missing or turned-off ones are not",
       settingsLoaded: true,
       providers: [
         provider(claude, { enabled: false, installed: false, status: "warning" }),
         provider(codex, { auth: "unauthenticated" }),
         provider(cursor, { status: "error", auth: "unknown" }),
         provider(ProviderDriverKind.make("grok"), { installed: false, status: "error" }),
+        provider(ProviderDriverKind.make("kiro"), { enabled: false, installed: false }),
       ],
       message:
         "Tinkjam Sync found no signed-in agent on James's Laptop. Claude Code: turned off in Tinkjam settings. Codex: not signed in (open a terminal on it and run `codex login`). Cursor: installed, but it did not start.",

@@ -206,7 +206,7 @@ const describeAgent = (driver: string, state: AgentState): string => {
 
 /**
  * Why a computer's agent cannot come to a board, from that computer's agents: Claude Code and
- * Codex always, other agents only when installed.
+ * Codex always, other agents only when installed and turned on.
  */
 export function noAgentMessage(input: {
   readonly computerName: string;
@@ -239,7 +239,12 @@ export function noAgentMessage(input: {
       state: states.get(driver)?.state ?? "not-installed",
     })),
     ...[...states.entries()]
-      .filter(([driver, entry]) => !(driver in AGENT_NAMES) && entry.state !== "not-installed")
+      .filter(
+        ([driver, entry]) =>
+          !(driver in AGENT_NAMES) &&
+          entry.state !== "not-installed" &&
+          entry.state !== "turned-off",
+      )
       .map(([driver, entry]) => ({ driver, ...entry })),
   ];
   const anyReady = lines.some((line) => line.state === "ready");
