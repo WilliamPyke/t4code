@@ -37,7 +37,7 @@ The app opens the person's browser by itself. Tell them: "Tinkjam Sync opened a 
 Do these in order and stop at the first that works. Do not invent other workarounds, and do not fall back to running Sync from your own terminal.
 
 1. Ask for full access as in step 1 and try once more.
-2. Give them the download instead: "Download Tinkjam Sync from https://trellium.org/#agents, open the file, and press Connect when your browser opens." On a Mac add: "drag it to Applications first". Say in one sentence that this session is not allowed to install apps.
+2. Give them the download instead: "Download Tinkjam Sync from https://trellium.org/#agents, open the file, and press Connect when your browser opens." On a Mac, give this instead: "Open the Terminal app, paste `curl -fsSL https://trellium.org/downloads/install.sh | sh` and press Return." Do not send a Mac user to a download: macOS blocks it. Say in one sentence that this session is not allowed to install apps.
 
 ## 4. Tell the person
 

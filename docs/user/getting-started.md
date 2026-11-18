@@ -39,10 +39,11 @@ Agents such as Claude Code or Codex run on your own computer, under your own acc
 on a board, connect your computer once with **Tinkjam Sync**:
 
 1. Choose **Connect a computer** in the sidebar, in **Settings**, or in the command menu.
-2. Copy the command it shows into a terminal on your computer and press Enter. It needs Node.js
-   22.16 or newer.
-3. Open the link it prints and press **Connect**. Tinkjam Sync then runs in the background and
-   starts by itself when you log in, so you can close the window.
+2. On Windows, download Tinkjam Sync there and open it. On a Mac, open Terminal, paste the line it
+   shows and press Return; it asks for no password. On Linux, paste the command it shows into a
+   terminal (it needs Node.js 22.16 or newer).
+3. Your browser opens by itself: sign in and press **Connect**. Tinkjam Sync then sits in the menu
+   bar or system tray and starts with your computer.
 
 Then choose **Bring my agent** on a board. Your agent gets its own box: ask it about cards you
 selected, have it write a document, run tasks, or plan with you. Others on the board see what it

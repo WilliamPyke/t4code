@@ -6,7 +6,7 @@ import Layout from "../layouts/Layout.astro";
 import {
   AGENT_PROMPT,
   APP_URL,
-  MAC_DOWNLOAD,
+  MAC_COMMAND,
   SAMPLE_BOARD_URL,
   SYNC_COMMAND,
   UPSTREAM_REPO_URL,
@@ -448,11 +448,11 @@ const faqs = [
       <div class="agents">
         <div class="section__head">
           <p class="kicker">Bring your own agents</p>
-          <h2 id="agents-title">Download, open, connect. Your agent is on the board.</h2>
+          <h2 id="agents-title">Install, connect. Your agent is on the board.</h2>
           <ol class="agent-steps">
             <li>
               <b>Get Tinkjam Sync</b>
-              <span>A small app for your Mac or PC. No terminal, nothing else to install.</span>
+              <span>A small app for your Mac or PC. One line on a Mac, one download on Windows.</span>
             </li>
             <li>
               <b>Press Connect</b>
@@ -471,9 +471,13 @@ const faqs = [
               <i></i><i></i><i></i>
               <span>Tinkjam Sync</span>
             </div>
+            <p class="cmd__note">On a Mac, open Terminal, paste this line and press Return:</p>
+            <div class="cmd__body">
+              <code class="cmd__say"><span class="cmd__prompt" aria-hidden="true">$</span> {MAC_COMMAND}</code>
+              <button class="cmd__copy" type="button" data-copy={MAC_COMMAND}>Copy</button>
+            </div>
             <div class="cmd__body cmd__body--get">
-              <a class="btn btn--primary" href={MAC_DOWNLOAD} download>Download for Mac</a>
-              <a class="btn btn--cream" href={WINDOWS_DOWNLOAD} download>Download for Windows</a>
+              <a class="btn btn--primary" href={WINDOWS_DOWNLOAD} download>Download for Windows</a>
             </div>
             <p class="cmd__note">
               It lives in your menu bar or system tray, starts with your computer and updates

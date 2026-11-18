@@ -7,7 +7,7 @@ import { type ReactNode, useState } from "react";
 import {
   APP_DISPLAY_NAME,
   TINKJAM_SYNC_COMMAND,
-  TINKJAM_SYNC_MAC_DOWNLOAD,
+  TINKJAM_SYNC_MAC_COMMAND,
   TINKJAM_SYNC_WINDOWS_DOWNLOAD,
   TINKJAM_SYNC_URL,
 } from "~/branding";
@@ -93,11 +93,13 @@ function T3ConnectSteps() {
         )}
       </SetupStep>
       <SetupStep number={2}>
-        <p>Download Tinkjam Sync, open it, and press Connect when your browser opens:</p>
+        <p>Get Tinkjam Sync, then press Connect when your browser opens.</p>
+        <p className="mt-3 text-muted-foreground">
+          On a Mac, open the Terminal app, paste this line and press Return:
+        </p>
+        <CommandBlock command={TINKJAM_SYNC_MAC_COMMAND} className="mt-2" />
+        <p className="mt-3 text-muted-foreground">On Windows, download it and open it:</p>
         <div className="mt-2 flex flex-wrap gap-2">
-          <Button size="sm" render={<a href={TINKJAM_SYNC_MAC_DOWNLOAD} download />}>
-            Download for Mac
-          </Button>
           <Button size="sm" render={<a href={TINKJAM_SYNC_WINDOWS_DOWNLOAD} download />}>
             Download for Windows
           </Button>

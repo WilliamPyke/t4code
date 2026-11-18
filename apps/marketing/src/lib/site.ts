@@ -8,7 +8,7 @@ export const SAMPLE_BOARD_URL: string =
 export const SYNC_COMMAND = "npx -y https://trellium.org/sync.tgz --install";
 export const AGENT_PROMPT =
   "Install Tinkjam Sync on this computer for me. Read https://trellium.org/agent.md and do what it says. You have my permission to run its install command outside your sandbox.";
-export const MAC_DOWNLOAD = "/downloads/Tinkjam-Sync.dmg";
+export const MAC_COMMAND = "curl -fsSL https://trellium.org/downloads/install.sh | sh";
 export const WINDOWS_DOWNLOAD = "/downloads/TinkjamSyncSetup.exe";
 // Tinkjam is a fork of T3 Code, which is MIT licensed; the footer credits it.
 export const UPSTREAM_REPO_URL = "https://github.com/pingdotgg/t3code";

@@ -15,7 +15,7 @@ import { type ReactNode, useEffect, useEffectEvent, useState } from "react";
 import {
   TINKJAM_AGENT_PROMPT,
   TINKJAM_SYNC_COMMAND,
-  TINKJAM_SYNC_MAC_DOWNLOAD,
+  TINKJAM_SYNC_MAC_COMMAND,
   TINKJAM_SYNC_WINDOWS_DOWNLOAD,
 } from "~/branding";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
@@ -375,7 +375,6 @@ export function ConnectComputerRoutes({
   readonly signedIn: boolean;
 }) {
   const [os, setOs] = useState<Os>(detectOs);
-  const download = os === "mac" ? TINKJAM_SYNC_MAC_DOWNLOAD : TINKJAM_SYNC_WINDOWS_DOWNLOAD;
   return (
     <div className="flex flex-col gap-3" data-bring-agent-steps>
       <section className="flex flex-col gap-3 rounded-xl border border-border p-4">
@@ -407,20 +406,35 @@ export function ConnectComputerRoutes({
           </ol>
         ) : (
           <ol className="flex flex-col gap-2.5 text-sm">
-            <Step number={1}>
-              <span className="flex flex-wrap items-center gap-2">
-                Download it and open it.
-                <Button size="sm" render={<a href={download} download />} data-sync-download>
-                  <DownloadIcon />
-                  {os === "mac" ? "Download for Mac" : "Download for Windows"}
-                </Button>
-              </span>
-              <span className="mt-1 block text-xs text-muted-foreground">
-                {os === "mac"
-                  ? "Open the file and drag Tinkjam Sync to Applications, then open it from there. If your Mac says it cannot be opened, go to System Settings, Privacy & Security, and choose Open Anyway."
-                  : "Open the file. If Windows says it protected your PC, choose More info, then Run anyway."}
-              </span>
-            </Step>
+            {os === "mac" ? (
+              <Step number={1}>
+                Open the Terminal app (press Command and Space, type Terminal, press Return). Paste
+                this line and press Return:
+                <CopyLine text={TINKJAM_SYNC_MAC_COMMAND} mono />
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  It asks for no password and changes no settings. It puts Tinkjam Sync in your
+                  Applications folder and opens it. You can close Terminal afterwards.
+                </span>
+              </Step>
+            ) : (
+              <Step number={1}>
+                <span className="flex flex-wrap items-center gap-2">
+                  Download it and open it.
+                  <Button
+                    size="sm"
+                    render={<a href={TINKJAM_SYNC_WINDOWS_DOWNLOAD} download />}
+                    data-sync-download
+                  >
+                    <DownloadIcon />
+                    Download for Windows
+                  </Button>
+                </span>
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  Open the file. If Windows says it protected your PC, choose More info, then Run
+                  anyway.
+                </span>
+              </Step>
+            )}
             <Step number={2}>
               Your browser opens by itself. Sign in and press Connect. That is all: Tinkjam Sync
               sits in your {os === "mac" ? "menu bar" : "system tray"}, starts with your computer

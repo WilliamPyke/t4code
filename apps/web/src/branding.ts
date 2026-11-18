@@ -32,7 +32,9 @@ export const TINKJAM_SYNC_COMMAND = "npx -y https://trellium.org/sync.tgz --inst
 export const TINKJAM_AGENT_PROMPT =
   "Install Tinkjam Sync on this computer for me. Read https://trellium.org/agent.md and do what it says. You have my permission to run its install command outside your sandbox.";
 // The desktop apps, served beside the homepage (see apps/sync-mac and apps/sync-windows).
-export const TINKJAM_SYNC_MAC_DOWNLOAD = "https://trellium.org/downloads/Tinkjam-Sync.dmg";
+// Macs install by this one line until the app is notarized: macOS refuses a browser download of
+// an un-notarized app, and a download made by curl is not checked.
+export const TINKJAM_SYNC_MAC_COMMAND = "curl -fsSL https://trellium.org/downloads/install.sh | sh";
 export const TINKJAM_SYNC_WINDOWS_DOWNLOAD = "https://trellium.org/downloads/TinkjamSyncSetup.exe";
 // The homepage's section on bringing your agent with Tinkjam Sync.
 export const TINKJAM_SYNC_URL = "https://trellium.org/#agents";

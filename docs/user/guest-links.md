@@ -514,7 +514,7 @@ A cloud board has no agent of its own. Each person brings theirs. When you make 
 
 Your agents, such as Claude Code or Codex, are programs on your computer, so a browser cannot run them by itself. Tinkjam Sync is a small app that connects them to your account.
 
-On a Mac or a Windows PC, choose **Bring your agent** (or **Connect a computer**), download Tinkjam Sync and open it; on a Mac, drag it to Applications first. Your browser opens by itself: sign in and choose **Connect**. Tinkjam Sync then sits in the menu bar or the system tray, starts with your computer and keeps itself up to date. Its menu shows whether it is connected, and has **Disconnect** and **Quit**. Only one Tinkjam Sync runs per computer, and it replaces any older setup it finds.
+On a Mac or a Windows PC, choose **Bring your agent** (or **Connect a computer**). On Windows, download Tinkjam Sync and open it. On a Mac, open Terminal, paste the line shown there (`curl -fsSL https://trellium.org/downloads/install.sh | sh`) and press Return; it asks for no password. Your browser opens by itself: sign in and choose **Connect**. Tinkjam Sync then sits in the menu bar or the system tray, starts with your computer and keeps itself up to date. Its menu shows whether it is connected, and has **Disconnect** and **Quit**. Only one Tinkjam Sync runs per computer, and it replaces any older setup it finds.
 
 You can also have a coding agent install it: copy the prompt under **Or have your coding agent install it** and send it to Claude Code or Codex.
 
