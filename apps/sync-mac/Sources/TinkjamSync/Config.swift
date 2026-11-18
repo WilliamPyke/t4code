@@ -25,8 +25,9 @@ enum Config {
         "x64": "2693310b2820f9350d29524f21344e1c623875bab773457d55b2aceb9670716f",
     ]
 
-    /// Background checks for a newer Sync or app happen at most this often.
-    static let updateCheckInterval: TimeInterval = 24 * 60 * 60
+    /// Background checks for a newer Sync or app happen at most this often; an hourly timer and
+    /// waking from sleep ask. A little under an hour, so a timer that fires early still counts.
+    static let updateCheckInterval: TimeInterval = 55 * 60
 
     private static func url(_ key: String, _ fallback: String) -> URL {
         if let value = UserDefaults.standard.string(forKey: key), let url = URL(string: value) {

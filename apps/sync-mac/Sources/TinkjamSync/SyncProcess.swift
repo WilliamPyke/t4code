@@ -78,6 +78,12 @@ final class SyncChild {
 
     var pid: pid_t { process.processIdentifier }
 
+    /// Something besides its tunnel helper runs under Sync: an agent session, which Sync ends 30
+    /// minutes after that agent's last turn.
+    var agentsRunning: Bool {
+        watchQueue.sync { descendants.values.contains { !$0.hasSuffix("/cloudflared") } }
+    }
+
     /// Lines arrive on a background queue; exit on the main queue.
     /// `onExit` gets a description such as "exit code 1" or "signal 9".
     func start(onLine: @escaping (String) -> Void, onExit: @escaping (Int32, String) -> Void) throws {

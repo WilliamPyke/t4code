@@ -40,7 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var restarts: [Date] = []
     private var restartWork: DispatchWorkItem?
     private var statusTimer: Timer?
-    private var dailyTimer: Timer?
+    private var updateTimer: Timer?
     private var openedApprovalThisSession = false
     private var approvedThisRun = false
     private var portBusyThisRun = false
@@ -86,8 +86,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         log.app("Tinkjam Sync for Mac \(Machine.appVersion) started (home \(paths.base.path))")
         applyLoginItemPreference()
         Task { await bootstrap() }
-        dailyTimer = Timer.scheduledTimer(withTimeInterval: 60 * 60, repeats: true) { [weak self] _ in
+        updateTimer = Timer.scheduledTimer(withTimeInterval: 60 * 60, repeats: true) { [weak self] _ in
             Task { await self?.checkForUpdates(manual: false) }
+        }
+        // A laptop that sleeps through the hour asks on waking, once Wi-Fi is back.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
+                                                          object: nil, queue: .main) { [weak self] _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+                Task { await self?.checkForUpdates(manual: false) }
+            }
         }
     }
 
@@ -373,8 +380,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if due(Defaults.lastSyncCheck), !busy, SyncPackage.isInstalled(paths) {
             do {
-                try await updateSyncIfNewer()
-                defaults.set(Date(), forKey: Defaults.lastSyncCheck)
+                if try await updateSyncIfNewer(interruptingAgents: manual) {
+                    defaults.set(Date(), forKey: Defaults.lastSyncCheck)
+                }
             } catch {
                 let message = (error as? SetupError)?.message ?? error.localizedDescription
                 log.app("Sync update: \(message)")
@@ -387,12 +395,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Installs the newer Sync beside the running one, then swaps with a few seconds' gap.
+    /// Installs the newer Sync beside the running one, then swaps with a few seconds' gap. Unless
+    /// asked, it never stops an agent mid-answer: false means it waits for a later check.
     @MainActor
-    private func updateSyncIfNewer() async throws {
+    private func updateSyncIfNewer(interruptingAgents: Bool) async throws -> Bool {
         let release = try await SyncPackage.latestRelease()
         let installed = SyncPackage.installedVersion(in: paths.app)
-        guard SyncPackage.isNewer(release.version, than: installed) else { return }
+        guard SyncPackage.isNewer(release.version, than: installed) else { return true }
+        if !interruptingAgents, child?.agentsRunning == true {
+            log.app("Tinkjam Sync \(release.version) installs once no agent is running")
+            return false
+        }
         busy = true
         defer { busy = false }
         log.app("Updating Tinkjam Sync from \(installed ?? "?") to \(release.version)")
@@ -401,6 +414,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         await stopSync()
         try await takeOver(staged: staging)
         if wasRunning { startSync() }
+        return true
     }
 
     private func restartToUpdate() {
