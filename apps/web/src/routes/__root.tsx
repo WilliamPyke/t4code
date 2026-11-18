@@ -66,6 +66,7 @@ import { primaryServerConfigAtom, primaryServerWelcomeAtom } from "../state/serv
 import { readProject } from "../state/entities";
 import { useShellMode } from "../shellMode";
 import { advancedOnlyPageName } from "../shellMode.logic";
+import { ComputerReconnectCoordinator } from "../components/guest/ComputerReconnectCoordinator";
 
 import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
 import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
@@ -156,6 +157,8 @@ function RootRouteView() {
   return (
     <ToastProvider>
       <AnchoredToastProvider>
+        {/* Boards and the app shell alike wait on the person's computers. */}
+        <ComputerReconnectCoordinator />
         <RootRouteBranch />
       </AnchoredToastProvider>
     </ToastProvider>

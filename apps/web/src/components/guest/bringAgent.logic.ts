@@ -150,6 +150,35 @@ export function bringAgentComputers(input: {
     );
 }
 
+type SavedComputer = Parameters<typeof bringAgentComputers>[0]["saved"][number];
+
+/** Saved computers this browser still waits on, retrying or stopped after an error. */
+export function computersAwaitingReconnect(
+  saved: ReadonlyArray<SavedComputer>,
+): ReadonlyArray<EnvironmentId> {
+  return saved
+    .filter(
+      (entry) => entry.relayOnly && (entry.phase === "reconnecting" || entry.phase === "error"),
+    )
+    .map((entry) => entry.environmentId);
+}
+
+/**
+ * The waiting computers the account says Tinkjam Sync runs on again. This browser's own retries
+ * slow to one every few minutes, and some errors stop them, so these are retried at once.
+ */
+export function computersBackOnline(
+  saved: ReadonlyArray<SavedComputer>,
+  discovered: ReadonlyArray<DiscoveredComputer>,
+): ReadonlyArray<EnvironmentId> {
+  const online = new Set(
+    discovered
+      .filter((entry) => entry.availability === "online" && !entry.unsupported)
+      .map((entry) => entry.environmentId),
+  );
+  return computersAwaitingReconnect(saved).filter((environmentId) => online.has(environmentId));
+}
+
 const AGENT_NAMES: Partial<Record<string, string>> = { claudeAgent: "Claude Code", codex: "Codex" };
 const SIGN_IN_HINTS: Partial<Record<string, string>> = {
   claudeAgent: "open a terminal on it, run `claude` and sign in",

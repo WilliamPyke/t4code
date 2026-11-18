@@ -2,7 +2,13 @@ import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connect
 import { EnvironmentId, ProviderDriverKind } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { bringAgentComputers, noAgentMessage, steadyDiscovered } from "./bringAgent.logic";
+import {
+  bringAgentComputers,
+  computersAwaitingReconnect,
+  computersBackOnline,
+  noAgentMessage,
+  steadyDiscovered,
+} from "./bringAgent.logic";
 
 const id = (value: string) => EnvironmentId.make(value);
 const LINKED_AT = "2026-11-17T12:00:00.000Z";
@@ -49,6 +55,34 @@ describe("bringAgentComputers", () => {
     hasConfig: boolean,
     relayOnly = true,
   ) => ({ environmentId: id(environmentId), name, phase, hasConfig, relayOnly });
+
+  it("retries at once the waiting computers the account says are online again", () => {
+    const savedHere = [
+      saved("back", "Back", "reconnecting", false),
+      saved("stopped", "Stopped", "error", false),
+      saved("asleep", "Asleep", "reconnecting", false),
+      saved("desk", "Desk", "connected", true),
+      saved("off", "Off", "available", false),
+      saved("lan", "Lan", "error", false, false),
+      saved("stale", "Stale", "error", false),
+    ];
+    expect(computersAwaitingReconnect(savedHere)).toEqual([
+      id("back"),
+      id("stopped"),
+      id("asleep"),
+      id("stale"),
+    ]);
+    expect(
+      computersBackOnline(savedHere, [
+        discovered("back", "Back", "online"),
+        discovered("stopped", "Stopped", "online"),
+        discovered("asleep", "Asleep", "offline"),
+        discovered("desk", "Desk", "online"),
+        discovered("off", "Off", "online"),
+        discovered("stale", "Stale", "online", true),
+      ]),
+    ).toEqual([id("back"), id("stopped")]);
+  });
 
   it("is ready only once connected here with its config, and trusts the account otherwise", () => {
     const computers = bringAgentComputers({
