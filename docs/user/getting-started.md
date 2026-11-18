@@ -66,8 +66,10 @@ Tinkjam you run on your own computer open in Advanced.
 
 ## Settings
 
-In Simple mode, **Settings** has your profile, light or dark, the theme, your computers (with
-**Disconnect**), and **Advanced settings** for everything else.
+In Simple mode, **Settings** has your profile, light or dark, the theme, your computers, and
+**Advanced settings** for everything else. **Remove** next to a computer takes it off your
+account and out of this browser, even when it is off; connect it again with Tinkjam Sync to
+use its agent later.
 
 ## More
 

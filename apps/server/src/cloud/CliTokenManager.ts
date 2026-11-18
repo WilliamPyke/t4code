@@ -536,6 +536,44 @@ const serveLoopbackCallback = Effect.fn("cloud.cli_token.serve_loopback_callback
 
 // Long enough to sign up for an account on the approval page first.
 const COMPUTER_APPROVAL_TIMEOUT = Duration.minutes(30);
+const PENDING_APPROVAL_SECRET = "cloud-cli-pending-approval";
+const PendingApproval = Schema.fromJsonString(
+  Schema.Struct({
+    verifier: Schema.String,
+    challenge: Schema.String,
+    state: Schema.String,
+    createdAt: Schema.Number,
+  }),
+);
+const decodePendingApproval = Schema.decodeOption(PendingApproval);
+const encodePendingApproval = Schema.encodeEffect(PendingApproval);
+
+/**
+ * The sign-in request this computer is waiting on. A Sync that restarts while the person is still
+ * on the approval page reuses it, so the page's return to this computer still connects it.
+ */
+export const pendingApprovalRequest = Effect.fn("cloud.cli_token.pending_approval_request")(
+  function* () {
+    const secrets = yield* ServerSecretStore.ServerSecretStore;
+    const now = yield* Clock.currentTimeMillis;
+    const stored = yield* secrets.get(PENDING_APPROVAL_SECRET).pipe(
+      Effect.map(Option.flatMap((bytes) => decodePendingApproval(bytesToString(bytes)))),
+      Effect.orElseSucceed(() => Option.none()),
+    );
+    if (
+      Option.isSome(stored) &&
+      now - stored.value.createdAt < Duration.toMillis(COMPUTER_APPROVAL_TIMEOUT)
+    ) {
+      return stored.value;
+    }
+    const fresh = { ...(yield* makePkceRequest), createdAt: now };
+    const encoded = yield* encodePendingApproval(fresh).pipe(Effect.option);
+    if (Option.isSome(encoded)) {
+      yield* secrets.set(PENDING_APPROVAL_SECRET, stringToBytes(encoded.value)).pipe(Effect.ignore);
+    }
+    return fresh;
+  },
+);
 
 /**
  * Tinkjam Sync's sign-in: the loopback grant `t3 connect` uses, opened from a short local address
@@ -550,7 +588,7 @@ export const approveComputerLogin = Effect.fn("cloud.cli_token.approve_computer_
 }) {
   const metadata = yield* cloudCliOAuthConfig;
   const hostedAppUrl = yield* hostedAppUrlConfig;
-  const { verifier, challenge, state } = yield* makePkceRequest;
+  const { verifier, challenge, state } = yield* pendingApprovalRequest();
   const callback = yield* serveLoopbackCallback({
     metadata,
     state,
@@ -572,13 +610,15 @@ export const approveComputerLogin = Effect.fn("cloud.cli_token.approve_computer_
       TimeoutError: (cause) => Effect.fail(new CloudCliAuthorizationTimeoutError({ cause })),
     }),
   );
+  // A code works once: whatever the exchange says, the next sign-in starts afresh.
+  const secrets = yield* ServerSecretStore.ServerSecretStore;
   return yield* exchangeToken(metadata, {
     grant_type: "authorization_code",
     code,
     redirect_uri: metadata.redirectUri,
     client_id: metadata.clientId,
     code_verifier: verifier,
-  });
+  }).pipe(Effect.ensuring(secrets.remove(PENDING_APPROVAL_SECRET).pipe(Effect.ignore)));
 }, Effect.scoped);
 
 /** @public */

@@ -162,10 +162,16 @@ const approveIfNeeded = Effect.fn("cli.sync.approve_if_needed")(function* (input
   return true;
 });
 
+// Removes this computer from the account with its own sign-in first, then signs out here.
 const disconnect = Effect.fn("cli.sync.disconnect")(function* () {
-  yield* disconnectCloud({ clearAuthorization: true }).pipe(
+  const { leftAccount } = yield* disconnectCloud({ clearAuthorization: true }).pipe(
     Effect.provideService(Console.Console, silentConsole),
   );
+  if (!leftAccount) {
+    yield* Console.log(
+      "Could not remove this computer from your Tinkjam account, so your boards may still list it. To remove it, open Tinkjam, go to Settings and press Remove next to it.",
+    );
+  }
   yield* Console.log("This computer is no longer connected to Tinkjam.");
 });
 

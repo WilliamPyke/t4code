@@ -116,7 +116,8 @@ function formatOpenCodeProbeError(input: {
   if (lower.includes("enoent") || lower.includes("notfound")) {
     return {
       installed: false,
-      message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
+      message:
+        "OpenCode is not installed on this computer, or Tinkjam cannot find the `opencode` command.",
     };
   }
 
@@ -430,8 +431,8 @@ export const makePendingOpenCodeProvider = Effect.fn(
         auth: { status: "unknown" },
         message:
           openCodeSettings.serverUrl.trim().length > 0
-            ? "OpenCode is disabled in T3 Code settings. A server URL is configured."
-            : "OpenCode is disabled in T3 Code settings.",
+            ? "OpenCode is turned off in Tinkjam settings. A server URL is configured."
+            : "OpenCode is turned off in Tinkjam settings.",
       },
     });
   }
@@ -738,8 +739,8 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
         status: "warning",
         auth: { status: "unknown" },
         message: isExternalServer
-          ? "OpenCode is disabled in T3 Code settings. A server URL is configured."
-          : "OpenCode is disabled in T3 Code settings.",
+          ? "OpenCode is turned off in Tinkjam settings. A server URL is configured."
+          : "OpenCode is turned off in Tinkjam settings.",
       },
     });
   }

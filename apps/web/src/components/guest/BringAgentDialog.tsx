@@ -1,13 +1,10 @@
 import {
-  orchestrationProtocolCompatibilityError,
   RelayConnectionRegistration,
   RelayConnectionTarget,
 } from "@t3tools/client-runtime/connection";
-import { isGuestEnvironment } from "@t3tools/client-runtime/environment";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { CheckIcon, CopyIcon, DownloadIcon } from "lucide-react";
 import { type ReactNode, useEffect, useEffectEvent, useState } from "react";
@@ -50,6 +47,14 @@ import {
   bringAgentComputers,
   steadyDiscovered,
 } from "./bringAgent.logic";
+import {
+  COMPUTER_STATUS_DOT,
+  computerStatusLine,
+  discoveredComputers,
+  removeComputerQuestion,
+  savedComputers,
+  useRemoveComputer,
+} from "./yourComputers";
 
 // Discovery lists the account's computers; asked again while the dialog is open, so one that
 // just connected shows up without a reload.
@@ -90,37 +95,30 @@ export function BringAgentDialog({
     reportFailure: false,
   });
   const [discovered, setDiscovered] = useState<ReadonlyArray<DiscoveredComputer>>([]);
-  const steady =
-    withAccount && signedIn
-      ? steadyDiscovered(discovered, {
-          listed: discovery.listed,
-          computers: [...discovery.environments.values()].map(
-            ({ environment, availability, status }) => {
-              const descriptor = Option.getOrNull(status)?.descriptor;
-              return {
-                environmentId: environment.environmentId,
-                name: environment.label,
-                availability,
-                unsupported:
-                  descriptor !== undefined &&
-                  orchestrationProtocolCompatibilityError(descriptor) !== null,
-              };
-            },
-          ),
-        })
-      : [];
+  // Each ask for the account's list starts unlisted; once one answered, `discovered` holds it.
+  const [listedOnce, setListedOnce] = useState(false);
+  const withComputerList = withAccount && signedIn;
+  if (listedOnce !== (withComputerList && (listedOnce || discovery.listed))) {
+    setListedOnce(!listedOnce);
+  }
+  const steady = withComputerList
+    ? steadyDiscovered(discovered, {
+        listed: discovery.listed,
+        computers: discoveredComputers(discovery),
+      })
+    : [];
   if (JSON.stringify(steady) !== JSON.stringify(discovered)) setDiscovered(steady);
   const computers = bringAgentComputers({
-    saved: environments
-      .filter((entry) => !isGuestEnvironment(entry.environmentId))
-      .map((entry) => ({
-        environmentId: entry.environmentId,
-        name: entry.label,
-        phase: entry.connection.phase,
-        hasConfig: entry.serverConfig !== null,
-      })),
+    saved: savedComputers(environments),
     discovered: steady,
+    listed: withComputerList && listedOnce,
   });
+  const removeComputer = useRemoveComputer();
+  const primaryIds = new Set(
+    environments
+      .filter((entry) => entry.entry.target._tag === "PrimaryConnectionTarget")
+      .map((entry) => entry.environmentId),
+  );
 
   const [busy, setBusy] = useState<EnvironmentId | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -229,6 +227,14 @@ export function BringAgentDialog({
                       }
                       disabled={busy !== null || pending !== null}
                       onBring={(project) => void choose(computer, project)}
+                      onRemove={
+                        primaryIds.has(computer.environmentId)
+                          ? null
+                          : () => {
+                              setError(null);
+                              return removeComputer(computer);
+                            }
+                      }
                     />
                   ))}
                 </ul>
@@ -263,34 +269,35 @@ export function BringAgentDialog({
 
 const NO_PROJECT = "none";
 
-const STATUS_TEXT: Record<BringAgentComputer["status"], string> = {
-  ready: "Connected",
-  online: "Online",
-  connecting: "Connecting...",
-  offline: "Offline. Start Tinkjam Sync on it.",
-  unsupported: "Out of date. Run the Tinkjam Sync command on it again.",
-};
-
-const STATUS_DOT: Record<BringAgentComputer["status"], string> = {
-  ready: "bg-success",
-  online: "bg-success",
-  connecting: "bg-warning",
-  offline: "bg-muted-foreground/35",
-  unsupported: "bg-destructive",
-};
-
-/** One of the person's computers: whether it is up, the project its agent works in, and Bring. */
+/**
+ * One of the person's computers: whether it is up, the project its agent works in, Bring, and
+ * Remove.
+ */
 function ComputerRow({
   computer,
   working,
   disabled,
   onBring,
+  onRemove,
 }: {
   readonly computer: BringAgentComputer;
   readonly working: boolean;
   readonly disabled: boolean;
   readonly onBring: (project: EnvironmentProject | null) => void;
+  /** Resolves to what went wrong, or null. Null for this computer's own, which cannot go. */
+  readonly onRemove: (() => Promise<string | null>) | null;
 }) {
+  const [removal, setRemoval] = useState<{
+    readonly phase: "confirming" | "removing";
+    readonly error: string | null;
+  } | null>(null);
+  const remove = async () => {
+    if (onRemove === null) return;
+    setRemoval({ phase: "removing", error: null });
+    const failed = await onRemove();
+    // On success the row goes away with the computer.
+    if (failed !== null) setRemoval({ phase: "confirming", error: failed });
+  };
   const projects = useProjects().filter(
     (project) =>
       project.environmentId === computer.environmentId &&
@@ -317,12 +324,12 @@ function ComputerRow({
     >
       <span
         aria-hidden
-        className={cn("size-2 shrink-0 rounded-full", STATUS_DOT[computer.status])}
+        className={cn("size-2 shrink-0 rounded-full", COMPUTER_STATUS_DOT[computer.status])}
       />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium">{computer.name}</span>
         <span className="block truncate text-xs text-muted-foreground">
-          {working && computer.status !== "ready" ? "Connecting..." : STATUS_TEXT[computer.status]}
+          {working && computer.status !== "ready" ? "Connecting..." : computerStatusLine(computer)}
         </span>
       </span>
       {projects.length > 0 && canBring ? (
@@ -355,6 +362,46 @@ function ComputerRow({
       >
         {working ? "Bringing..." : "Bring my agent"}
       </Button>
+      {onRemove === null ? null : (
+        <Button
+          size="sm"
+          variant="ghost-muted"
+          disabled={working || removal !== null}
+          onClick={() => setRemoval({ phase: "confirming", error: null })}
+          aria-label={`Remove ${computer.name}`}
+          data-remove-computer
+        >
+          Remove
+        </Button>
+      )}
+      {removal === null ? null : (
+        <div className="flex basis-full flex-col gap-2 border-t border-border pt-2" role="group">
+          <p className="text-sm">{removeComputerQuestion(computer.name)}</p>
+          {removal.error === null ? null : (
+            <p role="alert" className="text-sm text-destructive">
+              {removal.error}
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={removal.phase === "removing"}
+              onClick={() => setRemoval(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={removal.phase === "removing"}
+              onClick={() => void remove()}
+            >
+              {removal.phase === "removing" ? "Removing..." : "Remove"}
+            </Button>
+          </div>
+        </div>
+      )}
     </li>
   );
 }

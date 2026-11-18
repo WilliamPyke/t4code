@@ -104,7 +104,7 @@ export const buildInitialKiroProviderSnapshot = Effect.fn(
     auth: { status: "unknown" },
     message: settings.enabled
       ? "Checking Kiro CLI availability..."
-      : "Kiro is disabled in T3 Code settings.",
+      : "Kiro is turned off in Tinkjam settings.",
   });
 });
 
@@ -369,7 +369,7 @@ export const checkKiroProviderStatus = Effect.fn("checkKiroProviderStatus")(func
       version: null,
       status: "warning",
       auth: { status: "unknown" },
-      message: "Kiro is disabled in T3 Code settings.",
+      message: "Kiro is turned off in Tinkjam settings.",
     });
   }
 
@@ -385,7 +385,7 @@ export const checkKiroProviderStatus = Effect.fn("checkKiroProviderStatus")(func
       status: "error",
       auth: { status: "unknown" },
       message: missing
-        ? "Kiro CLI (`kiro-cli`) is not installed or not on PATH."
+        ? "Kiro is not installed on this computer, or Tinkjam cannot find the `kiro-cli` command."
         : "Failed to run `kiro-cli --version`.",
     });
   }

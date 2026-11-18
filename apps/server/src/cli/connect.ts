@@ -516,7 +516,10 @@ export const disconnectCloud = Effect.fn("cloud.cli.disconnect")(function* (opti
       "Signed out of T3 Connect locally.\nThe background service is managed separately with `t3 service`.",
     );
   }
-  return liveResult;
+  // "not-linked" also counts: the account no longer lists this machine either way.
+  const leftAccount =
+    Exit.isSuccess(relayResult) && relayResult.value.status !== "not-authenticated";
+  return { ...liveResult, leftAccount };
 });
 
 export const runCloudCommand = Effect.fn("cloud.cli.run_cloud_command")(function* <A, E>(

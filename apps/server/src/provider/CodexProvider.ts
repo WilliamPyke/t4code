@@ -676,7 +676,7 @@ const makePendingCodexProvider = Effect.fn("CodexProvider.makePendingCodexProvid
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Codex is disabled in T3 Code settings.",
+        message: "Codex is turned off in Tinkjam settings.",
       },
     });
   }
@@ -769,7 +769,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Codex is disabled in T3 Code settings.",
+        message: "Codex is turned off in Tinkjam settings.",
       },
     });
   }
@@ -812,10 +812,9 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         auth: { status: "unknown" },
         message: installed
           ? `Codex app-server provider probe failed: ${error.message}.`
-          : `Could not start Codex CLI (\`${codexSettings.binaryPath}\`). Check Settings → Providers → Codex → Binary path on the server.` +
-            (codexSettings.binaryPath === "codex"
-              ? " Installing ChatGPT or Codex desktop may not add codex to PATH."
-              : " Make sure the configured executable exists and can be run."),
+          : codexSettings.binaryPath === "codex"
+            ? "Codex is not installed on this computer, or Tinkjam cannot find the `codex` command. Install the Codex command-line tool (the Codex app on its own may not be enough), then restart Tinkjam Sync."
+            : `Could not start Codex from \`${codexSettings.binaryPath}\`. Check that the file exists, or change it in Settings → Providers → Codex → Binary path.`,
       },
     });
   }

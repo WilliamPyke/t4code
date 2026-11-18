@@ -1,17 +1,23 @@
 import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import type { Discovery } from "@t3tools/client-runtime/relay";
-import type { EnvironmentId } from "@t3tools/contracts";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  type EnvironmentId,
+  type ServerProvider,
+} from "@t3tools/contracts";
 
 /**
  * `ready`: connected here, its agent can join now. `online`: Tinkjam Sync runs on it, not yet
  * connected here. `offline`: Tinkjam Sync is not running. `unsupported`: an incompatible version.
+ * `gone`: saved here, but no longer on the person's account.
  */
 export type BringAgentComputerStatus =
   | "ready"
   | "online"
   | "connecting"
   | "offline"
-  | "unsupported";
+  | "unsupported"
+  | "gone";
 
 export interface BringAgentComputer {
   readonly environmentId: EnvironmentId;
@@ -19,6 +25,8 @@ export interface BringAgentComputer {
   readonly status: BringAgentComputerStatus;
   /** Added to this browser's computers; one that is not gets added when its agent is brought. */
   readonly saved: boolean;
+  /** When the account got it; only set when another computer has the same name. */
+  readonly addedAt: string | null;
 }
 
 const ORDER: Record<BringAgentComputerStatus, number> = {
@@ -27,6 +35,7 @@ const ORDER: Record<BringAgentComputerStatus, number> = {
   connecting: 2,
   offline: 3,
   unsupported: 4,
+  gone: 5,
 };
 
 export interface DiscoveredComputer {
@@ -34,6 +43,7 @@ export interface DiscoveredComputer {
   readonly name: string;
   readonly availability: Discovery.RelayEnvironmentAvailability;
   readonly unsupported: boolean;
+  readonly linkedAt: string;
 }
 
 /**
@@ -68,43 +78,177 @@ export function bringAgentComputers(input: {
     readonly name: string;
     readonly phase: EnvironmentConnectionPhase;
     readonly hasConfig: boolean;
+    /** Reached only through the account; one paired directly is never treated as gone. */
+    readonly relayOnly: boolean;
   }>;
   readonly discovered: ReadonlyArray<DiscoveredComputer>;
+  /** The account's list has loaded, so a computer missing from it is not on the account. */
+  readonly listed: boolean;
 }): ReadonlyArray<BringAgentComputer> {
   const discoveredById = new Map(input.discovered.map((entry) => [entry.environmentId, entry]));
   const savedIds = new Set(input.saved.map((entry) => entry.environmentId));
-  const saved = input.saved.map((entry): BringAgentComputer => {
-    const accountSays = discoveredById.get(entry.environmentId)?.availability;
+  const saved = input.saved.map((entry) => {
+    const onAccount = discoveredById.get(entry.environmentId);
+    const accountSays = onAccount?.availability;
+    // This browser keeps retrying a computer it cannot reach; the account's word wins then.
     const status: BringAgentComputerStatus =
       entry.phase === "unsupported"
         ? "unsupported"
         : entry.phase === "connected" && entry.hasConfig
           ? "ready"
-          : entry.phase === "connected" ||
-              entry.phase === "connecting" ||
-              entry.phase === "reconnecting" ||
-              entry.phase === "available" ||
-              accountSays === "online"
+          : entry.phase === "connected"
             ? "connecting"
-            : "offline";
-    return { environmentId: entry.environmentId, name: entry.name, status, saved: true };
+            : input.listed && entry.relayOnly && onAccount === undefined
+              ? "gone"
+              : accountSays === "offline"
+                ? "offline"
+                : entry.phase === "connecting" ||
+                    entry.phase === "reconnecting" ||
+                    entry.phase === "available" ||
+                    accountSays === "online"
+                  ? "connecting"
+                  : "offline";
+    return {
+      environmentId: entry.environmentId,
+      name: entry.name,
+      status,
+      saved: true,
+      linkedAt: onAccount?.linkedAt ?? null,
+    };
   });
   const discovered = input.discovered
     .filter((entry) => !savedIds.has(entry.environmentId))
-    .map((entry): BringAgentComputer => ({
-      environmentId: entry.environmentId,
-      name: entry.name,
-      status: entry.unsupported
+    .map((entry) => {
+      const status: BringAgentComputerStatus = entry.unsupported
         ? "unsupported"
         : entry.availability === "online"
           ? "online"
           : entry.availability === "checking"
             ? "connecting"
-            : "offline",
-      saved: false,
-    }));
-  return [...saved, ...discovered].toSorted(
-    (left, right) =>
-      ORDER[left.status] - ORDER[right.status] || left.name.localeCompare(right.name),
-  );
+            : "offline";
+      return {
+        environmentId: entry.environmentId,
+        name: entry.name,
+        status,
+        saved: false,
+        linkedAt: entry.linkedAt,
+      };
+    });
+  const all = [...saved, ...discovered];
+  const nameCounts = new Map<string, number>();
+  for (const computer of all) {
+    nameCounts.set(computer.name, (nameCounts.get(computer.name) ?? 0) + 1);
+  }
+  return all
+    .map(({ linkedAt, ...computer }): BringAgentComputer => ({
+      ...computer,
+      addedAt: (nameCounts.get(computer.name) ?? 0) > 1 ? linkedAt : null,
+    }))
+    .toSorted(
+      (left, right) =>
+        ORDER[left.status] - ORDER[right.status] || left.name.localeCompare(right.name),
+    );
+}
+
+const AGENT_NAMES: Partial<Record<string, string>> = { claudeAgent: "Claude Code", codex: "Codex" };
+const SIGN_IN_HINTS: Partial<Record<string, string>> = {
+  claudeAgent: "open a terminal on it, run `claude` and sign in",
+  codex: "open a terminal on it and run `codex login`",
+};
+
+type AgentState = "ready" | "checking" | "signed-out" | "broken" | "turned-off" | "not-installed";
+const AGENT_STATE_ORDER: ReadonlyArray<AgentState> = [
+  "ready",
+  "checking",
+  "signed-out",
+  "broken",
+  "turned-off",
+  "not-installed",
+];
+
+type ProviderSummary = Pick<
+  ServerProvider,
+  "driver" | "displayName" | "enabled" | "installed" | "status" | "auth"
+>;
+
+const agentState = (provider: ProviderSummary): AgentState =>
+  !provider.enabled
+    ? "turned-off"
+    : !provider.installed
+      ? // Before its first check an agent reports not installed, without an error.
+        provider.status === "error"
+        ? "not-installed"
+        : "checking"
+      : provider.auth.status === "unauthenticated"
+        ? "signed-out"
+        : provider.status === "error"
+          ? "broken"
+          : "ready";
+
+const describeAgent = (driver: string, state: AgentState): string => {
+  switch (state) {
+    case "not-installed":
+      return "not installed";
+    case "checking":
+      return "still being checked";
+    case "turned-off":
+      return "turned off in Tinkjam settings";
+    case "broken":
+      return "installed, but it did not start";
+    case "ready":
+      return "ready, but it has no model to use";
+    case "signed-out": {
+      const hint = SIGN_IN_HINTS[driver];
+      return hint === undefined ? "not signed in" : `not signed in (${hint})`;
+    }
+  }
+};
+
+/**
+ * Why a computer's agent cannot come to a board, from that computer's agents: Claude Code and
+ * Codex always, other agents only when installed.
+ */
+export function noAgentMessage(input: {
+  readonly computerName: string;
+  readonly settingsLoaded: boolean;
+  readonly providers: ReadonlyArray<ProviderSummary>;
+}): string {
+  const stillChecking = `${input.computerName} is still checking its agents. Try again in a moment.`;
+  if (!input.settingsLoaded || input.providers.length === 0) return stillChecking;
+  const states = new Map<string, { name: string; state: AgentState }>();
+  for (const provider of input.providers) {
+    const state = agentState(provider);
+    const known = states.get(provider.driver);
+    if (
+      known !== undefined &&
+      AGENT_STATE_ORDER.indexOf(known.state) <= AGENT_STATE_ORDER.indexOf(state)
+    ) {
+      continue;
+    }
+    const name =
+      AGENT_NAMES[provider.driver] ??
+      provider.displayName ??
+      PROVIDER_DISPLAY_NAMES[provider.driver] ??
+      provider.driver;
+    states.set(provider.driver, { name, state });
+  }
+  const lines = [
+    ...["claudeAgent", "codex"].map((driver) => ({
+      driver,
+      name: AGENT_NAMES[driver]!,
+      state: states.get(driver)?.state ?? "not-installed",
+    })),
+    ...[...states.entries()]
+      .filter(([driver, entry]) => !(driver in AGENT_NAMES) && entry.state !== "not-installed")
+      .map(([driver, entry]) => ({ driver, ...entry })),
+  ];
+  const anyReady = lines.some((line) => line.state === "ready");
+  if (!anyReady && lines.some((line) => line.state === "checking")) return stillChecking;
+  const heading = anyReady
+    ? `Tinkjam Sync found no agent it can start on ${input.computerName}.`
+    : `Tinkjam Sync found no signed-in agent on ${input.computerName}.`;
+  return [
+    heading,
+    ...lines.map((line) => `${line.name}: ${describeAgent(line.driver, line.state)}.`),
+  ].join(" ");
 }

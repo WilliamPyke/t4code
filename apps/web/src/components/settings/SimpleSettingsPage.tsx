@@ -1,23 +1,31 @@
-import { isGuestEnvironment } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { ChevronRightIcon, LaptopIcon, PaletteIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useEffectEvent, useState } from "react";
 
 import { dispatchCommandPalette } from "~/commandPaletteStore";
 import { requestConfirmDialog } from "~/confirmDialog";
-import { environmentCatalog } from "~/connection/catalog";
 import { boardAccountsEnabled, useBoardAccount } from "~/guest/boardAccount";
 import { useTheme } from "~/hooks/useTheme";
 import { cn } from "~/lib/utils";
 import { setShellMode } from "~/shellMode";
-import { type EnvironmentPresentation, useEnvironments } from "~/state/environments";
+import { useEnvironments, useRelayEnvironmentDiscovery } from "~/state/environments";
+import { relayEnvironmentDiscovery } from "~/state/relay";
 import { useAtomCommand } from "~/state/use-atom-command";
 import type { ThemePreferenceMode } from "~/themePalette";
 
 import { AppRouteModalClose } from "../AppRouteModal";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { openConnectComputer } from "../ConnectComputerDialog";
+import { type BringAgentComputer, bringAgentComputers } from "../guest/bringAgent.logic";
+import {
+  COMPUTER_STATUS_DOT,
+  computerStatusLine,
+  discoveredComputers,
+  removeComputerQuestion,
+  savedComputers,
+  useRemoveComputer,
+} from "../guest/yourComputers";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
@@ -151,61 +159,79 @@ function AppearanceSection() {
   );
 }
 
-function computerStatus(environment: EnvironmentPresentation): {
-  readonly label: string;
-  readonly dot: string;
-} {
-  switch (environment.connection.phase) {
-    case "connected":
-      return { label: "Connected", dot: "bg-success" };
-    case "connecting":
-    case "reconnecting":
-      return { label: "Connecting...", dot: "bg-warning" };
-    default:
-      return { label: "Offline", dot: "bg-muted-foreground/35" };
-  }
-}
-
 function ComputersSection() {
   const { environments } = useEnvironments();
-  const removeEnvironment = useAtomCommand(environmentCatalog.remove, { reportFailure: false });
-  const computers = environments.filter(
-    (environment) => !isGuestEnvironment(environment.environmentId),
+  const account = useBoardAccount();
+  const discovery = useRelayEnvironmentDiscovery();
+  const removeComputer = useRemoveComputer();
+  const [removing, setRemoving] = useState<EnvironmentId | null>(null);
+  // The account's computers too, so one this browser never opened can still be removed.
+  const signedIn = boardAccountsEnabled() && account.status === "signed-in";
+  const refreshDiscovery = useAtomCommand(relayEnvironmentDiscovery.refresh, {
+    reportFailure: false,
+  });
+  const askAccount = useEffectEvent(() => void refreshDiscovery());
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- asks the account for its computers when Settings opens, so the list matches it
+  useEffect(() => {
+    if (signedIn) askAccount();
+  }, [signedIn]);
+  const computers = bringAgentComputers({
+    saved: savedComputers(environments),
+    discovered: signedIn ? discoveredComputers(discovery) : [],
+    listed: signedIn && discovery.listed,
+  });
+  const primaryIds = new Set(
+    environments
+      .filter((environment) => environment.entry.target._tag === "PrimaryConnectionTarget")
+      .map((environment) => environment.environmentId),
   );
-  const disconnect = async (environmentId: EnvironmentId, name: string) => {
+  const remove = async (computer: BringAgentComputer) => {
     const confirmed =
-      (await requestConfirmDialog(
-        `Disconnect ${name}? Its agents leave your boards on this browser. You can connect it again later.`,
-        { variant: "destructive" },
-      )) ?? window.confirm(`Disconnect ${name}?`);
+      (await requestConfirmDialog(removeComputerQuestion(computer.name), {
+        variant: "destructive",
+      })) ?? window.confirm(removeComputerQuestion(computer.name));
     if (!confirmed) return;
-    const result = await removeEnvironment(environmentId);
-    if (result._tag === "Failure") {
-      toastManager.add({ type: "error", title: `Could not disconnect ${name}` });
+    setRemoving(computer.environmentId);
+    const failed = await removeComputer(computer);
+    setRemoving(null);
+    if (failed !== null) {
+      toastManager.add({
+        type: "error",
+        title: `Could not remove ${computer.name}`,
+        description: failed,
+      });
     }
   };
   return (
     <Section title="Your computers">
-      {computers.map((environment) => {
-        const status = computerStatus(environment);
-        const thisComputer = environment.entry.target._tag === "PrimaryConnectionTarget";
+      {computers.map((computer) => {
+        const thisComputer = primaryIds.has(computer.environmentId);
+        const status = computerStatusLine(computer);
         return (
           <Row
-            key={environment.environmentId}
+            key={computer.environmentId}
             label={
               <span className="flex min-w-0 items-center gap-2">
-                <span aria-hidden className={cn("size-2 shrink-0 rounded-full", status.dot)} />
-                <span className="truncate">{environment.label}</span>
+                <span
+                  aria-hidden
+                  className={cn(
+                    "size-2 shrink-0 rounded-full",
+                    COMPUTER_STATUS_DOT[computer.status],
+                  )}
+                />
+                <span className="truncate">{computer.name}</span>
               </span>
             }
-            description={thisComputer ? `This computer · ${status.label}` : status.label}
+            description={thisComputer ? `This computer · ${status}` : status}
           >
             {thisComputer ? undefined : (
               <Button
                 variant="outline"
-                onClick={() => void disconnect(environment.environmentId, environment.label)}
+                disabled={removing !== null}
+                onClick={() => void remove(computer)}
+                data-remove-computer
               >
-                Disconnect
+                {removing === computer.environmentId ? "Removing..." : "Remove"}
               </Button>
             )}
           </Row>

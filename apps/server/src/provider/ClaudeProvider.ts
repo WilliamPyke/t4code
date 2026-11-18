@@ -544,7 +544,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Claude is disabled in T3 Code settings.",
+        message: "Claude Code is turned off in Tinkjam settings.",
       },
     });
   }
@@ -572,8 +572,8 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         status: "error",
         auth: { status: "unknown" },
         message: isCommandMissingCause(error)
-          ? "Claude Agent CLI (`claude`) was not found on PATH."
-          : "Failed to execute Claude Agent CLI health check.",
+          ? "Claude Code is not installed on this computer, or Tinkjam cannot find the `claude` command. Install Claude Code, then restart Tinkjam Sync."
+          : "Claude Code is installed but did not start. Open a terminal on this computer and run `claude` to see what is wrong.",
       },
     });
   }
@@ -766,7 +766,7 @@ export const makePendingClaudeProvider = Effect.fn("ClaudeProvider.makePendingCl
           version: null,
           status: "warning",
           auth: { status: "unknown" },
-          message: "Claude is disabled in T3 Code settings.",
+          message: "Claude Code is turned off in Tinkjam settings.",
         },
       });
     }

@@ -17,6 +17,8 @@ import { useEnvironmentProviders, useEnvironments } from "~/state/environments";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 
+import { noAgentMessage } from "./bringAgent.logic";
+
 /**
  * Joins a cloud board from one of the person's own computers, as the join page does, without
  * leaving the board: the agent's thread is made there, on that computer's own provider sign-in,
@@ -35,23 +37,25 @@ export function useJoinBoardOnComputer() {
     readonly project: EnvironmentProject | null;
     readonly source: { readonly host: string; readonly token: string };
   }): Promise<string | null> => {
+    const computer = environments.find((entry) => entry.environmentId === input.environmentId);
+    const settings = computer?.serverConfig?.settings;
+    const providers = providersByEnvironment.get(input.environmentId) ?? [];
+    const noAgent = () =>
+      noAgentMessage({
+        computerName: computer?.label ?? "your computer",
+        settingsLoaded: settings !== undefined,
+        providers,
+      });
+    if (settings === undefined || providers.length === 0) return noAgent();
     const project =
       input.project ??
       (await openScratchProject(input.environmentId, "Could not start your agent"));
     if (project === null) return "Your computer could not start your agent. Try again.";
-    const settings = environments.find((entry) => entry.environmentId === input.environmentId)
-      ?.serverConfig?.settings;
-    const providers = providersByEnvironment.get(input.environmentId) ?? [];
-    const projectSettings =
-      settings === undefined ? null : resolveProjectSettings(settings, project.id, project);
+    const projectSettings = resolveProjectSettings(settings, project.id, project);
     const modelSelection =
-      settings === undefined || projectSettings === null
-        ? null
-        : (projectSettings.settings.defaultModelSelection ??
-          resolveProjectDefaultProviderModelSelection(providers, settings, project.id));
-    if (projectSettings === null || modelSelection === null) {
-      return "Sign in to Claude Code or Codex on that computer first, then try again.";
-    }
+      projectSettings.settings.defaultModelSelection ??
+      resolveProjectDefaultProviderModelSelection(providers, settings, project.id);
+    if (modelSelection === null) return noAgent();
     const result = await joinSharedThread({
       environmentId: input.environmentId,
       input: {

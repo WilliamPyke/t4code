@@ -125,7 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         defer { busy = false }
         waitingForNetwork = false
         let firstRun = !NodeRuntime.isInstalled(paths) || !SyncPackage.isInstalled(paths)
-        if firstRun { setupWindow.present() }
+        if firstRun { presentSetupWindow() }
         do {
             if loginPath == nil {
                 phase = .settingUp("Getting ready…", nil)
@@ -261,7 +261,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if !openedApprovalThisSession {
                 openedApprovalThisSession = true
                 NSWorkspace.shared.open(url)
-                setupWindow.present()
+                presentSetupWindow()
                 UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
             }
         case .approved:
@@ -746,6 +746,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     // MARK: Setup window
+
+    /// The phase is often set before the window shows, so fill it in as it appears.
+    private func presentSetupWindow() {
+        setupWindow.present()
+        updateSetupWindow()
+    }
 
     private func updateSetupWindow() {
         guard setupWindow.isVisible else { return }
