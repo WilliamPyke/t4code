@@ -6,6 +6,7 @@ import Foundation
 ///       "sha256": "<hex of the zip>", "minimumSystemVersion": "13.0" }
 struct AppRelease: Decodable {
     let version: String
+    let build: String?
     let url: String
     let sha256: String
     let minimumSystemVersion: String?
@@ -41,7 +42,9 @@ enum AppUpdater {
         do { release = try await fetchJSON(AppRelease.self, from: Config.appManifestURL) } catch {
             throw SetupError.from(error, doing: "checking for a new version of the app")
         }
-        guard isNewer(release.version, than: Machine.appVersion) else { return .upToDate }
+        let sameVersionNewerBuild = release.version == Machine.appVersion &&
+            isNewer(release.build ?? "", than: Machine.appBuild)
+        guard isNewer(release.version, than: Machine.appVersion) || sameVersionNewerBuild else { return .upToDate }
         if let minimum = release.minimumSystemVersion {
             let parts = minimum.split(separator: ".").compactMap { Int($0) }
             let required = OperatingSystemVersion(majorVersion: parts.first ?? 0,

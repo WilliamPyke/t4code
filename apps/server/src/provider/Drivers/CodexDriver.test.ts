@@ -57,6 +57,13 @@ const layerDeps = ServerConfig.layerTest(process.cwd(), {
   Layer.provideMerge(
     Layer.mock(CodexInstallation.CodexInstallation)({
       managedDirectory: "unused-managed-installation",
+      resolve: () =>
+        Effect.fail(
+          new CodexInstallation.CodexInstallationError({
+            operation: "resolve",
+            detail: "No Codex in this test.",
+          }),
+        ),
     }),
   ),
   Layer.provideMerge(Layer.mock(ServerSecretStore.ServerSecretStore)({})),
