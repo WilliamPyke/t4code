@@ -314,8 +314,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             phase = .stopped("Port \(Config.approvalPort) is in use by another app, so this Mac can't be approved. Quit that app, then choose Retry.")
             return
         }
+        // Sync keeps its sign-in request across a restart, so the open approval page still works.
         if case .awaitingApproval = phase {
-            phase = .notConnected("The approval page expired. Choose Connect… to try again.")
+            scheduleRestart(reason: "the approval wait ended")
             return
         }
         if heldThisRun != nil {
@@ -553,12 +554,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                                 "--base-dir", paths.base.path],
                                    environment: nodeEnvironment(), timeout: 120)
             log.app("--disconnect: \(result.tail(4))")
-            UserDefaults.standard.set(true, forKey: Defaults.disconnected)
+            // Only a finished disconnect keeps Sync off; otherwise Retry or a relaunch connects again.
+            if result.succeeded { UserDefaults.standard.set(true, forKey: Defaults.disconnected) }
             phase = result.succeeded ? .notConnected(nil) : .stopped("Could not disconnect: \(result.tail(1))")
         }
     }
 
     @objc private func retry() {
+        UserDefaults.standard.removeObject(forKey: Defaults.disconnected)
         restarts = []
         openedApprovalThisSession = false
         if NodeRuntime.isInstalled(paths), SyncPackage.isInstalled(paths), child == nil, !busy {
@@ -587,7 +590,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func quit() { onMainRunLoop { NSApp.terminate(nil) } }
 
     /// `tinkjam-sync://connect`, `…/check-for-updates`, `…/restart-to-update`, `…/start-at-login?enabled=0|1`,
-    /// `…/quit`, `…/menu`: the menu's
+    /// `…/quit`, `…/menu`, `…/disconnect` (asks first): the menu's
     /// actions for scripts and agents, which `open` can reach without any permission.
     @objc private func handleURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
         guard let text = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
@@ -598,6 +601,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "check-for-updates": checkForUpdatesClicked()
         case "restart-to-update": restartToUpdate()
         case "quit": quit()
+        case "disconnect": if case .connected = phase { disconnect() }
         case "start-at-login":
             // tinkjam-sync://start-at-login?enabled=0 (or 1)
             let enabled = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "enabled" }?.value

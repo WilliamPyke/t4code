@@ -161,6 +161,20 @@ if (parsed.action === "status") {
 }
 
 const disconnecting = parsed.serverArgs.includes("--disconnect");
+// The app owns its Sync and files: taking them down here would leave it broken.
+if (macApp !== undefined && (parsed.action === "uninstall" || disconnecting)) {
+  if (disconnecting) {
+    NodeChildProcess.spawnSync("open", ["tinkjam-sync://disconnect"]);
+    console.log(
+      `Tinkjam Sync for Mac (${macApp}) runs Tinkjam Sync. It now asks you to confirm: choose Disconnect.`,
+    );
+  } else {
+    console.log(
+      `Tinkjam Sync for Mac (${macApp}) runs Tinkjam Sync. To remove it, choose Quit in its menu bar menu, then move it to the Trash.`,
+    );
+  }
+  process.exit(0);
+}
 if (parsed.action === "uninstall" || disconnecting) {
   await takeDown();
   // Before the files go: this launcher may be the installed copy it is about to remove.

@@ -141,7 +141,7 @@ const terminalState = (installation: CodexInstallation.CodexInstallation["Servic
     Effect.map(Option.getOrThrow),
   );
 
-it.effect.each(["0.156.0", "0.156.1", "0.156.2", "0.157.0"])(
+it.effect.each(["0.156.0", "0.156.1", "0.156.2", "0.157.0", "0.169.0-alpha.11.1"])(
   "reuses installed Codex %s without downloading or taking ownership of it",
   (version) =>
     Effect.gen(function* () {

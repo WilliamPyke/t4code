@@ -813,7 +813,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         message: installed
           ? `Codex app-server provider probe failed: ${error.message}.`
           : codexSettings.binaryPath === "codex"
-            ? "Codex is not installed on this computer, or Tinkjam cannot find the `codex` command. Install the Codex command-line tool (the Codex app on its own may not be enough), then restart Tinkjam Sync."
+            ? "Codex is not installed on this computer, or Tinkjam cannot find the `codex` command. Install the ChatGPT app for Mac or the Codex command-line tool, then restart Tinkjam Sync."
             : `Could not start Codex from \`${codexSettings.binaryPath}\`. Check that the file exists, or change it in Settings → Providers → Codex → Binary path.`,
       },
     });
