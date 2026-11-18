@@ -160,8 +160,11 @@ if (parsed.action === "status") {
   process.exit(0);
 }
 
-if (parsed.action === "uninstall" || parsed.serverArgs.includes("--disconnect")) {
+const disconnecting = parsed.serverArgs.includes("--disconnect");
+if (parsed.action === "uninstall" || disconnecting) {
   await takeDown();
+  // Before the files go: this launcher may be the installed copy it is about to remove.
+  const disconnected = disconnecting ? await runSync(ownEntry, parsed.serverArgs) : 0;
   service.removeFiles();
   console.log("Tinkjam Sync no longer runs in the background or starts when you log in.");
   if (parsed.action === "uninstall") {
@@ -170,6 +173,7 @@ if (parsed.action === "uninstall" || parsed.serverArgs.includes("--disconnect"))
     );
     process.exit(0);
   }
+  process.exit(disconnected);
 }
 
 if (parsed.action === "install") {
