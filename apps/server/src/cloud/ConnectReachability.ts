@@ -30,6 +30,7 @@ import {
 } from "./config.ts";
 import { LINK_REMOVED_FAILURE } from "./relayResponse.ts";
 import * as ManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
+import { onSystemResume } from "./systemResume.ts";
 import * as TunnelEndpointProbe from "./tunnelEndpointProbe.ts";
 
 // cloudflared finds the edge through the SRV record `_v2-origintunneld._tcp.argotunnel.com`,
@@ -446,6 +447,15 @@ const make = Effect.gen(function* () {
     Effect.forever,
     Effect.forkScoped,
   );
+  // A wait that grew before the sleep says nothing about the network the machine woke on,
+  // and nothing else looks until the next periodic check. Forked: the watch must keep its beat.
+  yield* onSystemResume(() =>
+    SynchronizedRef.update(deadConnectorRef, (state) => ({
+      ...state,
+      restartAfterMillis: firstRestartAfterMillis,
+      restartOrder: 0,
+    })).pipe(Effect.andThen(Effect.forkIn(check, scope))),
+  ).pipe(Effect.forkScoped);
 
   return ConnectReachability.of({
     check,

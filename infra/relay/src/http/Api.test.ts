@@ -49,6 +49,7 @@ import {
   registerEnvironmentTunnelRecovery,
   relayDpopFailureReason,
   traceRelayHttpRequestWith,
+  supersedeSameComputerLinks,
   unlinkEnvironmentRecord,
   verifyRelayClientBearerToken,
   verifyEnvironmentTunnelRecoveryProof,
@@ -524,6 +525,7 @@ function layerRelayUnlinkTest(input?: {
   readonly reconcileOrigin?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["reconcileOrigin"];
   readonly release?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["release"];
   readonly clearInbox?: HookInbox.HookInbox["Service"]["clear"];
+  readonly listOtherEnvironmentsForMachine?: EnvironmentLinks.EnvironmentLinks["Service"]["listOtherEnvironmentsForMachine"];
 }) {
   return Layer.mergeAll(
     Layer.mock(HookInbox.HookInbox, {
@@ -548,6 +550,9 @@ function layerRelayUnlinkTest(input?: {
         revokeForUser: input?.revokeForUser ?? (() => Effect.succeed(false)),
         wasRemovedByUser: () => Effect.die("unused wasRemovedByUser"),
         listOtherUsersForEnvironmentKey: () => Effect.die("unused listOtherUsersForEnvironmentKey"),
+        listOtherEnvironmentsForMachine:
+          input?.listOtherEnvironmentsForMachine ??
+          (() => Effect.die("unused listOtherEnvironmentsForMachine")),
       }),
     ),
     Layer.succeed(
@@ -1131,6 +1136,56 @@ describe("relay environment unlink", () => {
       expect(yield* unlink(false)).toBe(true);
       expect(cleared).toEqual([endpointKey]);
       expect(yield* unlink(true)).toBe(true);
+    });
+  });
+
+  it.effect("removes a reinstalled computer's earlier entry only on a fresh approval", () => {
+    const revoked: Array<string> = [];
+    const revokedKeys: Array<string> = [];
+    const lookups: Array<string> = [];
+    const machineId = "a".repeat(64);
+    const relink = (input: { machineId: string | null; freshlyApproved: boolean }) =>
+      supersedeSameComputerLinks({
+        userId: "user-1",
+        environmentId: "environment-new",
+        ...input,
+      }).pipe(
+        Effect.provide(
+          layerRelayUnlinkTest({
+            listOtherEnvironmentsForMachine: (query) =>
+              Effect.sync(() => {
+                lookups.push(`${query.userId}:${query.machineId}:${query.environmentId}`);
+                return ["environment-1"];
+              }),
+            getForUser: (query) =>
+              Effect.succeed(
+                query.userId === "user-1" && query.environmentId === "environment-1"
+                  ? linkedEnvironmentRecord
+                  : null,
+              ),
+            revokeForUser: (query) =>
+              Effect.sync(() => {
+                revoked.push(`${query.userId}:${query.environmentId}`);
+                return true;
+              }),
+            revokeCredential: (query) =>
+              Effect.sync(() => {
+                revokedKeys.push(`${query.environmentId}:${query.environmentPublicKey}`);
+                return true;
+              }),
+          }),
+        ),
+      );
+    return Effect.gen(function* () {
+      yield* relink({ machineId, freshlyApproved: false });
+      yield* relink({ machineId: null, freshlyApproved: true });
+      expect(lookups).toEqual([]);
+      expect(revoked).toEqual([]);
+
+      yield* relink({ machineId, freshlyApproved: true });
+      expect(lookups).toEqual([`user-1:${machineId}:environment-new`]);
+      expect(revoked).toEqual(["user-1:environment-1"]);
+      expect(revokedKeys).toEqual(["environment-1:public-key"]);
     });
   });
 

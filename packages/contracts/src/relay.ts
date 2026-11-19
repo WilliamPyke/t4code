@@ -285,6 +285,9 @@ export const RelayEnvironmentLinkScope = Schema.Literals([
 ]);
 export type RelayEnvironmentLinkScope = typeof RelayEnvironmentLinkScope.Type;
 
+export const RelayEnvironmentMachineId = Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/u));
+export type RelayEnvironmentMachineId = typeof RelayEnvironmentMachineId.Type;
+
 export const RelayEnvironmentLinkProofPayload = Schema.Struct({
   ...RelaySignedJwtRegisteredClaims,
   challenge: TrimmedNonEmptyString,
@@ -294,6 +297,8 @@ export const RelayEnvironmentLinkProofPayload = Schema.Struct({
   endpoint: RelayManagedEndpoint,
   origin: RelayManagedEndpointOrigin,
   scopes: Schema.Array(RelayEnvironmentLinkScope),
+  /** A hash naming this computer and data folder, the same after a reinstall. Never a hardware id. */
+  machineId: Schema.optionalKey(RelayEnvironmentMachineId),
 });
 export type RelayEnvironmentLinkProofPayload = typeof RelayEnvironmentLinkProofPayload.Type;
 

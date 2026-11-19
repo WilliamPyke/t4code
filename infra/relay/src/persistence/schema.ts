@@ -78,6 +78,7 @@ export const relayEnvironmentLinks = pgTable(
     managedTunnelsEnabled: boolean("managed_tunnels_enabled").notNull().default(false),
     holdWebhooksWhileOffline: boolean("hold_webhooks_while_offline").notNull().default(false),
     createdByDeviceId: varchar("created_by_device_id", { length: 191 }),
+    machineId: varchar("machine_id", { length: 64 }),
     revokedAt: varchar("revoked_at", { length: 64 }),
     createdAt: varchar("created_at", { length: 64 }).notNull(),
     updatedAt: varchar("updated_at", { length: 64 }).notNull(),

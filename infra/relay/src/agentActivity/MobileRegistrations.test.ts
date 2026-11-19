@@ -121,6 +121,7 @@ function makeEnvironmentLinks(
     revokeForUser: () => Effect.succeed(false),
     wasRemovedByUser: () => Effect.succeed(false),
     listOtherUsersForEnvironmentKey: () => Effect.succeed([]),
+    listOtherEnvironmentsForMachine: () => Effect.succeed([]),
     ...overrides,
   };
 }

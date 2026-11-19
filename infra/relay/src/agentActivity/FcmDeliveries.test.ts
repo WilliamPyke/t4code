@@ -175,6 +175,7 @@ function harness() {
       revokeForUser: () => Effect.succeed(false),
       wasRemovedByUser: () => Effect.succeed(false),
       listOtherUsersForEnvironmentKey: () => Effect.succeed([]),
+      listOtherEnvironmentsForMachine: () => Effect.succeed([]),
       getForUser: (input) =>
         Effect.sync(() =>
           current.linked && !current.revokedEnvironments.includes(input.environmentId)

@@ -28,6 +28,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ManagedLimits from "../policy/managedLimits.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
+import { onSystemResume } from "./systemResume.ts";
 
 export type CloudManagedEndpointRuntimeStatus =
   | {
@@ -114,6 +115,10 @@ const CONNECTOR_READINESS_INTERVAL = Duration.seconds(30);
 const CONNECTOR_READINESS_REQUEST_TIMEOUT = Duration.seconds(5);
 const CONNECTOR_NOT_READY_CHECKS_BEFORE_RESTART = 6;
 const CONNECTOR_NOT_READY_CHECKS_MAX = 60;
+// A laptop usually wakes on a changed network, where a connector still unconnected after a
+// minute rarely recovers by itself. The window bounds these faster restarts to a few per wake.
+const CONNECTOR_NOT_READY_CHECKS_AFTER_RESUME = 2;
+const CONNECTOR_AFTER_RESUME_WINDOW_MS = 3 * 60_000;
 const RELAY_CLIENT_METRICS_LINE = /\bStarting metrics server on (127\.0\.0\.1:\d+)\/metrics\b/u;
 const RELAY_CLIENT_PROTOCOL = /\bprotocol=(\w+)/u;
 // cloudflared's metrics server: `/ready` answers 200 or 503 with this body, and
@@ -228,6 +233,7 @@ export const make = Effect.gen(function* () {
   const prunedRef = yield* Ref.make(false);
   const retryLoopRunningRef = yield* Ref.make(false);
   const notReadyChecksBeforeRestartRef = yield* Ref.make(CONNECTOR_NOT_READY_CHECKS_BEFORE_RESTART);
+  const resumedAtRef = yield* Ref.make(Number.NEGATIVE_INFINITY);
   // An explicit cloudflared transport in the environment is the user's choice.
   const env = yield* HostProcess.Environment;
   const transportChosenByUser = Option.isSome(
@@ -537,13 +543,20 @@ export const make = Effect.gen(function* () {
       }
       if (status.value !== 503) continue;
       notReadyChecks += 1;
-      const threshold = yield* Ref.get(notReadyChecksBeforeRestartRef);
+      const justResumed =
+        (yield* Clock.currentTimeMillis) - (yield* Ref.get(resumedAtRef)) <
+        CONNECTOR_AFTER_RESUME_WINDOW_MS;
+      const threshold = justResumed
+        ? CONNECTOR_NOT_READY_CHECKS_AFTER_RESUME
+        : yield* Ref.get(notReadyChecksBeforeRestartRef);
       if (notReadyChecks < threshold) continue;
       notReadyChecks = 0;
-      yield* Ref.set(
-        notReadyChecksBeforeRestartRef,
-        Math.min(threshold * 2, CONNECTOR_NOT_READY_CHECKS_MAX),
-      );
+      if (!justResumed) {
+        yield* Ref.set(
+          notReadyChecksBeforeRestartRef,
+          Math.min(threshold * 2, CONNECTOR_NOT_READY_CHECKS_MAX),
+        );
+      }
       yield* Effect.logWarning("Relay client has no tunnel connection; restarting it", {
         pid: Number(connector.child.pid),
         notReadyChecks: threshold,
@@ -912,6 +925,14 @@ export const make = Effect.gen(function* () {
     withLinkStateLock: linkStateSemaphore.withPermits(1),
   });
 
+  // A wait that grew while the machine was offline says nothing about the network it woke on.
+  yield* onSystemResume((asleepMillis) =>
+    Effect.gen(function* () {
+      yield* Ref.set(resumedAtRef, yield* Clock.currentTimeMillis);
+      yield* Ref.set(notReadyChecksBeforeRestartRef, CONNECTOR_NOT_READY_CHECKS_BEFORE_RESTART);
+      yield* Effect.logInfo("This machine woke from sleep", { asleepMillis });
+    }),
+  ).pipe(Effect.forkIn(runtimeScope));
   yield* Effect.addFinalizer(() => runtime.applyConfig(null));
   return runtime;
 });

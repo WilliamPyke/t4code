@@ -836,6 +836,40 @@ const supersedeOtherAccountLinks = Effect.fn("relay.api.client.supersedeOtherAcc
   ),
 );
 
+/**
+ * A reinstalled computer links under a new id. Its earlier entry on the same account goes, so
+ * the account does not list one computer twice. Only a fresh approval may remove it.
+ */
+export const supersedeSameComputerLinks = Effect.fn("relay.api.client.supersedeSameComputerLinks")(
+  function* (input: {
+    readonly userId: string;
+    readonly environmentId: string;
+    readonly machineId: string | null;
+    readonly freshlyApproved: boolean;
+    readonly managedEndpointNamespace?: string | undefined;
+  }) {
+    const { machineId } = input;
+    if (machineId === null || !input.freshlyApproved) return;
+    const links = yield* EnvironmentLinks.EnvironmentLinks;
+    const earlier = yield* links.listOtherEnvironmentsForMachine({ ...input, machineId });
+    yield* Effect.forEach(
+      earlier,
+      (environmentId) =>
+        unlinkEnvironmentRecord({
+          userId: input.userId,
+          environmentId,
+          managedEndpointNamespace: input.managedEndpointNamespace,
+        }),
+      { discard: true },
+    );
+  },
+  Effect.catch((error) =>
+    Effect.logWarning("Could not remove a reinstalled computer's earlier entry", {
+      errorTag: error._tag,
+    }),
+  ),
+);
+
 type EnvironmentTunnelRecoveryProofInput = {
   readonly proof: string;
   readonly userId: string;
@@ -1127,15 +1161,23 @@ export const layerClientApi = HttpApiBuilder.group(
             const { payload } = args;
             yield* appendRelayCredentialResponseHeaders;
             const { userId, mode } = yield* RelayClientPrincipal;
+            const freshlyApproved = mode !== "computer" || payload.freshApproval === true;
             const result = yield* linker.link({
               userId,
               request: payload,
-              mayRestoreRemovedLink: mode !== "computer" || payload.freshApproval === true,
+              mayRestoreRemovedLink: freshlyApproved,
             });
             yield* supersedeOtherAccountLinks({
               userId,
               environmentId: result.environmentId,
               environmentPublicKey: result.environmentPublicKey,
+              managedEndpointNamespace: config.managedEndpointNamespace,
+            });
+            yield* supersedeSameComputerLinks({
+              userId,
+              environmentId: result.environmentId,
+              machineId: result.machineId,
+              freshlyApproved,
               managedEndpointNamespace: config.managedEndpointNamespace,
             });
             return {

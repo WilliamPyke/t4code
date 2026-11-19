@@ -97,6 +97,7 @@ const makeRequest = Effect.gen(function* () {
     },
     origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
     scopes: ["agent_activity_notifications", "managed_tunnels"],
+    machineId: "a".repeat(64),
   } satisfies RelayEnvironmentLinkProofPayload;
   return {
     request: {
@@ -135,6 +136,7 @@ function layerTest(input?: {
           revokeForUser: () => Effect.succeed(false),
           wasRemovedByUser: () => Effect.succeed(input?.removedByUser ?? false),
           listOtherUsersForEnvironmentKey: () => Effect.succeed([]),
+          listOtherEnvironmentsForMachine: () => Effect.succeed([]),
         }),
         Layer.succeed(EnvironmentCredentials.EnvironmentCredentials, {
           create: () => Effect.succeed("t3env_credential_secret"),
@@ -175,6 +177,7 @@ describe("EnvironmentLinker", () => {
       });
       expect(result.environmentId).toBe(payload.environmentId);
       expect(result.environmentCredential).toBe("t3env_credential_secret");
+      expect(result.machineId).toBe(payload.machineId);
       expect(persistedEnvironmentId).toBe(payload.environmentId);
     }).pipe(
       Effect.provide(

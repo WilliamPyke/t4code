@@ -102,6 +102,7 @@ export class EnvironmentLinker extends Context.Service<
           | ManagedEndpointProvider.ManagedEndpointProvisioningResult["runtime"]
           | null;
         readonly environmentCredential: string;
+        readonly machineId: string | null;
       },
       EnvironmentLinkError
     >;
@@ -363,6 +364,7 @@ const make = Effect.gen(function* () {
         endpoint,
         endpointRuntime: provisioned?.runtime ?? null,
         environmentCredential,
+        machineId: verified.machineId ?? null,
       };
     }),
   });

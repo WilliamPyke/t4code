@@ -100,6 +100,7 @@ import {
 import { EnvironmentSigningKey } from "./environmentKeys.ts";
 import * as ConnectReachability from "./ConnectReachability.ts";
 import * as ManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
+import { linkMachineId } from "./linkMachineId.ts";
 import * as ManagedLimits from "../policy/managedLimits.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import { relayUrlConfig } from "./publicConfig.ts";
@@ -624,6 +625,7 @@ const make = Effect.gen(function* () {
     const expiresAt = DateTime.add(now, { minutes: 5 });
     const nowSeconds = Math.floor(now.epochMilliseconds / 1_000);
     const descriptor = yield* environment.getDescriptor;
+    const machineId = yield* linkMachineId(config.stateDir);
     const payload = {
       iss: `t3-env:${descriptor.environmentId}`,
       aud: normalizeRelayIssuer(request.relayIssuer),
@@ -638,6 +640,7 @@ const make = Effect.gen(function* () {
       endpoint: request.endpoint,
       origin: request.origin,
       scopes: linkProofScopes(request),
+      ...(machineId === null ? {} : { machineId }),
     } satisfies RelayEnvironmentLinkProofPayload;
     return yield* signingKey
       .sign({

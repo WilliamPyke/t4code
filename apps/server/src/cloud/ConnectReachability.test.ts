@@ -22,6 +22,7 @@ import * as ConnectReachability from "./ConnectReachability.ts";
 import { classifyReachability, type ReachabilityFacts } from "./ConnectReachability.ts";
 import * as ServerConfig from "../config.ts";
 import * as ManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
+import { withMachineSleep } from "./systemResume.testkit.ts";
 import * as TunnelEndpointProbe from "./tunnelEndpointProbe.ts";
 
 vi.mock("node:net", { spy: true });
@@ -266,6 +267,43 @@ describe("ConnectReachability stale connector recovery", () => {
         expect(yield* Queue.take(restarts)).toBe(connected.pid);
       }).pipe(Effect.provide(layer));
     }),
+  );
+
+  it.effect("looks at once when the machine wakes, and waits the first wait again", () =>
+    withMachineSleep((sleepFor) =>
+      Effect.gen(function* () {
+        using _connect = mockEdgeConnect();
+        const restarts = yield* Queue.unbounded<number>();
+        let requests = 0;
+        const layer = reachabilityLayer(
+          Effect.sync(() => {
+            requests += 1;
+            return { status: 530, body: { cloudflareError: 1033 } };
+          }),
+          (pid, stillDead) =>
+            stillDead.pipe(Effect.tap((dead) => (dead ? Queue.offer(restarts, pid) : Effect.void))),
+          { sync: true },
+        );
+        yield* Effect.gen(function* () {
+          const reachability = yield* ConnectReachability.ConnectReachability;
+          // Two restarts that did not help grow the wait to 80 s.
+          yield* reachability.check;
+          yield* TestClock.adjust(Duration.seconds(20));
+          yield* reachability.check;
+          yield* TestClock.adjust(Duration.seconds(40));
+          expect(yield* Queue.takeAll(restarts)).toHaveLength(2);
+
+          const before = requests;
+          yield* sleepFor(Duration.hours(1));
+          yield* TestClock.adjust(Duration.seconds(10));
+          expect(requests).toBe(before + 1);
+
+          yield* reachability.check;
+          yield* TestClock.adjust(Duration.seconds(20));
+          expect(yield* Queue.size(restarts)).toBe(1);
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
   );
 
   it.effect("starts a new streak after a healthy check that a newer check overtook", () =>

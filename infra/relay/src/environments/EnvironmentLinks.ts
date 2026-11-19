@@ -160,6 +160,12 @@ export class EnvironmentLinks extends Context.Service<
       readonly environmentId: string;
       readonly environmentPublicKey: string;
     }) => Effect.Effect<ReadonlyArray<string>, EnvironmentLinkEnvironmentLookupPersistenceError>;
+    /** The account's other active links made from the same computer and data folder. */
+    readonly listOtherEnvironmentsForMachine: (input: {
+      readonly userId: string;
+      readonly environmentId: string;
+      readonly machineId: string;
+    }) => Effect.Effect<ReadonlyArray<string>, EnvironmentLinkEnvironmentLookupPersistenceError>;
   }
 >()("t3code-relay/environments/EnvironmentLinks") {}
 
@@ -213,6 +219,7 @@ const make = Effect.gen(function* () {
           liveActivitiesEnabled: request.liveActivitiesEnabled,
           managedTunnelsEnabled: request.managedTunnelsEnabled,
           createdByDeviceId: request.deviceId ?? null,
+          machineId: proof.machineId ?? null,
           revokedAt: null,
           createdAt: now,
           updatedAt: now,
@@ -229,6 +236,8 @@ const make = Effect.gen(function* () {
             liveActivitiesEnabled: request.liveActivitiesEnabled,
             managedTunnelsEnabled: request.managedTunnelsEnabled,
             createdByDeviceId: request.deviceId ?? null,
+            // A relink from a server too old to send one keeps the id already recorded.
+            ...(proof.machineId === undefined ? {} : { machineId: proof.machineId }),
             revokedAt: null,
             updatedAt: now,
             holdWebhooksWhileOffline: inheritedHoldWebhooks,
@@ -539,6 +548,33 @@ const make = Effect.gen(function* () {
           ),
         );
       return rows.map((row) => row.userId);
+    }),
+
+    listOtherEnvironmentsForMachine: Effect.fn(
+      "relay.environment_links.list_other_environments_for_machine",
+    )(function* (input) {
+      yield* Effect.annotateCurrentSpan({ "relay.environment_id": input.environmentId });
+      const rows = yield* db
+        .select({ environmentId: relayEnvironmentLinks.environmentId })
+        .from(relayEnvironmentLinks)
+        .where(
+          and(
+            eq(relayEnvironmentLinks.userId, input.userId),
+            eq(relayEnvironmentLinks.machineId, input.machineId),
+            ne(relayEnvironmentLinks.environmentId, input.environmentId),
+            isNull(relayEnvironmentLinks.revokedAt),
+          ),
+        )
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new EnvironmentLinkEnvironmentLookupPersistenceError({
+                environmentId: input.environmentId,
+                cause,
+              }),
+          ),
+        );
+      return rows.map((row) => row.environmentId);
     }),
   });
 });
