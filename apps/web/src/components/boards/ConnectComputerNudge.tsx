@@ -7,7 +7,6 @@ import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorag
 import { useEnvironments } from "~/state/environments";
 
 import { openConnectComputer } from "../ConnectComputerDialog";
-import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { Button } from "../ui/button";
 
 // Per browser: the person said no thanks; the sidebar still offers it.
@@ -29,15 +28,21 @@ export function ConnectComputerNudge() {
   const [dismissed, setDismissed] = useState(readDismissed);
   if (hasComputer || dismissed) return null;
   return (
-    <Alert variant="info" data-connect-computer-nudge>
-      <BotIcon />
-      <AlertTitle>Bring your AI agents onto your boards</AlertTitle>
-      <AlertDescription>
-        Get Tinkjam Sync for your computer and press Connect. On Windows you download it and open
-        it; on a Mac you paste one line into Terminal, once. Your boards can then use Claude Code or
-        Codex on it.
-      </AlertDescription>
-      <AlertAction>
+    <section
+      className="flex flex-col gap-3 rounded-xl border border-info/32 bg-info/4 px-3.5 py-3 text-sm sm:flex-row sm:items-center"
+      data-connect-computer-nudge
+    >
+      <div className="flex min-w-0 flex-1 gap-2.5">
+        <BotIcon className="mt-0.5 size-4 shrink-0 text-info" aria-hidden />
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <h2 className="font-medium">Bring your AI agents onto your boards</h2>
+          <p className="text-muted-foreground">
+            Get Tinkjam Sync for your computer and press Connect. Your boards can then use Claude
+            Code or Codex on it.
+          </p>
+        </div>
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">
         <Button size="sm" onClick={openConnectComputer}>
           <DownloadIcon />
           Get Tinkjam Sync
@@ -45,7 +50,7 @@ export function ConnectComputerNudge() {
         <Button
           size="icon-sm"
           variant="ghost"
-          aria-label="Not now"
+          aria-label="Hide this"
           onClick={() => {
             setDismissed(true);
             try {
@@ -55,7 +60,7 @@ export function ConnectComputerNudge() {
         >
           <XIcon />
         </Button>
-      </AlertAction>
-    </Alert>
+      </div>
+    </section>
   );
 }
