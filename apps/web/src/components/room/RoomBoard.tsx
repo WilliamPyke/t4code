@@ -860,6 +860,8 @@ function ResizeHandle({
 
 const THREAD_DROP = "thread";
 const CLOUD_NO_AGENTS = "Agents cannot join this board.";
+const CLOUD_NO_WINDOWS =
+  "Needs a board kept on your computer. Start one from New board with On this computer switched on.";
 const OWN_AGENT_DROP = "own-agent";
 
 /**
@@ -2644,18 +2646,27 @@ export function RoomBoard({
     (artifactsFull ? `The board holds ${ROOM_BOARD_MAX_ARTIFACTS} artifacts at most` : null);
   const codeFull =
     shown.notes.filter((note) => note.kind === "code").length >= ROOM_BOARD_MAX_CODE_WINDOWS;
+  // A cloud board has no machine to read code or pull requests from; its tools show disabled.
+  const noMachineWindows = cards === undefined && !holds.windows;
   const cannotAddCode =
     cannotAdd ??
-    (codeFull ? `The board holds ${ROOM_BOARD_MAX_CODE_WINDOWS} code windows at most` : null);
+    (noMachineWindows
+      ? CLOUD_NO_WINDOWS
+      : codeFull
+        ? `The board holds ${ROOM_BOARD_MAX_CODE_WINDOWS} code windows at most`
+        : null);
   const pullRequestsFull =
     shown.notes.filter((note) => note.kind === "pull-request").length >=
     ROOM_BOARD_MAX_PULL_REQUESTS;
   const cannotAddPullRequest =
     cannotAdd ??
-    (pullRequestsFull
-      ? `The board holds ${ROOM_BOARD_MAX_PULL_REQUESTS} pull request windows at most`
-      : null);
+    (noMachineWindows
+      ? CLOUD_NO_WINDOWS
+      : pullRequestsFull
+        ? `The board holds ${ROOM_BOARD_MAX_PULL_REQUESTS} pull request windows at most`
+        : null);
   const machineTools = cards === undefined && holds.windows;
+  const machineToolsShown = cards === undefined;
   const drawnRects = () => drawnRectsIn(surfaceRef.current);
   const takenRects = () =>
     boardTakenRects(
@@ -5574,7 +5585,7 @@ export function RoomBoard({
                       </BoardTool>
                     </WhyNot>
                   ) : null}
-                  {machineTools ? (
+                  {machineToolsShown ? (
                     <span className="contents @max-2xl/board:hidden">
                       <WhyNot reason={cannotAddCode}>
                         <BoardTool
@@ -5588,7 +5599,7 @@ export function RoomBoard({
                       </WhyNot>
                     </span>
                   ) : null}
-                  {machineTools ? (
+                  {machineToolsShown ? (
                     <span className="contents @max-2xl/board:hidden">
                       <WhyNot reason={cannotAddPullRequest}>
                         <BoardTool
@@ -5663,7 +5674,7 @@ export function RoomBoard({
                           <LinkIcon />
                           Link
                         </MenuItem>
-                        {machineTools ? (
+                        {machineToolsShown ? (
                           <MenuItem
                             disabled={cannotAddCode !== null}
                             onClick={() => addAndType(() => addCard({ kind: "code" }))}
@@ -5672,7 +5683,7 @@ export function RoomBoard({
                             Code window
                           </MenuItem>
                         ) : null}
-                        {machineTools ? (
+                        {machineToolsShown ? (
                           <MenuItem
                             disabled={cannotAddPullRequest !== null}
                             onClick={startPullRequest}

@@ -11,10 +11,16 @@ export function resolveShellMode(stored: ShellMode | null, hosted: boolean): She
   return stored ?? defaultShellMode(hosted);
 }
 
-/** Pages only Advanced lists, by name, so Simple can say where they went instead of breaking. */
-export function advancedOnlyPageName(pathname: string): string | null {
+/**
+ * Pages only Advanced lists, by name, so Simple can say where they went instead of breaking.
+ * Pull requests stay reachable in Simple once the person has a computer connected.
+ */
+export function advancedOnlyPageName(
+  pathname: string,
+  pullRequestsAvailable = false,
+): string | null {
   if (pathname === "/usage") return "Usage";
-  if (pathname === "/pull-requests") return "Pull requests";
+  if (pathname === "/pull-requests") return pullRequestsAvailable ? null : "Pull requests";
   if (pathname.startsWith("/projects/")) return "Project settings";
   return null;
 }
@@ -34,8 +40,15 @@ const SIMPLE_PALETTE_ACTIONS = new Set([
   "action:switch-shell-mode",
 ]);
 
-export function paletteActionShows(value: string, mode: ShellMode): boolean {
-  return mode === "advanced" || SIMPLE_PALETTE_ACTIONS.has(value);
+export function paletteActionShows(
+  value: string,
+  mode: ShellMode,
+  pullRequestsAvailable = false,
+): boolean {
+  if (mode === "advanced") return true;
+  // Pull requests need a computer connected; without one the action is not offered.
+  if (value === "action:pull-requests") return pullRequestsAvailable;
+  return SIMPLE_PALETTE_ACTIONS.has(value);
 }
 
 /** Simple's own Settings page is the bare /settings; every other settings page is the full set. */

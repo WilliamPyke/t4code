@@ -68,6 +68,7 @@ import { primaryServerConfigAtom, primaryServerWelcomeAtom } from "../state/serv
 import { readProject } from "../state/entities";
 import { useShellMode } from "../shellMode";
 import { advancedOnlyPageName } from "../shellMode.logic";
+import { useHasComputer } from "../state/environments";
 import { ComputerReconnectCoordinator } from "../components/guest/ComputerReconnectCoordinator";
 
 import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
@@ -179,7 +180,10 @@ function RootRouteBranch() {
   const hostedPromptLinkLanding = useHostedPromptLinkLanding(
     authGateState.status === "hosted-static",
   );
-  const advancedOnlyPage = useShellMode() === "simple" ? advancedOnlyPageName(pathname) : null;
+  const shellMode = useShellMode();
+  const hasComputer = useHasComputer();
+  const advancedOnlyPage =
+    shellMode === "simple" ? advancedOnlyPageName(pathname, hasComputer) : null;
 
   // By the page drawn: a guest's page keeps the window, and its cover, until the board has loaded.
   if (isGuestEntryPath(drawnPathname)) return <Outlet />;
