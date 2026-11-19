@@ -128,8 +128,8 @@ const DOCKED_BELOW_WIDTH = 640;
 const DOCK_GAP = 8;
 
 /**
- * How many cards are selected, what they can do, Delete for the ones this viewer may remove and
- * Clear. It sits beside the selected cards and steps out of the way while they move;
+ * How many cards are selected, what they can do, Delete for the ones this viewer may remove (or
+ * why there is none, when every card is someone else's) and Clear. It sits beside the selected cards and steps out of the way while they move;
  * on a phone it docks above the toolbar, clear of the cards' own controls, with icons and a menu.
  */
 export function SelectionBar({
@@ -137,6 +137,7 @@ export function SelectionBar({
   hidden,
   count,
   removable,
+  kept = 0,
   onDelete,
   onClear,
   actions,
@@ -148,6 +149,8 @@ export function SelectionBar({
   readonly hidden: boolean;
   readonly count: number;
   readonly removable: number;
+  /** How many this viewer may not remove, as they are someone else's. */
+  readonly kept?: number;
   readonly actions: ReadonlyArray<SelectionAction>;
   /** Controls shown first, such as the colour picker. */
   readonly children?: ReactNode;
@@ -297,7 +300,13 @@ export function SelectionBar({
               {action.label}
             </Button>
           ))}
-          {removable === 0 ? null : (
+          {removable === 0 ? (
+            kept === 0 ? null : (
+              <span className="px-1.5 whitespace-nowrap text-muted-foreground" data-selection-kept>
+                Only whoever added {kept === 1 ? "it" : "these"}, or the board owner, can delete
+              </span>
+            )
+          ) : (
             <Button
               size="micro"
               variant="ghost-muted"

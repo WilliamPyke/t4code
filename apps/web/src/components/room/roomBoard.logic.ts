@@ -3236,7 +3236,8 @@ export type BoardHistoryEntry = ReadonlyArray<BoardStep>;
 export const boardValueOf = (board: RoomBoard, target: BoardTarget): BoardValue =>
   roomCopy(board, target) ?? null;
 
-// A note's colour cannot be cleared, so going back to none is going back to yellow.
+// A colour cannot be cleared, so going back to none is going back to the one it starts with:
+// yellow for a note, grey for a section.
 const withColorOf = (value: BoardValue, other: BoardValue): BoardValue =>
   value !== null &&
   other !== null &&
@@ -3244,7 +3245,7 @@ const withColorOf = (value: BoardValue, other: BoardValue): BoardValue =>
   "text" in other &&
   value.color === undefined &&
   other.color !== undefined
-    ? { ...value, color: "yellow" }
+    ? { ...value, color: value.section === true ? "grey" : "yellow" }
     : value;
 
 // What only the owner's server writes into a card: taking back adding it would lose it.
@@ -3275,7 +3276,10 @@ export function boardHistoryChanges(
   for (const { target, before, after } of steps) {
     const [from, to] = direction === "undo" ? [after, before] : [before, after];
     const now = boardValueOf(board, target);
-    if (valueKey(now) !== valueKey(from)) return null;
+    // An undo that took a first colour off left yellow, which redo has to know as its start.
+    if (valueKey(now) !== valueKey(from) && valueKey(now) !== valueKey(withColorOf(from, to))) {
+      return null;
+    }
     // The board keeps a removed comment thread, so deleting it again loses nothing.
     const commentThread = now !== null && "text" in now && now.kind === "comment";
     if (to === null && hasServerContent(now) && !commentThread) return null;

@@ -343,8 +343,8 @@ export function WorkspacePeople({ workspace }: { readonly workspace: CloudWorksp
   );
 }
 
-const confirm = (message: string) =>
-  ensureLocalApi().dialogs.confirm(message, { variant: "destructive" });
+const confirm = (message: string, confirmLabel: string) =>
+  ensureLocalApi().dialogs.confirm(message, { variant: "destructive", confirmLabel });
 
 const reportFailure = (title: string) => (failed: string | null) => {
   if (failed !== null) toastManager.add({ type: "error", title, description: failed });
@@ -373,6 +373,7 @@ function WorkspacePeopleDialog({
       workspace.invite !== undefined &&
       !(await confirm(
         "Make a new invite link?\nThe old link stops working. People already in stay in.",
+        "Make a new link",
       ))
     ) {
       return;
@@ -386,6 +387,7 @@ function WorkspacePeopleDialog({
     if (
       !(await confirm(
         `Leave ${workspace.name}?\nYou stop seeing its boards. Your cards on them stay.`,
+        "Leave workspace",
       ))
     ) {
       return;
@@ -401,6 +403,7 @@ function WorkspacePeopleDialog({
         `Delete ${workspace.name}?`,
         "Its boards are not deleted: they stay with everyone already on them, outside any workspace.",
       ].join("\n"),
+      "Delete workspace",
     );
     if (!confirmed) return;
     if (reportFailure("Could not delete the workspace")(await deleteWorkspace(workspace.id))) {
@@ -548,6 +551,7 @@ function MemberRow({
         `Remove ${member.name} from ${workspace.name}?`,
         "They stop seeing its boards and cannot open them. Their cards stay, with their name.",
       ].join("\n"),
+      "Remove person",
     );
     if (confirmed) {
       reportFailure("Could not remove them")(

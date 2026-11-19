@@ -7,7 +7,12 @@ import { useBoardAccount } from "~/guest/boardAccount";
 import { loadMyTasks, openInboxBoard } from "~/guest/inbox";
 import { cn } from "~/lib/utils";
 
-import { BOARD_PLAN_COLUMNS, BOARD_PLAN_PRIORITIES } from "../room/boardPlan.logic";
+import {
+  BOARD_PLAN_COLUMNS,
+  BOARD_PLAN_PRIORITIES,
+  boardPlanDue,
+  boardPlanToday,
+} from "../room/boardPlan.logic";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { toastManager } from "../ui/toast";
@@ -51,6 +56,8 @@ const priorityTitle = (task: CloudMyTask) =>
 export function MyTasks() {
   const account = useBoardAccount();
   const [open, setOpen] = useState(false);
+  // The day the list was last opened on, which its due days are read against.
+  const [today, setToday] = useState(() => boardPlanToday(new Date()));
   const [tasks, setTasks] = useState<ReadonlyArray<CloudMyTask> | string | null>(null);
   const navigate = useNavigate();
   const signedIn = account.status === "signed-in";
@@ -87,7 +94,9 @@ export function MyTasks() {
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
-        if (next) void loadMyTasks().then(setTasks);
+        if (!next) return;
+        setToday(boardPlanToday(new Date()));
+        void loadMyTasks().then(setTasks);
       }}
     >
       <PopoverTrigger
@@ -143,7 +152,9 @@ export function MyTasks() {
                           {priorityTitle(task) === undefined ? null : (
                             <span>{priorityTitle(task)}</span>
                           )}
-                          {task.due === undefined ? null : <span>Due {task.due}</span>}
+                          {task.due === undefined ? null : (
+                            <span>{boardPlanDue(task.due, today).label}</span>
+                          )}
                         </span>
                       </button>
                     </li>

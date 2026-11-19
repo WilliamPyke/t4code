@@ -142,6 +142,15 @@ export const BOARD_SHORTCUTS: ReadonlyArray<BoardShortcutGroup> = [
     ],
   },
   {
+    title: "Plan and List",
+    shortcuts: [
+      { label: "New task", keys: [{ key: "C" }] },
+      { label: "Select every task shown", keys: [{ key: "A", mod: true }] },
+      { label: "Delete the selected tasks", keys: [{ key: "Delete" }] },
+      { label: "Clear the selection", keys: [{ key: "Esc" }] },
+    ],
+  },
+  {
     title: "Menus and agents",
     shortcuts: [
       { label: "Command menu", keys: [{ key: "K", mod: true }] },

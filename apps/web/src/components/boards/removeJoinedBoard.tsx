@@ -68,7 +68,7 @@ function useRemoveJoinedBoard() {
           ? "You leave the board. Everyone else on it keeps it, and the invite link brings you back."
           : "It goes from this browser only. Everyone else on it keeps it. To come back, you need a new link from the owner.",
       ].join("\n"),
-      { variant: "destructive" },
+      { variant: "destructive", confirmLabel: board.cloud ? "Leave board" : "Remove board" },
     );
     if (!confirmed) return;
     const share = findGuestShare(board.shareId);
@@ -95,7 +95,7 @@ export function useDeleteCloudBoard() {
         `Delete "${board.title}"?`,
         "It is deleted for everyone on it, with everything on it. This cannot be undone.",
       ].join("\n"),
-      { variant: "destructive" },
+      { variant: "destructive", confirmLabel: "Delete board" },
     );
     if (!confirmed) return;
     const share = findGuestShare(board.shareId) ?? (await openAccountBoard(board.shareId));

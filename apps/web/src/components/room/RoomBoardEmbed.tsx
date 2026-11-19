@@ -199,7 +199,7 @@ export function RoomEmbedBody({
                   live && "opacity-0 group-hover/embed:opacity-100",
                 )}
               >
-                {live ? "Click to use" : `Click to show ${embed.name}`}
+                {live ? "Click to interact" : `Click to show ${embed.name}`}
               </span>
             </div>
           )}

@@ -268,6 +268,12 @@ export function BoardPlan({
   const [sorts, setSorts] = useState(MANUAL_SORTS);
   const [listSort, setListSort] = useState<BoardPlanSort>("manual");
   const [pickedIds, setPicked] = useState<ReadonlySet<string>>(NO_PICKS);
+  // A selection belongs to the view it was made in: the Plan's is let go of in the List.
+  const [pickedIn, setPickedIn] = useState(layout);
+  if (pickedIn !== layout) {
+    setPickedIn(layout);
+    setPicked(NO_PICKS);
+  }
   // The task last clicked without Shift, where a Shift-click's range starts.
   const anchor = useRef<string | null>(null);
   const [lifted, setLifted] = useState<{ readonly id: string; readonly width: number } | null>(
@@ -285,11 +291,15 @@ export function BoardPlan({
   // The day the Plan opened on: a Plan left open past midnight reads due days a day behind.
   const [today] = useState(() => boardPlanToday(new Date()));
   const all = BOARD_PLAN_COLUMNS.flatMap(({ status }) => columns[status]);
-  // Tasks someone else took off leave the picked ones.
+  // Tasks someone else took off, or a filter hides, leave the picked ones.
   const picked: ReadonlySet<string> =
     pickedIds.size === 0
       ? NO_PICKS
-      : new Set(all.flatMap((task) => (pickedIds.has(task.id) ? [task.id] : [])));
+      : new Set(
+          all.flatMap((task) =>
+            pickedIds.has(task.id) && boardPlanShows(task, filter) ? [task.id] : [],
+          ),
+        );
   const shownColumns: BoardPlanColumns = {
     todo: boardPlanSorted(
       columns.todo.filter((task) => boardPlanShows(task, filter)),
@@ -802,7 +812,7 @@ const EVERYONE = "everyone";
 const NOBODY = "nobody";
 const OWNER = "owner";
 
-/** Search, whose tasks, and done ones; or, with tasks picked, what to do with them. */
+/** Whose tasks and done ones, after the search or, with tasks picked, what to do with them. */
 function PlanToolbar({
   history,
   total,
@@ -909,82 +919,80 @@ function PlanToolbar({
           </Button>
         </div>
       ) : (
-        <>
-          <div className="w-full sm:w-56">
-            <Input
-              size="sm"
-              type="search"
-              aria-label="Search tasks"
-              placeholder="Search tasks"
-              value={filter.text}
-              onChange={(event) => onFilter({ ...filter, text: event.target.value })}
-              onKeyDown={(event) => {
-                if (event.key === "Escape" && filter.text !== "") {
-                  event.preventDefault();
-                  onFilter({ ...filter, text: "" });
-                }
-              }}
-            />
-          </div>
-          <div className="w-36">
-            <Select
-              value={personValue}
-              onValueChange={(next) => {
-                if (typeof next !== "string") return;
-                onFilter({
-                  ...filter,
-                  person:
-                    next === EVERYONE
-                      ? null
-                      : next === NOBODY
-                        ? "nobody"
-                        : { guestId: next === OWNER ? null : next },
-                });
-              }}
-            >
-              <SelectTrigger size="sm" aria-label="Whose tasks">
-                <SelectValue>{nameOf(personValue)}</SelectValue>
-              </SelectTrigger>
-              <SelectPopup>
-                <SelectItem value={EVERYONE}>Everyone</SelectItem>
-                <SelectItem value={NOBODY}>No one</SelectItem>
-                {choices.map((choice) => (
-                  <SelectItem key={choice} value={choice}>
-                    {nameOf(choice)}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          </div>
-          <Toggle
+        <div className="w-full sm:w-56">
+          <Input
             size="sm"
-            variant="outline"
-            pressed={mine}
-            onPressedChange={(pressed) =>
-              onFilter({ ...filter, person: pressed ? { guestId: viewer } : null })
-            }
-          >
-            Only mine
-          </Toggle>
-          <Toggle
-            size="sm"
-            variant="outline"
-            pressed={filter.hideDone}
-            onPressedChange={(hideDone) => onFilter({ ...filter, hideDone })}
-          >
-            Hide done
-          </Toggle>
-          {isPlanFiltered(filter) ? (
-            <Button size="xs" variant="ghost-muted" onClick={() => onFilter(NO_PLAN_FILTER)}>
-              <XIcon />
-              {shown} of {total}
-            </Button>
-          ) : (
-            <p className="hidden text-xs text-muted-foreground sm:block">
-              {total === 1 ? "1 task" : `${total} tasks`}
-            </p>
-          )}
-        </>
+            type="search"
+            aria-label="Search tasks"
+            placeholder="Search tasks"
+            value={filter.text}
+            onChange={(event) => onFilter({ ...filter, text: event.target.value })}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && filter.text !== "") {
+                event.preventDefault();
+                onFilter({ ...filter, text: "" });
+              }
+            }}
+          />
+        </div>
+      )}
+      <div className="w-36">
+        <Select
+          value={personValue}
+          onValueChange={(next) => {
+            if (typeof next !== "string") return;
+            onFilter({
+              ...filter,
+              person:
+                next === EVERYONE
+                  ? null
+                  : next === NOBODY
+                    ? "nobody"
+                    : { guestId: next === OWNER ? null : next },
+            });
+          }}
+        >
+          <SelectTrigger size="sm" aria-label="Whose tasks">
+            <SelectValue>{nameOf(personValue)}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup>
+            <SelectItem value={EVERYONE}>Everyone</SelectItem>
+            <SelectItem value={NOBODY}>No one</SelectItem>
+            {choices.map((choice) => (
+              <SelectItem key={choice} value={choice}>
+                {nameOf(choice)}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+      </div>
+      <Toggle
+        size="sm"
+        variant="outline"
+        pressed={mine}
+        onPressedChange={(pressed) =>
+          onFilter({ ...filter, person: pressed ? { guestId: viewer } : null })
+        }
+      >
+        Only mine
+      </Toggle>
+      <Toggle
+        size="sm"
+        variant="outline"
+        pressed={filter.hideDone}
+        onPressedChange={(hideDone) => onFilter({ ...filter, hideDone })}
+      >
+        Hide done
+      </Toggle>
+      {isPlanFiltered(filter) ? (
+        <Button size="xs" variant="ghost-muted" onClick={() => onFilter(NO_PLAN_FILTER)}>
+          <XIcon />
+          {shown} of {total}
+        </Button>
+      ) : picked.size > 0 ? null : (
+        <p className="hidden text-xs text-muted-foreground sm:block">
+          {total === 1 ? "1 task" : `${total} tasks`}
+        </p>
       )}
       <div className="ms-auto flex items-center gap-0.5">{history}</div>
     </div>

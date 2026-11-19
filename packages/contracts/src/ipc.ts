@@ -1308,6 +1308,8 @@ export type ConfirmDialogVariant = "default" | "destructive";
 
 export interface ConfirmDialogOptions {
   readonly variant?: ConfirmDialogVariant;
+  /** What the confirming button says, naming what it does; "Confirm" when absent. */
+  readonly confirmLabel?: string;
 }
 
 export interface LocalApi {

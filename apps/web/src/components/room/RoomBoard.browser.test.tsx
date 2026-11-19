@@ -814,7 +814,56 @@ describe("RoomBoard keys and pointer", () => {
         x: pointed.left + 150,
         y: pointed.top + 500,
       });
+
+      // The Task tool's task lands under the click as well, with the caret in it.
+      await userEvent.click(screen.getByRole("button", { name: "Task", exact: true }));
+      const taskLayer = screen.container.querySelector<HTMLElement>('[data-board-place="task"]');
+      if (taskLayer === null) throw new Error("The Task tool did not wait for a click");
+      const taskBox = taskLayer.getBoundingClientRect();
+      await userEvent.click(taskLayer, { position: { x: 420, y: 330 } });
+      await vi.waitFor(() =>
+        expect(puts(onChange).find((change) => change.kind === "task")).toBeDefined(),
+      );
+      expectUnder(drawnAt(puts(onChange).find((change) => change.kind === "task")!.noteId), {
+        x: taskBox.left + 420,
+        y: taskBox.top + 330,
+      });
+      await expect
+        .element(screen.getByRole("textbox", { name: "Task", exact: true }).last())
+        .toHaveFocus();
     }
+  });
+
+  it("lets go of a selection when the view changes, sets a priority from the Plan's bar beside its filters, and opens the shortcuts there with ?", async () => {
+    await using _viewport = await boardSizedViewport();
+    const board = renderBoard([
+      { id: "a", text: "First", x: 0, y: 0 },
+      { id: "t", text: "Ship", x: 300, y: 300, kind: "task" },
+    ]);
+    const { onChange } = board;
+    await using screen = await board.screen;
+    const view = (name: string) =>
+      screen.getByRole("group", { name: "View" }).getByRole("button", { name });
+    await userEvent.click(headerIn(screen.container, "a"));
+    await expect.element(screen.getByText("1 selected")).toBeInTheDocument();
+
+    await userEvent.click(view("Plan"));
+    await expect.element(screen.getByText("1 selected")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Task: Ship" }));
+    await expect.element(screen.getByText("1 selected")).toBeVisible();
+    await expect.element(screen.getByRole("button", { name: "Hide done" })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Priority", exact: true }));
+    await userEvent.click(page.getByRole("menuitem", { name: "High" }));
+    await vi.waitFor(() =>
+      expect(puts(onChange).at(-1)).toMatchObject({ noteId: "t", priority: "high" }),
+    );
+
+    await userEvent.click(view("List"));
+    await expect.element(screen.getByText("1 selected")).not.toBeInTheDocument();
+    await userEvent.keyboard("?");
+    await expect.element(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(view("Board"));
   });
 
   it("puts a note added from the toolbar by key into the section last clicked, and a Section where clicked", async () => {

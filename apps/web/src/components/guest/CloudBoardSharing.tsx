@@ -121,9 +121,12 @@ export function CloudBoardSharing({
   const asSheet = useMediaQuery("max-sm");
 
   // A confirmation never opens over this popover: closing it first leaves nothing behind.
-  const confirmed = async (question: ReadonlyArray<string>) => {
+  const confirmed = async (question: ReadonlyArray<string>, confirmLabel: string) => {
     setOpen(false);
-    return ensureLocalApi().dialogs.confirm(question.join("\n"), { variant: "destructive" });
+    return ensureLocalApi().dialogs.confirm(question.join("\n"), {
+      variant: "destructive",
+      confirmLabel,
+    });
   };
   const run = async (work: () => Promise<string | null>, done?: string) => {
     setBusy(true);
@@ -150,7 +153,7 @@ export function CloudBoardSharing({
                 ? "It stops working, and anyone watching from it loses the board."
                 : "It stops working. Everyone already on the board stays.",
             ];
-        if (!(await confirmed(question))) return;
+        if (!(await confirmed(question, on ? "Make a new link" : "Turn off link"))) return;
       }
       await run(
         async () => {
@@ -167,7 +170,7 @@ export function CloudBoardSharing({
       `Leave "${title}"?`,
       "It goes from your boards. Everyone else keeps it, and the edit link brings you back.",
     ];
-    if (!(await confirmed(question))) return;
+    if (!(await confirmed(question, "Leave board"))) return;
     setBusy(true);
     const failed = await removeFromCloudBoard(share, viewer);
     setBusy(false);
@@ -180,7 +183,7 @@ export function CloudBoardSharing({
         `Remove ${guest.name} from this board?`,
         "They lose it at once. The edit link would bring them back.",
       ];
-      if (!(await confirmed(question))) return;
+      if (!(await confirmed(question, "Remove person"))) return;
       await run(() => removeFromCloudBoard(share, guest.id), `${guest.name} was removed`);
     })();
   const setRole = (guest: ThreadGuest, role: CloudBoardRole) =>

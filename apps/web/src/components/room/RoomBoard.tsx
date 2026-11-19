@@ -4537,6 +4537,12 @@ export function RoomBoard({
   // The Plan is the same tasks as the board's: a team's relay may not keep their status yet.
   const plannable = cards === undefined && room !== null;
   const planShown = plannable && pickedView !== "board";
+  // A selection belongs to the view it was made in: switching views lets go of it.
+  const switchView = (next: BoardViewMode) => {
+    setSelection(NO_SELECTION);
+    setSelectedEdge(null);
+    pickView(next);
+  };
   const planColumns = planShown ? boardPlanColumns(shown.notes) : null;
   const planAttachments = planShown ? boardPlanAttachments(shown) : null;
   // A task an inbox item opened in the Plan.
@@ -4739,7 +4745,7 @@ export function RoomBoard({
     onUndo: canEdit ? () => travel("undo") : undefined,
     onRedo: canEdit ? () => travel("redo") : undefined,
     view: planShown ? pickedView : "board",
-    onView: plannable ? pickView : undefined,
+    onView: plannable ? switchView : undefined,
     chooseOwnBox: (then) => chooseDraftBox(null, (boxId) => then(boardBoxRef(boxId))),
     onAddOwnBox: canAddOwnBox
       ? () => {
@@ -4792,7 +4798,7 @@ export function RoomBoard({
           </BoardFloat>
           {plannable ? (
             <BoardFloat className="pointer-events-auto shrink-0 p-1 @max-xl/board:order-2">
-              <BoardViewSwitch view={planShown ? pickedView : "board"} onView={pickView} />
+              <BoardViewSwitch view={planShown ? pickedView : "board"} onView={switchView} />
             </BoardFloat>
           ) : null}
           {/* Passing states sit under the header's right end, never squeezing the title. */}
@@ -6200,6 +6206,7 @@ export function RoomBoard({
               hidden={moving}
               count={selected.size}
               removable={canEdit ? removal.noteIds.length : 0}
+              kept={canEdit ? removal.left : 0}
               onDelete={deleteSelection}
               onClear={() => setSelection(NO_SELECTION)}
               actions={[

@@ -668,9 +668,17 @@ export function useBoardPower(props: BoardPowerProps): {
 
   const onKey = useStableCallback((event: KeyboardEvent) => {
     const surface = surfaceRef.current;
-    if (event.defaultPrevented || !props.onBoard || surface === null) return;
+    if (event.defaultPrevented || surface === null) return;
     if (surface.getClientRects().length === 0) return;
     const target = event.target;
+    // In the Plan and the List only "?" is the board's: they take their own keys.
+    if (!props.onBoard) {
+      const typing = target instanceof Element && target.closest(OWN_KEYS) !== null;
+      if (boardKeyAction(event) !== "shortcuts" || typing) return;
+      event.preventDefault();
+      setSheetOpen(true);
+      return;
+    }
     const onSurface = target === surface;
     const inside = target instanceof Node && surface.contains(target);
     const root = surface.parentElement;
@@ -844,7 +852,7 @@ function BoardShortcutsSheet({
       <DialogPopup className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Keyboard shortcuts</DialogTitle>
-          <DialogDescription>Keys work on the board whenever you are not typing.</DialogDescription>
+          <DialogDescription>Keys work whenever you are not typing.</DialogDescription>
         </DialogHeader>
         <DialogPanel>
           <Input

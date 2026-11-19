@@ -3035,6 +3035,22 @@ describe("undo and redo", () => {
     expect(
       boardHistoryChanges({ ...board, positions: { thread: { x: 10, y: 10 } } }, moved, "redo"),
     ).toEqual([{ target: card, value: { x: 0, y: 0 } }]);
+    // A first colour is taken back to yellow, and redo still finds the note as it left it.
+    const coloured = [
+      { target: noteTarget, before: note, after: { ...note, color: "purple" as const } },
+    ];
+    const yellow = { ...board, notes: [{ ...note, color: "yellow" as const }] };
+    expect(boardHistoryChanges(yellow, coloured, "redo")).toEqual([
+      { target: noteTarget, value: { ...note, color: "purple" } },
+    ]);
+    // A section starts grey, so that is what taking its first colour back leaves.
+    const frame = { ...note, section: true as const };
+    const framed = [
+      { target: noteTarget, before: frame, after: { ...frame, color: "blue" as const } },
+    ];
+    expect(
+      boardHistoryChanges({ ...board, notes: [{ ...frame, color: "blue" }] }, framed, "undo"),
+    ).toEqual([{ target: noteTarget, value: { ...frame, color: "grey" } }]);
   });
 
   it("takes back several cards moved together, and keeps the newest entries", () => {
