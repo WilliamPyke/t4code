@@ -1252,6 +1252,11 @@ const make = Effect.gen(function* () {
     if (Option.isNone(runtimeConfig)) {
       return false;
     }
+    // Sync restarts at every login and update, and a new tunnel takes minutes to route; it keeps
+    // its tunnel until the person disconnects or removes the computer.
+    if (config.startupPresentation === "sync") {
+      return false;
+    }
     // CLI authorization releases only CLI-desired managed links; web/mobile links recover by credential and expire through the relay reaper.
     if (
       !(yield* readCliDesiredCloudLink.pipe(withSecrets)) ||

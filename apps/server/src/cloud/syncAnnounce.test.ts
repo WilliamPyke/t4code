@@ -109,10 +109,7 @@ describe("inSyncWords", () => {
       { ...base, endpoint: { kind: "dns_failed" } },
     ] as const satisfies ReadonlyArray<ReachabilityFacts>;
     for (const facts of results) {
-      const said = inSyncWords(
-        classifyReachability(facts, checkedAt),
-        "npx -y https://x/sync.tgz --install",
-      );
+      const said = inSyncWords(classifyReachability(facts, checkedAt));
       if (said.status === "reachable") continue;
       expect(`${said.reason} ${said.fix}`).not.toMatch(/\bT3\b|`t3 /);
     }

@@ -139,6 +139,7 @@ describe("releaseManagedTunnelOnShutdown", () => {
     readonly store: ServerSecretStore.ServerSecretStore["Service"];
     readonly applyConfigCalls: Array<unknown>;
     readonly requests: Array<HttpClientRequest.HttpClientRequest>;
+    readonly presentation?: "sync";
     readonly onRequest?: (request: HttpClientRequest.HttpClientRequest) => Effect.Effect<void>;
     readonly respond?: () => Response;
     readonly address?: HttpServer.HttpServer["Service"]["address"];
@@ -256,7 +257,17 @@ describe("releaseManagedTunnelOnShutdown", () => {
         ),
 
         Effect.provide(
-          ServerConfigModule.layerTest("/", { prefix: "t3-http-release-test-" }).pipe(
+          Layer.effect(
+            ServerConfigModule.ServerConfig,
+            Effect.gen(function* () {
+              const config = yield* ServerConfigModule.ServerConfig;
+              return {
+                ...config,
+                startupPresentation: harness.presentation ?? config.startupPresentation,
+              };
+            }),
+          ).pipe(
+            Layer.provide(ServerConfigModule.layerTest("/", { prefix: "t3-http-release-test-" })),
             Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ),
@@ -453,6 +464,19 @@ describe("releaseManagedTunnelOnShutdown", () => {
       expect(requests).toHaveLength(1);
       expect(values.has(CLOUD_ENDPOINT_RUNTIME_CONFIG)).toBe(false);
     }).pipe(provideReleaseHarness({ store, applyConfigCalls, requests }));
+  });
+
+  it.effect("keeps Tinkjam Sync's tunnel, so its next start is reachable at once", () => {
+    const { store, values } = makeMemorySecretStore(managedLinkSecrets);
+    const applyConfigCalls: Array<unknown> = [];
+    const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+
+    return Effect.gen(function* () {
+      const link = yield* CloudLink.CloudLink;
+      expect(yield* link.releaseManagedTunnelOnShutdown()).toBe(false);
+      expect(requests).toHaveLength(0);
+      expect(values.has(CLOUD_ENDPOINT_RUNTIME_CONFIG)).toBe(true);
+    }).pipe(provideReleaseHarness({ store, applyConfigCalls, requests, presentation: "sync" }));
   });
 
   it.effect("keeps a runtime config that a fast restart replaced mid-release", () => {

@@ -23,7 +23,7 @@ export const SYNC_URL = Config.String("TINKJAM_SYNC_URL").pipe(
 
 export const SYNC_CONNECTING_MESSAGE = "Connecting this computer to Tinkjam...";
 export const SYNC_CONNECTED_MESSAGE =
-  "Connected. You can close the browser tab; keep this window open while you work.";
+  "Connected. You can close the browser tab; this computer stays connected while Tinkjam Sync runs.";
 export const SYNC_SLOW_MESSAGE =
   "Still connecting. Tinkjam Sync keeps trying; the next line says what it is waiting on.";
 
@@ -76,7 +76,6 @@ const T3_WORDS = /\bT3\b|`t3 /;
  */
 export const inSyncWords = (
   result: EnvironmentConnectReachability,
-  installCommand: string,
 ): EnvironmentConnectReachability =>
   result.status === "reachable"
     ? result
@@ -87,7 +86,7 @@ export const inSyncWords = (
           .replaceAll("T3 server", "Tinkjam Sync")
           .replaceAll("T3 Code", "Tinkjam Sync"),
         fix: T3_WORDS.test(result.fix)
-          ? `Nothing to do: Tinkjam Sync keeps trying. If it stays like this, run ${installCommand} again.`
+          ? "Nothing to do: Tinkjam Sync keeps trying. If it stays like this, quit Tinkjam Sync and open it again."
           : result.fix,
       };
 
@@ -106,10 +105,7 @@ export const layer = Layer.effectDiscard(
           // The installer then reports that it timed out instead of the state.
         }
       });
-    const installCommand = `npx -y ${yield* SYNC_URL} --install`;
-    const check = reachability.check.pipe(
-      Effect.map((result) => inSyncWords(result, installCommand)),
-    );
+    const check = reachability.check.pipe(Effect.map((result) => inSyncWords(result)));
     // The apps show "Connected" from this file, so it keeps saying what is true after the first yes.
     const keepRecording = check.pipe(
       Effect.flatMap(record),
