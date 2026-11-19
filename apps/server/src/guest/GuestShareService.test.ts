@@ -696,7 +696,7 @@ it.effect("trusts a guest who signs in as a saved contributor, and no one else",
     // With no hosted app configured, no page on another origin can start a sign-in.
     assert.equal(
       (yield* Effect.flip(
-        guestShares.signInFromHostedApp({ session: sam.token, origin: "https://app.t3.codes" }),
+        guestShares.signInFromHostedApp({ session: sam.token, origin: "https://app.trellium.org" }),
       )).reason,
       "invalid",
     );

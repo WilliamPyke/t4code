@@ -35,11 +35,11 @@ describe("connectCliAuth", () => {
 
   it("returns from sign-in to /connect as a new page that continues to approval by itself", () => {
     const connectUrl =
-      "https://app.t3.codes/connect#state=state-1&challenge=challenge-1&port=34338";
+      "https://app.trellium.org/connect#state=state-1&challenge=challenge-1&port=34338";
     const redirectUrl = connectCliSignInRedirectUrl(connectUrl);
 
     expect(redirectUrl).toBe(
-      "https://app.t3.codes/connect?continue=1#state=state-1&challenge=challenge-1&port=34338",
+      "https://app.trellium.org/connect?continue=1#state=state-1&challenge=challenge-1&port=34338",
     );
     expect(connectCliContinueRequested(redirectUrl)).toBe(true);
     expect(connectCliContinueRequested(connectUrl)).toBe(false);
