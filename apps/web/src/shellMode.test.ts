@@ -38,6 +38,12 @@ describe("shell mode", () => {
     expect(advancedOnlyPageName("/board/env/thread")).toBeNull();
   });
 
+  it("lets Simple open pull requests once the person has a computer connected", () => {
+    expect(advancedOnlyPageName("/pull-requests", true)).toBeNull();
+    expect(advancedOnlyPageName("/usage", true)).toBe("Usage");
+    expect(advancedOnlyPageName("/projects/env:abc", true)).toBe("Project settings");
+  });
+
   it("keeps the command menu to boards and the ways to more in Simple, and everything in Advanced", () => {
     for (const value of ["action:new-board", "action:settings", "action:switch-shell-mode"]) {
       expect(paletteActionShows(value, "simple")).toBe(true);
@@ -46,6 +52,13 @@ describe("shell mode", () => {
       expect(paletteActionShows(value, "simple")).toBe(false);
       expect(paletteActionShows(value, "advanced")).toBe(true);
     }
+  });
+
+  it("offers pull requests in Simple only with a computer connected", () => {
+    expect(paletteActionShows("action:pull-requests", "simple")).toBe(false);
+    expect(paletteActionShows("action:pull-requests", "simple", true)).toBe(true);
+    expect(paletteActionShows("action:pull-requests", "advanced")).toBe(true);
+    expect(paletteActionShows("action:pull-requests", "advanced", false)).toBe(true);
   });
 
   it("opens Settings on the short page in Simple and the full set in Advanced", () => {

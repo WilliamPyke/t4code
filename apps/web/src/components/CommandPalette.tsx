@@ -138,6 +138,7 @@ import {
   useEnvironmentProviders,
   useEnvironments,
   useGuestOnly,
+  useHasComputer,
   usePrimaryEnvironmentId,
 } from "../state/environments";
 import {
@@ -486,6 +487,7 @@ function OpenCommandPaletteDialog(props: {
   });
   const { environments } = useEnvironments();
   const guestOnly = useGuestOnly();
+  const hasComputer = useHasComputer();
   const shellMode = useShellMode();
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -1915,7 +1917,9 @@ function OpenCommandPaletteDialog(props: {
     },
   );
   const simpleShell = shellMode === "simple";
-  const shownActionItems = actionItems.filter((item) => paletteActionShows(item.value, shellMode));
+  const shownActionItems = actionItems.filter((item) =>
+    paletteActionShows(item.value, shellMode, hasComputer),
+  );
   const rootGroups = [
     // The board on screen leads: its own commands are what someone on it wants first.
     ...(boardEntries.group === null ? [] : [boardEntries.group]),

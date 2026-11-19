@@ -1,10 +1,9 @@
-import { isGuestEnvironment } from "@t3tools/client-runtime/environment";
 import * as Schema from "effect/Schema";
 import { BotIcon, DownloadIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
-import { useEnvironments } from "~/state/environments";
+import { useHasComputer } from "~/state/environments";
 
 import { openConnectComputer } from "../ConnectComputerDialog";
 import { Button } from "../ui/button";
@@ -22,9 +21,7 @@ const readDismissed = () => {
 
 /** On the boards home until a computer is connected: the way to Tinkjam Sync, one click away. */
 export function ConnectComputerNudge() {
-  const hasComputer = useEnvironments().environments.some(
-    (environment) => !isGuestEnvironment(environment.environmentId),
-  );
+  const hasComputer = useHasComputer();
   const [dismissed, setDismissed] = useState(readDismissed);
   if (hasComputer || dismissed) return null;
   return (

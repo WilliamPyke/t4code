@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { isGuestEnvironment } from "@t3tools/client-runtime/environment";
 import {
   connectionCatalogDisplayUrl,
   hasRelayRoute,
@@ -56,6 +57,13 @@ export function useEnvironments() {
     environments,
     presentationById,
   };
+}
+
+/** Whether the person has a computer of their own here, not only threads shared with them. */
+export function useHasComputer(): boolean {
+  return useEnvironments().environments.some(
+    (environment) => !isGuestEnvironment(environment.environmentId),
+  );
 }
 
 /**

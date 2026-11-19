@@ -20,9 +20,8 @@ import {
 } from "../../navigationHistory";
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { cn } from "../../lib/utils";
-import { isGuestEnvironment } from "@t3tools/client-runtime/environment";
 import { useShellMode } from "../../shellMode";
-import { useEnvironments, usePullRequestsSupported } from "../../state/environments";
+import { useHasComputer, usePullRequestsSupported } from "../../state/environments";
 import { useBeforeFirstBoard } from "../boards/homeFocus";
 import { openConnectComputer } from "../ConnectComputerDialog";
 import { TinkjamMark, TinkjamWord } from "../TinkjamLogo";
@@ -247,6 +246,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     select: (location) => isSidebarUtilityPage(location.pathname),
   });
   const pullRequestsSupported = usePullRequestsSupported();
+  const hasComputer = useHasComputer();
   const advanced = useShellMode() === "advanced";
   const closeMobileSidebar = () => {
     if (isMobile) {
@@ -299,7 +299,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             label="Settings"
             onClick={handleSettingsClick}
           />
-          {advanced && pullRequestsSupported ? (
+          {pullRequestsSupported && (advanced || hasComputer) ? (
             <SidebarUtilityItem
               icon={<PullRequestGlyph.pullRequest />}
               label="Pull requests"
@@ -330,9 +330,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 /** The way to a person's own agents, in both modes, until they have a computer here. */
 function SidebarConnectComputer() {
   const { isMobile, setOpenMobile } = useSidebar();
-  const hasComputer = useEnvironments().environments.some(
-    (environment) => !isGuestEnvironment(environment.environmentId),
-  );
+  const hasComputer = useHasComputer();
   const beforeFirstBoard = useBeforeFirstBoard();
   if (hasComputer) return null;
   return (
