@@ -1050,9 +1050,10 @@ describe("boardConnector", () => {
     expect(boardConnector(card, boardNoteBox({ x: 2_000, y: 900 })).path).toBe(
       "M320 120 C1158 120, 1158 972, 1996 972",
     );
-    // Far off to the side of a narrow gap, the S stands upright in the gap and never leaves it.
+    // Far off to the side of a narrow gap, its ends slide along their sides until it is no taller
+    // than the gap is wide.
     const tall = boardCardBox({ x: 380, y: 80 }, { w: 380, h: 600 });
-    expect(boardConnector(card, tall).path).toBe("M320 120 C376 120, 320 380, 376 380");
+    expect(boardConnector(card, tall).path).toBe("M320 220 C350 220, 346 280, 376 280");
     // A turn is one quarter curve, each end pulled along its own leg.
     expect(boardConnector(card, boardNoteBox({ x: 520, y: 620 })).path).toBe(
       "M320 120 C497.6 120, 616 318.4, 616 616",

@@ -210,7 +210,7 @@ namespace TinkjamSync
                 info.EnvironmentVariables["T3CODE_HOSTED_APP_URL"] = SyncEngine.AppUrl;
                 info.EnvironmentVariables["TINKJAM_SYNC_URL"] = SyncEngine.SyncUrl;
                 info.EnvironmentVariables["TINKJAM_SYNC_FROM_APP"] = "1";
-                info.EnvironmentVariables["NODE_USE_SYSTEM_CA"] = "1";
+                if (NodeEnv.MayUseSystemCa(Environment.GetEnvironmentVariable("NODE_OPTIONS"))) info.EnvironmentVariables["NODE_USE_SYSTEM_CA"] = "1";
                 using (var process = Process.Start(info))
                 {
                     if (!process.WaitForExit(60_000)) process.Kill();

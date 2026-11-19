@@ -1079,14 +1079,68 @@ export interface BoardLineEnds {
   readonly slots?: BoardLineSlots | undefined;
 }
 
+// A line alone on its side attaches no nearer a corner than this.
+const SLOT_MARGIN = 20;
+
+/**
+ * Where a line between facing sides attaches along each: an end alone on its side (slot 0.5)
+ * slides toward the other end, so cards side by side but offset get a straight or gentle line
+ * in place of a tall S. Ends that share a side keep their slots.
+ */
+function facingSlots(
+  from: BoardBox,
+  to: BoardBox,
+  fromSide: BoardSide,
+  toSide: BoardSide,
+  slots: BoardLineSlots | undefined,
+): readonly [number, number] {
+  const held: readonly [number, number] = [slots?.from ?? 0.5, slots?.to ?? 0.5];
+  if (isAcross(fromSide) !== isAcross(toSide)) return held;
+  const across = isAcross(fromSide);
+  const span = (box: BoardBox) => {
+    const low = across ? box.y : box.x;
+    const length = across ? box.height : box.width;
+    const margin = Math.min(SLOT_MARGIN, length / 2);
+    return { low, length, min: low + margin, max: low + length - margin };
+  };
+  const a = span(from);
+  const b = span(to);
+  const at = (side: typeof a, slot: number) => side.low + side.length * slot;
+  const freeA = held[0] === 0.5;
+  const freeB = held[1] === 0.5;
+  if (!freeA && !freeB) return held;
+  let pa = at(a, held[0]);
+  let pb = at(b, held[1]);
+  // Only as far as it takes for the line to run no steeper than it is long.
+  const gap = Math.max(
+    0,
+    across
+      ? Math.max(to.x - from.x - from.width, from.x - to.x - to.width)
+      : Math.max(to.y - from.y - from.height, from.y - to.y - to.height),
+  );
+  const way = Math.sign(pb - pa);
+  let excess = Math.abs(pb - pa) - gap;
+  if (excess <= 0) return held;
+  const reachA = freeA ? Math.max(0, way > 0 ? a.max - pa : pa - a.min) : 0;
+  const reachB = freeB ? Math.max(0, way > 0 ? pb - b.min : b.max - pb) : 0;
+  excess = Math.min(excess, reachA + reachB);
+  const moveA = clamp(excess / 2, excess - reachB, reachA);
+  pa += way * moveA;
+  pb -= way * (excess - moveA);
+  const slot = (side: typeof a, point: number) =>
+    side.length === 0 ? 0.5 : (point - side.low) / side.length;
+  return [slot(a, pa), slot(b, pb)];
+}
+
 /**
  * Where a line starts and where its tip stops, just short of the far box, with the ways it leaves
  * (`out`) and the far side faces (`into`): by the sides `boardConnectorSides` picks or `ends.sides`.
  */
 export function boardLineEnds(from: BoardBox, to: BoardBox, ends?: BoardLineEnds) {
   const [fromSide, toSide] = ends?.sides ?? boardConnectorSides(from, to);
-  const start = boardSidePoint(from, fromSide, ends?.slots?.from);
-  const tip = boardSidePoint(to, toSide, ends?.slots?.to);
+  const [fromSlot, toSlot] = facingSlots(from, to, fromSide, toSide, ends?.slots);
+  const start = boardSidePoint(from, fromSide, fromSlot);
+  const tip = boardSidePoint(to, toSide, toSlot);
   const out = SIDE_OUT[fromSide];
   const into = SIDE_OUT[toSide];
   const end = { x: tip.x + into.x * ARROW_GAP, y: tip.y + into.y * ARROW_GAP };

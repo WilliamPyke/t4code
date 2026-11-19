@@ -936,7 +936,7 @@ namespace TinkjamSync
             env["NO_COLOR"] = "1";
             // Node trusts only its own certificate list and uses no proxy unless told: on a work
             // network, Windows' certificates and proxy are the ones that work.
-            env["NODE_USE_SYSTEM_CA"] = "1";
+            if (NodeEnv.MayUseSystemCa(env.ContainsKey("NODE_OPTIONS") ? env["NODE_OPTIONS"] : null)) env["NODE_USE_SYSTEM_CA"] = "1";
             if (systemProxy != null)
             {
                 foreach (var name in new[] { "HTTPS_PROXY", "HTTP_PROXY" })

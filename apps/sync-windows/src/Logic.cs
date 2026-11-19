@@ -170,6 +170,14 @@ namespace TinkjamSync
         }
     }
 
+    public static class NodeEnv
+    {
+        /// <summary>Whether to ask Node for Windows' certificates: not when the person's own
+        /// NODE_OPTIONS already picks a certificate store, which Node refuses to combine.</summary>
+        public static bool MayUseSystemCa(string nodeOptions) =>
+            !Regex.IsMatch(nodeOptions ?? "", @"--use-(openssl|bundled|system)-ca(?![A-Za-z-])");
+    }
+
     public static class Versions
     {
         // Same scheme as the Sync package: <major>.<minor>.<patch>+<yyyymmddhhmm>.

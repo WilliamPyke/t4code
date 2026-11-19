@@ -25,6 +25,8 @@ namespace TinkjamSync
             Check("numeric not text", Versions.IsNewer("0.9.0", "0.10.0"));
             Check("stamp beats none", Versions.IsNewer("0.1.0", "0.1.0+202601010000"));
             Check("garbage latest", !Versions.IsNewer("0.1.0", "latest"));
+            Check("system certificates by default", NodeEnv.MayUseSystemCa(null));
+            Check("own certificate choice kept", !NodeEnv.MayUseSystemCa("--max-old-space-size=4096 --use-openssl-ca"));
             Check("null latest", !Versions.IsNewer("0.1.0", null));
             Check("nothing installed", Versions.IsNewer(null, "0.1.0"));
 
