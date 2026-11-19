@@ -303,9 +303,11 @@ describe("releaseManagedTunnelOnShutdown", () => {
       const { store, values } = makeMemorySecretStore(managedLinkSecrets);
       const applyConfigCalls: Array<unknown> = [];
       const requests: Array<HttpClientRequest.HttpClientRequest> = [];
-      const sentFreshApproval = (request: HttpClientRequest.HttpClientRequest) =>
+      const sent = (request: HttpClientRequest.HttpClientRequest, text: string) =>
         request.body._tag === "Uint8Array" &&
-        new TextDecoder().decode(request.body.body).includes('"freshApproval":true');
+        new TextDecoder().decode(request.body.body).includes(text);
+      const sentFreshApproval = (request: HttpClientRequest.HttpClientRequest) =>
+        sent(request, '"freshApproval":true');
 
       return Effect.gen(function* () {
         const link = yield* CloudLink.CloudLink;
@@ -322,6 +324,12 @@ describe("releaseManagedTunnelOnShutdown", () => {
         yield* store.set(CLOUD_LINK_FRESH_APPROVAL, new TextEncoder().encode("true"));
         yield* Effect.flip(link.reconcileDesiredLinkIfStillDesired("http://127.0.0.1:3773"));
         expect(sentFreshApproval(requests[3]!)).toBe(true);
+        expect(sent(requests[3]!, "approvalVerifier")).toBe(false);
+
+        // The relay redeems an approval only with the verifier of the sign-in it was given for.
+        yield* store.set(CLOUD_LINK_FRESH_APPROVAL, new TextEncoder().encode("verifier-1"));
+        yield* Effect.flip(link.reconcileDesiredLinkIfStillDesired("http://127.0.0.1:3773"));
+        expect(sent(requests[5]!, '"approvalVerifier":"verifier-1"')).toBe(true);
       }).pipe(
         provideReleaseHarness({
           store,

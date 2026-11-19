@@ -174,7 +174,6 @@ const approveIfNeeded = Effect.fn("cli.sync.approve_if_needed")(function* (input
   yield* CliState.setCliDesiredCloudLink(true, "managed");
   // The approval may be for another account than last time; the next link is made for it.
   yield* CliState.forgetLinkedAccount;
-  yield* CliState.markFreshApproval;
   yield* Console.log("Approved.");
   return true;
 });

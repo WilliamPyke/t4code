@@ -63,6 +63,7 @@ import * as ApnsDeliveryQueue from "./agentActivity/ApnsDeliveryQueue.ts";
 import * as ApnsDeliveries from "./agentActivity/ApnsDeliveries.ts";
 import * as CloudflareApiPause from "./environments/CloudflareApiPause.ts";
 import * as EnvironmentConnector from "./environments/EnvironmentConnector.ts";
+import * as ComputerApprovals from "./environments/ComputerApprovals.ts";
 import * as EnvironmentLinker from "./environments/EnvironmentLinker.ts";
 import * as EnvironmentPublishSignatures from "./environments/EnvironmentPublishSignatures.ts";
 import * as ManagedEndpointProvider from "./environments/ManagedEndpointProvider.ts";
@@ -333,6 +334,7 @@ export const layer = Api.make(
           ManagedEndpointReaper.layer,
           HeldHooks.layer,
           GuestLinks.layer,
+          ComputerApprovals.layer,
           Teams.layer,
           TeamProfiles.layer,
         ),

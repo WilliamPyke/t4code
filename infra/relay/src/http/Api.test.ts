@@ -58,6 +58,7 @@ import {
 import * as RelayHttpApi from "./Api.ts";
 import * as RelayConfiguration from "../Config.ts";
 import * as RelayDb from "../db.ts";
+import * as ComputerApprovals from "../environments/ComputerApprovals.ts";
 import * as EnvironmentCredentials from "../environments/EnvironmentCredentials.ts";
 import * as GuestLinks from "../guestLinks/GuestLinks.ts";
 import * as Teams from "../teams/Teams.ts";
@@ -135,6 +136,7 @@ describe("managed endpoint provisioning errors", () => {
           Layer.mock(Devices.Devices, {}),
           Layer.mock(T3ChatAccounts.T3ChatAccounts, { available: false }),
           Layer.mock(ManagedTunnelLimits.ManagedTunnelLimits, {}),
+          Layer.mock(ComputerApprovals.ComputerApprovals, {}),
         ),
       ),
       Layer.provideMerge(
@@ -248,6 +250,7 @@ describe("device listing compatibility", () => {
           }),
           Layer.mock(T3ChatAccounts.T3ChatAccounts, { available: false }),
           Layer.mock(ManagedTunnelLimits.ManagedTunnelLimits, {}),
+          Layer.mock(ComputerApprovals.ComputerApprovals, {}),
         ),
       ),
       Layer.provideMerge(
@@ -331,6 +334,7 @@ describe("Cloudflare rate-limit retry hint", () => {
           Layer.mock(Devices.Devices, {}),
           Layer.mock(T3ChatAccounts.T3ChatAccounts, { available: false }),
           Layer.mock(ManagedTunnelLimits.ManagedTunnelLimits, {}),
+          Layer.mock(ComputerApprovals.ComputerApprovals, {}),
         ),
       ),
       Layer.provideMerge(
@@ -445,6 +449,145 @@ describe("relay client authentication", () => {
       ),
     ),
   );
+
+  it.effect(
+    "lets a computer's sign-in reach only its own link, and refuses it once removed",
+    () => {
+      const approved: Array<string> = [];
+      const released: Array<string> = [];
+      vi.mocked(verifyToken).mockImplementation(async (token) => {
+        if (token !== "session-token") throw new Error("not a session JWT");
+        return { sub: "user-1", aud: relaySettings.clerkJwtAudience } as never;
+      });
+      vi.mocked(createClerkClient).mockReturnValue({
+        authenticateRequest: vi.fn().mockResolvedValue({
+          isAuthenticated: true,
+          toAuth: () => ({ userId: "user-1" }),
+        }),
+      } as never);
+      const handlers = RelayHttpApi.layerClientApi.pipe(
+        HttpRouter.provideRequest(
+          Layer.mergeAll(
+            Layer.mock(EnvironmentCredentials.EnvironmentCredentials, {}),
+            Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
+            Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
+            Layer.mock(RelayDb.RelayTransactions, {}),
+            Layer.mock(HookInbox.HookInbox, {}),
+            Layer.mock(Teams.Teams, {}),
+          ),
+        ),
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(RelayConfiguration.RelayConfiguration, relaySettings),
+            NodeCryptoLayer.layer,
+            Layer.mock(RelayTokens.RelayTokens, { resolveDpopAccessTokenScopes: () => null }),
+            Layer.mock(EnvironmentLinker.EnvironmentLinker, {}),
+            Layer.mock(EnvironmentLinks.EnvironmentLinks, {
+              listForUser: () => Effect.succeed([]),
+              getForUser: ({ environmentId }) =>
+                Effect.succeed(environmentId === "environment-1" ? linkedEnvironmentRecord : null),
+            }),
+            Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {
+              release: ({ environmentId }) =>
+                Effect.sync(() => {
+                  released.push(environmentId);
+                  return true;
+                }),
+            }),
+            Layer.mock(Devices.Devices, { listForUser: () => Effect.succeed([]) }),
+            Layer.mock(T3ChatAccounts.T3ChatAccounts, { available: false }),
+            Layer.mock(ManagedTunnelLimits.ManagedTunnelLimits, {}),
+            Layer.mock(ComputerApprovals.ComputerApprovals, {
+              create: ({ codeChallenge }) =>
+                Effect.sync(() => {
+                  approved.push(codeChallenge);
+                  return { expiresAt: "2026-11-19T12:30:00.000Z" };
+                }),
+            }),
+          ),
+        ),
+        Layer.provideMerge(
+          RelayHttpApi.layerClientAuth.pipe(
+            Layer.provide(Layer.succeed(RelayConfiguration.RelayConfiguration, relaySettings)),
+          ),
+        ),
+      );
+      return Effect.gen(function* () {
+        const app = yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            HttpRouter.toWebHandler(
+              HttpApiBuilder.layer(HttpApi.make("RelayApi").add(RelayApi.groups.client)).pipe(
+                Layer.provide(handlers),
+                Layer.provide(HttpServer.layerServices),
+              ),
+              { disableLogger: true },
+            ),
+          ),
+          (app) => Effect.promise(() => app.dispose()),
+        );
+        const call = (token: string, method: string, path: string, body?: unknown) =>
+          Effect.promise(async () => {
+            const response = await app.handler(
+              new Request(`https://relay.example.test${path}`, {
+                method,
+                headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+                ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+              }),
+            );
+            return { status: response.status, body: await response.json() };
+          });
+        const approval = { codeChallenge: "challenge-1" };
+
+        // The account-wide sign-in a computer holds reads and approves nothing.
+        for (const [method, path, body] of [
+          ["GET", "/v1/environments", undefined],
+          ["GET", "/v2/client/devices", undefined],
+          ["GET", "/v1/client/t3chat-link", undefined],
+          ["POST", "/v1/client/computer-approvals", approval],
+        ] as const) {
+          const refused = yield* call("oauth-token", method, path, body);
+          expect(refused.status, path).toBe(401);
+          expect(refused.body).toMatchObject({ code: "auth_invalid", reason: "not_authorized" });
+        }
+        expect(approved).toEqual([]);
+
+        // A removed computer cannot touch its tunnel; one still on the account can.
+        const removed = yield* call(
+          "oauth-token",
+          "DELETE",
+          "/v1/client/environment-links/environment-2/tunnel",
+        );
+        expect(removed.status).toBe(403);
+        expect(removed.body).toMatchObject({ code: "environment_link_removed" });
+        const active = yield* call(
+          "oauth-token",
+          "DELETE",
+          "/v1/client/environment-links/environment-1/tunnel",
+        );
+        expect(active).toEqual({ status: 200, body: { ok: true } });
+        expect(released).toEqual(["environment-1"]);
+
+        // The person's own session still reads, and is the only one that approves a computer.
+        expect((yield* call("session-token", "GET", "/v1/environments")).status).toBe(200);
+        const created = yield* call(
+          "session-token",
+          "POST",
+          "/v1/client/computer-approvals",
+          approval,
+        );
+        expect(created).toEqual({ status: 200, body: { expiresAt: "2026-11-19T12:30:00.000Z" } });
+        expect(approved).toEqual(["challenge-1"]);
+      }).pipe(
+        Effect.scoped,
+        Effect.ensuring(
+          Effect.sync(() => {
+            vi.mocked(verifyToken).mockReset();
+            vi.mocked(createClerkClient).mockReset();
+          }),
+        ),
+      );
+    },
+  );
 });
 
 describe("relay DPoP failure mapping", () => {
@@ -548,7 +691,6 @@ function layerRelayUnlinkTest(input?: {
         findActiveManagedForEnvironment: () => Effect.die("unused findActiveManagedForEnvironment"),
         setHoldWebhooksWhileOffline: () => Effect.die("unused setHoldWebhooksWhileOffline"),
         revokeForUser: input?.revokeForUser ?? (() => Effect.succeed(false)),
-        wasRemovedByUser: () => Effect.die("unused wasRemovedByUser"),
         listOtherUsersForEnvironmentKey: () => Effect.die("unused listOtherUsersForEnvironmentKey"),
         listOtherEnvironmentsForMachine:
           input?.listOtherEnvironmentsForMachine ??

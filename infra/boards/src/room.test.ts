@@ -4,6 +4,7 @@ import {
   CLOUD_BOARD_LINK_ROUTE,
   CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
   CLOUD_BOARD_PEOPLE_ROLE_ROUTE,
+  CLOUD_BOARD_SHARING_ROUTE,
   GUEST_BOARD_ROUTE,
   GuestId,
   GuestShareId,
@@ -17,6 +18,7 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import { SESSION_ROUTE, SESSION_ROUTES, STREAM_ROUTE, checkAccess } from "./access.ts";
+import { accountLockedOut, withAccountSession } from "./account.ts";
 import { machineGuestOf } from "./machines.ts";
 import {
   CLOUD_BOARD_MAX_GUESTS,
@@ -39,6 +41,7 @@ import {
   guestBySession,
   isViewLink,
   joinRoom,
+  linkSharingOf,
   managesBoard,
   moveCursor,
   openingEvents,
@@ -49,6 +52,7 @@ import {
   viewFor,
   withLink,
   withRole,
+  withSharing,
   withoutPerson,
   type CloudRoom,
 } from "./room.ts";
@@ -303,6 +307,7 @@ describe("cloud room", () => {
         CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
         CLOUD_BOARD_PEOPLE_ROLE_ROUTE,
         CLOUD_BOARD_LINK_ROUTE,
+        CLOUD_BOARD_SHARING_ROUTE,
         CLOUD_BOARD_COPIES_ROUTE,
       ].includes(route);
       expect([route, checkAccess("edit", route)]).toEqual([route, null]);
@@ -399,5 +404,158 @@ describe("cloud room", () => {
     expect(decodeEvent(JSON.stringify(seen))).toMatchObject({ type: "cursors" });
     expect(cursorsEventFor(moved, other, now).cursors).toEqual([]);
     expect(cursorsEventFor(withoutPerson(moved, other), maker, now).cursors).toEqual([]);
+  });
+});
+
+describe("link sharing", () => {
+  const grace = GuestId.make("guest-two");
+  const fresh = {
+    edit: { credential: "share-one-0000.fresh", hash: "fresh-edit" },
+    view: { credential: "share-one-0000.v.fresh", hash: "fresh-view" },
+  };
+  // Grace is on the board as her account; Ada kept the edit link she made it with.
+  const board = (): CloudRoom => {
+    const joined = Result.getOrThrow(join(newRoom(), "guest-two"));
+    return {
+      ...joined,
+      editLink: "share-one-0000.invite",
+      guests: joined.guests.map((guest) =>
+        guest.id === grace ? { ...guest, accountId: "account-grace" } : guest,
+      ),
+    };
+  };
+  const shared = (sharing: "edit" | "view" | "off") =>
+    Result.getOrThrow(withSharing(board(), true, { sharing, renew: false, fresh }, NOW));
+
+  it.each([
+    {
+      sharing: "edit" as const,
+      editJoins: true,
+      viewOpens: true,
+      links: { edit: "share-one-0000.invite", view: fresh.view.credential },
+    },
+    {
+      sharing: "view" as const,
+      editJoins: false,
+      viewOpens: true,
+      links: { edit: null, view: fresh.view.credential },
+    },
+    { sharing: "off" as const, editJoins: false, viewOpens: false, links: { edit: null } },
+  ])(
+    "$sharing: the edit link lets someone new in ($editJoins), the view link opens ($viewOpens), seats stay",
+    ({ sharing, editJoins, viewOpens, links }) => {
+      const room = shared(sharing);
+      expect(linkSharingOf(room)).toBe(sharing);
+      // Someone new, with each link.
+      expect(Result.isSuccess(join(room, "guest-new"))).toBe(editJoins);
+      expect(isViewLink(room, "fresh-view")).toBe(viewOpens);
+      // Everyone already on the board keeps their seat and what they can do.
+      expect(guestBySession(room, "guest-two-session")?.id).toBe(grace);
+      expect(Result.isSuccess(withAccountSession(room, "account-grace", "new-device"))).toBe(true);
+      expect(Result.isSuccess(changeBoard(room, grace, notePut("still-editing"), NOW))).toBe(true);
+      // Removed, her account opens nothing; only the link, as it lets anyone, brings her back.
+      const removed = Result.getOrThrow(removePerson(room, maker, grace, NOW));
+      expect(Result.isFailure(withAccountSession(removed, "account-grace", "again"))).toBe(true);
+      expect(accountLockedOut(removed, "account-grace")).toBe(false);
+      expect(Result.isSuccess(join(removed, "guest-two-again"))).toBe(editJoins);
+      // Taken out of the workspace instead, her account stays locked out whatever the links do.
+      const locked = {
+        ...room,
+        guests: room.guests.map((guest) =>
+          guest.id === grace ? { ...guest, locked: true as const } : guest,
+        ),
+      };
+      expect(accountLockedOut(locked, "account-grace")).toBe(true);
+      // Only the links that let people in are handed out, so an older client offers no other.
+      expect(viewFor(room, room.guests[1]!)).toMatchObject({ links, sharing });
+      expect(viewFor(room, null)).not.toHaveProperty("sharing");
+    },
+  );
+
+  it("says why a link no longer lets someone in, in words an older client already shows", () => {
+    expect(checkInvite(shared("off"), "invite-hash")).toMatchObject({
+      status: 403,
+      reason: "invalid",
+      message: expect.stringContaining("Link sharing is off"),
+    });
+    expect(checkInvite(shared("view"), "invite-hash")).toMatchObject({
+      reason: "invalid",
+      message: expect.stringContaining("only lets people look"),
+    });
+    expect(checkInvite(shared("edit"), "wrong")).toMatchObject({
+      message: "This board link is not valid.",
+    });
+  });
+
+  it("brings back the very same links when sharing comes back on, and new ones only on renew", () => {
+    const off = Result.getOrThrow(
+      withSharing(shared("edit"), true, { sharing: "off", renew: false, fresh }, NOW),
+    );
+    expect([checkInvite(off, "invite-hash")?.reason, isViewLink(off, "fresh-view")]).toEqual([
+      "invalid",
+      false,
+    ]);
+    const back = Result.getOrThrow(
+      withSharing(
+        off,
+        true,
+        {
+          sharing: "edit",
+          renew: false,
+          fresh: {
+            edit: { credential: "share-one-0000.other", hash: "other-edit" },
+            view: { credential: "share-one-0000.v.other", hash: "other-view" },
+          },
+        },
+        NOW,
+      ),
+    );
+    expect(checkInvite(back, "invite-hash")).toBeNull();
+    expect(isViewLink(back, "fresh-view")).toBe(true);
+    expect(withSharing(back, true, { sharing: "edit", renew: false, fresh }, NOW)).toStrictEqual(
+      Result.succeed(back),
+    );
+    expect(withSharing(back, false, { sharing: "off", renew: false, fresh }, NOW)).toStrictEqual(
+      Result.fail(roomFailure("not_maker")),
+    );
+    const renewed = Result.getOrThrow(
+      withSharing(
+        shared("edit"),
+        true,
+        {
+          sharing: "edit",
+          renew: true,
+          fresh: {
+            edit: { credential: "share-one-0000.renewed", hash: "renewed-edit" },
+            view: { credential: "share-one-0000.v.renewed", hash: "renewed-view" },
+          },
+        },
+        NOW,
+      ),
+    );
+    expect(checkInvite(renewed, "invite-hash")).not.toBeNull();
+    expect(checkInvite(renewed, "renewed-edit")).toBeNull();
+    expect([isViewLink(renewed, "fresh-view"), isViewLink(renewed, "renewed-view")]).toEqual([
+      false,
+      true,
+    ]);
+    expect(renewed.guests).toHaveLength(2);
+  });
+
+  it("shares a board from before the setting as its links say, and an older client's link turns it up", () => {
+    const legacy = board();
+    expect(linkSharingOf(legacy)).toBe("edit");
+    const editOff = Result.getOrThrow(withLink(legacy, true, "edit", null, NOW));
+    expect(linkSharingOf(editOff)).toBe("off");
+    const viewOn = Result.getOrThrow(withLink(editOff, true, "view", fresh.view, NOW));
+    expect(linkSharingOf(viewOn)).toBe("view");
+    // An older client turning a link on means it to work, whatever the setting was.
+    const turnedOn = Result.getOrThrow(withLink(shared("off"), true, "edit", fresh.edit, NOW));
+    expect([linkSharingOf(turnedOn), checkInvite(turnedOn, "fresh-edit")]).toEqual(["edit", null]);
+    const viewOnly = Result.getOrThrow(withLink(shared("off"), true, "view", fresh.view, NOW));
+    expect(linkSharingOf(viewOnly)).toBe("view");
+    // Made anew while it works, a link leaves the setting as it was.
+    const remade = Result.getOrThrow(withLink(shared("view"), true, "view", fresh.view, NOW));
+    expect(linkSharingOf(remade)).toBe("view");
   });
 });

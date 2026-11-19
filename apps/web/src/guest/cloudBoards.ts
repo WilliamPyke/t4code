@@ -3,6 +3,7 @@ import {
   CLOUD_BOARD_COPIES_ROUTE,
   CLOUD_BOARD_COPY_ROUTE,
   CLOUD_BOARD_LINK_ROUTE,
+  CLOUD_BOARD_SHARING_ROUTE,
   CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
   CLOUD_BOARD_PEOPLE_ROLE_ROUTE,
   CLOUD_BOARD_ROUTE,
@@ -17,6 +18,7 @@ import {
   GuestHandoff,
   GuestRedeemResult,
   type CloudBoardLinkKind,
+  type CloudBoardLinkSharing,
   type CloudBoardRole,
   type RoomBoardChange,
 } from "@t3tools/contracts";
@@ -405,6 +407,37 @@ export async function setCloudBoardLink(
       ? Option.getOrNull(decodeLinkResult(await response.json().catch(() => null)))
       : null;
     return result ?? "The board service did not take that. Try again.";
+  } catch {
+    return "Could not reach the board service.";
+  }
+}
+
+/**
+ * Sets who a cloud board's links let in; `renew` also makes both links anew, which ends the old
+ * ones. Resolves to null, or what went wrong.
+ */
+export async function setCloudBoardSharing(
+  share: JoinedGuestShare,
+  sharing: CloudBoardLinkSharing,
+  renew = false,
+): Promise<string | null> {
+  try {
+    const response = await guestShareRequest(
+      guestShareEndpointOf(share),
+      CLOUD_BOARD_SHARING_ROUTE,
+      {
+        init: {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(renew ? { sharing, renew } : { sharing }),
+        },
+      },
+    );
+    if (response.ok) return null;
+    if (response.status === 403) return "Only the person who made this board can change its links.";
+    return response.status === 404
+      ? "The board service does not have link sharing yet. Try again later."
+      : "The board service did not take that. Try again.";
   } catch {
     return "Could not reach the board service.";
   }

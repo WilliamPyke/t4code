@@ -3,7 +3,10 @@ import { readConnectAuthorizeRequest } from "@t3tools/shared/connectAuth";
 import { CheckIcon } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 
-import { buildConnectCliClerkAuthorizeUrl } from "../../cloud/connectCliAuth";
+import {
+  approveComputerSignIn,
+  buildConnectCliClerkAuthorizeUrl,
+} from "../../cloud/connectCliAuth";
 import { isElectron } from "../../env";
 import { resolveClerkSignInProps } from "../clerk/authRedirect";
 import { BoardBackdrop } from "../room/BoardChrome";
@@ -31,7 +34,7 @@ const ALLOWS = [
 export function ConnectCliAuthorizeSurface() {
   const [request] = useState(() => readConnectAuthorizeRequest(new URL(window.location.href)));
   const clerk = useClerk();
-  const { isLoaded, isSignedIn } = useAuth();
+  const { isLoaded, isSignedIn, getToken } = useAuth();
   const { user } = useUser();
   const [connecting, setConnecting] = useState(false);
   const [cannotStart, setCannotStart] = useState(false);
@@ -68,10 +71,15 @@ export function ConnectCliAuthorizeSurface() {
     );
   }
 
-  const connect = () => {
+  const connect = async () => {
     const authorizeUrl = buildConnectCliClerkAuthorizeUrl(request);
     if (!authorizeUrl) return setCannotStart(true);
     setConnecting(true);
+    // The press itself is the approval: the relay remembers it for this sign-in only.
+    if (!(await approveComputerSignIn({ getToken, codeChallenge: request.challenge }))) {
+      setConnecting(false);
+      return setCannotStart(true);
+    }
     // On a development sign-in instance, Clerk's own pages are on another site that cannot see
     // this page's sign-in, and would ask for it again; this carries it there. Nothing elsewhere.
     window.location.assign(clerk.buildUrlWithAuth(authorizeUrl));
@@ -155,7 +163,7 @@ export function ConnectCliAuthorizeSurface() {
               size="lg"
               disabled={!isLoaded || connecting}
               aria-busy={connecting || undefined}
-              onClick={connect}
+              onClick={() => void connect()}
               data-connect-computer
             >
               {connecting ? <Spinner aria-hidden /> : null}

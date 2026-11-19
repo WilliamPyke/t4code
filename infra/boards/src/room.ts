@@ -3,6 +3,7 @@ import {
   roomBoardAgentCard,
   roomBoardGuestCard,
   type CloudBoardLinkKind,
+  type CloudBoardLinkSharing,
   type CloudBoardRole,
   type GuestCursorRequest,
   type GuestId,
@@ -53,6 +54,8 @@ export interface CloudRoom {
   readonly editLink?: string;
   /** The view link, which shows the board to anyone who has it. Absent while it is off. */
   readonly viewLink?: { readonly credential: string; readonly hash: string };
+  /** Who the links let in now; see `linkSharingOf`. Absent on boards from before it was kept. */
+  readonly sharing?: CloudBoardLinkSharing;
   /** Requests for edit access, open ones and the last few answered. */
   readonly requests?: ReadonlyArray<AccessRequest>;
   /** Anyone who can see the board may make their own copy of it, as its maker allowed. */
@@ -207,11 +210,28 @@ export function createRoom(input: {
   };
 }
 
+/**
+ * The board's link sharing. A board from before it was kept shares as its links say: the edit
+ * link while it is on, else the view link while that is on.
+ */
+export const linkSharingOf = (room: CloudRoom): CloudBoardLinkSharing =>
+  room.sharing ?? (room.inviteHash !== "" ? "edit" : room.viewLink !== undefined ? "view" : "off");
+
+// Each keeps the "not valid" reason an older client already knows how to show.
+const SHARING_OFF =
+  "Link sharing is off for this board. Ask whoever shared it to turn it on, then try again.";
+const ONLY_VIEWING =
+  "This board's link now only lets people look at it. Ask whoever shared it for the view link.";
+
 // An empty `inviteHash` is the edit link turned off: no credential hashes to it.
-export const checkInvite = (room: CloudRoom | null, inviteHash: string): RoomFailure | null =>
-  room === null || room.inviteHash === "" || room.inviteHash !== inviteHash
-    ? roomFailure("invalid")
-    : null;
+export function checkInvite(room: CloudRoom | null, inviteHash: string): RoomFailure | null {
+  if (room === null || room.inviteHash === "" || room.inviteHash !== inviteHash) {
+    return roomFailure("invalid");
+  }
+  const sharing = linkSharingOf(room);
+  if (sharing === "off") return roomFailure("invalid", SHARING_OFF);
+  return sharing === "view" ? roomFailure("invalid", ONLY_VIEWING) : null;
+}
 
 /**
  * What the edit link's holder is told before joining: the board's name and its maker's. Read only
@@ -228,7 +248,7 @@ export const invitePreviewOf = (room: CloudRoom): GuestInvitePreview => {
 
 /** Whether `hash` is the board's view link now, which opens it to look at and nothing more. */
 export const isViewLink = (room: CloudRoom | null, hash: string): boolean =>
-  room?.viewLink !== undefined && room.viewLink.hash === hash;
+  room !== null && room.viewLink?.hash === hash && linkSharingOf(room) !== "off";
 
 /** People looking on from the view link at once, on one board. */
 export const CLOUD_BOARD_MAX_VIEWERS = 200;
@@ -286,11 +306,17 @@ export function withLink(
   now: string,
 ): Result.Result<CloudRoom, RoomFailure> {
   if (!manages) return Result.fail(roomFailure("not_maker"));
+  // Turning a link on from an older client means it should work: sharing comes up to it.
+  const sharing =
+    next !== null && room.sharing !== undefined && !sharingAdmits(room.sharing, kind)
+      ? { sharing: kind }
+      : {};
   if (kind === "view") {
     const { viewLink: _old, ...rest } = room;
     return Result.succeed({
       ...rest,
       ...(next === null ? {} : { viewLink: next }),
+      ...sharing,
       updatedAt: now,
     });
   }
@@ -299,6 +325,41 @@ export function withLink(
     ...rest,
     inviteHash: next?.hash ?? "",
     ...(next === null ? {} : { editLink: next.credential }),
+    ...sharing,
+    updatedAt: now,
+  });
+}
+
+const sharingAdmits = (sharing: CloudBoardLinkSharing, kind: CloudBoardLinkKind): boolean =>
+  sharing === "edit" || (sharing === "view" && kind === "view");
+
+type NewLink = { readonly credential: string; readonly hash: string };
+
+/**
+ * The board with link sharing set to `sharing`. A link it needs that the board does not have yet
+ * is made from `fresh`; `renew` makes both anew, which ends the old ones. Otherwise the links stay
+ * the same, so turning sharing off and on again brings back the very links people were given.
+ */
+export function withSharing(
+  room: CloudRoom,
+  manages: boolean,
+  input: {
+    readonly sharing: CloudBoardLinkSharing;
+    readonly renew: boolean;
+    readonly fresh: { readonly edit: NewLink; readonly view: NewLink };
+  },
+  now: string,
+): Result.Result<CloudRoom, RoomFailure> {
+  if (!manages) return Result.fail(roomFailure("not_maker"));
+  const on = input.sharing !== "off";
+  const edit = input.renew || (on && room.inviteHash === "") ? input.fresh.edit : null;
+  const view = input.renew || (on && room.viewLink === undefined) ? input.fresh.view : null;
+  if (room.sharing === input.sharing && edit === null && view === null) return Result.succeed(room);
+  return Result.succeed({
+    ...room,
+    sharing: input.sharing,
+    ...(edit === null ? {} : { inviteHash: edit.hash, editLink: edit.credential }),
+    ...(view === null ? {} : { viewLink: view }),
     updatedAt: now,
   });
 }
@@ -499,11 +560,16 @@ export function viewFor(
 ): GuestShareView {
   const edits = guest !== null && canChange(guest);
   const viewers = room.guests.flatMap((person) => (canChange(person) ? [] : [person.id]));
+  const sharing = linkSharingOf(room);
+  // Only the links that let people in now, so an older client never offers one that does not.
+  const editWorks = room.inviteHash !== "" && sharing === "edit";
   const links = {
-    ...(edits && (room.inviteHash === "" || room.editLink !== undefined)
-      ? { edit: room.editLink ?? null }
+    ...(edits && (!editWorks || room.editLink !== undefined)
+      ? { edit: editWorks ? (room.editLink ?? null) : null }
       : {}),
-    ...(guest !== null && room.viewLink !== undefined ? { view: room.viewLink.credential } : {}),
+    ...(guest !== null && room.viewLink !== undefined && sharing !== "off"
+      ? { view: room.viewLink.credential }
+      : {}),
   };
   return {
     shareId: room.shareId,
@@ -523,6 +589,7 @@ export function viewFor(
     ...(viewers.length === 0 ? {} : { viewers }),
     ...(manages && guest !== null ? { manage: true } : {}),
     ...(Object.keys(links).length === 0 ? {} : { links }),
+    ...(guest === null ? {} : { sharing }),
     model: CLOUD_MODEL,
     ...(guest?.inboxAt === undefined ? {} : { inboxAt: guest.inboxAt }),
     ...(guest === null ? grantedOf(room) : {}),

@@ -68,7 +68,7 @@ export function relayProtectedErrorMessage(error: RelayProtectedError): string {
     case "RelayEnvironmentLinkLimitExceededError":
       return `Your account already has its maximum of ${error.maxTunnels} connected computers. Remove a computer you no longer use in Settings, then try again.`;
     case "RelayEnvironmentLinkRemovedError":
-      return "This computer was removed from your Tinkjam account. Approve it again from that computer to bring it back.";
+      return "This computer was removed from your Tinkjam account. Connect it again to use it.";
     case "RelayAgentActivityPublishProofExpiredError":
       return "The computer's update arrived too late to be accepted. Check that its date and time are set automatically.";
     case "RelayAgentActivityPublishProofInvalidError":

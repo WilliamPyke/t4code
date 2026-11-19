@@ -18,6 +18,7 @@ import {
   useEnvironments,
   useRelayEnvironmentDiscovery,
 } from "~/state/environments";
+import { toastManager } from "~/components/ui/toast";
 import { relayEnvironmentDiscovery } from "~/state/relay";
 import { useAtomCommand } from "~/state/use-atom-command";
 
@@ -197,6 +198,9 @@ export function useYourComputers(options: {
   };
 }
 
+const REMOVED = "It is signed out of your account and can no longer reach your boards";
+const BRING_BACK = "Connect it again from that computer to bring it back.";
+
 /**
  * Removes one of the person's computers: off their account, so no board finds it, and out of
  * this browser. Neither step needs the computer to be on. `remove` resolves to what went wrong,
@@ -220,7 +224,7 @@ export function useRemoveComputer() {
     question: (name: string) =>
       browserOnly
         ? `Forget ${name} in this browser? You are signed out, so it stays on your account. Sign in first to remove it everywhere.`
-        : `Remove ${name}? Its agents can no longer work on your boards. To bring it back, open Tinkjam Sync on it and choose Connect.`,
+        : `Remove ${name}? ${REMOVED}. A board that has it open right now keeps that connection until it drops. ${BRING_BACK}`,
     remove: async (computer: {
       readonly environmentId: EnvironmentId;
       readonly name: string;
@@ -232,6 +236,11 @@ export function useRemoveComputer() {
         if (result._tag === "Failure") {
           return `Could not remove ${computer.name} from your account. Check your internet connection, then try again.`;
         }
+        toastManager.add({
+          type: "success",
+          title: `${computer.name} was removed`,
+          description: `${REMOVED}. ${BRING_BACK}`,
+        });
       }
       if (environments.some((entry) => entry.environmentId === computer.environmentId)) {
         const result = await forget(computer.environmentId);

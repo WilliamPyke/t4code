@@ -608,12 +608,13 @@ const linkEnvironmentForConnect = Effect.fn("cloud.cli.link_environment")(functi
     }
   }
 
-  const identity = yield* authorizeCli(options);
-  yield* CliState.setCliDesiredCloudLink(true, publishOnly ? "publish_only" : "managed");
+  // A removed computer comes back only through a new sign-in the person approves in a browser.
   if (yield* CliState.dropRevokedCloudLink) {
+    yield* (yield* CliTokenManager.CloudCliTokenManager).clear;
     yield* Console.log("Replacing the link T3 Connect revoked.");
   }
-  yield* CliState.markFreshApproval;
+  const identity = yield* authorizeCli(options);
+  yield* CliState.setCliDesiredCloudLink(true, publishOnly ? "publish_only" : "managed");
   if (publishOnly) {
     const secrets = yield* ServerSecretStore.ServerSecretStore;
     yield* secrets.set(PUBLISH_AGENT_ACTIVITY_SECRET, stringToBytes("true"));

@@ -17,6 +17,7 @@ import * as Schema from "effect/Schema";
 import * as CloudMintSigner from "../auth/CloudMintSigner.ts";
 import * as DpopProofs from "../auth/DpopProofs.ts";
 import * as RelayTokens from "../auth/RelayTokens.ts";
+import * as ComputerApprovals from "./ComputerApprovals.ts";
 import * as EnvironmentCredentials from "./EnvironmentCredentials.ts";
 import * as EnvironmentLinks from "./EnvironmentLinks.ts";
 import * as RelayConfiguration from "../Config.ts";
@@ -114,7 +115,11 @@ function layerTest(input?: {
   readonly upsert?: EnvironmentLinks.EnvironmentLinks["Service"]["upsert"];
   readonly consume?: DpopProofs.DpopProofReplay["Service"]["consume"];
   readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
-  readonly removedByUser?: boolean;
+  /** The account's active link for the environment, if any. */
+  readonly activeKey?: string;
+  /** Verifier the relay recorded an approval for; anything else redeems nothing. */
+  readonly approvedVerifier?: string;
+  readonly finished?: Array<string>;
 }) {
   return EnvironmentLinker.layer.pipe(
     Layer.provideMerge(RelayTokens.layer.pipe(Layer.provide(CloudMintSigner.layer))),
@@ -130,13 +135,28 @@ function layerTest(input?: {
           upsert: input?.upsert ?? (() => Effect.void),
           listDeliveryUsersForEnvironment: () => Effect.succeed([]),
           listForUser: () => Effect.succeed([]),
-          getForUser: () => Effect.succeed(null),
+          getForUser: () =>
+            Effect.succeed(
+              input?.activeKey === undefined
+                ? null
+                : ({
+                    environmentPublicKey: input.activeKey,
+                  } as EnvironmentLinks.RelayLinkedEnvironmentRecord),
+            ),
           findActiveManagedForEnvironment: () => Effect.succeed([]),
           setHoldWebhooksWhileOffline: () => Effect.void,
           revokeForUser: () => Effect.succeed(false),
-          wasRemovedByUser: () => Effect.succeed(input?.removedByUser ?? false),
           listOtherUsersForEnvironmentKey: () => Effect.succeed([]),
           listOtherEnvironmentsForMachine: () => Effect.succeed([]),
+        }),
+        Layer.succeed(ComputerApprovals.ComputerApprovals, {
+          create: () => Effect.die("unexpected approval"),
+          redeem: (redeemed) =>
+            Effect.succeed(
+              redeemed.verifier === input?.approvedVerifier ? "approved-challenge" : null,
+            ),
+          finish: (finished) =>
+            Effect.sync(() => void input?.finished?.push(finished.codeChallenge)),
         }),
         Layer.succeed(EnvironmentCredentials.EnvironmentCredentials, {
           create: () => Effect.succeed("t3env_credential_secret"),
@@ -173,7 +193,7 @@ describe("EnvironmentLinker", () => {
       const result = yield* linker.link({
         userId: "user_123",
         request,
-        mayRestoreRemovedLink: false,
+        asComputer: false,
       });
       expect(result.environmentId).toBe(payload.environmentId);
       expect(result.environmentCredential).toBe("t3env_credential_secret");
@@ -244,7 +264,7 @@ describe("EnvironmentLinker", () => {
       const result = yield* linker.link({
         userId: "user_123",
         request,
-        mayRestoreRemovedLink: false,
+        asComputer: false,
       });
       expect(result.environmentCredential).toBe("t3env_credential_secret");
       expect(result.endpointRuntime).toBeNull();
@@ -277,7 +297,7 @@ describe("EnvironmentLinker", () => {
       const tampered = { ...request, proof: segments.join(".") };
       const linker = yield* EnvironmentLinker.EnvironmentLinker;
       const result = yield* Effect.result(
-        linker.link({ userId: "user_123", request: tampered, mayRestoreRemovedLink: false }),
+        linker.link({ userId: "user_123", request: tampered, asComputer: false }),
       );
       expect(Result.isFailure(result)).toBe(true);
       if (Result.isFailure(result)) {
@@ -305,31 +325,79 @@ describe("EnvironmentLinker", () => {
     );
   });
 
-  it.effect("keeps a removed computer off the account until a fresh approval", () => {
+  it.effect("lets a computer's own sign-in renew only its active link with the same key", () => {
     const upserts: Array<string> = [];
+    const linkWith = (activeKey: string | undefined) =>
+      Effect.gen(function* () {
+        const linker = yield* EnvironmentLinker.EnvironmentLinker;
+        return yield* Effect.result(
+          linker.link({ ...(yield* makeRequest), userId: "user_123", asComputer: true }),
+        );
+      }).pipe(
+        Effect.provide(
+          layerTest({
+            ...(activeKey === undefined ? {} : { activeKey }),
+            upsert: (input) => Effect.sync(() => void upserts.push(input.proof.environmentId)),
+          }),
+        ),
+      );
+    return Effect.gen(function* () {
+      // Removed (no active link), or another key claiming this computer's id: refused.
+      for (const activeKey of [undefined, "another-key"]) {
+        const refused = yield* linkWith(activeKey);
+        expect(Result.isFailure(refused) && refused.failure._tag).toBe("EnvironmentLinkRemoved");
+      }
+      expect(upserts).toEqual([]);
+
+      const renewed = yield* linkWith(environmentKeyPair.publicKey.trim());
+      expect(Result.isSuccess(renewed) && renewed.success.freshlyApproved).toBe(false);
+      expect(upserts).toEqual(["env-link-test"]);
+    });
+  });
+
+  it.effect("brings a removed computer back only with an approval the relay issued", () => {
+    const upserts: Array<string> = [];
+    const finished: Array<string> = [];
     return Effect.gen(function* () {
       const linker = yield* EnvironmentLinker.EnvironmentLinker;
-      const leftover = yield* Effect.result(
-        linker.link({ ...(yield* makeRequest), userId: "user_123", mayRestoreRemovedLink: false }),
+      const forged = yield* Effect.result(
+        linker.link({
+          ...(yield* makeRequest),
+          request: {
+            ...(yield* makeRequest).request,
+            freshApproval: true,
+            approvalVerifier: "made-up",
+          },
+          userId: "user_123",
+          asComputer: true,
+        }),
       );
-      expect(Result.isFailure(leftover) && leftover.failure._tag).toBe("EnvironmentLinkRemoved");
+      expect(Result.isFailure(forged) && forged.failure._tag).toBe("EnvironmentLinkRemoved");
       expect(upserts).toEqual([]);
 
       const approved = yield* linker.link({
         ...(yield* makeRequest),
+        request: { ...(yield* makeRequest).request, approvalVerifier: "pressed-connect" },
         userId: "user_123",
-        mayRestoreRemovedLink: true,
+        asComputer: true,
       });
-      expect(approved.environmentId).toBe("env-link-test");
+      expect(approved.freshlyApproved).toBe(true);
       expect(upserts).toEqual(["env-link-test"]);
+      expect(finished).toEqual(["approved-challenge"]);
+
+      // The person's own app session is the person.
+      const session = yield* linker.link({
+        ...(yield* makeRequest),
+        userId: "user_123",
+        asComputer: false,
+      });
+      expect(session.freshlyApproved).toBe(true);
     }).pipe(
       Effect.provide(
         layerTest({
-          removedByUser: true,
-          upsert: (input) =>
-            Effect.sync(() => {
-              upserts.push(input.proof.environmentId);
-            }),
+          approvedVerifier: "pressed-connect",
+          finished,
+          upsert: (input) => Effect.sync(() => void upserts.push(input.proof.environmentId)),
         }),
       ),
     );
@@ -340,7 +408,7 @@ describe("EnvironmentLinker", () => {
       const { request } = yield* makeRequest;
       const linker = yield* EnvironmentLinker.EnvironmentLinker;
       const result = yield* Effect.result(
-        linker.link({ userId: "user_123", request, mayRestoreRemovedLink: false }),
+        linker.link({ userId: "user_123", request, asComputer: false }),
       );
       expect(Result.isFailure(result)).toBe(true);
       if (Result.isFailure(result)) {

@@ -70,6 +70,7 @@ import * as Devices from "../agentActivity/Devices.ts";
 import * as CloudMintSigner from "../auth/CloudMintSigner.ts";
 import * as DpopProofs from "../auth/DpopProofs.ts";
 import * as RelayTokens from "../auth/RelayTokens.ts";
+import * as ComputerApprovals from "../environments/ComputerApprovals.ts";
 import * as EnvironmentCredentials from "../environments/EnvironmentCredentials.ts";
 import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
 import * as GuestLinks from "../guestLinks/GuestLinks.ts";
@@ -344,14 +345,14 @@ export const layerClientAuth = Layer.effect(
           "relay.auth.mode": verified.mode,
           "relay.auth.subject": verified.sub,
         });
+        const mode = verified.mode === "clerk_oauth_bearer" ? "computer" : "session";
+        if (mode === "computer" && !isComputerRoute(yield* HttpServerRequest.HttpServerRequest)) {
+          return yield* relayAuthInvalidError("not_authorized");
+        }
 
         return yield* httpEffect.pipe(
           withSpanAttributes({ "user.id": verified.sub }),
-          Effect.provideService(RelayClientPrincipal, {
-            userId: verified.sub,
-            token,
-            mode: verified.mode === "clerk_oauth_bearer" ? "computer" : "session",
-          }),
+          Effect.provideService(RelayClientPrincipal, { userId: verified.sub, token, mode }),
         );
       }),
     };
@@ -424,6 +425,20 @@ export const layerDpopClientAuth = Layer.effect(
     };
   }),
 );
+
+/**
+ * A computer's sign-in is account-wide and Clerk cannot revoke it per computer, so it reaches only
+ * the routes Tinkjam Sync calls for its own link; those check that the link was not removed.
+ */
+function isComputerRoute(request: HttpServerRequest.HttpServerRequest): boolean {
+  const url = HttpServerRequest.toURL(request);
+  if (url._tag === "None") return false;
+  const path = url.value.pathname;
+  return request.method === "POST"
+    ? path === "/v1/client/environment-link-challenges" || path === "/v1/client/environment-links"
+    : request.method === "DELETE" &&
+        /^\/v1\/client\/environment-links\/[^/]+(\/tunnel)?$/u.test(path);
+}
 
 function isDpopAuthorizationHeader(value: string | undefined): boolean {
   return /^DPoP +/iu.test(value ?? "");
@@ -839,7 +854,7 @@ const supersedeOtherAccountLinks = Effect.fn("relay.api.client.supersedeOtherAcc
 
 /**
  * A reinstalled computer links under a new id. Its earlier entry on the same account goes, so
- * the account does not list one computer twice. Only a fresh approval may remove it.
+ * the account does not list one computer twice. Only an approval the relay issued may remove it.
  */
 export const supersedeSameComputerLinks = Effect.fn("relay.api.client.supersedeSameComputerLinks")(
   function* (input: {
@@ -1123,6 +1138,7 @@ export const layerClientApi = HttpApiBuilder.group(
     const devices = yield* Devices.Devices;
     const t3Chat = yield* T3ChatAccounts.T3ChatAccounts;
     const tunnelLimits = yield* ManagedTunnelLimits.ManagedTunnelLimits;
+    const approvals = yield* ComputerApprovals.ComputerApprovals;
     return handlers
       .handle(
         "listEnvironments",
@@ -1162,11 +1178,10 @@ export const layerClientApi = HttpApiBuilder.group(
             const { payload } = args;
             yield* appendRelayCredentialResponseHeaders;
             const { userId, mode } = yield* RelayClientPrincipal;
-            const freshlyApproved = mode !== "computer" || payload.freshApproval === true;
             const result = yield* linker.link({
               userId,
               request: payload,
-              mayRestoreRemovedLink: freshlyApproved,
+              asComputer: mode === "computer",
             });
             yield* supersedeOtherAccountLinks({
               userId,
@@ -1178,7 +1193,7 @@ export const layerClientApi = HttpApiBuilder.group(
               userId,
               environmentId: result.environmentId,
               machineId: result.machineId,
-              freshlyApproved,
+              freshlyApproved: result.freshlyApproved,
               managedEndpointNamespace: config.managedEndpointNamespace,
             });
             return {
@@ -1253,6 +1268,12 @@ export const layerClientApi = HttpApiBuilder.group(
                 reason: "replay_persistence_failed",
                 traceId,
               }),
+            ComputerApprovalPersistenceError: (_error, traceId) =>
+              new RelayEnvironmentLinkFailedError({
+                code: "environment_link_failed",
+                reason: "link_persistence_failed",
+                traceId,
+              }),
           }),
           mapRelayCommonApiErrors("not_authorized"),
         ),
@@ -1278,6 +1299,16 @@ export const layerClientApi = HttpApiBuilder.group(
         }, mapRelayCommonApiErrors("not_authorized")),
       )
       .handle(
+        "createComputerApproval",
+        Effect.fn("relay.api.client.createComputerApproval")(function* ({ payload }) {
+          yield* appendRelayCredentialResponseHeaders;
+          const { userId } = yield* RelayClientPrincipal;
+          return yield* approvals
+            .create({ userId, codeChallenge: payload.codeChallenge })
+            .pipe(Effect.catch(() => relayInternalErrorResponse("persistence_failed")));
+        }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
         "unlinkEnvironment",
         Effect.fn("relay.api.client.unlinkEnvironment")(function* (args) {
           const { params } = args;
@@ -1300,7 +1331,16 @@ export const layerClientApi = HttpApiBuilder.group(
         "releaseEnvironmentTunnel",
         Effect.fn("relay.api.client.releaseEnvironmentTunnel")(function* (args) {
           const { params } = args;
-          const { userId } = yield* RelayClientPrincipal;
+          const { userId, mode } = yield* RelayClientPrincipal;
+          if (
+            mode === "computer" &&
+            (yield* links.getForUser({ userId, environmentId: params.environmentId })) === null
+          ) {
+            return yield* new RelayEnvironmentLinkRemovedError({
+              code: "environment_link_removed",
+              traceId: yield* currentTraceId,
+            });
+          }
           // False means concurrent provisioning retained the tunnel; the caller must keep its runtime config.
           const released = yield* managedEndpointProvider
             .release({

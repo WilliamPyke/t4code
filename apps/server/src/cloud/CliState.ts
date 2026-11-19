@@ -84,12 +84,6 @@ export const dropRevokedCloudLink = Effect.gen(function* () {
   return true;
 });
 
-/** Records that a person just approved this computer in a browser. */
-export const markFreshApproval = Effect.gen(function* () {
-  const secrets = yield* ServerSecretStore.ServerSecretStore;
-  yield* secrets.set(CLOUD_LINK_FRESH_APPROVAL, new TextEncoder().encode("true"));
-});
-
 export const clearPersistedCloudLink = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   yield* Effect.all(

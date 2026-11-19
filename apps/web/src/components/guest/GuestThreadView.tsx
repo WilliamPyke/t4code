@@ -973,6 +973,7 @@ function GuestThreadSession({
         viewers={view.viewers ?? NO_VIEWERS}
         viewing={viewing ?? 0}
         copies={view.copies === true}
+        sharing={view.sharing}
       />
     );
   return (

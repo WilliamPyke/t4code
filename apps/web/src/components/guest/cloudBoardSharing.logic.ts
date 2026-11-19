@@ -1,3 +1,5 @@
+import type { CloudBoardLinkSharing, CloudBoardRole } from "@t3tools/contracts";
+
 import type { BoardLinks } from "~/guest/boardLinks.logic";
 
 export const viewingLabel = (viewing: number) => `${viewing} viewing`;
@@ -55,3 +57,37 @@ export function boardPeopleSummary(input: {
         : `${input.joined} people · ${input.here} here now`;
   return input.viewing > 0 ? `${people} · ${viewingLabel(input.viewing)}` : people;
 }
+
+/**
+ * The board's link sharing: as the host says, or, from an older host, as the links it hands out
+ * say. Someone who can only look is handed no edit link, so they read it from the view link alone.
+ */
+export function boardLinkSharing(
+  sharing: CloudBoardLinkSharing | undefined,
+  links: BoardLinks,
+): CloudBoardLinkSharing {
+  if (sharing !== undefined) return sharing;
+  if (typeof links.edit === "string") return "edit";
+  return links.view === null ? "off" : "view";
+}
+
+/**
+ * What removing someone leaves open, said in the dialog, or null when link sharing lets nobody in.
+ * Removing never changes the links: closing them is the remover's own choice.
+ */
+export function removalNote(name: string, sharing: CloudBoardLinkSharing): string | null {
+  if (sharing === "off") return null;
+  return sharing === "edit"
+    ? `Link sharing is on: anyone with the link can still join and edit, ${name} too if they kept it.`
+    : `Link sharing is on: anyone with the view link can still look at the board, ${name} too if they kept it.`;
+}
+
+/** What moving someone to view-only leaves open, or null when the link cannot let them edit. */
+export const demotionNote = (name: string, sharing: CloudBoardLinkSharing): string | null =>
+  sharing === "edit"
+    ? `Link sharing lets anyone with the link edit, so ${name} could join again with it to edit.`
+    : null;
+
+/** A quiet note beside someone whose own access is lower than the link's, so the list never lies. */
+export const linkAccessNote = (role: CloudBoardRole, sharing: CloudBoardLinkSharing) =>
+  role === "view" && sharing === "edit" ? "the link lets them edit" : null;

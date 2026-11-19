@@ -38,5 +38,3 @@ export const TINKJAM_SYNC_MAC_COMMAND = "curl -fsSL https://trellium.org/downloa
 export const TINKJAM_SYNC_WINDOWS_DOWNLOAD = "https://trellium.org/downloads/TinkjamSyncSetup.exe";
 // The homepage's section on bringing your agent with Tinkjam Sync.
 export const TINKJAM_SYNC_URL = "https://trellium.org/#agents";
-// Redirects to the App Store or Google Play to match the phone that opens it.
-export const MOBILE_APP_URL = "https://t3.codes/mobile";

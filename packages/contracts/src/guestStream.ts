@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 
 import { GuestId, GuestShareId, IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
+  CloudBoardLinkSharing,
   RoomAgentsEvent,
   RoomBoard,
   RoomCursorsEvent,
@@ -84,6 +85,11 @@ export const GuestShareView = Schema.Struct({
       view: Schema.optional(TrimmedNonEmptyString),
     }),
   ),
+  /**
+   * With `cloud`, for someone on the board: its link sharing. `links` holds only the links
+   * that let people in now. Absent from an older host.
+   */
+  sharing: Schema.optional(CloudBoardLinkSharing),
   model: GuestThreadModel,
   /**
    * With `cloud`: when this board last put something in this person's account inbox, so their

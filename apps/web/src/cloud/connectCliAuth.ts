@@ -7,7 +7,12 @@ import {
 import { clerkFrontendApiUrlFromPublishableKey } from "@t3tools/shared/relayAuth";
 
 import { isHostedStaticApp } from "../hostedPairing";
-import { hasCloudPublicConfig, resolveCloudPublicConfig, trimNonEmpty } from "./publicConfig";
+import {
+  hasCloudPublicConfig,
+  resolveCloudPublicConfig,
+  resolveRelayClerkTokenOptions,
+  trimNonEmpty,
+} from "./publicConfig";
 
 function resolveConnectCliOAuthClientId(): string | null {
   return trimNonEmpty(import.meta.env.VITE_CLERK_CLI_OAUTH_CLIENT_ID as string | undefined);
@@ -44,4 +49,31 @@ export function buildConnectCliClerkAuthorizeUrl(request: ConnectAuthorizeReques
     state: request.state,
     challenge: request.challenge,
   });
+}
+
+/**
+ * Records on the relay that the signed-in person approved this sign-in. Only the computer holding
+ * its verifier can redeem that, once; without it, the relay links no new or removed computer.
+ */
+export async function approveComputerSignIn(input: {
+  readonly getToken: (
+    options: ReturnType<typeof resolveRelayClerkTokenOptions>,
+  ) => Promise<string | null>;
+  readonly codeChallenge: string;
+}): Promise<boolean> {
+  const { relayUrl } = resolveCloudPublicConfig();
+  if (!relayUrl) return false;
+  try {
+    const token = await input.getToken(resolveRelayClerkTokenOptions());
+    if (!token) return false;
+    const response = await fetch(new URL("/v1/client/computer-approvals", relayUrl), {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ codeChallenge: input.codeChallenge }),
+    });
+    // A relay from before approvals neither has this route nor asks for one.
+    return response.ok || response.status === 404;
+  } catch {
+    return false;
+  }
 }

@@ -118,8 +118,8 @@ export function linkFailureFor(error: unknown): LinkFailure | null {
   if (error.code === "RelayEnvironmentLinkRemovedError") {
     return {
       kind: "removed",
-      reason: "This computer was removed from its Tinkjam account.",
-      fix: "Start Tinkjam Sync on this computer again and approve it in the browser.",
+      reason: "This computer was removed from your Tinkjam account.",
+      fix: "Connect it again to use it.",
     };
   }
   if (error.code === "RelayEnvironmentLinkLimitExceededError") {

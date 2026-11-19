@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { boardPeopleSummary, boardShareControls } from "./cloudBoardSharing.logic";
+import {
+  boardLinkSharing,
+  boardPeopleSummary,
+  boardShareControls,
+  demotionNote,
+  linkAccessNote,
+  removalNote,
+} from "./cloudBoardSharing.logic";
 
 const allowed = (input: Parameters<typeof boardShareControls>[0]) =>
   Object.entries(boardShareControls(input))
@@ -66,5 +73,36 @@ describe("boardPeopleSummary", () => {
     { joined: 2, here: 1, viewing: 1, says: "2 people on this board · 1 viewing" },
   ])("$joined joined, $here here, $viewing viewing", ({ says, ...input }) => {
     expect(boardPeopleSummary(input)).toBe(says);
+  });
+});
+
+describe("link sharing", () => {
+  it.each([
+    { sharing: undefined, links: { edit: "e", view: "v" }, is: "edit" },
+    { sharing: undefined, links: { edit: undefined, view: "v" }, is: "view" },
+    { sharing: undefined, links: { edit: null, view: "v" }, is: "view" },
+    { sharing: undefined, links: { edit: null, view: null }, is: "off" },
+    // The host's word wins over the links, which it hands out only while they let people in.
+    { sharing: "off", links: { edit: undefined, view: null }, is: "off" },
+    { sharing: "edit", links: { edit: null, view: null }, is: "edit" },
+  ] as const)("reads $is from $sharing and the links", ({ sharing, links, is }) => {
+    expect(boardLinkSharing(sharing, links)).toBe(is);
+  });
+
+  it("warns about the link only where it would let the person back in", () => {
+    expect(removalNote("Grace", "off")).toBeNull();
+    expect(removalNote("Grace", "edit")).toContain("join and edit");
+    expect(removalNote("Grace", "view")).toContain("look at the board");
+    expect(demotionNote("Grace", "edit")).toContain("join again with it to edit");
+    expect([demotionNote("Grace", "view"), demotionNote("Grace", "off")]).toEqual([null, null]);
+  });
+
+  it("notes someone who can edit through the link though they can only view", () => {
+    expect(linkAccessNote("view", "edit")).toBe("the link lets them edit");
+    expect([
+      linkAccessNote("view", "view"),
+      linkAccessNote("edit", "edit"),
+      linkAccessNote("view", "off"),
+    ]).toEqual([null, null, null]);
   });
 });

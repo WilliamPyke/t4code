@@ -14,11 +14,13 @@ import {
   type RoomBoardOutline,
   CLOUD_WORKSPACES_ROUTE,
   CLOUD_BOARD_LINK_ROUTE,
+  CLOUD_BOARD_SHARING_ROUTE,
   CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
   CLOUD_BOARD_PEOPLE_ROLE_ROUTE,
   CLOUD_BOARD_ROUTE,
   CLOUD_BOARD_VIEW_ROUTE,
   CloudBoardLinkRequest,
+  CloudBoardSharingRequest,
   CloudBoardRoleRequest,
   type CloudBoardLinkResult,
   CloudBoardAccountClaimRequest,
@@ -122,6 +124,7 @@ import {
   viewFor,
   withCopies,
   withLink,
+  withSharing,
   withRole,
   withoutPerson,
   type CloudGuest,
@@ -222,6 +225,7 @@ const decodeRemove = Schema.decodeUnknownOption(
   Schema.fromJsonString(CloudBoardRemovePersonRequest),
 );
 const decodeLink = Schema.decodeUnknownOption(Schema.fromJsonString(CloudBoardLinkRequest));
+const decodeSharing = Schema.decodeUnknownOption(Schema.fromJsonString(CloudBoardSharingRequest));
 const decodeRole = Schema.decodeUnknownOption(Schema.fromJsonString(CloudBoardRoleRequest));
 const decodeCopies = Schema.decodeUnknownOption(Schema.fromJsonString(CloudBoardCopiesRequest));
 const decodeCopy = Schema.decodeUnknownOption(Schema.fromJsonString(CloudBoardCopyRequest));
@@ -850,6 +854,32 @@ export class BoardRoom extends DurableObject<Env> {
         const result: CloudBoardLinkResult = { credential };
         return Response.json(result, { headers: NO_STORE });
       }
+      case CLOUD_BOARD_SHARING_ROUTE: {
+        const body = decodeSharing(await request.text());
+        if (Option.isNone(body)) return failureResponse(roomFailure("bad_request"));
+        const manages = await this.manages(this.room ?? room, guest);
+        const current = this.room ?? room;
+        const edit = makeSecret(current.shareId);
+        const view = makeViewSecret(current.shareId);
+        const [editHash, viewHash] = await Promise.all([hashSecret(edit), hashSecret(view)]);
+        const next = withSharing(
+          current,
+          manages,
+          {
+            sharing: body.value.sharing,
+            renew: body.value.renew === true,
+            fresh: {
+              edit: { credential: edit, hash: editHash },
+              view: { credential: view, hash: viewHash },
+            },
+          },
+          nowIso(),
+        );
+        if (Result.isFailure(next)) return failureResponse(next.failure);
+        await this.save(next.success);
+        this.endOldViews();
+        return noContent();
+      }
       case CLOUD_BOARD_COPIES_ROUTE: {
         const body = decodeCopies(await request.text());
         if (Option.isNone(body)) return failureResponse(roomFailure("bad_request"));
@@ -1118,11 +1148,12 @@ export class BoardRoom extends DurableObject<Env> {
     return managesBoard(room, guest, role);
   }
 
-  /** Ends every page opened with a view link the board no longer has. */
+  /** Ends every page opened with a view link that no longer opens the board. */
   private endOldViews() {
-    const current = this.room?.viewLink?.hash;
     for (const stream of this.streams) {
-      if (stream.viewHash !== null && stream.viewHash !== current) this.drop(stream, true);
+      if (stream.viewHash !== null && !isViewLink(this.room, stream.viewHash)) {
+        this.drop(stream, true);
+      }
     }
   }
 

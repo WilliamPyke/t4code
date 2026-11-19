@@ -202,6 +202,23 @@ export const relayDpopProofs = pgTable(
   ],
 );
 
+/** A person's press of Connect for one computer sign-in, redeemed once by the computer's first link. */
+export const relayComputerApprovals = pgTable(
+  "relay_computer_approvals",
+  {
+    userId: varchar("user_id", { length: 191 }).notNull(),
+    codeChallenge: varchar("code_challenge", { length: 128 }).notNull(),
+    environmentPublicKey: text("environment_public_key"),
+    expiresAt: varchar("expires_at", { length: 64 }).notNull(),
+    usedAt: varchar("used_at", { length: 64 }),
+    createdAt: varchar("created_at", { length: 64 }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.userId, table.codeChallenge] }),
+    index("idx_relay_computer_approvals_expires_at").on(table.expiresAt),
+  ],
+);
+
 export const relayGuestLinks = pgTable(
   "relay_guest_links",
   {

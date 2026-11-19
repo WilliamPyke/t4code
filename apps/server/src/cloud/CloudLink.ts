@@ -883,7 +883,12 @@ const make = Effect.gen(function* () {
       );
       const mode = yield* readCliDesiredLinkMode.pipe(withSecrets);
       const managedTunnelsEnabled = mode !== "publish_only";
-      const freshApproval = Option.isSome(yield* secrets.get(CLOUD_LINK_FRESH_APPROVAL));
+      const approval = Option.map(yield* secrets.get(CLOUD_LINK_FRESH_APPROVAL), bytesToString);
+      const freshApproval = Option.isSome(approval);
+      // Older versions stored "true"; the relay redeems only the sign-in's own verifier.
+      const approvalVerifier = Option.getOrNull(
+        Option.filter(approval, (value) => value !== "true"),
+      );
       const relayUrl = yield* requireRelayUrl;
       const challenge = yield* relayClientRequest({
         url: `${relayUrl}/v1/client/environment-link-challenges`,
@@ -917,6 +922,7 @@ const make = Effect.gen(function* () {
           liveActivitiesEnabled: true,
           managedTunnelsEnabled,
           ...(freshApproval ? { freshApproval: true } : {}),
+          ...(approvalVerifier === null ? {} : { approvalVerifier }),
         },
         schema: RelayEnvironmentLinkResponse,
         timeout: MANAGED_ENDPOINT_PROVISION_REQUEST_TIMEOUT,

@@ -2193,6 +2193,22 @@ export const CloudBoardLinkResult = Schema.Struct({
 });
 export type CloudBoardLinkResult = typeof CloudBoardLinkResult.Type;
 
+/**
+ * Who a cloud board's links let in, as one setting: `edit`, both links work; `view`, only the
+ * view link does; `off`, neither lets anyone new in. People already on the board keep their own
+ * access, and turning sharing back on brings back the same links.
+ */
+export const CloudBoardLinkSharing = Schema.Literals(["edit", "view", "off"]);
+export type CloudBoardLinkSharing = typeof CloudBoardLinkSharing.Type;
+
+/** Sets link sharing (`?share=`, as the link route); `renew` also makes both links anew. */
+export const CLOUD_BOARD_SHARING_ROUTE = `${CLOUD_BOARD_ROUTE}/sharing`;
+export const CloudBoardSharingRequest = Schema.Struct({
+  sharing: CloudBoardLinkSharing,
+  renew: Schema.optional(Schema.Literal(true)),
+});
+export type CloudBoardSharingRequest = typeof CloudBoardSharingRequest.Type;
+
 /** Lets someone on a board change it, or only look at it: `?share=`, as the link route. */
 export const CLOUD_BOARD_PEOPLE_ROLE_ROUTE = `${CLOUD_BOARD_ROUTE}/people/role`;
 export const CloudBoardRole = Schema.Literals(["edit", "view"]);

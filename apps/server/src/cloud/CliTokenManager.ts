@@ -31,6 +31,7 @@ import { buildConnectAuthorizeRequestUrl } from "@t3tools/shared/connectAuth";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ExternalLauncher from "../process/externalLauncher.ts";
+import { CLOUD_LINK_FRESH_APPROVAL } from "./config.ts";
 import {
   cloudCliOAuthConfig,
   hostedAppUrlConfig,
@@ -635,9 +636,21 @@ export const approveComputerLogin = Effect.fn("cloud.cli_token.approve_computer_
       schedule: Schedule.spaced("2 seconds"),
       while: (error) => isTransportError(error) || error._tag === "TimeoutError",
     }),
+    Effect.tap(() => rememberApproval(verifier)),
     Effect.ensuring(secrets.remove(PENDING_APPROVAL_SECRET).pipe(Effect.ignore)),
   );
 }, Effect.scoped);
+
+/**
+ * Pressing Connect left an approval on the relay for this sign-in; the next link redeems it with
+ * the sign-in's verifier, which only this computer holds.
+ */
+const rememberApproval = Effect.fn("cloud.cli_token.remember_approval")(function* (
+  verifier: string,
+) {
+  const secrets = yield* ServerSecretStore.ServerSecretStore;
+  yield* secrets.set(CLOUD_LINK_FRESH_APPROVAL, stringToBytes(verifier)).pipe(Effect.ignore);
+});
 
 /** @public */
 export const make = Effect.gen(function* () {
@@ -714,6 +727,9 @@ export const make = Effect.gen(function* () {
       client_id: metadata.clientId,
       code_verifier: verifier,
     });
+    yield* rememberApproval(verifier).pipe(
+      Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
+    );
     return { _tag: "Authorized", token } as const;
   });
 

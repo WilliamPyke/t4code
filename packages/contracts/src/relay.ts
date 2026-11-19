@@ -340,7 +340,13 @@ export const RelayEnvironmentLinkRequest = Schema.Struct({
   freshApproval: Schema.optionalKey(
     Schema.Boolean.annotate({
       description:
-        "Set by a computer whose link was just approved in a browser; required to link again after the account removed it.",
+        "Set by a computer whose link was just approved in a browser. Relays now ignore it in favour of approvalVerifier.",
+    }),
+  ),
+  approvalVerifier: Schema.optionalKey(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(128)).annotate({
+      description:
+        "The PKCE verifier of the browser sign-in this computer just finished. It redeems the approval the relay recorded when the person pressed Connect.",
     }),
   ),
 }).annotate({ description: "Links an authenticated cloud user to a T3 environment." });
@@ -856,6 +862,19 @@ export const RelayEnvironmentUnlinkParams = Schema.Struct({
 });
 export type RelayEnvironmentUnlinkParams = typeof RelayEnvironmentUnlinkParams.Type;
 
+/** Sent by the signed-in browser when its person presses Connect for a computer. */
+export const RelayComputerApprovalRequest = Schema.Struct({
+  codeChallenge: TrimmedNonEmptyString.check(Schema.isMaxLength(128)).annotate({
+    description: "The PKCE code challenge of the computer's sign-in that the person approved.",
+  }),
+});
+export type RelayComputerApprovalRequest = typeof RelayComputerApprovalRequest.Type;
+
+export const RelayComputerApprovalResponse = Schema.Struct({
+  expiresAt: TrimmedNonEmptyString,
+});
+export type RelayComputerApprovalResponse = typeof RelayComputerApprovalResponse.Type;
+
 export const RelayEnvironmentConnectResponse = Schema.Struct({
   environmentId: EnvironmentId,
   endpoint: RelayManagedEndpoint,
@@ -1144,6 +1163,17 @@ const RelayClientGroup = HttpApiGroup.make("client")
         error: RelayAuthAndInternalErrors,
       },
     ).annotate(OpenApi.Summary, "Create an environment-link challenge"),
+    HttpApiEndpoint.post("createComputerApproval", "/v1/client/computer-approvals", {
+      headers: RelayBearerRequestHeaders,
+      payload: RelayComputerApprovalRequest,
+      success: RelayComputerApprovalResponse,
+      error: RelayAuthAndInternalErrors,
+    })
+      .annotate(OpenApi.Summary, "Approve a computer for the signed-in account")
+      .annotate(
+        OpenApi.Description,
+        "Only a person's app session may call this. The computer redeems the approval once, with the verifier of the same sign-in, when it links.",
+      ),
     HttpApiEndpoint.delete("unlinkEnvironment", "/v1/client/environment-links/:environmentId", {
       headers: RelayBearerRequestHeaders,
       params: RelayEnvironmentUnlinkParams,
@@ -1157,7 +1187,7 @@ const RelayClientGroup = HttpApiGroup.make("client")
         headers: RelayBearerRequestHeaders,
         params: RelayEnvironmentUnlinkParams,
         success: RelayOkResponse,
-        error: RelayAuthAndInternalErrors,
+        error: [...RelayAuthAndInternalErrors, RelayEnvironmentLinkRemovedError],
       },
     )
       .annotate(OpenApi.Summary, "Release an environment's managed tunnel")
