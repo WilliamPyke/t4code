@@ -473,9 +473,13 @@ async function route(request: Request, env: Env): Promise<Response> {
     const copier = GuestId.make(crypto.randomUUID());
     const source = await boardOf(env, sourceId).copyFor(copy.value.source, copier, nowIso());
     if ("failure" in source) return failureResponse(source.failure);
-    // A copy is a new board: it counts against the same limit as making one.
-    const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
-    const limit = env.CREATE_LIMITS.get(env.CREATE_LIMITS.idFromName(ip));
+    // A copy is a new board: it counts against the same limit as making one, keyed the
+    // same way so a signed-in person's address is not shared with strangers behind it.
+    const maker =
+      account === null
+        ? (request.headers.get("cf-connecting-ip") ?? "unknown")
+        : `account:${account}`;
+    const limit = env.CREATE_LIMITS.get(env.CREATE_LIMITS.idFromName(maker));
     if (!(await limit.take(Date.now()))) return failureResponse(roomFailure("too_fast"));
     const shareId = crypto.randomUUID();
     const made = await boardOf(env, shareId).createCopy({
