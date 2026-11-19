@@ -37,7 +37,9 @@
   --maya: #12a57a;
   --sam: #3b7bf6;
   --agent: #7a5af8;
+  --agent-text: #5b3fd6;
   --live: #16a34a;
+  --live-text: #166534;
   --add: #15803d;
   --add-bg: #e7f6ec;
   --del: #b42318;
@@ -69,7 +71,9 @@
     --jam-soft: #3a1823;
     --note: #ffd45c;
     --note-2: #b5e8cc;
+    --agent-text: #b3a2ff;
     --live: #4ade80;
+    --live-text: #4ade80;
     --add: #6ee79a;
     --add-bg: #12301f;
     --del: #ff8a80;
@@ -96,6 +100,9 @@ html {
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
+  }
+  .btn {
+    transition: none;
   }
 }
 
@@ -217,7 +224,7 @@ p {
 }
 
 .btn--small {
-  min-height: 40px;
+  min-height: 44px;
   padding: 0 16px;
   font-size: 15px;
 }
@@ -227,7 +234,7 @@ p {
   font-size: 15px;
   text-decoration: none;
   color: var(--ink-2);
-  padding: 8px 4px;
+  padding: 10px 6px;
 }
 
 .link-quiet:hover {
@@ -732,7 +739,7 @@ p {
 
 .pill--working {
   background: color-mix(in srgb, var(--agent) 14%, transparent);
-  color: var(--agent);
+  color: var(--agent-text);
 }
 
 .pill--idle {
@@ -742,7 +749,7 @@ p {
 
 .pill--live {
   background: color-mix(in srgb, var(--live) 14%, transparent);
-  color: var(--live);
+  color: var(--live-text);
 }
 
 .pill__dot {
@@ -1191,7 +1198,7 @@ p {
 
 .pill--done {
   background: color-mix(in srgb, var(--live) 14%, transparent);
-  color: var(--live);
+  color: var(--live-text);
 }
 
 .pill--done svg {
@@ -1209,7 +1216,7 @@ p {
   gap: 8px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--live);
+  color: var(--live-text);
 }
 
 .done-row svg {
@@ -2411,7 +2418,7 @@ p {
 /* Plan view illustration */
 
 .plan {
-  margin-top: 48px;
+  margin-top: 56px;
   border-radius: 22px;
   border: 1px solid var(--line);
   background: var(--surface);
@@ -2595,7 +2602,7 @@ p {
 }
 
 .due--done {
-  color: var(--live);
+  color: var(--live-text);
 }
 
 .avatar--sm {
@@ -2646,7 +2653,7 @@ p {
 
 .ptask__stream {
   font-size: 12px;
-  color: var(--agent);
+  color: var(--agent-text);
   font-weight: 550;
 }
 
@@ -3016,7 +3023,7 @@ p {
     display: none;
   }
   .depth {
-    margin-bottom: 0;
+    margin-bottom: 24px;
   }
   .code {
     margin: 0 10px;
@@ -3131,66 +3138,44 @@ p {
   margin-left: 8px;
 }
 
-.cmd__body {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 18px 14px 18px 18px;
+.cmd__os {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  padding: 20px 18px;
+  border-bottom: 1px solid rgb(255 255 255 / 0.08);
 }
 
-.cmd__body code {
-  flex: 1;
-  min-width: 0;
-  font-family: var(--font-mono);
+.cmd__os h3 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.cmd__os p {
   font-size: 15px;
-  overflow-wrap: anywhere;
+  color: #d9d2dc;
 }
 
-.cmd__body--get {
-  flex-wrap: wrap;
-  padding-bottom: 4px;
+.cmd__os .btn {
+  margin-top: 4px;
 }
 
-.cmd__body code.cmd__say {
-  font-family: var(--font-body);
-  font-size: 16px;
-  line-height: 1.45;
-  overflow-wrap: break-word;
-}
-
-.cmd__note code {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: #e6dfe9;
-  overflow-wrap: anywhere;
-}
-
-.cmd__prompt {
-  color: #ff7d9b;
-  margin-right: 6px;
-  user-select: none;
-}
-
-.cmd__copy {
-  flex-shrink: 0;
-  min-width: 68px;
-  height: 34px;
-  padding: 0 12px;
-  border-radius: 9px;
-  border: 1px solid rgb(255 255 255 / 0.2);
-  background: rgb(255 255 255 / 0.08);
+/* A secondary action on the dark panel, which stays dark in both themes. */
+.btn--on-dark {
+  border-color: rgb(255 255 255 / 0.3);
   color: #fff;
-  font: 600 13px var(--font-body);
-  cursor: pointer;
+  background: rgb(255 255 255 / 0.08);
 }
 
-.cmd__copy:hover {
+.btn--on-dark:hover {
+  border-color: rgb(255 255 255 / 0.55);
   background: rgb(255 255 255 / 0.16);
 }
 
 .cmd__note {
-  padding: 10px 18px 14px;
-  font-size: 13px;
+  padding: 16px 18px 18px;
+  font-size: 14px;
   color: #b8afbd;
 }
 
@@ -3426,7 +3411,7 @@ p {
 /* Pricing */
 
 .prices {
-  margin-top: 48px;
+  margin-top: 56px;
   display: grid;
   grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr);
   gap: 20px;
@@ -3586,7 +3571,7 @@ p {
   padding: 2px 8px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--agent) 14%, transparent);
-  color: var(--agent);
+  color: var(--agent-text);
   font-size: 11px;
   font-weight: 700;
 }
@@ -3787,6 +3772,11 @@ kbd {
   background: #fff;
 }
 
+/* The blue focus ring disappears on jam red. */
+.closing :focus-visible {
+  outline-color: #fff7ec;
+}
+
 /* A secondary action on the jam panel: outlined in cream. */
 .btn--on-jam {
   border-color: rgb(255 247 236 / 0.6);
@@ -3874,11 +3864,12 @@ kbd {
 .site-footer__links {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 24px;
+  gap: 0 24px;
   align-items: flex-start;
 }
 
 .site-footer__links a {
+  padding: 10px 0;
   text-decoration: none;
   font-weight: 550;
 }

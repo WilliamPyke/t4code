@@ -74,10 +74,10 @@ function Row({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
-      <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium">{label}</div>
+      <div className="min-w-40 flex-1">
+        <div className="text-sm font-medium wrap-anywhere">{label}</div>
         {description === undefined ? null : (
-          <div className="text-xs text-muted-foreground">{description}</div>
+          <div className="text-xs text-pretty text-muted-foreground">{description}</div>
         )}
       </div>
       {children === undefined ? null : (
@@ -101,7 +101,7 @@ function ProfileRow() {
   const { openAuthPrompt } = useT3ConnectAuthPrompt();
   if (account.status === "signed-in") {
     return (
-      <Row label={account.name ?? "No name yet"} description="Your name, email and sign-in">
+      <Row label={account.name ?? "No name yet"} description="Your name, picture and sign-in">
         <Button variant="outline" render={<Link to="/account" />}>
           Your account
         </Button>
@@ -127,7 +127,7 @@ function AppearanceSection() {
   const { appearanceMode, setAppearanceMode } = useTheme();
   return (
     <Section title="Appearance">
-      <Row label="Light or dark">
+      <Row label="Light or dark" description="System follows your device's setting.">
         <ToggleGroup
           aria-label="Light or dark"
           value={[appearanceMode]}
@@ -193,15 +193,15 @@ function ComputersSection() {
           <Row
             key={computer.environmentId}
             label={
-              <span className="flex min-w-0 items-center gap-2">
+              <span className="flex min-w-0 items-baseline gap-2">
                 <span
                   aria-hidden
                   className={cn(
-                    "size-2 shrink-0 rounded-full",
+                    "size-2 shrink-0 -translate-y-px rounded-full",
                     COMPUTER_STATUS_DOT[computer.status],
                   )}
                 />
-                <span className="truncate">{computer.name}</span>
+                <span className="min-w-0">{computer.name}</span>
               </span>
             }
             description={thisComputer ? `This computer · ${status}` : status}
@@ -232,7 +232,7 @@ function ComputersSection() {
       })}
       {list.loading && list.computers.length === 0 ? (
         <div className="px-4 py-3">
-          <ComputersLoading />
+          <ComputersLoading framed={false} />
         </div>
       ) : null}
       {list.failed ? (
@@ -241,8 +241,14 @@ function ComputersSection() {
         </div>
       ) : null}
       <Row
-        label={list.computers.length === 0 ? "No computer connected" : "Another computer"}
-        description="Use the agents on your computer, such as Claude Code or Codex, on your boards."
+        label={
+          list.computers.length > 0
+            ? "Another computer"
+            : list.loading || list.failed
+              ? "Your own agents"
+              : "No computer connected yet"
+        }
+        description="Optional. Connect a computer to use the agents on it, such as Claude Code or Codex, on your boards."
       >
         <Button onClick={openConnectComputer}>
           <LaptopIcon />
@@ -259,7 +265,7 @@ function AdvancedSection() {
     <Section title="Advanced">
       <Row
         label="Advanced mode"
-        description="Adds chats, projects, code changes, terminals and pull requests beside your boards."
+        description="For developers. Adds chats, projects and code changes beside your boards. You can switch back from Settings or the menu with your name."
       >
         <Switch
           aria-label="Advanced mode"
@@ -276,7 +282,12 @@ function AdvancedSection() {
         className="flex min-h-12 items-center gap-2 px-4 py-3 text-sm font-medium outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
         data-advanced-settings
       >
-        <span className="flex-1">Advanced settings</span>
+        <span className="flex flex-1 flex-col">
+          Advanced settings
+          <span className="text-xs font-normal text-muted-foreground">
+            Every setting, without switching modes
+          </span>
+        </span>
         <ChevronRightIcon aria-hidden className="size-4 text-muted-foreground" />
       </Link>
     </Section>

@@ -16,7 +16,7 @@ export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
     title: "Simple and Advanced",
     items: [
       "Tinkjam starts Simple: boards, your tasks, sharing and settings, in plain words.",
-      "Switch to Advanced from the menu with your name, or from the command menu, to see threads, projects, pull requests and usage. Switch back the same way.",
+      "Advanced adds tools for developers beside your boards: chats, projects and code changes. Switch to it from the menu with your name or from Settings, and switch back the same way.",
     ],
   },
   {
@@ -45,7 +45,7 @@ export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
     title: "Bring documents in with your agent",
     items: [
       "Paste or drop a link on a board and it becomes a card: Figma, Google Docs, Sheets and Slides, YouTube, Loom and Vimeo show live, and other links show their title and icon.",
-      "Bring in with my agent, on a link card, asks your own agent to read it and leave a copy on the board that everyone can read. Draw a line from it to an agent box to use it as context.",
+      "Bring in with my agent, on a link card, asks your own agent to read it and leave a copy on the board that everyone can read. Draw a line from it to an agent box and that agent reads it too.",
       "Nothing is fetched until you press Send, and only your own agent does the reading.",
     ],
   },

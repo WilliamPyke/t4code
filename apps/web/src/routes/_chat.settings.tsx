@@ -1,5 +1,12 @@
 import { workspaceAreaProps } from "../lib/workspaceFocus";
-import { Link, Outlet, createFileRoute, redirect, useLocation } from "@tanstack/react-router";
+import {
+  Link,
+  Outlet,
+  createFileRoute,
+  redirect,
+  useLocation,
+  useNavigate,
+} from "@tanstack/react-router";
 import { useState, type ReactNode } from "react";
 import { ArrowLeftIcon, RotateCcwIcon } from "lucide-react";
 import { Button } from "../components/ui/button";
@@ -9,7 +16,7 @@ import { AppRouteModal, AppRouteModalClose } from "../components/AppRouteModal";
 import { SettingsBreadcrumb } from "../components/settings/SettingsBreadcrumb";
 import { SettingsSidebarNav } from "../components/settings/SettingsSidebarNav";
 import { SimpleSettingsPage } from "../components/settings/SimpleSettingsPage";
-import { readShellMode, useShellMode } from "../shellMode";
+import { readShellMode, setShellMode, useShellMode } from "../shellMode";
 import { settingsLandingPath } from "../shellMode.logic";
 import {
   SettingsScopeProvider,
@@ -119,6 +126,7 @@ function SettingsContentLayout() {
       : JSON.stringify(search);
   const [restoreSignal, setRestoreSignal] = useState(0);
   const simple = useShellMode() === "simple";
+  const navigate = useNavigate();
 
   // Only Simple mode lands on the bare path; Advanced is redirected to its first page.
   if (location.pathname === "/settings") {
@@ -142,7 +150,20 @@ function SettingsContentLayout() {
                   <ArrowLeftIcon className="mx-1 size-3.5" />
                   <span className="max-sm:sr-only">Basic settings</span>
                 </Button>
-              ) : null}
+              ) : (
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  onClick={() => {
+                    setShellMode("simple");
+                    void navigate({ to: "/settings", replace: true });
+                  }}
+                  data-switch-to-simple
+                >
+                  <ArrowLeftIcon className="mx-1 size-3.5" />
+                  <span className="max-sm:sr-only">Switch to Simple</span>
+                </Button>
+              )}
               {location.pathname === "/settings/general" ? (
                 <RestoreDeviceDefaultsButton
                   onRestored={() => setRestoreSignal((value) => value + 1)}

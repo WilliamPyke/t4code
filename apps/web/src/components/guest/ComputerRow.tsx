@@ -57,7 +57,7 @@ export function ComputerRow({
         className={cn("size-2 shrink-0 rounded-full", COMPUTER_STATUS_DOT[computer.status])}
       />
       <span className="min-w-48 flex-1">
-        <span className="block truncate text-sm font-medium">{computer.name}</span>
+        <span className="block text-sm font-medium wrap-anywhere">{computer.name}</span>
         <span className="block text-xs text-muted-foreground" role="status">
           {working ?? (thisComputer ? `This computer · ${status}` : status)}
         </span>
@@ -129,10 +129,13 @@ export function ComputerRow({
 }
 
 /** Stands in for the list until the account first says which computers the person has. */
-export function ComputersLoading() {
+export function ComputersLoading({ framed = true }: { readonly framed?: boolean }) {
   return (
     <div
-      className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5"
+      className={cn(
+        "flex items-center gap-3",
+        framed && "rounded-lg border border-border px-3 py-2.5",
+      )}
       role="status"
       aria-label="Looking for your computers"
     >

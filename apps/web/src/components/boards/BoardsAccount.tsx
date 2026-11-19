@@ -94,9 +94,9 @@ function AccountMenu({ name }: { readonly name: string | null }) {
       </MenuTrigger>
       <MenuPopup align="end">
         <div className="flex max-w-64 flex-col px-2 py-1.5" data-account-identity>
-          <span className="truncate text-sm font-medium">{name ?? "No name yet"}</span>
+          <span className="text-sm font-medium wrap-anywhere">{name ?? "No name yet"}</span>
           {email === null ? null : (
-            <span className="truncate text-xs text-muted-foreground">{email}</span>
+            <span className="text-xs text-muted-foreground wrap-anywhere">{email}</span>
           )}
         </div>
         <MenuSeparator />
@@ -113,7 +113,14 @@ function AccountMenu({ name }: { readonly name: string | null }) {
           data-account-shell-mode
         >
           <WrenchIcon />
-          {shellMode === "simple" ? "Switch to Advanced" : "Switch to Simple"}
+          <span className="flex max-w-56 flex-col">
+            {shellMode === "simple" ? "Switch to Advanced" : "Switch to Simple"}
+            <span className="text-xs text-pretty text-muted-foreground">
+              {shellMode === "simple"
+                ? "Adds tools for developers beside your boards. Switch back here any time."
+                : "Shows only your boards. Switch back here any time."}
+            </span>
+          </span>
         </MenuItem>
         <MenuSeparator />
         <MenuItem onClick={() => void clerk.signOut()}>

@@ -1,6 +1,45 @@
 ---
 import Layout from "../layouts/Layout.astro";
 
+const newest = [
+  {
+    title: "A simpler first screen",
+    text: "Start a board opens one screen: pick Blank, Project kickoff or Design review, name the board if you like, and you are on it in one click. No account needed.",
+  },
+  {
+    title: "Your name, asked once",
+    text: "Tinkjam asks what to call you once, instead of again on each board.",
+  },
+  {
+    title: "Sign in without leaving the page",
+    text: "Signing in opens over the page you are on, so you stay where you were. It is still optional: it makes your boards follow you to every device.",
+  },
+  {
+    title: "A Getting started guide",
+    text: "A new board has a short guide that ticks itself off as you go. Hide it when you are done with it.",
+  },
+  {
+    title: "Invites that say what they are for",
+    text: "An invite now names the board and who made it, before you join. Invites are still links you paste yourself: Tinkjam does not send emails.",
+  },
+  {
+    title: "Short board addresses",
+    text: "A board's address is now short and starts with /b/, so it is easier to paste and to recognise.",
+  },
+  {
+    title: "Boards fit a phone",
+    text: "A board now fits a phone screen, so you can open one wherever you are.",
+  },
+  {
+    title: "A calmer page for connecting a computer",
+    text: "The steps for Tinkjam Sync are in plain words, with the reasons. Windows says it protected your PC because it does not recognise the app yet: choose More info, then Run anyway. On a Mac you paste one line into Terminal, once, because Apple has not checked the app yet; it asks for no password and changes no settings. Then you press Connect.",
+  },
+  {
+    title: "Computers reconnect sooner",
+    text: "After your computer wakes from sleep it is back on your boards sooner, and it no longer shows up twice after you reinstall Tinkjam Sync.",
+  },
+];
+
 const latest = [
   {
     title: "Agents plan the work",
@@ -59,19 +98,31 @@ const entries = [
   },
   {
     title: "Tinkjam Sync",
-    text: "A small app for Mac and Windows that connects the agents on your computer. On Windows you download it and open it; on a Mac you paste one line into Terminal, once. Then press Connect. It lives in the menu bar on a Mac, or the system tray on Windows, and updates itself.",
+    text: "A small app for Mac and Windows that connects the agents on your computer. On Windows you download it and open it; on a Mac you paste one line into Terminal, once. Then press Connect. It lives in the menu bar on a Mac, or the system tray on Windows, starts with your computer and updates itself.",
   },
 ];
 ---
 
 <Layout
   title="Changelog | Tinkjam"
-  description="What shipped in Tinkjam this week, in plain words."
+  description="What is new in Tinkjam, in plain words: a simpler start, clearer invites and a calmer way to connect your computer."
 >
   <div class="wrap">
     <article class="prose changelog">
       <h1>Changelog</h1>
       <p>What is new in Tinkjam, in plain words.</p>
+
+      <h2>19 November</h2>
+      <ul class="changelog__list">
+        {
+          newest.map((entry) => (
+            <li>
+              <b>{entry.title}</b>
+              <span>{entry.text}</span>
+            </li>
+          ))
+        }
+      </ul>
 
       <h2>17 November</h2>
       <ul class="changelog__list">

@@ -220,7 +220,7 @@ export function useRemoveComputer() {
     question: (name: string) =>
       browserOnly
         ? `Forget ${name} in this browser? You are signed out, so it stays on your account. Sign in first to remove it everywhere.`
-        : `Remove ${name}? Its agent can no longer be used on your boards until you connect it again.`,
+        : `Remove ${name}? Its agents can no longer work on your boards. To bring it back, open Tinkjam Sync on it and choose Connect.`,
     remove: async (computer: {
       readonly environmentId: EnvironmentId;
       readonly name: string;

@@ -108,11 +108,11 @@ function SignedInAccount({ name }: { readonly name: string | null }) {
           className="size-16 shrink-0 rounded-full border border-board-hairline bg-muted object-cover"
         />
         <div className="flex min-w-0 flex-col gap-1">
-          <h1 className="truncate text-2xl leading-tight font-semibold">
+          <h1 className="text-2xl leading-tight font-semibold wrap-anywhere">
             {name ?? "Your account"}
           </h1>
           {email === null ? null : (
-            <p className="truncate text-sm text-muted-foreground">Signed in as {email}</p>
+            <p className="text-sm text-muted-foreground wrap-anywhere">Signed in as {email}</p>
           )}
         </div>
       </header>
@@ -126,7 +126,7 @@ function SignedInAccount({ name }: { readonly name: string | null }) {
 
       <Section
         title="Picture, email and password"
-        detail="Your picture shows beside your name in workspaces."
+        detail="Your picture shows beside your name on your boards and in your workspaces."
       >
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => clerk.openUserProfile()}>
@@ -149,7 +149,7 @@ function SignedInAccount({ name }: { readonly name: string | null }) {
       <Section title="Your boards">
         <p className="text-sm">
           {made === null || joined === null
-            ? "Reading your boards..."
+            ? "Counting your boards…"
             : `You made ${made} ${made === 1 ? "board" : "boards"} and joined ${joined}.`}
         </p>
         <p className="text-sm text-muted-foreground">

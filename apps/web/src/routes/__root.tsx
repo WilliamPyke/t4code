@@ -295,7 +295,7 @@ function RootRouteErrorView({ error }: ErrorComponentProps) {
       </div>
 
       <details className="mt-6 text-sm">
-        <summary className="cursor-pointer text-muted-foreground">Details for support</summary>
+        <summary className="cursor-pointer text-muted-foreground">Technical details</summary>
         <p className="mt-2 text-muted-foreground">{message}</p>
         <div className="mt-2">
           <CopyErrorButton report={report} />
@@ -330,7 +330,7 @@ function errorMessage(error: unknown): string {
     return error;
   }
 
-  return "An unexpected router error occurred.";
+  return "The page stopped without saying why.";
 }
 
 function errorDetails(error: unknown): string {

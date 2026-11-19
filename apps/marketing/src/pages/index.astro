@@ -3,23 +3,15 @@ import BoardScene from "../components/BoardScene.astro";
 import Cursor from "../components/Cursor.astro";
 import Icon from "../components/Icon.astro";
 import Layout from "../layouts/Layout.astro";
-import {
-  AGENT_PROMPT,
-  APP_URL,
-  MAC_COMMAND,
-  SAMPLE_BOARD_URL,
-  SYNC_COMMAND,
-  UPSTREAM_REPO_URL,
-  WINDOWS_DOWNLOAD,
-} from "../lib/site";
+import { APP_URL, SAMPLE_BOARD_URL, UPSTREAM_REPO_URL, WINDOWS_DOWNLOAD } from "../lib/site";
 
 const today = [
+  "Start a board in one click, with no account",
   "Accounts and workspaces, with invites by link",
   "Boards in the cloud that stay open when your computer is off",
   "Share links that can edit or only view; viewers need no account",
   "Starter templates, and copies of boards their makers allow",
-  "Tinkjam Sync: a small app for Mac and Windows that connects your computer",
-  "Bring your own Claude or Codex agent",
+  "Tinkjam Sync, a small app for Mac and Windows, brings your own Claude or Codex agent",
   "Sticky notes, and lines with handles on every side",
   "Link embeds, and readable snapshots your agent brings in",
   "Artifacts that change live as agents edit them",
@@ -38,7 +30,11 @@ const faqs = [
   },
   {
     q: "Do I need a terminal?",
-    a: "Teammates who just join boards never do. To bring your own agent you install the Tinkjam Sync app once. On Windows you download it and open it. On a Mac you paste one line into the Terminal app, once; we show you exactly how. After that everything happens in the browser.",
+    a: "Teammates who just join boards never do. To bring your own agent you install the Tinkjam Sync app once. On Windows you download it and open it. On a Mac you paste one line into the Terminal app, once, because Apple has not checked the app yet. It asks for no password and changes no settings, and Tinkjam gives you the line when you get there. After that everything happens in the browser.",
+  },
+  {
+    q: "Why does Windows say it protected my PC?",
+    a: "Windows does not recognise Tinkjam Sync yet, so it shows that notice the first time you open it. Choose More info, then Run anyway. Tinkjam Sync then sits in your system tray, starts with your computer and keeps itself up to date.",
   },
   {
     q: "Where do my boards live?",
@@ -49,12 +45,16 @@ const faqs = [
     a: "Each person's agent uses that person's own Claude or Codex account. Tinkjam itself is free while in beta.",
   },
   {
-    q: "Do people need an account to see a board?",
-    a: "Not to look. A Can view link opens without an account, and a viewer can ask for edit access. To edit, people sign in.",
+    q: "Do I need an account?",
+    a: "Not to start. You can start a board, or open a Can view or Can edit link, without one. Signing in is offered so your boards follow you to every device. You do sign in to join a workspace, to ask for edit access, or to connect your computer.",
+  },
+  {
+    q: "How do I invite people?",
+    a: "With a link. Every board has a Can edit link and a Can view link, and a workspace has an invite link. Tinkjam does not send emails, so you paste the link wherever your team talks. The invite names the board and who made it.",
   },
   {
     q: "Can others run my agent?",
-    a: "No. Teammates can write a message for your agent or hand it a task, but nothing reaches it until you press Send.",
+    a: "No. Your agent runs on your own computer, under your own Claude or Codex account. Teammates can write a message for it or hand it a task, but nothing anyone else writes reaches it unless you press Send.",
   },
 ];
 ---
@@ -87,7 +87,7 @@ const faqs = [
               )
             }
           </div>
-          <p class="hero__fine">Free while in beta.</p>
+          <p class="hero__fine">Free while in beta. No account needed to start.</p>
         </div>
       </div>
       <div class="hero__board">
@@ -210,16 +210,18 @@ const faqs = [
           <span class="step__num" aria-hidden="true">1</span>
           <h3>Start a board</h3>
           <p>
-            Sign in and start from a blank board or a template like Project kickoff or Design
-            review. It lives in the cloud, so it stays open when your laptop is closed.
+            Pick Blank, Project kickoff or Design review, name it if you like, and you are on your
+            board in one click. No account needed; sign in when you want your boards on every
+            device.
           </p>
         </li>
         <li class="step">
           <span class="step__num" aria-hidden="true">2</span>
           <h3>Invite your team</h3>
           <p>
-            Invite teammates to your workspace with a link. Designers, PMs and engineers see the
-            same boards, and each other's cursors, notes and lines as they happen.
+            Copy the board's Can edit or Can view link and paste it wherever your team talks. The
+            invite names the board and who made it, and everyone sees each other's cursors, notes
+            and lines as they happen.
           </p>
         </li>
         <li class="step">
@@ -227,7 +229,7 @@ const faqs = [
           <h3>Bring your agents</h3>
           <p>
             Install the Tinkjam Sync app on your computer and press Connect. Your Claude or Codex
-            agent shows up as a box everyone can follow.
+            agent shows up as a box everyone can follow, and only you can send it work.
           </p>
         </li>
       </ol>
@@ -459,7 +461,7 @@ const faqs = [
             </li>
             <li>
               <b>Press Connect</b>
-              <span>Your browser opens by itself. Sign in if it asks, then approve this computer.</span>
+              <span>Your browser opens by itself. Sign in if it asks, then press Connect.</span>
             </li>
             <li>
               <b>Bring your agent onto a board</b>
@@ -477,43 +479,41 @@ const faqs = [
               <i></i><i></i><i></i>
               <span>Tinkjam Sync</span>
             </div>
-            <p class="cmd__note">
-              On a Mac, open the Terminal app (press Command and Space, type Terminal, press
-              Return), paste this line and press Return. You only do this once:
-            </p>
-            <div class="cmd__body">
-              <code class="cmd__say"><span class="cmd__prompt" aria-hidden="true">$</span> {MAC_COMMAND}</code>
-              <button class="cmd__copy" type="button" data-copy={MAC_COMMAND}>Copy</button>
-            </div>
-            <p class="cmd__note">On Windows, download it and open the file:</p>
-            <div class="cmd__body cmd__body--get">
+            <div class="cmd__os">
+              <h3>On Windows</h3>
+              <p>
+                Download Tinkjam Sync and open the file. Windows does not recognise the app yet, so
+                it says it protected your PC. Choose More info, then Run anyway.
+              </p>
               <a class="btn btn--primary" href={WINDOWS_DOWNLOAD} download>Download for Windows</a>
             </div>
-            <p class="cmd__note">
-              If Windows says it protected your PC, choose More info, then Run anyway.
-            </p>
+            <div class="cmd__os">
+              <h3>On a Mac</h3>
+              <p>
+                You paste one line into the Terminal app, once, because Apple has not checked the
+                app yet. It asks for no password and changes no settings. Tinkjam gives you the
+                line, with a Copy button, when you press Bring my agent on a board.
+              </p>
+              <a class="btn btn--on-dark" href={APP_URL}>Open Tinkjam</a>
+            </div>
             <p class="cmd__note">
               Tinkjam Sync then sits in the menu bar on a Mac, or the system tray on Windows, starts
-              with your computer and updates itself. Rather have your coding agent install it? Paste
-              this to it:
+              with your computer and keeps itself up to date. To stop it, quit it from its menu. On
+              Linux, or rather have your coding agent install it? Both ways are beside the Mac and
+              Windows steps in the app.
             </p>
-            <div class="cmd__body">
-              <code class="cmd__say"><span class="cmd__prompt" aria-hidden="true">&gt;</span> {AGENT_PROMPT}</code>
-              <button class="cmd__copy" type="button" data-copy={AGENT_PROMPT}>Copy</button>
-            </div>
-            <p class="cmd__note">On Linux: <code>{SYNC_COMMAND}</code> (needs Node 22.16 or newer).</p>
           </div>
 
           <div class="connect" aria-hidden="true">
             <span class="tape"></span>
             <p class="connect__title">Connect Maya's MacBook to Tinkjam?</p>
-            <p class="connect__text">Only approve a computer you just opened Tinkjam Sync on.</p>
+            <p class="connect__text">Only connect a computer you just opened Tinkjam Sync on.</p>
             <span class="mini-btn mini-btn--send">Connect</span>
           </div>
 
           <p class="agents__promise">
-            Your agents run on your computer, under your own Claude or Codex account. Nobody else's
-            words run on your agent unless you press Send.
+            Your agents run on your own computer, under your own Claude or Codex account. Nothing
+            anyone else writes reaches your agent unless you press Send.
           </p>
         </div>
       </div>
@@ -639,6 +639,7 @@ const faqs = [
           </p>
           <ul class="ticks">
             <li><Icon name="check" />Can edit and Can view links; viewers need no account</li>
+            <li><Icon name="check" />Invites name the board and who made it; Tinkjam sends no emails</li>
             <li><Icon name="check" />Viewers can ask for edit access; makers can allow copies</li>
             <li><Icon name="check" />@mention teammates in notes, tasks and comments</li>
             <li><Icon name="check" />An inbox for mentions, assignments, replies and access requests</li>
@@ -784,17 +785,4 @@ const faqs = [
     </div>
   </section>
 
-  <script is:inline>
-    for (const button of document.querySelectorAll("[data-copy]")) {
-      button.addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(button.dataset.copy);
-          button.textContent = "Copied";
-        } catch {
-          button.textContent = "Select and copy";
-        }
-        setTimeout(() => (button.textContent = "Copy"), 1800);
-      });
-    }
-  </script>
 </Layout>
