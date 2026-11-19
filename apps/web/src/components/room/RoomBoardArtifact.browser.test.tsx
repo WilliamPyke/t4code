@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page as browser, userEvent } from "vite-plus/test/browser";
 
 import { render } from "../../../test/render";
 import "../../index.css";
@@ -61,6 +61,42 @@ describe("RoomArtifactBody", () => {
       "Make it bigger",
     );
     await expect.element(field).not.toBeInTheDocument();
+  });
+
+  it("offers the board's own menu for a link right-clicked in a page, and a spot to start at", async () => {
+    const onOpenBeside = vi.fn();
+    using opened = vi.spyOn(window, "open").mockReturnValue(null);
+    // The page right-clicks its own link once the board has told it `after`, as a person would,
+    // and names the link after whether our script had scrolled it by then.
+    const page = (href: string, after: string) =>
+      `<!doctype html><html><body><a id="go" href="${href}">Our menu</a><p id="far" style="margin-top:3000px">Far</p><script>addEventListener("message", (event) => { if (event.data && event.data.type === "${after}") setTimeout(() => { const go = document.getElementById("go"); if (scrollY > 0) go.textContent = "Scrolled"; go.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 10 })); }); });</script></body></html>`;
+    await using screen = await render(
+      <div style={{ display: "flex", flexDirection: "column", width: 400, height: 300 }}>
+        <RoomArtifactBody
+          artifact={written(page("menu.html", "scroll"))}
+          active
+          links={{ onOpenBeside, spot: "far" }}
+        />
+      </div>,
+    );
+    await userEvent.click(browser.getByRole("menuitem", { name: "Open beside this artifact" }));
+    expect(onOpenBeside).toHaveBeenCalledWith({
+      kind: "page",
+      name: "Scrolled",
+      copy: "menu.html",
+    });
+    // Someone who may only look gets no way to add a card; another site still opens in a tab.
+    await screen.rerender(
+      <div style={{ display: "flex", flexDirection: "column", width: 400, height: 300 }}>
+        <RoomArtifactBody artifact={written(page("https://roofs.example/quote", "mode"))} active />
+      </div>,
+    );
+    await userEvent.click(browser.getByRole("menuitem", { name: "Open in a new tab" }));
+    expect(opened).toHaveBeenCalledWith(
+      "https://roofs.example/quote",
+      "_blank",
+      "noopener,noreferrer",
+    );
   });
 
   it("shows a page still being written as its source, never running it in a frame", async () => {

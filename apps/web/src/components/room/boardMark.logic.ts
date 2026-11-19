@@ -1,6 +1,7 @@
 import {
   ROOM_BOARD_MARK_SELECTOR_MAX_LENGTH,
   ROOM_BOARD_MARK_TEXT_MAX_LENGTH,
+  isRoomBoardUrl,
   roomBoardNoteRef,
   type RoomBoard,
   type RoomBoardMark,
@@ -27,12 +28,40 @@ export interface BoardMarkPick {
   };
 }
 
+/** A link someone pressed in a page, as its frame said it: untrusted text, checked and capped. */
+export interface BoardPageLinkSaid {
+  /** The address as the page wrote it, such as `#pricing` or `menu.html`. */
+  readonly href: string;
+  /** The same address as the frame's browser resolved it, or empty. */
+  readonly url: string;
+  readonly text: string;
+  /** Where the pointer was, in the frame's own pixels. */
+  readonly x: number;
+  readonly y: number;
+  /** Whether it was a plain click, which the page lost, and not a right-click. */
+  readonly click: boolean;
+}
+
 type BoardMarkMessage =
   | { readonly type: "ready" }
   | { readonly type: "escape" }
+  | { readonly type: "link"; readonly link: BoardPageLinkSaid }
   | { readonly type: "pick"; readonly pick: BoardMarkPick };
 
 const FRAME_REACH = 20_000;
+const LINK_MAX_LENGTH = 2_048;
+const LINK_NAME_MAX_LENGTH = 80;
+/**
+ * An address that names the page it is on: nothing, `/` or `index.html` before any `#spot`. Kept
+ * as text because our script in the page reads the same rule.
+ */
+const SAME_PAGE = "^(?:\\.?/)?(?:index\\.html?)?(?:\\?[^#]*)?(?:#|$)";
+
+const linkAddress = (value: unknown): string | null => {
+  if (typeof value !== "string") return null;
+  const address = value.trim();
+  return address.length > LINK_MAX_LENGTH || /\p{Cc}/u.test(address) ? null : address;
+};
 
 const pageText = (value: unknown): string =>
   typeof value === "string"
@@ -56,6 +85,22 @@ export function boardMarkMessage(data: unknown): BoardMarkMessage | null {
   const said: Readonly<Record<string, unknown>> = { ...data };
   if (said.source !== BOARD_MARK_MESSAGE) return null;
   if (said.type === "ready" || said.type === "escape") return { type: said.type };
+  if (said.type === "link") {
+    const href = linkAddress(said.href);
+    const at = { x: frameLength(said.x, 0), y: frameLength(said.y, 0) };
+    if (href === null || href === "" || at.x === null || at.y === null) return null;
+    return {
+      type: "link",
+      link: {
+        href,
+        url: linkAddress(said.url) ?? "",
+        text: pageText(said.text),
+        x: at.x,
+        y: at.y,
+        click: said.click === true,
+      },
+    };
+  }
   if (said.type !== "pick" || typeof said.selector !== "string") return null;
   const selector = said.selector.trim();
   if (
@@ -87,6 +132,77 @@ export function boardMarkMessage(data: unknown): BoardMarkMessage | null {
       },
       rect: { x, y, width, height },
     },
+  };
+}
+
+/**
+ * What a link in an artifact's page can open, and the text Copy link copies. An artifact is one
+ * page, so an address on it that is not a spot on that page names a page nobody has made.
+ */
+export type BoardPageLink =
+  /** Another site: a link card beside the artifact, or a new tab. */
+  | { readonly kind: "site"; readonly url: string; readonly copy: string }
+  /** An address only a new tab opens: our own hosts, or one a link card cannot hold. */
+  | { readonly kind: "tab"; readonly url: string; readonly copy: string }
+  /** A spot on the same page; an empty `id` is its top. */
+  | { readonly kind: "spot"; readonly id: string; readonly copy: string }
+  /** A page that does not exist, named after the link's text. */
+  | { readonly kind: "page"; readonly name: string; readonly copy: string }
+  /** Anything else, such as `mailto:` and `tel:`: only copied. */
+  | { readonly kind: "other"; readonly copy: string };
+
+const siteOf = (host: string) =>
+  host.toLowerCase().replace(/\.$/, "").split(".").slice(-2).join(".");
+
+const pageName = (text: string, href: string): string => {
+  const file = (href.split(/[?#]/)[0] ?? "").split("/").findLast((part) => part !== "") ?? "";
+  const words = file
+    .replace(/\.[a-z0-9]+$/i, "")
+    .replace(/[-_+]+|%20/g, " ")
+    .trim();
+  const name = text !== "" ? text : words.charAt(0).toUpperCase() + words.slice(1);
+  return name.slice(0, LINK_NAME_MAX_LENGTH).trim() || "New page";
+};
+
+/**
+ * Reads a link a page reported. A frame resolves its page's addresses against the board's own, so
+ * `ownHosts` (the app's and the board host's) tell a page's own addresses from another site's.
+ * Null for what is never offered: an address that runs script or holds data.
+ */
+export function boardPageLinkOf(
+  said: Pick<BoardPageLinkSaid, "href" | "url" | "text">,
+  ownHosts: ReadonlyArray<string>,
+): BoardPageLink | null {
+  const { href } = said;
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(href)?.[1]?.toLowerCase();
+  if (scheme !== undefined && scheme !== "http" && scheme !== "https") {
+    return /^(?:mailto|tel|sms)$/.test(scheme) ? { kind: "other", copy: href } : null;
+  }
+  const absolute = scheme !== undefined || href.startsWith("//");
+  if (!absolute && new RegExp(SAME_PAGE, "i").test(href)) {
+    const hash = href.includes("#") ? href.slice(href.indexOf("#") + 1) : "";
+    let id = hash;
+    try {
+      id = decodeURIComponent(hash);
+    } catch {
+      id = hash;
+    }
+    return { kind: "spot", id: id.slice(0, ROOM_BOARD_MARK_TEXT_MAX_LENGTH), copy: href };
+  }
+  let url: URL | null = null;
+  try {
+    url = new URL(absolute && scheme !== undefined ? href : said.url);
+  } catch {
+    url = null;
+  }
+  const host = url?.hostname ?? "";
+  const own = host === "" || ownHosts.some((ownHost) => siteOf(ownHost) === siteOf(host));
+  if (!absolute && own) return { kind: "page", name: pageName(said.text, href), copy: href };
+  if (url === null || !isRoomBoardUrl(url.href) || url.href.length > LINK_MAX_LENGTH) return null;
+  return {
+    kind: own || url.username !== "" || url.password !== "" ? "tab" : "site",
+    url: url.href,
+    copy: url.href,
   };
 }
 
@@ -187,10 +303,13 @@ function boardMarkPage(
   config: {
     readonly source: string;
     readonly textMax: number;
+    readonly linkMax: number;
+    readonly samePage: string;
     readonly nouns: Readonly<Record<string, string>>;
   },
 ): void {
   let pointing = false;
+  let start: string | null = null;
   let held: Element | null = null;
   let over: Element | null = null;
   let pins: ReadonlyArray<unknown> = [];
@@ -311,6 +430,63 @@ function boardMarkPage(
   const redraw = () => {
     if (pointing) draw();
   };
+  const scrollToSpot = (id: string) => {
+    const spot =
+      id === "" ? null : document.getElementById(id) || document.getElementsByName(id)[0];
+    if (spot) spot.scrollIntoView();
+    else if (id === "" || id === "top") window.scrollTo(0, 0);
+  };
+  // Heard last and never while marking up: a page that handles its own link keeps it. A sandboxed
+  // frame cannot go anywhere a link leads, so a click that would try is reported instead.
+  const link = (event: MouseEvent, click: boolean) => {
+    if (pointing || event.defaultPrevented) return;
+    const anchor = event.target instanceof Element ? event.target.closest("a[href]") : null;
+    if (anchor === null) return;
+    const href = (anchor.getAttribute("href") || "").trim();
+    const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(href);
+    if (
+      href === "" ||
+      (scheme !== null && /^(javascript|data|blob|vbscript)$/i.test(scheme[1] || ""))
+    )
+      return;
+    if (click) {
+      if (href.charAt(0) === "#" || anchor.hasAttribute("download")) return;
+      if (scheme !== null && !/^https?$/i.test(scheme[1] || "")) return;
+      if (
+        scheme === null &&
+        href.slice(0, 2) !== "//" &&
+        new RegExp(config.samePage, "i").test(href)
+      ) {
+        event.preventDefault();
+        let id = href.indexOf("#") < 0 ? "" : href.slice(href.indexOf("#") + 1);
+        try {
+          id = decodeURIComponent(id);
+        } catch {
+          id = "";
+        }
+        scrollToSpot(id);
+        return;
+      }
+    }
+    event.preventDefault();
+    say({
+      type: "link",
+      click,
+      href: href.slice(0, config.linkMax),
+      url: anchor instanceof HTMLAnchorElement ? anchor.href.slice(0, config.linkMax) : "",
+      text: textOf(anchor),
+      x: event.clientX,
+      y: event.clientY,
+    });
+  };
+  window.addEventListener("contextmenu", (event) => link(event, false));
+  window.addEventListener("click", (event) => link(event, true));
+  window.addEventListener("auxclick", (event) => {
+    if (event.button === 1) link(event, true);
+  });
+  window.addEventListener("load", () => {
+    if (start !== null) scrollToSpot(start);
+  });
   window.addEventListener("scroll", redraw, true);
   window.addEventListener("resize", redraw);
   window.addEventListener("message", (event) => {
@@ -321,6 +497,7 @@ function boardMarkPage(
       readonly color?: unknown;
       readonly ink?: unknown;
       readonly pins?: unknown;
+      readonly id?: unknown;
     } | null;
     if (event.source !== window.parent || typeof data !== "object" || data === null) return;
     if (data.source !== config.source) return;
@@ -331,6 +508,10 @@ function boardMarkPage(
       if (typeof data.color === "string" && data.color !== "") color = data.color;
       if (typeof data.ink === "string" && data.ink !== "") ink = data.ink;
       document.documentElement.style.cursor = pointing ? "crosshair" : "";
+    }
+    if (data.type === "scroll" && typeof data.id === "string") {
+      start = data.id;
+      scrollToSpot(start);
     }
     if (data.type === "pins" && typeof data.pins === "string") {
       try {
@@ -357,6 +538,8 @@ const BOARD_MARK_SCRIPT = `<script>try{(${boardMarkPage.toString()})(${boardMark
   {
     source: BOARD_MARK_MESSAGE,
     textMax: ROOM_BOARD_MARK_TEXT_MAX_LENGTH,
+    linkMax: LINK_MAX_LENGTH,
+    samePage: SAME_PAGE,
     nouns: ROOM_MARK_NOUNS,
   },
 )})}catch(error){}</script>`;

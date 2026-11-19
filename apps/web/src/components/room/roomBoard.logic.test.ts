@@ -111,6 +111,7 @@ import {
   boardTidy,
   boardTidySection,
   boardPushedBelow,
+  boardRoomBeside,
   boardSectionAround,
   boardSectionFrameAt,
   boardSectionHolding,
@@ -3240,6 +3241,50 @@ describe("selecting several cards", () => {
     expect(withFrame.dy).toBe(100 + size.h + 24 - 500);
     // Nothing in the way: nothing moves.
     expect(boardPushedBelow(section, section, below)).toEqual({ dy: 0, refs: [] });
+  });
+
+  it("makes room right of a card by pushing along only what a new card would cover", () => {
+    const source = { x: 100, y: 100, width: 400, height: 300 };
+    const size = { w: 400, h: 300 };
+    const home = {
+      ref: "note:home",
+      rect: { x: 60, y: 40, width: 1200, height: 420 },
+      section: true,
+    };
+    const items = [
+      home,
+      { ref: "note:covered", rect: { x: 600, y: 150, width: 200, height: 100 } },
+      { ref: "note:landed-on", rect: { x: 1000, y: 150, width: 200, height: 100 } },
+      { ref: "note:clear", rect: { x: 600, y: 500, width: 200, height: 100 } },
+      { ref: "note:left", rect: { x: -200, y: 100, width: 200, height: 100 } },
+    ];
+    const room = boardRoomBeside(source, size, items);
+    // A card gap right of the source, level with it; what it covers clears it by Tidy's gap.
+    expect(room?.at).toEqual({ x: 540, y: 100 });
+    expect(room?.dx).toBe(540 + 400 + 24 - 600);
+    // The section the source sits in stays, so the source does not move with it.
+    expect(room?.refs.toSorted()).toEqual(["note:covered", "note:landed-on"]);
+    expect(boardRoomBeside(source, size, items.slice(3))).toEqual({
+      at: { x: 540, y: 100 },
+      dx: 0,
+      refs: [],
+    });
+    // Another section goes with its card, and takes its other cards along.
+    const framed = boardRoomBeside(source, size, [
+      { ref: "note:covered", rect: { x: 600, y: 150, width: 200, height: 100 } },
+      { ref: "note:frame", rect: { x: 580, y: 120, width: 600, height: 500 }, section: true },
+      { ref: "note:inside", rect: { x: 900, y: 450, width: 200, height: 100 } },
+    ]);
+    expect(framed?.refs.toSorted()).toEqual(["note:covered", "note:frame", "note:inside"]);
+    expect(framed?.dx).toBe(540 + 400 + 24 - 580);
+    // Something that may not move, even only landed on, sends the card elsewhere.
+    expect(
+      boardRoomBeside(
+        source,
+        size,
+        items.map((item) => (item.ref === "note:landed-on" ? { ...item, fixed: true } : item)),
+      ),
+    ).toBeNull();
   });
 
   it("moves every selected card and note together, one change each, and leaves pins out", () => {

@@ -1,6 +1,7 @@
 import {
   ROOM_ARTIFACT_MAX_LENGTH,
   ROOM_BOARD_NOTE_MAX_LENGTH,
+  isRoomBoardUrl,
   type RoomArtifactContent,
   type RoomBoardMark,
   type RoomBoxProgress,
@@ -16,15 +17,21 @@ import { boardTimeLabel } from "../boards/boardsHome.logic";
 import ChatMarkdown from "../ChatMarkdown";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { BoardChip } from "./BoardChrome";
 import {
   BOARD_MARK_MESSAGE,
   type BoardMarkPick,
   type BoardMarkPin,
+  type BoardPageLink,
+  type BoardPageLinkSaid,
   boardMarkMessage,
+  boardPageLinkOf,
   boardPageWithMarks,
 } from "./boardMark.logic";
+import { boardOwnHosts } from "./boardFrameCheck";
+import { BoardContextMenu, type CardAction } from "./RoomBoardCardMenu";
 import { BoardPageCover, useBoardPageRelease } from "./RoomBoardEmbed";
 import {
   type BoardPeople,
@@ -38,6 +45,27 @@ import { useArtifactProgress, useBoardNow } from "./roomBoardLive";
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
 const nothing = () => {};
+
+/** The links in an artifact's page, and what a card one of them opened shows first. */
+export interface ArtifactLinks {
+  /** The spot its page opens scrolled to: this viewer's alone, for this visit. */
+  readonly spot?: string | undefined;
+  /** Whether it is the empty card of a page a link named, which says how to get it written. */
+  readonly unmade?: boolean | undefined;
+  /** Adds a card beside this one for what a link leads to. Absent for whoever may not add. */
+  readonly onOpenBeside?: ((link: BoardPageLink) => void) | undefined;
+}
+
+// Opened by the board, never by the page: only an http or https address, with no way back to us.
+const openInNewTab = (url: string) => {
+  if (isRoomBoardUrl(url)) window.open(url, "_blank", "noopener,noreferrer");
+};
+
+const copyLink = (text: string) =>
+  void navigator.clipboard.writeText(text).then(
+    () => toastManager.add({ type: "info", title: "Link copied" }),
+    () => toastManager.add({ type: "info", title: "Could not copy the link" }),
+  );
 
 /** Pointing at parts of an artifact's page: its numbered marks, and how one is added. */
 export interface ArtifactMarking {
@@ -61,7 +89,10 @@ export function RoomArtifactBody({
   active = false,
   onRelease = nothing,
   marking,
+  links,
 }: {
+  /** What its page's links open, and where its page starts. */
+  readonly links?: ArtifactLinks | undefined;
   /** Whether the viewer clicked its content, which then scrolls and takes the pointer. */
   readonly active?: boolean;
   /** Gives the board back: a press outside it, or Escape. */
@@ -112,9 +143,9 @@ export function RoomArtifactBody({
     return (
       <div className="flex min-h-0 flex-1 flex-col items-start gap-2 px-3 pb-3">
         <p className="text-xs text-muted-foreground">
-          Nothing here yet. Draw a line from a thread box to this card, or use Attach my agent, then
-          prompt that box. Its reply shows here for everyone. A line from another artifact makes
-          this a live view of it.
+          {links?.unmade === true
+            ? "This page isn't made yet. Ask your agent to write it: the first page goes along as context."
+            : "Nothing here yet. Draw a line from a thread box to this card, or use Attach my agent, then prompt that box. Its reply shows here for everyone. A line from another artifact makes this a live view of it."}
         </p>
         {onWrite === undefined ? null : (
           <Button
@@ -139,17 +170,11 @@ export function RoomArtifactBody({
             body={artifact.body}
             active={active}
             marking={marking}
+            links={links}
             onRelease={onRelease}
           />
         ) : (
-          <div
-            data-board-scroll
-            data-board-text
-            className="min-h-0 flex-1 cursor-auto overflow-auto px-3 py-2"
-            onPointerDown={stopPointer}
-          >
-            <ChatMarkdown text={artifact.body} cwd={undefined} />
-          </div>
+          <ArtifactText body={artifact.body} links={links} />
         )}
         {active || (marking !== undefined && isBoardHtmlArtifact(artifact.body)) ? null : (
           <BoardPageCover
@@ -176,14 +201,38 @@ function ArtifactPage({
   body,
   active,
   marking,
+  links,
   onRelease,
 }: {
   readonly body: string;
   readonly active: boolean;
   readonly marking: (ArtifactMarking & { readonly onStop: () => void }) | undefined;
+  readonly links: ArtifactLinks | undefined;
   readonly onRelease: () => void;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
+  const linkMenu = usePressedLink();
+  const spot = links?.spot;
+  const tellSpot = useStableCallback(() => {
+    if (spot === undefined) return;
+    frameRef.current?.contentWindow?.postMessage(
+      { source: BOARD_MARK_MESSAGE, type: "scroll", id: spot },
+      "*",
+    );
+  });
+  // What the page says is only read: the menu is the board's own, at the pointer on our screen,
+  // which the frame's pixels reach through the board's zoom.
+  const pressLink = useStableCallback((said: BoardPageLinkSaid) => {
+    const frame = frameRef.current;
+    const link = boardPageLinkOf(said, boardOwnHosts());
+    if (frame === null || link === null) return;
+    const drawn = frame.getBoundingClientRect();
+    const scale = frame.offsetWidth === 0 ? 1 : drawn.width / frame.offsetWidth;
+    linkMenu.press(link, {
+      x: drawn.left + Math.min(said.x, frame.offsetWidth) * scale,
+      y: drawn.top + Math.min(said.y, frame.offsetHeight) * scale,
+    });
+  });
   const on = marking !== undefined;
   const pins = marking?.pins ?? NO_PINS;
   // As text, so the frame is told again only when the marks themselves change.
@@ -210,12 +259,17 @@ function ArtifactPage({
     const heard = (event: MessageEvent) => {
       if (event.source === null || event.source !== frameRef.current?.contentWindow) return;
       const message = boardMarkMessage(event.data);
-      if (message?.type === "ready") tell(on, pinsJson);
+      if (message?.type === "ready") {
+        tell(on, pinsJson);
+        tellSpot();
+      }
       if (message?.type === "escape") leave();
+      // While marking up, a press picks a part of the page and this menu stays shut.
+      if (message?.type === "link" && !on) pressLink(message.link);
     };
     window.addEventListener("message", heard);
     return () => window.removeEventListener("message", heard);
-  }, [tell, leave, on, pinsJson]);
+  }, [tell, tellSpot, pressLink, leave, on, pinsJson]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- tells the page's frame, another document, whether it is pointed at and where its pins are
   useEffect(() => {
     tell(on, pinsJson);
@@ -249,11 +303,113 @@ function ArtifactPage({
           onDone={() => tell(on, pinsJson)}
         />
       )}
+      {on ? null : <ArtifactLinkMenu menu={linkMenu} onOpenBeside={links?.onOpenBeside} />}
     </>
   );
 }
 
 const NO_PINS: ReadonlyArray<BoardMarkPin> = [];
+
+interface PressedLink {
+  readonly link: BoardPageLink;
+  /** Where the pointer was, on our own screen. */
+  readonly at: { readonly x: number; readonly y: number };
+  /** Tells one press from the next at the same spot, so each opens a menu of its own. */
+  readonly press: number;
+}
+
+/** The link someone last pressed in an artifact, while its menu is open. */
+function usePressedLink() {
+  const [pressed, setPressed] = useState<PressedLink | null>(null);
+  const presses = useRef(0);
+  return {
+    pressed,
+    press: (link: BoardPageLink, at: PressedLink["at"]) => {
+      presses.current += 1;
+      setPressed({ link, at, press: presses.current });
+    },
+    // Only the menu that closed: a later press may have opened another by then.
+    close: (closed: PressedLink) => setPressed((open) => (open === closed ? null : open)),
+  };
+}
+
+/**
+ * The board's own menu for a link pressed in an artifact: a card beside it for whoever may add
+ * to the board, a new tab for an http or https address, and Copy link.
+ */
+function ArtifactLinkMenu({
+  menu: { pressed, close },
+  onOpenBeside,
+}: {
+  readonly menu: ReturnType<typeof usePressedLink>;
+  readonly onOpenBeside: ArtifactLinks["onOpenBeside"];
+}) {
+  if (pressed === null) return null;
+  const { link } = pressed;
+  const actions: ReadonlyArray<CardAction> = [
+    ...(onOpenBeside === undefined || link.kind === "tab" || link.kind === "other"
+      ? []
+      : [{ label: "Open beside this artifact", run: () => onOpenBeside(link) }]),
+    ...(link.kind === "site" || link.kind === "tab"
+      ? [{ label: "Open in a new tab", run: () => openInNewTab(link.url) }]
+      : []),
+    { label: "Copy link", run: () => copyLink(link.copy) },
+  ];
+  return (
+    // The menu is drawn elsewhere on the page, but what happens in it still reaches the card.
+    <div
+      className="contents"
+      onPointerDown={stopPointer}
+      onKeyDown={(event) => event.stopPropagation()}
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      <BoardContextMenu
+        key={pressed.press}
+        at={pressed.at}
+        card={undefined}
+        groups={[actions]}
+        onClose={() => close(pressed)}
+      />
+    </div>
+  );
+}
+
+/**
+ * An artifact's Markdown. A right-click on a link to another site opens the board's menu in
+ * place of the chat's, so it too can open beside the card; any other link keeps what it had.
+ */
+function ArtifactText({
+  body,
+  links,
+}: {
+  readonly body: string;
+  readonly links: ArtifactLinks | undefined;
+}) {
+  const linkMenu = usePressedLink();
+  return (
+    <div
+      data-board-scroll
+      data-board-text
+      className="min-h-0 flex-1 cursor-auto overflow-auto px-3 py-2"
+      onPointerDown={stopPointer}
+      onContextMenuCapture={(event) => {
+        const anchor = event.target instanceof Element ? event.target.closest("a[href]") : null;
+        if (!(anchor instanceof HTMLAnchorElement)) return;
+        const link = boardPageLinkOf(
+          { href: anchor.getAttribute("href") ?? "", url: anchor.href, text: anchor.innerText },
+          boardOwnHosts(),
+        );
+        if (link?.kind !== "site" && link?.kind !== "tab") return;
+        event.preventDefault();
+        event.stopPropagation();
+        linkMenu.press(link, { x: event.clientX, y: event.clientY });
+      }}
+    >
+      <ChatMarkdown text={body} cwd={undefined} />
+      <ArtifactLinkMenu menu={linkMenu} onOpenBeside={links?.onOpenBeside} />
+    </div>
+  );
+}
 
 /**
  * While an artifact's page is marked up: what its frame says was picked, and the field that asks
@@ -355,7 +511,10 @@ export function RoomArtifactLive({
   active = false,
   onRelease,
   marks,
+  links,
 }: {
+  /** What its page's links open, where its page starts, and whether it is a page not yet made. */
+  readonly links?: ArtifactLinks | undefined;
   /** Whether the viewer clicked its content to scroll and use it, and what gives the board back. */
   readonly active?: boolean;
   readonly onRelease?: (() => void) | undefined;
@@ -453,6 +612,7 @@ export function RoomArtifactLive({
         active={active}
         onRelease={onRelease}
         marking={marking}
+        links={links}
       />
     </>
   );

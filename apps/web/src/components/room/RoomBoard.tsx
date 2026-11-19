@@ -165,6 +165,7 @@ import {
   type BoardMenuEntry,
   boardMenuEntries,
   boardPushedBelow,
+  boardRoomBeside,
   boardTidy,
   boardTidySection,
   boardDragItems,
@@ -255,6 +256,7 @@ import {
   boardValueOf,
   boardViewportOf,
   canPromptBoardBox,
+  clampBoardSize,
   type RoomBoardCloud,
   roomBoardHolds,
   cursorSender,
@@ -290,8 +292,8 @@ import {
   rememberedRoomBoardView,
   roomBoardFitAwaits,
 } from "./roomBoardNavigation";
-import { type ArtifactMarking, RoomArtifactLive } from "./RoomBoardArtifact";
-import { type BoardMarkPin, boardMarks } from "./boardMark.logic";
+import { type ArtifactLinks, type ArtifactMarking, RoomArtifactLive } from "./RoomBoardArtifact";
+import { type BoardMarkPin, type BoardPageLink, boardMarks } from "./boardMark.logic";
 import { useBoardDrawnHeights } from "./roomBoardHeights";
 import { BoardGuide } from "./BoardGuide";
 import { boardGuideStepOfChange } from "./boardGuide.logic";
@@ -3286,6 +3288,98 @@ export function RoomBoard({
       { id: line, from: noteRef(id), to: noteRef(artifact.id) },
       boardEditKey({ kind: "note", id }),
     );
+  };
+  // The spot each card a page's link opened starts scrolled to: this viewer's, for this visit.
+  const [pageSpots, setPageSpots] = useState<ReadonlyMap<string, string>>(() => new Map());
+  // What a link in an artifact's page leads to, in a card right of the card it was pressed in,
+  // with a line to it and room made for it, as one undo step. Another site is a link card showing
+  // its page, a spot on the page a live view opened there, any other address an empty artifact
+  // for the page nobody made yet. A board edit: it sends nothing and starts nothing.
+  const openLinkBeside = (on: RoomBoardNote, link: BoardPageLink) => {
+    const from = noteRef(on.id);
+    const element = drawnItem(from);
+    if (!canEdit || element === null || link.kind === "tab" || link.kind === "other") return;
+    const kind = link.kind === "site" ? "link" : "artifact";
+    if (full || edges.length >= ROOM_BOARD_MAX_EDGES || (kind === "artifact" && artifactsFull)) {
+      toastManager.add({
+        type: "info",
+        title: "This board is full",
+        description: "Remove a card or a line first, then open the link again.",
+      });
+      return;
+    }
+    const rect = drawnRect(element);
+    const url = link.kind === "site" ? link.url : undefined;
+    const framed =
+      framePage !== undefined && url !== undefined && boardCanFramePage(url, boardOwnHosts());
+    // As big as the card it came from, but a link card that only names its address.
+    const size =
+      kind === "artifact" || framed ? clampBoardSize({ w: rect.width, h: rect.height }) : undefined;
+    const taking = size ?? boardNewNoteSize(kind, url);
+    // Never moved: another person's agent box or card, and a section that feeds one.
+    const theirs = new Set(
+      shown.notes
+        .filter((note) => note.kind === "thread" && (note.guestId ?? null) !== viewer)
+        .map((note) => noteRef(note.id)),
+    );
+    const mine =
+      viewer === null
+        ? [cardRef(ROOM_BOARD_THREAD_CARD)]
+        : [cardRef(roomBoardGuestCard(viewer)), cardRef(roomBoardAgentCard(viewer))];
+    const fixed = (ref: string) =>
+      theirs.has(ref) ||
+      (ref.startsWith("card:") && !mine.includes(ref)) ||
+      edges.some((edge) => edge.from === ref && theirs.has(edge.to));
+    const room = boardRoomBeside(
+      rect,
+      taking,
+      [
+        ...(surfaceRef.current?.querySelectorAll<HTMLElement>(
+          "[data-board-item]:not([data-board-pin])",
+        ) ?? []),
+      ].flatMap((item) => {
+        const ref = item.dataset.boardItem ?? "";
+        return ref === from
+          ? []
+          : [
+              {
+                ref,
+                rect: drawnRect(item),
+                section: item.hasAttribute("data-board-section"),
+                fixed: fixed(ref),
+              },
+            ];
+      }),
+    );
+    const at = room?.at ?? besideBoardItem(rect, taking, takenRects());
+    const id = randomUUID();
+    const added: RoomBoardNote = settleBoardValue({
+      id,
+      text: link.kind === "page" ? link.name : "",
+      ...at,
+      kind,
+      ...(viewer === null ? {} : { guestId: viewer }),
+      ...(url === undefined ? {} : { url }),
+      ...(framed ? { framed: true as const } : {}),
+      ...(size === undefined ? {} : { size }),
+    });
+    const to = noteRef(id);
+    send({ kind: "note", id }, added);
+    for (const { target, value } of boardSelectionItems(shown, positions, room?.refs ?? [])) {
+      const now = "text" in value ? noteNow(value) : value;
+      send(target, settleBoardValue({ ...now, x: now.x + (room?.dx ?? 0) }));
+    }
+    const line = randomUUID();
+    send({ kind: "edge", id: line }, { id: line, from, to }, to);
+    // Whoever opened it asked for its page, so it loads for them at once.
+    if (framed) showEmbed(id);
+    if (link.kind === "spot") {
+      setPageSpots((spots) => new Map(spots).set(id, link.id));
+      viewArtifactAlong(from, to, to, { ...shown, notes: [...shown.notes, added] });
+    }
+    lastCard.current = to;
+    setEmbedInUse(null);
+    reveal({ ...at, width: taking.w, height: taking.h }, true);
   };
   // The page a box's agent last wrote, in a new artifact beside the box: the box is asked to write
   // it there, as its replies fill any artifact it has a line to.
@@ -6503,6 +6597,25 @@ export function RoomBoard({
                           }
                         : undefined
                     }
+                    artifactLinks={
+                      note.kind === "artifact"
+                        ? {
+                            spot: pageSpots.get(note.id),
+                            unmade:
+                              note.viewOf === undefined &&
+                              note.artifact === undefined &&
+                              edges.some(
+                                (edge) =>
+                                  edge.to === noteRef(note.id) &&
+                                  roomBoardNoteOfRef(shown, edge.from)?.kind === "artifact",
+                              ),
+                            onOpenBeside:
+                              canEdit && onChange !== undefined
+                                ? (link) => openLinkBeside(note, link)
+                                : undefined,
+                          }
+                        : undefined
+                    }
                     onAddNext={
                       canEdit && !full && followsOn(note)
                         ? () => addAndType(() => addNextNote(note))
@@ -7380,7 +7493,10 @@ function BoardNote({
   bringIn,
   markNumber,
   artifactMarks,
+  artifactLinks,
 }: {
+  /** What the links in an artifact's page open, and what a card one of them opened shows first. */
+  readonly artifactLinks?: ArtifactLinks | undefined;
   /** A link card's Bring in, or a snapshot artifact's mark with Refresh. */
   readonly bringIn?: ReactNode;
   /** A marked note's number on the artifact it points into, while a line joins them. */
@@ -7935,6 +8051,7 @@ function BoardNote({
             active={embed?.active === true}
             onRelease={embed?.onRelease}
             marks={artifactMarks}
+            links={artifactLinks}
           />
         ) : null}
         {code || pullRequest ? codeWindow : null}

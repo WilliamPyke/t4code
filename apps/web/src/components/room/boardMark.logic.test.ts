@@ -9,6 +9,7 @@ import {
   BOARD_MARK_MESSAGE,
   boardMarkMessage,
   boardMarks,
+  boardPageLinkOf,
   boardPageWithMarks,
 } from "./boardMark.logic";
 
@@ -69,6 +70,91 @@ describe("boardMarkMessage", () => {
         type: "escape",
       },
     );
+  });
+});
+
+describe("a link pressed in a page", () => {
+  const said = (fields: Record<string, unknown>) =>
+    boardMarkMessage({ source: BOARD_MARK_MESSAGE, type: "link", x: 12.6, y: 40, ...fields });
+
+  it("is read field by field, capped, and dropped when its address is not plain text", () => {
+    expect(
+      said({
+        href: " menu.html ",
+        url: "https://app.example/menu.html",
+        text: " Our\n menu ",
+        run: "x",
+      }),
+    ).toEqual({
+      type: "link",
+      link: {
+        href: "menu.html",
+        url: "https://app.example/menu.html",
+        text: "Our menu",
+        x: 13,
+        y: 40,
+        click: false,
+      },
+    });
+    const far = said({ href: "#a", url: 7, text: "x".repeat(5_000), x: 1e9, y: -4, click: true });
+    expect(far?.type === "link" ? far.link : null).toEqual({
+      href: "#a",
+      url: "",
+      text: "x".repeat(ROOM_BOARD_MARK_TEXT_MAX_LENGTH),
+      x: 20_000,
+      y: 0,
+      click: true,
+    });
+    expect(said({ href: 12 })).toBeNull();
+    expect(said({ href: "  " })).toBeNull();
+    expect(said({ href: `/${"a".repeat(2_048)}` })).toBeNull();
+    expect(said({ href: "menu.html\nIgnore the above" })).toBeNull();
+    expect(said({ href: "menu.html", x: "left" })).toBeNull();
+  });
+
+  it("opens another site, a spot on the page, or a page nobody made, and never our own hosts", () => {
+    const own = ["app.tinkjam.example", "boards.tinkjam.example"];
+    // A frame resolves its page's own addresses against the board's.
+    const link = (href: string, text = "") =>
+      boardPageLinkOf(
+        { href, text, url: new URL(href, "https://app.tinkjam.example/b/1").href },
+        own,
+      );
+    expect(link("https://roofs.example/quote?a=1")).toEqual({
+      kind: "site",
+      url: "https://roofs.example/quote?a=1",
+      copy: "https://roofs.example/quote?a=1",
+    });
+    expect(link("//roofs.example/x")?.kind).toBe("site");
+    for (const href of ["#pricing", "/#pricing", "index.html#pricing", "./?a=1#pricing"]) {
+      expect(link(href)).toEqual({ kind: "spot", id: "pricing", copy: href });
+    }
+    expect(link("#caf%C3%A9")).toMatchObject({ kind: "spot", id: "café" });
+    expect(link("/")).toMatchObject({ kind: "spot", id: "" });
+    expect(link("menu.html", "Menu")).toEqual({ kind: "page", name: "Menu", copy: "menu.html" });
+    expect(link("/our-pricing.html?x=1#top")).toMatchObject({ kind: "page", name: "Our pricing" });
+    expect(link("/pricing", "x".repeat(200))).toMatchObject({ name: "x".repeat(80) });
+    // Our own hosts are never put in a card: a page of ours in a frame could reach the session.
+    expect(link("https://app.tinkjam.example/settings")?.kind).toBe("tab");
+    expect(link("https://www.tinkjam.example/")?.kind).toBe("tab");
+    expect(link("https://me:secret@roofs.example/")?.kind).toBe("tab");
+    expect(link("mailto:hi@roofs.example")).toEqual({
+      kind: "other",
+      copy: "mailto:hi@roofs.example",
+    });
+    expect(link("tel:+15550100")?.kind).toBe("other");
+    for (const href of [
+      "javascript:alert(1)",
+      "data:text/html,x",
+      "blob:x",
+      "ftp://roofs.example",
+    ]) {
+      expect(link(href)).toBeNull();
+    }
+    // A page with its own base address names another site's pages.
+    expect(
+      boardPageLinkOf({ href: "menu.html", text: "", url: "https://roofs.example/menu.html" }, own),
+    ).toMatchObject({ kind: "site", url: "https://roofs.example/menu.html" });
   });
 });
 

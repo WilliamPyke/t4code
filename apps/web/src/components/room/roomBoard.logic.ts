@@ -3336,26 +3336,33 @@ export function boardTidySection<T extends { readonly ref: string; readonly rect
 const rectsMeet = (a: BoardRect, b: BoardRect) =>
   a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
+interface BoardPushItem {
+  readonly ref: string;
+  readonly rect: BoardRect;
+  readonly section?: boolean;
+}
+
 /**
- * What a section grown from `from` to `grown` pushes down, and by how much: the items it now
- * covers move below it with Tidy's gap, then whatever they would land on, and whatever sits in a
- * section that moves. All move by the same amount, so what is pushed keeps its own layout.
+ * What must move for `grown` to be clear, and how far: the `covered` items go past its bottom
+ * edge (its right edge when `across`) with Tidy's gap, then whatever they would land on, and
+ * whatever sits in a section that moves. All move by the same amount, so they keep their layout.
  */
-export function boardPushedBelow(
-  from: BoardRect,
+function boardPushedPast<Item extends BoardPushItem>(
   grown: BoardRect,
-  items: ReadonlyArray<{
-    readonly ref: string;
-    readonly rect: BoardRect;
-    readonly section?: boolean;
-  }>,
-): { readonly dy: number; readonly refs: ReadonlyArray<string> } {
-  const covered = items.filter(({ rect }) => rectsMeet(rect, grown) && !rectsMeet(rect, from));
-  if (covered.length === 0) return { dy: 0, refs: [] };
-  const clear = (rect: BoardRect) => grown.y + grown.height + TIDY_GAP - rect.y;
+  covered: ReadonlyArray<Item>,
+  items: ReadonlyArray<Item>,
+  across: boolean,
+): { readonly by: number; readonly moved: ReadonlyArray<Item> } {
+  if (covered.length === 0) return { by: 0, moved: [] };
+  const clear = (rect: BoardRect) =>
+    across ? grown.x + grown.width + TIDY_GAP - rect.x : grown.y + grown.height + TIDY_GAP - rect.y;
   const beside = (rect: BoardRect) =>
-    rect.x < grown.x + grown.width && grown.x < rect.x + rect.width;
-  let dy = Math.ceil(Math.max(...covered.map(({ rect }) => clear(rect))));
+    across
+      ? rect.y < grown.y + grown.height && grown.y < rect.y + rect.height
+      : rect.x < grown.x + grown.width && grown.x < rect.x + rect.width;
+  const shifted = (rect: BoardRect, by: number) =>
+    across ? { ...rect, x: rect.x + by } : { ...rect, y: rect.y + by };
+  let by = Math.ceil(Math.max(...covered.map(({ rect }) => clear(rect))));
   const moved = new Set(covered);
   for (let grew = true; grew;) {
     grew = false;
@@ -3363,7 +3370,7 @@ export function boardPushedBelow(
       if (moved.has(item)) continue;
       const lands = [...moved].some(
         (other) =>
-          rectsMeet(item.rect, { ...other.rect, y: other.rect.y + dy }) ||
+          rectsMeet(item.rect, shifted(other.rect, by)) ||
           (other.section === true &&
             boardItemsCentredIn([item], other.rect, other.ref).length > 0) ||
           // A section goes with a card of its own that moves, so the card stays inside it.
@@ -3376,15 +3383,53 @@ export function boardPushedBelow(
     }
     // A frame that came along started higher than its cards: everything moves far enough for it.
     const needed = Math.ceil(
-      Math.max(...[...moved].filter(({ rect }) => beside(rect)).map(({ rect }) => clear(rect)), dy),
+      Math.max(...[...moved].filter(({ rect }) => beside(rect)).map(({ rect }) => clear(rect)), by),
     );
-    if (needed > dy) {
-      dy = needed;
+    if (needed > by) {
+      by = needed;
       grew = true;
     }
   }
+  return { by, moved: [...moved] };
+}
+
+/**
+ * What a section grown from `from` to `grown` pushes down, and by how much: the items it now
+ * covers move below it with Tidy's gap, then whatever they would land on, and whatever sits in a
+ * section that moves. All move by the same amount, so what is pushed keeps its own layout.
+ */
+export function boardPushedBelow(
+  from: BoardRect,
+  grown: BoardRect,
+  items: ReadonlyArray<BoardPushItem>,
+): { readonly dy: number; readonly refs: ReadonlyArray<string> } {
+  const covered = items.filter(({ rect }) => rectsMeet(rect, grown) && !rectsMeet(rect, from));
+  const { by, moved } = boardPushedPast(grown, covered, items, false);
   // Each once, however often it was drawn, so nothing moves twice.
-  return { dy, refs: [...new Set([...moved].map(({ ref }) => ref))] };
+  return { dy: by, refs: [...new Set(moved.map(({ ref }) => ref))] };
+}
+
+/**
+ * Room for a card of `size` right of `rect`, a card gap away and level with its top: where it
+ * goes, and what it would cover pushed right as `boardPushedBelow` pushes down. A section `rect`
+ * sits in stays. Null when something `fixed` would have to move: the card goes elsewhere then.
+ */
+export function boardRoomBeside(
+  rect: BoardRect,
+  size: RoomBoardSize,
+  items: ReadonlyArray<BoardPushItem & { readonly fixed?: boolean }>,
+): { readonly at: BoardPoint; readonly dx: number; readonly refs: ReadonlyArray<string> } | null {
+  const at = { x: Math.round(rect.x + rect.width + CARD_GAP), y: Math.round(rect.y) };
+  const wanted = { ...at, width: size.w, height: size.h };
+  const others = items.filter(
+    (item) =>
+      item.section !== true ||
+      boardItemsCentredIn([{ ref: "", rect }], item.rect, item.ref).length === 0,
+  );
+  const covered = others.filter((item) => item.section !== true && rectsMeet(item.rect, wanted));
+  const { by, moved } = boardPushedPast(wanted, covered, others, true);
+  if (moved.some((item) => item.fixed === true)) return null;
+  return { at, dx: by, refs: [...new Set(moved.map(({ ref }) => ref))] };
 }
 
 /** A selected card or note and where it is now. */
