@@ -704,7 +704,8 @@ export function decideGuestShareCommand(input: {
           return { ...board, notes: board.notes.map((note) => (note === window ? read : note)) };
         }),
       );
-    // Dispatched by the owner's server once it took the owner's own prompt from a box.
+    // Dispatched by the owner's server once it took the owner's own prompt from a box, and again
+    // with `settled` once the run that carried the cards ended.
     case "thread.room-cards.sent":
       return Result.succeed(
         withRoomBoard(thread, command.shareId, (board) =>
@@ -714,6 +715,7 @@ export function decideGuestShareCommand(input: {
             command.artifactId,
             command.cardRefs,
             DateTime.formatIso(now),
+            command.settled,
           ),
         ),
       );

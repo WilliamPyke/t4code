@@ -4,7 +4,9 @@ import {
   roomBoardGuestCard,
   type CloudBoardAccountBoard,
   type GuestId,
+  type RoomBoardOutline,
 } from "@t3tools/contracts";
+import { boardOutline } from "@t3tools/shared/boardOutline";
 import * as Result from "effect/Result";
 
 import {
@@ -201,6 +203,25 @@ export function withAccountSession(
     },
     guest: next,
   });
+}
+
+/** Who reads a board's outline without a session on it: verified by the Worker, never the page. */
+export type OutlineReader = { readonly account: string } | { readonly workspaceId: string };
+
+/**
+ * What is on the board by name, for someone who could open it with no invite: the account's
+ * person on it, or a member of the workspace it is in (the workspace said they are). Null for
+ * anyone else, as for a board that has ended.
+ */
+export function outlineFor(room: CloudRoom | null, reader: OutlineReader): RoomBoardOutline | null {
+  if (room === null) return null;
+  if ("workspaceId" in reader) {
+    if (room.workspaceId !== reader.workspaceId) return null;
+  } else {
+    const guest = accountGuestOf(room, reader.account);
+    if (guest === undefined || guest.locked === true) return null;
+  }
+  return boardOutline(room.board, null);
 }
 
 /** The accounts on the board, each once, so its list follows what happens to the board. */

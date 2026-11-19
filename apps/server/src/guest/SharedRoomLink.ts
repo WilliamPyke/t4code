@@ -20,6 +20,7 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
   RoomArtifactRead,
+  RoomBoardAgentArrangeResult,
   type RoomBoardAgentChangeRequest,
   RoomBoardAgentResult,
   RoomBoardAgentView,
@@ -90,7 +91,7 @@ import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { forkParked } from "../serverActivation.ts";
-import { threadRoomOf } from "../orchestration-v2/GuestShareDecider.ts";
+import { type ThreadRoom, threadRoomOf } from "../orchestration-v2/GuestShareDecider.ts";
 import * as RoomBoxes from "./RoomBoxes.ts";
 import * as RoomCodeDiffs from "./RoomCodeDiffs.ts";
 import { clip } from "@t3tools/shared/roomUpdates";
@@ -123,6 +124,8 @@ interface BoxRun {
   readonly told: GuestAgentActivityRequest;
 }
 const SETTLED_RUN = new Set(["completed", "interrupted", "failed", "cancelled", "rolled_back"]);
+/** Ended without a reply to show, so what the run carried goes with the next prompt again. */
+const UNFINISHED_RUN = new Set(["interrupted", "failed", "cancelled"]);
 // Well over the largest catch-up an honest room sends, so a declared size past it is refused unread.
 const MAX_UPDATES_BYTES = 512 * 1024;
 const decodeUpdates = Schema.decodeUnknownEffect(Schema.toCodecJson(RoomUpdates));
@@ -130,6 +133,15 @@ const decodeRoomTask = Schema.decodeUnknownOption(RoomTaskContextPayload);
 const decodeArtifact = Schema.decodeUnknownEffect(RoomArtifactRead);
 const decodeBoardView = Schema.decodeUnknownEffect(RoomBoardAgentView);
 const decodeBoardResult = Schema.decodeUnknownEffect(RoomBoardAgentResult);
+const decodeBoardArranged = Schema.decodeUnknownEffect(RoomBoardAgentArrangeResult);
+
+type BoardChange = RoomBoardAgentChangeRequest["change"];
+type BoardArrange = Extract<BoardChange, { readonly arrange: unknown }>;
+/** A board tool call that adds or changes cards, which every host takes. */
+export type BoardEdit = Exclude<BoardChange, BoardArrange>;
+type BoardRequest<Change> = Omit<RoomBoardAgentChangeRequest, "boxId" | "change"> & {
+  readonly change: Change;
+};
 
 /** A room's update as this machine keeps it: no characters nobody can see, a one-line name. */
 const sanitizeUpdate = (update: RoomUpdate): ReadonlyArray<RoomUpdate> => {
@@ -333,8 +345,13 @@ export class SharedRoomLink extends Context.Service<
     /** Has the room's owner make one board tool call of the agent of that box's thread here. */
     readonly changeBoard: (
       threadId: ThreadId,
-      request: Omit<RoomBoardAgentChangeRequest, "boxId">,
+      request: BoardRequest<BoardEdit>,
     ) => Effect.Effect<RoomBoardAgentResult, SharedThreadJoinError>;
+    /** As `changeBoard`. A host from before it refuses, as `invalid_response`. */
+    readonly arrangeBoard: (
+      threadId: ThreadId,
+      request: BoardRequest<BoardArrange>,
+    ) => Effect.Effect<RoomBoardAgentArrangeResult, SharedThreadJoinError>;
     /** Posts one finished run if its thread is connected. Never fails: the turn is local first. */
     readonly publishRun: (threadId: ThreadId, runId: RunId) => Effect.Effect<void>;
     /**
@@ -684,6 +701,8 @@ const make = Effect.gen(function* () {
     // The box is no longer on the board, or no longer this user's.
     if (response.status === 404) return yield* fail("thread_unavailable");
     if (response.status === 429) return yield* fail("too_fast");
+    // A host that does not know this request: it runs an older version.
+    if (response.status === 400) return yield* fail("invalid_response");
     if (response.status !== 200) return yield* fail("unreachable");
     if (Number(response.headers["content-length"] ?? "0") > MAX_UPDATES_BYTES) {
       return yield* fail("invalid_response");
@@ -703,7 +722,11 @@ const make = Effect.gen(function* () {
       decodeBoardView,
     );
 
-  const changeBoard = (threadId: ThreadId, request: Omit<RoomBoardAgentChangeRequest, "boxId">) =>
+  const postBoard = <A>(
+    threadId: ThreadId,
+    request: BoardRequest<BoardChange>,
+    decode: (body: unknown) => Effect.Effect<A, Schema.SchemaError>,
+  ) =>
     boardRequest(
       threadId,
       (url, boxId) =>
@@ -713,8 +736,14 @@ const make = Effect.gen(function* () {
             boxId,
           } satisfies RoomBoardAgentChangeRequest),
         ),
-      decodeBoardResult,
+      decode,
     );
+
+  const changeBoard = (threadId: ThreadId, request: BoardRequest<BoardEdit>) =>
+    postBoard(threadId, request, decodeBoardResult);
+
+  const arrangeBoard = (threadId: ThreadId, request: BoardRequest<BoardArrange>) =>
+    postBoard(threadId, request, decodeBoardArranged);
 
   const boxMessage = (threadId: ThreadId, commandId: CommandId, message: BoxMessage) =>
     orchestrator.dispatch({
@@ -1137,7 +1166,7 @@ const make = Effect.gen(function* () {
    * shows on the box, and only when the share recorded that thread for that box.
    */
   const answerOnOwnBoard = Effect.fn("SharedRoomLink.answerOnOwnBoard")(
-    function* (threadId: ThreadId, runId: RunId) {
+    function* (threadId: ThreadId, runId: RunId, settled: "done" | "failed" = "done") {
       const { thread, turnItems, runs } = yield* orchestrator.getThreadRecords(
         threadId,
         ["turnItems", "runs"],
@@ -1146,10 +1175,23 @@ const make = Effect.gen(function* () {
       const run = runs.find((candidate) => candidate.id === runId);
       // A thread that is neither shared nor keeps a board may be behind a thread box.
       if (thread.guestShare == null && thread.roomBoard == null) {
-        return yield* answerOnBox(threadId, runId, turnItems, run);
+        return yield* answerOnBox(threadId, runId, turnItems, run, settled);
       }
       const share = threadRoomOf(thread);
       if (share.board === undefined) return;
+      const sentId = turnItems.flatMap((item) =>
+        item.type === "user_message" ? (item.context?.guest?.guestMessageId ?? []) : [],
+      )[0];
+      yield* settleCards(
+        threadId,
+        share,
+        ROOM_BOARD_ROOM_BOX,
+        runId,
+        turnItems,
+        share.messages.find((message) => message.id === sentId),
+        settled,
+      );
+      if (settled === "failed") return;
       const taskId = roomTaskOfRun(turnItems, share.id);
       const turn = taskId === undefined ? null : guestTurnOf(runId, turnItems);
       if (taskId !== undefined && turn !== null) {
@@ -1185,6 +1227,36 @@ const make = Effect.gen(function* () {
     Effect.catch((cause) => Effect.logWarning("Could not show a turn on the board", { cause })),
   );
 
+  /**
+   * Marks the cards a run of the owner's agent carried done, or when it failed or was stopped to
+   * go with the next prompt again. A guest's request names its cards itself (`asked`).
+   */
+  const settleCards = Effect.fn("SharedRoomLink.settleCards")(function* (
+    roomThreadId: ThreadId,
+    share: ThreadRoom,
+    boxId: string,
+    runId: RunId,
+    turnItems: ReadonlyArray<OrchestrationV2TurnItem>,
+    asked: ThreadGuestMessage | undefined,
+    settled: "done" | "failed",
+  ) {
+    const cardRefs = asked?.cardRefs ?? roomCardRefsOf(turnItems);
+    if (cardRefs.length === 0) return;
+    const artifactId = asked?.artifactId ?? roomArtifactRequestOf(turnItems, share.id)?.noteId;
+    yield* orchestrator
+      .dispatch({
+        type: "thread.room-cards.sent",
+        commandId: CommandId.make(`server:room-cards:${runId}`),
+        threadId: roomThreadId,
+        shareId: share.id,
+        boxId,
+        ...(artifactId === undefined ? {} : { artifactId }),
+        cardRefs: [...cardRefs],
+        settled,
+      })
+      .pipe(Effect.catch((cause) => Effect.logWarning("Could not mark a run's cards", { cause })));
+  });
+
   /** Posts a run of the owner's agent in the comment thread it was asked from, if it was. */
   const answerComment = Effect.fn("SharedRoomLink.answerComment")(function* (
     roomThreadId: ThreadId,
@@ -1218,17 +1290,19 @@ const make = Effect.gen(function* () {
     runId: RunId,
     turnItems: ReadonlyArray<OrchestrationV2TurnItem>,
     run: OrchestrationV2Run | undefined,
+    settled: "done" | "failed",
   ) {
     const box = yield* roomBoxes.boxOfThread(threadId, turnItems);
     if (box === null) return;
     const { roomThreadId, share } = box;
-    const reply = roomRunReplyText(turnItems);
-    if (reply === "") return;
     // The guest's request the owner sent, found by the message this server sent it as.
     const asked =
       run === undefined
         ? undefined
         : share.messages.find((message) => message.sentAs === run.userMessageId);
+    yield* settleCards(roomThreadId, share, box.boxId, runId, turnItems, asked, settled);
+    const reply = roomRunReplyText(turnItems);
+    if (settled === "failed" || reply === "") return;
     const askedBy = asked?.guestId === undefined ? {} : { askedBy: asked.guestId };
     const about = yield* aboutRun(turnItems, run, asked);
     yield* orchestrator.dispatch({
@@ -1280,7 +1354,12 @@ const make = Effect.gen(function* () {
   );
 
   type Job = {
-    readonly kind: "turn" | "answer" | "changes" | GuestAgentActivityRequest["state"];
+    readonly kind:
+      | "turn"
+      | "answer"
+      | "unanswered"
+      | "changes"
+      | GuestAgentActivityRequest["state"];
     readonly threadId: ThreadId;
     readonly runId: RunId;
   };
@@ -1289,9 +1368,11 @@ const make = Effect.gen(function* () {
       ? publishRun(threadId, runId)
       : kind === "answer"
         ? answerOnOwnBoard(threadId, runId)
-        : kind === "changes"
-          ? showChanges(threadId, runId)
-          : publishActivity(threadId, runId, kind),
+        : kind === "unanswered"
+          ? answerOnOwnBoard(threadId, runId, "failed")
+          : kind === "changes"
+            ? showChanges(threadId, runId)
+            : publishActivity(threadId, runId, kind),
   );
   const linkBox = Effect.fn("SharedRoomLink.linkBox")(function* (input: SharedThreadLinkBoxInput) {
     const joined = yield* findJoined(input.host, input.shareId);
@@ -1406,6 +1487,8 @@ const make = Effect.gen(function* () {
         if (status === "completed") {
           yield* worker.enqueue({ kind: "turn", threadId, runId });
           yield* worker.enqueue({ kind: "answer", threadId, runId });
+        } else if (UNFINISHED_RUN.has(status)) {
+          yield* worker.enqueue({ kind: "unanswered", threadId, runId });
         }
         // After the turn, so a turn the room took has already cleared the run there.
         return yield* worker.enqueue({ kind: "idle", threadId, runId });
@@ -1446,6 +1529,7 @@ const make = Effect.gen(function* () {
     linkBox,
     readBoard,
     changeBoard,
+    arrangeBoard,
     publishRun,
     publishActivity,
     drain: worker.drain.pipe(Effect.andThen(codeDiffs.drain)),

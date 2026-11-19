@@ -105,15 +105,19 @@ export async function boardPng(
     const rect = rects.get(note.id);
     if (rect === undefined) continue;
     roundRect(context, rect, 12);
-    context.fillStyle =
-      note.color === undefined ? "rgba(255,255,255,0.5)" : (PAINTS[note.color] ?? CARD);
+    // Its background is a soft tint of its paint, as on the board; grey is a section with none.
+    const paint =
+      note.color === undefined || note.color === "grey" ? undefined : PAINTS[note.color];
+    context.fillStyle = paint ?? "rgba(255,255,255,0.5)";
+    context.globalAlpha = paint === undefined ? 1 : 0.55;
     context.fill();
+    context.globalAlpha = 1;
     context.strokeStyle = HAIRLINE;
     context.lineWidth = 1.5;
     context.stroke();
     context.fillStyle = INK;
-    context.font = `600 15px ${FONT}`;
-    context.fillText(note.text.trim() || "Untitled section", rect.x + 12, rect.y - 22);
+    context.font = `700 18px ${FONT}`;
+    context.fillText(note.text.trim() || "Untitled section", rect.x + 4, rect.y - 27);
   }
 
   const centre = (ref: string) => {

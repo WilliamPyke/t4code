@@ -597,3 +597,33 @@ export function newCloudBoardAgent<TProject extends NewBoardProjectSource>(input
   });
   return { environmentId: environmentId!, project: picked.kind === "use" ? picked.project : null };
 }
+
+/** Rows a board's outline shows in the sidebar before it offers the board itself. */
+const BOARD_OUTLINE_SHOWN = 12;
+
+/**
+ * The outline rows a board list shows, in their order: at most `max`, each kind getting an even
+ * share before any gets more, so many artifacts never push every agent out. `more` were left out.
+ */
+export function boardOutlineShown<Item extends { readonly kind: string }>(
+  items: ReadonlyArray<Item>,
+  max: number = BOARD_OUTLINE_SHOWN,
+): { readonly shown: ReadonlyArray<Item>; readonly more: number } {
+  if (items.length <= max) return { shown: items, more: 0 };
+  const counts = new Map<string, number>();
+  for (const item of items) counts.set(item.kind, (counts.get(item.kind) ?? 0) + 1);
+  const share = Math.floor(max / counts.size);
+  const taken = new Map([...counts].map(([kind, count]) => [kind, Math.min(count, share)]));
+  let spare = max - [...taken.values()].reduce((sum, count) => sum + count, 0);
+  for (const [kind, count] of counts) {
+    const extra = Math.min(spare, count - (taken.get(kind) ?? 0));
+    taken.set(kind, (taken.get(kind) ?? 0) + extra);
+    spare -= extra;
+  }
+  const shown = items.filter((item) => {
+    const left = taken.get(item.kind) ?? 0;
+    taken.set(item.kind, left - 1);
+    return left > 0;
+  });
+  return { shown, more: items.length - shown.length };
+}

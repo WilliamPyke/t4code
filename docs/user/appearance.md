@@ -1,6 +1,10 @@
 # Appearance and themes
 
-In Simple mode, **Settings** has **Light or dark** and **Choose a theme**. In Advanced mode and the
+In Simple mode, **Settings** has **Light or dark**, **Text size** and **Choose a theme**. Text size
+is Small, Medium or Large; Medium is the standard size. It changes the words everywhere, including
+on board cards, which keep their size and place on the board. In Advanced mode, **Text size** under
+**Settings → Appearance** sets the font sizes below it together, and reads Custom once you change
+one of them yourself. In Advanced mode and the
 desktop app, open **Settings → Appearance** to choose a theme and follow the system
 appearance or stay in light or dark mode. To use different themes for light and dark mode, select
 the corresponding preview within each theme. Appearance preferences are saved separately on each

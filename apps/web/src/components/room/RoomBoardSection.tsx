@@ -14,12 +14,15 @@ import {
   BOARD_SELECTED_CHROME_CLASS,
 } from "./BoardChrome";
 import { BOARD_SECTION_SIZE, boardEditKey } from "./roomBoard.logic";
+import { boardStroke } from "./RoomBoardEdge";
 import { boardLiveRect, boardLiveStyle, boardLiveText, useBoardLiveDrag } from "./roomBoardLive";
 import { dragHandlers, leaveText } from "./roomBoardPointer";
 import { useBoardSelected } from "./RoomBoardSelection";
 import { NoteColorPicker, sectionColorClassName, sectionLabelClassName } from "./RoomNoteColor";
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
+
+const SECTION_TITLE_SIZE = "calc(18px * min(var(--board-line-scale, 1), 2.5))";
 
 // A band along each edge that the section is moved by, thicker as the board zooms out. The top
 // one reaches little into the title bar, and the sides start under it, clear of its buttons.
@@ -87,7 +90,7 @@ export function BoardSection({
     <div
       className={cn(
         // Its title, edges and grips take the pointer; pressing inside pans or selects the board.
-        "group/item pointer-events-none absolute flex flex-col rounded-lg border",
+        "group/item pointer-events-none absolute flex flex-col rounded-xl border",
         sectionColorClassName(note.color),
         selected &&
           cn(
@@ -100,6 +103,8 @@ export function BoardSection({
         top: note.y,
         width: live?.w ?? size.w,
         height: live?.h ?? size.h,
+        // Its frame thickens as the board zooms out, as lines do, so it still reads as a region.
+        borderWidth: boardStroke(1.5),
         ...boardLiveStyle(note, live),
       }}
       data-board-item={ref}
@@ -116,7 +121,7 @@ export function BoardSection({
       >
         <div className={cn("flex items-center gap-1", !selected && BOARD_HOVER_CHROME_CLASS)}>
           {onPickColor === undefined ? null : (
-            <NoteColorPicker color={note.color ?? "grey"} onPick={onPickColor} />
+            <NoteColorPicker color={note.color ?? "grey"} onPick={onPickColor} section />
           )}
           {canDelete ? (
             <button
@@ -156,6 +161,8 @@ export function BoardSection({
               {...grab}
             />
           ))}
+      <div className="pointer-events-auto contents">{handles}</div>
+      {/* After the grips, so a press on the title is the title's where the two meet. */}
       <input
         aria-label="Section title"
         // Resting, it is the section's to grab; focused, it is typed in.
@@ -167,10 +174,12 @@ export function BoardSection({
         placeholder={canRename ? "Name this section" : "Untitled section"}
         className={cn(
           // Above the frame's corner, as wide as its title, so it never covers or clips a card.
-          "pointer-events-auto absolute bottom-full -left-1 mb-0.5 field-sizing-content h-6 min-w-0 max-w-full truncate rounded-sm bg-transparent px-1 text-sm font-semibold outline-none placeholder:text-placeholder focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+          "pointer-events-auto absolute bottom-full -left-1 mb-[calc(2px+1.5px*var(--board-line-scale,1))] field-sizing-content h-[1.6em] min-w-0 max-w-full truncate rounded-sm bg-transparent px-1 font-bold tracking-tight outline-none placeholder:font-semibold placeholder:text-placeholder focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
           sectionLabelClassName(note.color),
           grab !== undefined ? "cursor-move focus:cursor-text" : "cursor-default",
         )}
+        // The board's heading: large, and larger as the board zooms out, up to 2.5 times.
+        style={{ fontSize: SECTION_TITLE_SIZE }}
         {...grab}
         onChange={(event) => {
           setDrafting(true);
@@ -188,7 +197,6 @@ export function BoardSection({
           onBlur();
         }}
       />
-      <div className="pointer-events-auto contents">{handles}</div>
     </div>
   );
 }

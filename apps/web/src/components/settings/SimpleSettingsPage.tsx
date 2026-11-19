@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { ClientSettings, EnvironmentId } from "@t3tools/contracts";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { ChevronRightIcon, LaptopIcon, PaletteIcon } from "lucide-react";
 import { type ReactNode, useState } from "react";
@@ -6,6 +6,7 @@ import { type ReactNode, useState } from "react";
 import { dispatchCommandPalette } from "~/commandPaletteStore";
 import { requestConfirmDialog } from "~/confirmDialog";
 import { boardAccountsEnabled, useBoardAccount } from "~/guest/boardAccount";
+import { updateClientSettings, useClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
 import { cn } from "~/lib/utils";
 import { setShellMode } from "~/shellMode";
@@ -28,6 +29,7 @@ import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { SettingsGroup } from "./SettingsGroup";
+import { TEXT_SIZE_OPTIONS, TEXT_SIZE_PRESETS, textSizePresetOf } from "./SettingsPanels.logic";
 
 /**
  * Settings in Simple mode: who you are, how Tinkjam looks, the computers your agents run on,
@@ -143,6 +145,7 @@ function AppearanceSection() {
           ))}
         </ToggleGroup>
       </Row>
+      <TextSizeRow />
       <Row label="Theme" description="Colours for the whole app">
         <Button
           variant="outline"
@@ -153,6 +156,42 @@ function AppearanceSection() {
         </Button>
       </Row>
     </Section>
+  );
+}
+
+const selectFontSizes = (settings: ClientSettings) => ({
+  fontSizeInterface: settings.fontSizeInterface,
+  fontSizePrompt: settings.fontSizePrompt,
+  fontSizeCode: settings.fontSizeCode,
+  fontSizeTerminal: settings.fontSizeTerminal,
+});
+
+function TextSizeRow() {
+  const preset = textSizePresetOf(useClientSettings(selectFontSizes));
+  return (
+    <Row
+      label="Text size"
+      description={
+        preset === null
+          ? "Using custom sizes from Advanced settings. Pick one to replace them."
+          : "Makes the words bigger or smaller everywhere. Medium is the standard size."
+      }
+    >
+      <ToggleGroup
+        aria-label="Text size"
+        value={preset === null ? [] : [preset]}
+        onValueChange={(next) => {
+          const picked = TEXT_SIZE_OPTIONS.find((option) => option.preset === next[0]);
+          if (picked !== undefined) void updateClientSettings(TEXT_SIZE_PRESETS[picked.preset]);
+        }}
+      >
+        {TEXT_SIZE_OPTIONS.map((option) => (
+          <Toggle key={option.preset} value={option.preset}>
+            {option.label}
+          </Toggle>
+        ))}
+      </ToggleGroup>
+    </Row>
   );
 }
 

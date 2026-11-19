@@ -32,6 +32,9 @@ const handlers = {
   t3_board_update: McpToolAccess.actsAsCaller((input) =>
     asCaller((agent, threadId) => agent.update(threadId, input)),
   ),
+  t3_board_arrange: McpToolAccess.actsAsCaller((input) =>
+    asCaller((agent, threadId) => agent.arrange(threadId, input)),
+  ),
 } satisfies McpToolAccess.Handlers<typeof BoardToolkit.tools>;
 
 export const layer = McpToolAccess.toLayer(BoardToolkit, handlers);

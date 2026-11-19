@@ -40,6 +40,7 @@ import {
   OrchestrationV2GetTurnItemResult,
   OrchestrationV2ThreadHistoryPage,
   RoomArtifactRead,
+  RoomBoardAgentArrangeResult,
   RoomBoardAgentChangeRequest,
   RoomBoardAgentResult,
   RoomBoardAgentView,
@@ -483,7 +484,9 @@ const boardAgentErrorResponse = (error: RoomBoardAgentError) =>
   );
 
 const encodeBoardView = encodeForGuest(RoomBoardAgentView);
-const encodeBoardResult = Schema.encodeEffect(RoomBoardAgentResult);
+const encodeBoardResult = Schema.encodeEffect(
+  Schema.Union([RoomBoardAgentResult, RoomBoardAgentArrangeResult]),
+);
 
 // Read by the guest's own Tinkjam server for the agent of the guest's own box there.
 const roomBoardRoute = HttpRouter.add(

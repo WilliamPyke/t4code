@@ -2452,8 +2452,8 @@ export const layerWsRpc = (
                 Effect.fail(new RoomCodePatchError({ reason: "inactive" })),
             }),
           ),
-        [WS_METHODS.guestShareBoardSummaries]: ({ threadIds }) =>
-          guestShares.boardSummaries(threadIds),
+        [WS_METHODS.guestShareBoardSummaries]: ({ threadIds, outline }) =>
+          guestShares.boardSummaries(threadIds, outline),
         [WS_METHODS.guestShareCreate]: (input) =>
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(guestShares.create(input)),

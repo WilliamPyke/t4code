@@ -4,8 +4,12 @@ import { useEffect } from "react";
 
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 
-/** A card someone asked the board to show, from their inbox: on the board, or a task in the Plan. */
+/**
+ * A card someone asked the board to show, from their inbox or a board list: on the board, or a
+ * task in the Plan. Boards are named by share id, or by view key for an owner's own board.
+ */
 export interface BoardFocus {
+  /** A note's id, or the room box's for the room thread's own card. */
   readonly noteId: string;
   readonly plan: boolean;
   /** Tells two asks for the same card apart. */

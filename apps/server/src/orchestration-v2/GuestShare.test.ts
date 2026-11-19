@@ -952,6 +952,7 @@ it.effect(
         from: "note:idea",
         to: "note:box",
         sentAt: "2026-11-13T00:00:00.000Z",
+        doneAt: "2026-11-13T00:00:00.000Z",
       });
       assert.isTrue(Option.isSome(forged));
       if (Option.isSome(forged)) yield* change(sam, forged.value);
@@ -961,6 +962,24 @@ it.effect(
           .map((edge) => edge.id),
       );
       assert.deepEqual(yield* sent, []);
+      const done = Effect.map(orchestrator.getThreadRecords(threadId, []), ({ thread }) =>
+        (thread.guestShare?.board?.edges ?? [])
+          .filter((edge) => edge.doneAt !== undefined)
+          .map((edge) => edge.id),
+      );
+      const settle = (settled: "done" | "failed") =>
+        orchestrator.dispatch({
+          type: "thread.room-cards.sent",
+          commandId: next(settled),
+          threadId,
+          shareId,
+          boxId: "box",
+          cardRefs: ["note:plan", "note:late"],
+          settled,
+        });
+      // A run that finishes marks nothing done that no prompt was marked as carrying.
+      yield* settle("done");
+      assert.deepEqual(yield* done, []);
 
       // A turn Sam's machine posts for a box that is not his marks nothing.
       const post = (id: string, boxId: string, cardRefs: ReadonlyArray<string>) =>
@@ -986,6 +1005,10 @@ it.effect(
         cardRefs: ["note:plan", "note:late"],
       });
       assert.deepEqual(yield* sent, ["plan>box"]);
+      // The run that carried them marks them done as it finishes, never as they are sent.
+      assert.deepEqual(yield* done, []);
+      yield* settle("done");
+      assert.deepEqual(yield* done, ["plan>box"]);
 
       // A guest's request marks its cards only once the owner sends it, not when it waits or is
       // dismissed.
@@ -1028,6 +1051,9 @@ it.effect(
       // Sam's own turn in his box marks the cards it carried, once, as the box first shows it.
       yield* post("run:his", "his", ["note:late"]);
       assert.deepEqual(yield* sent, ["plan>box", "idea>his", "late>his"]);
+      // His machine posts a turn once it finished, so what it carried is done too; his request
+      // the owner sent is not until its run ends.
+      assert.deepEqual(yield* done, ["plan>box", "late>his"]);
       const marked = yield* orchestrator.getThreadRecords(threadId, []);
       const lateAt = marked.thread.guestShare?.board?.edges?.find((edge) => edge.id === "late>his");
       yield* post("run:his", "his", ["note:late", "note:plan"]);
@@ -1040,6 +1066,11 @@ it.effect(
         pinned.thread.guestShare?.board?.edges?.find((edge) => edge.id === "late>his"),
         { ...lateAt!, pinned: true },
       );
+
+      // A run that failed or was stopped leaves what it carried to go with the next prompt.
+      yield* settle("failed");
+      assert.deepEqual(yield* sent, ["idea>his", "late>his"]);
+      assert.deepEqual(yield* done, ["late>his"]);
     }).pipe(Effect.provide(layerTest)),
 );
 

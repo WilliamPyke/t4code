@@ -3661,6 +3661,8 @@ const OrchestrationV2InternalCommand = Schema.Union([
     boxId: RoomBoardNote.fields.id,
     artifactId: Schema.optional(RoomBoardNote.fields.id),
     cardRefs: Schema.Array(Schema.String.check(Schema.isMaxLength(170))),
+    /** How the run that carried them ended: marks them done, or to go again. Absent: just sent. */
+    settled: Schema.optional(Schema.Literals(["done", "failed"])),
   }),
   /**
    * Marks a guest's waiting message sent as `sentAs` in its thread box's own thread, or with null

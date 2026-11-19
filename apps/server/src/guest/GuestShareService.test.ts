@@ -1506,7 +1506,7 @@ it.effect("lets the agent of a guest's own box on their machine work on the boar
     const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
     const samId = thread.guestShare!.guests!.find((guest) => guest.name === "Sam")!.id;
     const note = thread.guestShare!.board!.notes.find(
-      (candidate) => candidate.id === added.done[0],
+      (candidate) => "done" in added && candidate.id === added.done[0],
     );
     assert.deepEqual(
       [note?.text, note?.guestId, note?.agent],

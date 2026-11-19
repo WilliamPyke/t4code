@@ -121,6 +121,10 @@ const elsewhere = () => {
       asked.push(request);
       return answer({ done: ["note:new"], refused: [] });
     },
+    arrangeBoard: (_threadId, request) => {
+      asked.push(request);
+      return answer({ moved: [], renamed: [], refused: [] });
+    },
   });
   return {
     asked,
@@ -474,6 +478,12 @@ it.effect("sends the board tools of the user's own box in someone else's room to
     assert.strictEqual((yield* agent.read(mineThreadId)).you, "box:mine");
     yield* agent.add(mineThreadId, { cards: [{ text: "Hi" }] });
     yield* agent.update(mineThreadId, { changes: [{ id: "note:1", done: true }] });
+    const tidy = { ops: [{ do: "tidy" as const, section: "Ideas" }] };
+    assert.deepEqual(yield* agent.arrange(mineThreadId, tidy), {
+      moved: [],
+      renamed: [],
+      refused: [],
+    });
     // Its run and model mark the changes; the room's owner takes the box and the person from its
     // own record of this machine's room token.
     assert.deepEqual(links.asked, [
@@ -484,7 +494,13 @@ it.effect("sends the board tools of the user's own box in someone else's room to
         model: "GPT-5.1 Codex",
         change: { update: { changes: [{ id: "note:1", done: true }] } },
       },
+      { turnId: "run:1", model: "GPT-5.1 Codex", change: { arrange: tidy } },
     ]);
+    // A host from before arranging refuses the request: the agent is told why, not that it broke.
+    links.fail("invalid_response");
+    const outdated = yield* Effect.flip(agent.arrange(mineThreadId, tidy));
+    assert.strictEqual(outdated.reason, "host_outdated");
+    assert.include(outdated.message, "needs updating");
     // A room it cannot reach is something the agent can tell its user.
     links.fail("unreachable");
     const unreachable = yield* Effect.flip(agent.read(mineThreadId));
@@ -587,6 +603,74 @@ it.effect("plans a batch of tasks as one group beside the board's tasks, startin
       ["note.put"],
     );
     assert.isTrue(boardOf(threads).every((note) => note.run === undefined));
+  }).pipe(Effect.provide(layerWith(threads, undefined, dispatched)));
+});
+
+it.effect("arranges cards in one turn that undo puts back, places and sizes", () => {
+  const threads = makeThreads([
+    { id: "sec", text: "Ideas", x: 2_000, y: 0, section: true },
+    { id: "note:2", text: "FAQ", x: 1_300, y: 500 },
+  ]);
+  const dispatched: Array<OrchestrationV2ServerCommand> = [];
+  const placeOf = (id: string) => {
+    const note = boardOf(threads).find((candidate) => candidate.id === id);
+    return note && [note.x, note.y, note.size];
+  };
+  return Effect.gen(function* () {
+    const agent = yield* RoomBoardAgent.RoomBoardAgent;
+    const shown = (yield* agent.read(boxThreadId)).cards.find((card) => card.id === "note:2");
+    assert.deepEqual([shown?.x, shown?.y, shown?.w, shown?.h], [1_300, 500, 192, 144]);
+    const result = yield* agent.arrange(boxThreadId, {
+      ops: [
+        { do: "layout", cards: ["note:sam", "note:2"], as: "column", in: "Ideas" },
+        { do: "resize", card: "note:2", w: 400, h: 300 },
+        // Sam's own box: only people move it.
+        { do: "move", card: "box:sam", x: 0, y: 0 },
+      ],
+    });
+    assert.deepEqual(result.moved, [
+      { id: "note:sam", x: 2_032, y: 72, w: 192, h: 144 },
+      { id: "note:2", x: 2_032, y: 240, w: 400, h: 300 },
+    ]);
+    assert.deepEqual(
+      result.refused.map((refusal) => refusal.op),
+      [2],
+    );
+    // Sam's card is still Sam's, and every change was a board change that starts nothing.
+    assert.strictEqual(boardOf(threads).find((note) => note.id === "note:sam")?.guestId, sam);
+    assert.isTrue(dispatched.every((command) => command.type === "thread.guest-board.change"));
+    const turns = threads[roomThreadId]?.guestShare?.board?.agentTurns ?? [];
+    assert.deepEqual(
+      turns.map((turn) => [turn.id, turn.cards.map((card) => card.id)]),
+      [["run:1", ["note:sam", "note:2"]]],
+    );
+    const undo = (undone: boolean) =>
+      decide(threads, null, { type: "agent-turn.undo", turnId: "run:1", undone });
+    threads[roomThreadId] = Result.getOrThrow(undo(true));
+    assert.deepEqual(
+      [placeOf("note:sam"), placeOf("note:2")],
+      [
+        [900, 0, undefined],
+        [1_300, 500, undefined],
+      ],
+    );
+    threads[roomThreadId] = Result.getOrThrow(undo(false));
+    assert.deepEqual(placeOf("note:2"), [2_032, 240, { w: 400, h: 300 }]);
+
+    // A guest's own box's agent arranges as that guest: never the owner's box.
+    const asSam = yield* agent.arrange(
+      { roomThreadId, shareId, guestId: sam, boxId: "box:sam", turnId: "run:sam" },
+      {
+        ops: [
+          { do: "move", card: "box:b", x: 0, y: 0 },
+          { do: "move", card: "note:2", x: 1_300, y: 900 },
+        ],
+      },
+    );
+    assert.deepEqual(
+      [asSam.refused.map((refusal) => refusal.op), asSam.moved.map((card) => card.id)],
+      [[0], ["note:2"]],
+    );
   }).pipe(Effect.provide(layerWith(threads, undefined, dispatched)));
 });
 

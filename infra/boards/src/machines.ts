@@ -7,6 +7,7 @@ import {
   type RoomAgentActivity,
   type RoomAgentsEvent,
   type RoomArtifactRead,
+  type RoomBoardAgentArrangeResult,
   type RoomBoardAgentChangeRequest,
   type RoomBoardAgentResult,
   type RoomBoardAgentView,
@@ -25,6 +26,7 @@ import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
 import { EMPTY_ROOM_BOARD, roomArtifactSource } from "@t3tools/shared/roomBoard";
 import {
   roomBoardAgentAdd,
+  roomBoardAgentArrange,
   roomBoardAgentUpdate,
   roomBoardAgentView,
   type RoomBoardAgentTarget,
@@ -234,7 +236,13 @@ export function changeBoardAsAgent(
   request: RoomBoardAgentChangeRequest,
   now: string,
   uuid: () => string,
-): Result.Result<{ readonly room: CloudRoom; readonly result: RoomBoardAgentResult }, RoomFailure> {
+): Result.Result<
+  {
+    readonly room: CloudRoom;
+    readonly result: RoomBoardAgentResult | RoomBoardAgentArrangeResult;
+  },
+  RoomFailure
+> {
   const target = agentTarget(room, guestId, request.boxId);
   if (Result.isFailure(target)) return Result.fail(target.failure);
   const model = sanitizeLinkedPrompt(request.model ?? "")
@@ -265,10 +273,12 @@ export function changeBoardAsAgent(
       }),
     uuid: Effect.sync(uuid),
   };
-  const result = Effect.runSync(
-    "add" in request.change
-      ? roomBoardAgentAdd(target.success, ops, request.change.add)
-      : roomBoardAgentUpdate(target.success, ops, request.change.update),
+  const result = Effect.runSync<RoomBoardAgentResult | RoomBoardAgentArrangeResult, never>(
+    "arrange" in request.change
+      ? roomBoardAgentArrange(target.success, ops, request.change.arrange)
+      : "add" in request.change
+        ? roomBoardAgentAdd(target.success, ops, request.change.add)
+        : roomBoardAgentUpdate(target.success, ops, request.change.update),
   );
   return Result.succeed({ room: current, result });
 }

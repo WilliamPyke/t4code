@@ -37,6 +37,7 @@ import {
   type BoardPoint,
   type BoardPresence,
   type BoardRect,
+  type BoardResizeEdges,
   type BoardValue,
   appendNoteToDraft,
   boardEntryWithAttached,
@@ -131,6 +132,12 @@ import {
   boardProgressPhase,
   boardReactionChips,
   boardPromptCardGoes,
+  boardNoteAgentState,
+  boardNoteAgentStatuses,
+  boardConnectedNotes,
+  boardDoneNoteIds,
+  boardNotesSummary,
+  boardResendChanges,
   boardPromptChips,
   boardPromptContext,
   boardReplyQuote,
@@ -160,7 +167,7 @@ import {
   placeBoardItem,
   boardNextNoteSpot,
   putBoardEdit,
-  resizeBoardFromLeft,
+  resizeBoardRect,
   resolveBoard,
   roomBoardHolds,
   roomCodeStatus,
@@ -846,19 +853,62 @@ describe("resolveBoard", () => {
     expect(resolveBoard(resized, sent).sizes?.thread).toEqual(dropped);
     expect(resolveBoard(resized, sent).positions.thread).toEqual({ x: 0, y: 0 });
 
-    // From the bottom-left corner the left edge follows the pointer and the right edge stays,
-    // stopping at the bounds without pushing the card along.
+    // A side moves one edge and a corner two; the opposite edges stay, so a left or top edge
+    // moves the card's origin, and an axis with no moving edge ignores the pointer.
     const card = { x: 100, y: 50, width: 300, height: 200 };
-    expect(resizeBoardFromLeft(card, -40, 25)).toEqual({ x: 60, y: 50, size: { w: 340, h: 225 } });
-    expect(resizeBoardFromLeft(card, 250, -500)).toEqual({
+    const by = (edges: BoardResizeEdges) => resizeBoardRect(card, edges, -40, 25);
+    expect(
+      [
+        { y: "start" },
+        { x: "end" },
+        { y: "end" },
+        { x: "start" },
+        { x: "start", y: "start" },
+        { x: "end", y: "start" },
+        { x: "end", y: "end" },
+        { x: "start", y: "end" },
+      ].map((edges) => by(edges as BoardResizeEdges)),
+    ).toEqual([
+      { x: 100, y: 75, size: { w: 300, h: 175 } },
+      { x: 100, y: 50, size: { w: 260, h: 200 } },
+      { x: 100, y: 50, size: { w: 300, h: 225 } },
+      { x: 60, y: 50, size: { w: 340, h: 200 } },
+      { x: 60, y: 75, size: { w: 340, h: 175 } },
+      { x: 100, y: 75, size: { w: 260, h: 175 } },
+      { x: 100, y: 50, size: { w: 260, h: 225 } },
+      { x: 60, y: 50, size: { w: 340, h: 225 } },
+    ]);
+    // At the bounds the moving edges stop without pushing the card along.
+    expect(resizeBoardRect(card, { x: "start", y: "start" }, 250, 500)).toEqual({
       x: 400 - ROOM_BOARD_MIN_CARD_SIZE,
+      y: 250 - ROOM_BOARD_MIN_CARD_SIZE,
+      size: { w: ROOM_BOARD_MIN_CARD_SIZE, h: ROOM_BOARD_MIN_CARD_SIZE },
+    });
+    expect(resizeBoardRect(card, { x: "end", y: "end" }, -250, -500)).toEqual({
+      x: 100,
       y: 50,
       size: { w: ROOM_BOARD_MIN_CARD_SIZE, h: ROOM_BOARD_MIN_CARD_SIZE },
     });
-    expect(resizeBoardFromLeft(card, -50_000, 0).x).toBe(400 - ROOM_BOARD_MAX_CARD_SIZE);
-    expect(resizeBoardFromLeft(card, -50_000, 0, ROOM_BOARD_MAX_SECTION_SIZE).x).toBe(
+    expect(resizeBoardRect(card, { y: "start" }, 0, -50_000)).toEqual({
+      x: 100,
+      y: 250 - ROOM_BOARD_MAX_CARD_SIZE,
+      size: { w: 300, h: ROOM_BOARD_MAX_CARD_SIZE },
+    });
+    expect(resizeBoardRect(card, { x: "start" }, -50_000, 0).x).toBe(
+      400 - ROOM_BOARD_MAX_CARD_SIZE,
+    );
+    expect(resizeBoardRect(card, { x: "start" }, -50_000, 0, ROOM_BOARD_MAX_SECTION_SIZE).x).toBe(
       400 - ROOM_BOARD_MAX_SECTION_SIZE,
     );
+    // A note's move and resize from its top-left corner are one value: one change, one undo step.
+    const dragged = resizeBoardRect(card, { x: "start", y: "start" }, -40, -20);
+    const moved = settleBoardValue({ id: "n", text: "", ...dragged });
+    expect(boardChangeOf({ kind: "note", id: "n" }, moved)).toMatchObject({
+      type: "note.put",
+      x: 60,
+      y: 30,
+      size: { w: 340, h: 220 },
+    });
 
     const note = { id: "n", text: "Ship", x: 0.4, y: 0, size: { w: 250.2, h: 30_000 } };
     const settled = settleBoardValue(note);
@@ -2093,6 +2143,99 @@ describe("boardPromptContext", () => {
       ["note:b", "new"],
       ["note:a", "new"],
     ]);
+  });
+
+  it("says where a note stands with its agent, lets a done one go again, and clears done ones", () => {
+    const sentAt = "2026-11-13T10:00:00.000Z";
+    const doneAt = "2026-11-13T10:05:00.000Z";
+    const later = "2026-11-13T11:00:00.000Z";
+    const into = (from: string, fields: Partial<RoomBoardEdge> = {}): RoomBoardEdge => ({
+      id: `${from}>doc`,
+      from: `note:${from}`,
+      to: "note:doc",
+      ...fields,
+    });
+    const marked: RoomBoard = {
+      positions: {},
+      notes: [
+        note("box", { kind: "thread" }),
+        note("other", { kind: "thread" }),
+        note("doc", { kind: "artifact" }),
+        note("fresh"),
+        note("sent"),
+        note("done", { guestId: sam }),
+        // A mark is a note like any other.
+        note("mark", { mark: { selector: "h1" } }),
+        note("edited", { editedAt: later }),
+        note("again"),
+        note("task", { kind: "task" }),
+        note("pin"),
+      ],
+      edges: [
+        { id: "box>doc", from: "note:box", to: "note:doc" },
+        into("fresh"),
+        into("sent", { sentAt }),
+        into("done", { sentAt, doneAt }),
+        into("mark", { sentAt, doneAt }),
+        into("edited", { sentAt, doneAt }),
+        // Sent again since the run that finished with it.
+        into("again", { sentAt: later, doneAt }),
+        into("task", { sentAt, doneAt }),
+        { id: "pin>box", from: "note:pin", to: "note:box", sentAt, doneAt, pinned: true },
+        // Done for one box and new to another reads as what is left to do.
+        { id: "pin>other", from: "note:pin", to: "note:other" },
+      ],
+    };
+    const contextsOf = (from: RoomBoard) =>
+      new Map(["box", "other"].map((id) => [id, boardPromptContext(from, people, [], id)]));
+    const statuses = boardNoteAgentStatuses(contextsOf(marked));
+    expect([...statuses].map(([ref, status]) => [ref, status.state, status.boxId])).toEqual([
+      ["note:fresh", "going", "box"],
+      ["note:sent", "sent", "box"],
+      ["note:done", "done", "box"],
+      ["note:mark", "done", "box"],
+      ["note:edited", "going", "box"],
+      ["note:again", "sent", "box"],
+      ["note:task", "done", "box"],
+      ["note:pin", "going", "box"],
+    ]);
+    // With the agent only while the run its prompt started is the one running.
+    const sent = statuses.get("note:sent")!;
+    expect(boardNoteAgentState(sent, { startedAt: sentAt })).toBe("working");
+    expect(boardNoteAgentState(sent, { startedAt: later })).toBe("sent");
+    expect(boardNoteAgentState(sent, undefined)).toBe("sent");
+    expect(boardNoteAgentState(statuses.get("note:done")!, { startedAt: sentAt })).toBe("done");
+    expect(boardNoteAgentState(statuses.get("note:fresh")!, { startedAt: sentAt })).toBe("going");
+
+    // Plain notes are what a box counts and clears: a task keeps its own status.
+    const cards = contextsOf(marked).get("box")?.cards ?? [];
+    const notes = boardConnectedNotes(marked, statuses, cards);
+    expect(notes.map((one) => one.note.id)).not.toContain("task");
+    expect(boardNotesSummary(notes)).toBe("7 notes: 2 done, 2 sent, 3 to send");
+    expect(boardNotesSummary([])).toBeNull();
+    expect(boardDoneNoteIds(notes, null)).toEqual(["done", "mark"]);
+    // A guest clears only their own.
+    expect(boardDoneNoteIds(notes, sam)).toEqual(["done"]);
+    expect(
+      boardConnectedNotes(marked, statuses, cards, "note:doc").map((one) => one.note.id),
+    ).not.toContain("pin");
+
+    // "Send again" arms the note for the next prompt and sends nothing.
+    const changes = boardResendChanges(marked, statuses.get("note:done")!.card);
+    expect(changes).toEqual([{ type: "edge.resend", edgeId: "done>doc" }]);
+    const rearmed = Result.getOrThrow(
+      applyRoomBoardChange(
+        marked,
+        { hasCard: () => false, hasPerson: () => true },
+        sam,
+        changes[0]!,
+        later,
+      ),
+    );
+    expect(boardNoteAgentStatuses(contextsOf(rearmed)).get("note:done")?.state).toBe("going");
+    expect(rearmed.edges?.find((edge) => edge.id === "mark>doc")).toEqual(
+      into("mark", { sentAt, doneAt }),
+    );
   });
 
   it("offers a section's cards as its line's, read now, and only a prompt taking them marks them", () => {

@@ -235,6 +235,14 @@
       "types": "./src/boardPreview.ts",
       "import": "./src/boardPreview.ts"
     },
+    "./boardLayout": {
+      "types": "./src/boardLayout.ts",
+      "import": "./src/boardLayout.ts"
+    },
+    "./boardOutline": {
+      "types": "./src/boardOutline.ts",
+      "import": "./src/boardOutline.ts"
+    },
     "./oauthScope": {
       "types": "./src/oauthScope.ts",
       "import": "./src/oauthScope.ts"

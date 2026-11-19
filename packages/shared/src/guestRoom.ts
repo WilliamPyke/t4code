@@ -284,10 +284,18 @@ export function roomAfterGuestTurn<R extends GuestRoom>(
       guestId,
     });
     // Only as the box first shows the turn: a post again with its changes marks nothing anew.
+    // Their machine posts a turn once it finished, so its cards are sent and done at once.
     const board =
       shown === commented || cardRefs === undefined
         ? shown
-        : roomBoardWithCardsSent(shown, box.id, artifact?.noteId, cardRefs, at);
+        : roomBoardWithCardsSent(
+            roomBoardWithCardsSent(shown, box.id, artifact?.noteId, cardRefs, at),
+            box.id,
+            artifact?.noteId,
+            cardRefs,
+            at,
+            "done",
+          );
     return board === room.board ? room : { ...room, board };
   }
   return {

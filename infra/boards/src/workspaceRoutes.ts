@@ -9,6 +9,7 @@ import {
   CLOUD_WORKSPACE_MEMBER_PARAM,
   CLOUD_WORKSPACE_MEMBER_ROUTE,
   CLOUD_WORKSPACE_OPEN_ROUTE,
+  CLOUD_WORKSPACE_OUTLINE_ROUTE,
   CLOUD_WORKSPACE_PARAM,
   CLOUD_WORKSPACE_PREVIEW_ROUTE,
   CLOUD_WORKSPACE_ROUTE,
@@ -218,6 +219,19 @@ export async function workspaceRoute(
       }
       await workspace.forgetBoard(shareId);
       return noContent();
+    }
+    case `GET ${CLOUD_WORKSPACE_OUTLINE_ROUTE}`: {
+      // As opening it: in the workspace now, and the workspace lists the board.
+      if ((await workspace.roleOf(account)) === null) {
+        return failureResponse(roomFailure("not_member"));
+      }
+      if (!(await workspace.hasBoard(shareId))) {
+        return failureResponse(roomFailure("not_in_workspace"));
+      }
+      const outline = await board.outlineFor({ workspaceId });
+      return outline === null
+        ? failureResponse(roomFailure("not_in_workspace"))
+        : Response.json(outline, { headers: NO_STORE });
     }
     case `POST ${CLOUD_WORKSPACE_OPEN_ROUTE}`: {
       const open = await body(decodeOpen);

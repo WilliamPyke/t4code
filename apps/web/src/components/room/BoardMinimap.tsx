@@ -98,7 +98,8 @@ function MinimapCard({ item }: { readonly item: MinimapItem }) {
             ? DEEP_PAINTS[item.color ?? "grey"]
             : "var(--color-card)"
       }
-      fillOpacity={item.tone === "section" ? 0.1 : 1}
+      // A section's background shows as the board tints it; one with none stays faint.
+      fillOpacity={item.tone !== "section" ? 1 : (item.color ?? "grey") === "grey" ? 0.08 : 0.2}
       stroke={item.tone === "window" ? "var(--color-board-hairline)" : undefined}
       strokeWidth={item.tone === "window" ? 1 : undefined}
     />

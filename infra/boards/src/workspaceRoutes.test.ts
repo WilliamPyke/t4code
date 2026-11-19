@@ -5,6 +5,7 @@ import {
   CLOUD_WORKSPACE_JOIN_ROUTE,
   CLOUD_WORKSPACE_MEMBER_ROUTE,
   CLOUD_WORKSPACE_OPEN_ROUTE,
+  CLOUD_WORKSPACE_OUTLINE_ROUTE,
   CLOUD_WORKSPACE_PREVIEW_ROUTE,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -42,6 +43,10 @@ function setup(members: ReadonlyArray<string>) {
         calls.push(`open ${account} ${workspaceId} ${name}`);
         return { failure: roomFailure("ended") };
       },
+      outlineFor: async (reader: object) => {
+        calls.push(`outline ${JSON.stringify(reader)}`);
+        return { items: [{ id: "a1", kind: "artifact", name: "Pricing page" }] };
+      },
     })),
     ACCOUNTS: namespace((account) => ({
       workspaces: async () => {
@@ -78,6 +83,7 @@ describe("workspace routes", () => {
       ["POST", CLOUD_WORKSPACES_ROUTE, { name: "Acme", color: "blue", profile: { name: "Eve" } }],
       ["POST", CLOUD_WORKSPACE_JOIN_ROUTE, { code: CODE, profile: { name: "Eve" } }],
       ["POST", scoped(CLOUD_WORKSPACE_OPEN_ROUTE), { name: "Eve" }],
+      ["GET", scoped(CLOUD_WORKSPACE_OUTLINE_ROUTE)],
       ["POST", scoped(CLOUD_WORKSPACE_BOARD_ROUTE)],
       ["POST", scoped(CLOUD_WORKSPACE_INVITE_ROUTE)],
       ["DELETE", `${CLOUD_WORKSPACE_MEMBER_ROUTE}?workspace=ws-one-0000&member=m-ada`],
@@ -107,6 +113,19 @@ describe("workspace routes", () => {
     expect(calls).toEqual(["roleOf user_ada", "open user_ada ws-one-0000 Ada"]);
     calls.length = 0;
     const outsider = await send("user_eve", "POST", scoped(CLOUD_WORKSPACE_OPEN_ROUTE), body);
+    expect(outsider.status).toBe(403);
+    expect(calls).toEqual(["roleOf user_eve"]);
+  });
+
+  it("names what is on a board to a member, and asks the board nothing for anyone else", async () => {
+    const { calls, send } = setup(["user_ada"]);
+    const read = await send("user_ada", "GET", scoped(CLOUD_WORKSPACE_OUTLINE_ROUTE));
+    expect(await read.json()).toEqual({
+      items: [{ id: "a1", kind: "artifact", name: "Pricing page" }],
+    });
+    expect(calls).toEqual(["roleOf user_ada", 'outline {"workspaceId":"ws-one-0000"}']);
+    calls.length = 0;
+    const outsider = await send("user_eve", "GET", scoped(CLOUD_WORKSPACE_OUTLINE_ROUTE));
     expect(outsider.status).toBe(403);
     expect(calls).toEqual(["roleOf user_eve"]);
   });

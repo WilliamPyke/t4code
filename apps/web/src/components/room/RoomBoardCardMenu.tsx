@@ -38,6 +38,8 @@ export interface CardMenu {
     | {
         readonly value: RoomBoardNoteColor | undefined;
         readonly onPick: (color: RoomBoardNoteColor) => void;
+        /** A section's: its background, listed with "None". */
+        readonly section?: boolean;
       }
     | undefined;
 }
@@ -73,9 +75,13 @@ function CardMenuItems({ actions, assign, onReact, color }: CardMenu) {
       )}
       {color === undefined ? null : (
         <MenuSub>
-          <MenuSubTrigger>Colour</MenuSubTrigger>
+          <MenuSubTrigger>{color.section === true ? "Background" : "Colour"}</MenuSubTrigger>
           <MenuSubPopup>
-            <NoteColorChoices color={color.value} onPick={color.onPick} />
+            <NoteColorChoices
+              color={color.value}
+              onPick={color.onPick}
+              section={color.section === true}
+            />
           </MenuSubPopup>
         </MenuSub>
       )}

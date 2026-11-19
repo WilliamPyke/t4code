@@ -2,6 +2,8 @@
 import {
   CLOUD_BOARD_ACCOUNT_CLAIM_ROUTE,
   CLOUD_BOARD_ACCOUNT_OPEN_ROUTE,
+  CLOUD_BOARD_ACCOUNT_OUTLINE_ROUTE,
+  CLOUD_BOARD_OUTLINE_ROUTE,
   CLOUD_BOARD_ACCOUNT_ROUTE,
   CLOUD_BOARD_COPIES_ROUTE,
   CLOUD_BOARD_COPY_ROUTE,
@@ -9,6 +11,7 @@ import {
   CloudBoardCopiesRequest,
   CloudBoardCopyRequest,
   type RoomBoard,
+  type RoomBoardOutline,
   CLOUD_WORKSPACES_ROUTE,
   CLOUD_BOARD_LINK_ROUTE,
   CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
@@ -54,6 +57,7 @@ import {
   RoomBoardChange,
   ThreadId,
 } from "@t3tools/contracts";
+import { boardOutline } from "@t3tools/shared/boardOutline";
 import { encodeBoardPreview } from "@t3tools/shared/boardPreview";
 import { DurableObject } from "cloudflare:workers";
 import * as Option from "effect/Option";
@@ -131,10 +135,12 @@ import {
   accountOfGuest,
   accountsOn,
   linkAccount,
+  outlineFor,
   retitledAccountBoard,
   withAccountBoard,
   withAccountSession,
   withoutAccountBoard,
+  type OutlineReader,
 } from "./account.ts";
 import {
   accessAnswerItem,
@@ -381,6 +387,12 @@ async function accountRoute(request: Request, env: Env, url: URL): Promise<Respo
     };
     return Response.json(result, { headers: NO_STORE });
   }
+  if (path === CLOUD_BOARD_ACCOUNT_OUTLINE_ROUTE && request.method === "GET") {
+    const outline = await boardOf(env, shareId).outlineFor({ account });
+    return outline === null
+      ? failureResponse(roomFailure("ended"))
+      : Response.json(outline, { headers: NO_STORE });
+  }
   if (path === CLOUD_BOARD_ACCOUNT_ROUTE && request.method === "DELETE") {
     await boardOf(env, shareId).leaveAsAccount(account);
     await index.forget(shareId);
@@ -604,6 +616,9 @@ const roomPosted = () =>
   });
 const encoder = new TextEncoder();
 const nowIso = () => new Date().toISOString();
+// A cloud board has no room thread of its own to name.
+const outlined = (room: CloudRoom) =>
+  Response.json(boardOutline(room.board, null), { headers: NO_STORE });
 
 /** One board. Everything it decides is in `room.ts`; this keeps it, and its open streams. */
 export class BoardRoom extends DurableObject<Env> {
@@ -727,6 +742,7 @@ export class BoardRoom extends DurableObject<Env> {
       const refused = checkAccess("link", url.pathname);
       if (refused !== null) return failureResponse(refused);
       if (url.pathname === STREAM_ROUTE) return this.openStream(room, null, request.signal, hash);
+      if (url.pathname === CLOUD_BOARD_OUTLINE_ROUTE) return outlined(room);
       return noContent();
     }
     // The board was deleted, or this person was taken off it.
@@ -802,6 +818,8 @@ export class BoardRoom extends DurableObject<Env> {
       }
       case SESSION_ROUTE:
         return noContent();
+      case CLOUD_BOARD_OUTLINE_ROUTE:
+        return outlined(room);
       case STREAM_ROUTE:
         return this.openStream(
           room,
@@ -1136,6 +1154,11 @@ export class BoardRoom extends DurableObject<Env> {
       this.sendCursors(Date.now());
     }
     return this.withPreview(linked.success.board);
+  }
+
+  /** Called by the Worker once it verified who reads: the board's outline, or null if they may not. */
+  async outlineFor(reader: OutlineReader): Promise<RoomBoardOutline | null> {
+    return outlineFor(this.room, reader);
   }
 
   /** Called by the Worker once it verified `account`: a new session as the account's person here. */

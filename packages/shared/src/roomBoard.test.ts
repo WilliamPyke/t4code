@@ -1504,6 +1504,16 @@ describe("roomBoardWithCardsSent", () => {
   };
   const sentIds = (next: RoomBoard) =>
     (next.edges ?? []).filter((edge) => edge.sentAt === at).map((edge) => edge.id);
+  const resend = (from: RoomBoard, edgeId: string, card?: string) =>
+    Result.getOrThrow(
+      applyRoomBoardChange(
+        from,
+        { hasCard: () => true, hasPerson: () => true },
+        GuestId.make("guest:sam"),
+        { type: "edge.resend", edgeId, ...(card === undefined ? {} : { card }) },
+        at,
+      ),
+    );
 
   it("marks only the lines the prompt carried its cards along into this box and its artifact", () => {
     const next = roomBoardWithCardsSent(board, "box", "doc", ["note:a", "note:far", "note:b"], at);
@@ -1576,6 +1586,54 @@ describe("roomBoardWithCardsSent", () => {
     expect(
       roomBoardWithCardsSent(movedOut, "box", undefined, ["note:in2"], later).edges?.[0]?.sentCards,
     ).toEqual({ other: { x: at }, box: { "note:in2": later } });
+    // The run that carried a card finishing marks it done for this box; failing forgets it went.
+    const done = roomBoardWithCardsSent(
+      sent,
+      "box",
+      undefined,
+      ["note:in1", "note:in2"],
+      later,
+      "done",
+    );
+    expect(done.edges?.[0]?.doneCards).toEqual({ box: { "note:in1": later } });
+    const failed = roomBoardWithCardsSent(done, "box", undefined, ["note:in1"], later, "failed");
+    expect(failed.edges?.[0]).toEqual({
+      ...tray.edges?.[0],
+      sentCards: { other: { x: at }, box: {} },
+      doneCards: { box: {} },
+    });
+    // Sending one card of the section again leaves the others' marks.
+    const both = roomBoardWithCardsSent(sent, "box", undefined, ["note:in2"], at);
+    expect(resend(both, "tray>box", "note:in1").edges?.[0]?.sentCards).toEqual({
+      other: { x: at },
+      box: { "note:in2": at },
+    });
+  });
+
+  it("marks what a finished run carried done beside its sent marks, and a failed run's to go again", () => {
+    const later = "2026-11-13T13:00:00.000Z";
+    const refs = ["note:a", "note:far", "note:b"];
+    const sent = roomBoardWithCardsSent(board, "box", "doc", refs, at);
+    // Never without a sent mark: a run of a box whose prompt carried nothing marks nothing.
+    expect(roomBoardWithCardsSent(board, "box", "doc", refs, later, "done")).toBe(board);
+    const done = roomBoardWithCardsSent(sent, "box", "doc", refs, later, "done");
+    expect(done.edges?.slice(0, 2)).toEqual([
+      { id: "a>box", from: "note:a", to: "note:box", sentAt: at, doneAt: later },
+      {
+        id: "far>a",
+        from: "note:far",
+        to: "note:a",
+        sentFor: { box: at },
+        doneFor: { box: later },
+      },
+    ]);
+    expect(done.edges?.[3]).toEqual({ ...sent.edges?.[3], doneAt: later });
+    expect(done.edges?.[4]).toEqual(board.edges?.[4]);
+    expect(roomBoardWithCardsSent(done, "box", "doc", refs, later, "done")).toBe(done);
+    expect(roomBoardWithCardsSent(sent, "box", "doc", refs, later, "failed")).toEqual(board);
+    // "Send again" forgets both marks on that line alone, and is nothing on a line never sent.
+    expect(resend(done, "a>box").edges).toEqual([board.edges?.[0], ...(done.edges ?? []).slice(1)]);
+    expect(resend(board, "a>box")).toBe(board);
   });
 
   it("times a card's change by its edit, a reply other than this box's agent's, or new content", () => {

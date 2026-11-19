@@ -1,4 +1,5 @@
 import {
+  CLOUD_BOARD_OUTLINE_ROUTE,
   CLOUD_BOARD_COPIES_ROUTE,
   CLOUD_BOARD_LINK_ROUTE,
   CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
@@ -292,7 +293,9 @@ describe("cloud room", () => {
 
   it("refuses every route but reading the board to whoever can only look", () => {
     for (const route of Object.keys(SESSION_ROUTES)) {
-      const reading = route === SESSION_ROUTE || route === STREAM_ROUTE;
+      // The outline names what the stream shows, so whoever may read one may read the other.
+      const reading =
+        route === SESSION_ROUTE || route === STREAM_ROUTE || route === CLOUD_BOARD_OUTLINE_ROUTE;
       const managing = [
         CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
         CLOUD_BOARD_PEOPLE_ROLE_ROUTE,

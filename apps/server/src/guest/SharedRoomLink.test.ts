@@ -158,6 +158,7 @@ const world = Effect.fn(function* (
                     command.type === "thread.room-artifact.fill" ||
                     command.type === "thread.room-comment.answer" ||
                     command.type === "thread.room-box.turn" ||
+                    command.type === "thread.room-cards.sent" ||
                     command.type === "thread.room-box.changes") &&
                   owner !== undefined
                 ? Queue.offer(answers, command).pipe(Effect.as({} as never))
@@ -849,7 +850,15 @@ it.effect(
             kind: "room-cards",
             label: "Board · 1 card",
             // As a viewer's client named it; the guest's request carries the board's own labels.
-            cards: [{ label: "Note from You", author: "guest", name: "Cam", text: "Dark mode" }],
+            cards: [
+              {
+                label: "Note from You",
+                author: "guest",
+                name: "Cam",
+                text: "Dark mode",
+                ref: "note:idea",
+              },
+            ],
           },
           {
             version: 1,
@@ -948,6 +957,7 @@ it.effect(
                   boxId: "box:plan",
                   sentAs: "message:asked",
                   cards: ["Note from Cam"],
+                  cardRefs: ["note:asked"],
                 },
               ],
               boardThreads: { "box:plan": threadId, "box:other": "thread:other" },
@@ -966,8 +976,23 @@ it.effect(
       });
       yield* Effect.gen(function* () {
         yield* SharedRoomLink.SharedRoomLink;
-        // Runs are taken in order, so the first command shows none came before it. A turn run
-        // from the thread itself shows on its box, and fills no artifact it was not sent for.
+        // Runs are taken in order, so the first command shows none came before it. A run that
+        // was stopped shows nothing, and what it carried goes with the next prompt again.
+        const cards = {
+          type: "thread.room-cards.sent",
+          threadId: roomThreadId,
+          shareId,
+          boxId: "box:plan",
+          artifactId: "note:plan",
+        };
+        assert.deepEqual(yield* Queue.take(answers), {
+          ...cards,
+          commandId: "server:room-cards:run:cancelled",
+          cardRefs: ["note:idea"],
+          settled: "failed",
+        } as never);
+        // A turn run from the thread itself shows on its box, and fills no artifact it was not
+        // sent for.
         const own = yield* Queue.take(answers);
         assert.deepInclude(own, { type: "thread.room-box.turn", boxId: "box:plan" } as never);
         assert.deepInclude((own as { turn: object }).turn, {
@@ -976,6 +1001,13 @@ it.effect(
           reply: "Fixed.",
           model: "GPT-5.1 Codex",
         });
+        // A finished run marks done the cards the guest's request named, not what its text says.
+        assert.deepEqual(yield* Queue.take(answers), {
+          ...cards,
+          commandId: "server:room-cards:run:asked",
+          cardRefs: ["note:asked"],
+          settled: "done",
+        } as never);
         const shown = yield* Queue.take(answers);
         assert.deepInclude(shown, {
           type: "thread.room-box.turn",

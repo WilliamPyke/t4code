@@ -376,6 +376,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "appearance-interface",
   },
   {
+    id: "text-size",
+    title: "Text size",
+    to: "/settings/appearance",
+    searchTerms: ["typography font small medium large bigger smaller zoom"],
+  },
+  {
     id: "interface-font",
     title: "Interface font",
     to: "/settings/appearance",

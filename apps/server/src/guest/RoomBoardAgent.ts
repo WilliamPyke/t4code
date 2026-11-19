@@ -4,7 +4,8 @@ import {
   type GuestShareId,
   ROOM_BOARD_ROOM_BOX,
   type RoomBoardAgentAddInput,
-  type RoomBoardAgentChangeRequest,
+  type RoomBoardAgentArrangeInput,
+  type RoomBoardAgentArrangeResult,
   type RoomBoardAgentMark,
   type RoomBoardAgentResult,
   type RoomBoardAgentUpdateInput,
@@ -18,6 +19,7 @@ import { roomBoxOn } from "@t3tools/shared/guestRoom";
 import { EMPTY_ROOM_BOARD, applyRoomBoardChange } from "@t3tools/shared/roomBoard";
 import {
   roomBoardAgentAdd,
+  roomBoardAgentArrange,
   roomBoardAgentUpdate,
   roomBoardAgentView,
   type RoomBoardAgentOps,
@@ -49,11 +51,21 @@ const AGENT_ERROR_MESSAGES = {
   board_gone: "This thread's board is no longer there.",
   unreachable: "This box can't reach the room's board from here.",
   too_fast: "The room's board is taking too many changes from this machine. Try again in a minute.",
+  host_outdated:
+    "This board's host needs updating before it takes this from an agent. Tell your user; the board's other tools still work.",
 } as const;
 
 export class RoomBoardAgentError extends Schema.TaggedError<RoomBoardAgentError>()(
   "RoomBoardAgentError",
-  { reason: Schema.Literals(["not_on_board", "board_gone", "unreachable", "too_fast"]) },
+  {
+    reason: Schema.Literals([
+      "not_on_board",
+      "board_gone",
+      "unreachable",
+      "too_fast",
+      "host_outdated",
+    ]),
+  },
 ) {
   override get message(): string {
     return AGENT_ERROR_MESSAGES[this.reason];
@@ -103,6 +115,11 @@ export class RoomBoardAgent extends Context.Service<
       by: Caller,
       input: RoomBoardAgentUpdateInput,
     ) => Effect.Effect<RoomBoardAgentResult, RoomBoardAgentError>;
+    /** Moves, sizes and renames cards. A room another server shares must know how. */
+    readonly arrange: (
+      by: Caller,
+      input: RoomBoardAgentArrangeInput,
+    ) => Effect.Effect<RoomBoardAgentArrangeResult, RoomBoardAgentError>;
   }
 >()("t3/guest/RoomBoardAgent") {}
 
@@ -253,7 +270,9 @@ const make = Effect.gen(function* () {
           ? "not_on_board"
           : error.reason === "too_fast"
             ? "too_fast"
-            : "unreachable",
+            : error.reason === "invalid_response"
+              ? "host_outdated"
+              : "unreachable",
     );
 
   /**
@@ -288,7 +307,7 @@ const make = Effect.gen(function* () {
     };
   });
 
-  const changeElsewhere = (threadId: ThreadId, change: RoomBoardAgentChangeRequest["change"]) =>
+  const changeElsewhere = (threadId: ThreadId, change: SharedRoomLink.BoardEdit) =>
     Effect.flatMap(elsewhere(threadId), (away) =>
       away === null
         ? Effect.succeed(null)
@@ -371,7 +390,21 @@ const make = Effect.gen(function* () {
     return yield* roomBoardAgentUpdate(target, opsOf(target), input);
   });
 
-  return RoomBoardAgent.of({ read, add, update });
+  const arrange = Effect.fn("RoomBoardAgent.arrange")(function* (
+    by: Caller,
+    input: RoomBoardAgentArrangeInput,
+  ) {
+    const away = yield* elsewhere(by);
+    if (away !== null) {
+      return yield* links
+        .arrangeBoard(away.threadId, { ...away.request, change: { arrange: input } })
+        .pipe(Effect.mapError(fromLink));
+    }
+    const target = yield* targetOf(by);
+    return yield* roomBoardAgentArrange(target, opsOf(target), input);
+  });
+
+  return RoomBoardAgent.of({ read, add, update, arrange });
 });
 
 export const layer = Layer.effect(RoomBoardAgent, make);

@@ -306,7 +306,12 @@ note to it. Once sent, a card stays out of that box's later prompts until it cha
 note or a comment thread with a new reply goes once more. Pin a card (**Always send**) to send it
 with every prompt. The box's message lists the cards that will go; remove any you do not want to
 send, or open **already sent** to send one again. On the board, a sent card's line is dashed and
-a pinned one is thicker. The owner sees them
+a pinned one is thicker. A connected note says where it stands: **To send**, **With the agent**
+while that prompt's run works, **Sent**, or **Done by agent** once the run finished. A run that
+fails or is stopped puts its notes back to **To send**. If the agent did not fix what a done note
+asked, press **Not fixed, send again** and it goes with the next prompt someone sends. A box's
+menu, or its artifact's, offers **Remove done notes**. The owner sees the cards
+that went
 as a **Board** chip on the message, and opening it shows exactly what the agent got. The agent
 reads each card as the words of whoever wrote it, so a guest's note is background, not the
 owner's instruction. A guest's cards are written into their message's text, so the owner reads
@@ -477,6 +482,9 @@ A thread that is shared or has a board shows a board button on its sidebar row, 
 palette's **Open board of...** lists those threads. The board opens where you last left it on that
 device, panned and zoomed the same, with the same conversation beside it; if that box or its thread
 is gone, the thread's own conversation opens instead.
+
+In the sidebar, the arrow on a board's row lists its artifacts, agents and sections without opening
+the board. Choose one to open the board with that card in view and selected.
 
 Someone who continued the thread on their own machine has the board in their own Tinkjam: **Board**
 in the joined thread's header opens it, and their own boxes run on that machine.

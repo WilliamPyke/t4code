@@ -224,6 +224,11 @@ import {
   boardNewNoteSize,
   boardNextNoteSpot,
   boardNoteQuote,
+  boardNoteAgentStatuses,
+  boardConnectedNotes,
+  boardDoneNoteIds,
+  boardNotesSummary,
+  boardResendChanges,
   boardNoteSize,
   boardOwnBoxFor,
   boardPeopleOf,
@@ -252,12 +257,13 @@ import {
   canPromptBoardBox,
   type RoomBoardCloud,
   roomBoardHolds,
-  clampBoardSize,
   cursorSender,
   dropBoardEdit,
   dropHeldBoardEdits,
   fitBoardOnSurface,
   boardTouchScale,
+  boardGripScale,
+  type BoardResizeEdges,
   boardTypingRect,
   openingBoardView,
   followBoardView,
@@ -268,7 +274,7 @@ import {
   placeBoardCards,
   placeBoardItem,
   putBoardEdit,
-  resizeBoardFromLeft,
+  resizeBoardRect,
   resolveBoard,
   settleBoardEdits,
   roomCodeStatus,
@@ -343,6 +349,7 @@ import {
   boardDraftBox,
 } from "./boardAsk.logic";
 import { type BoardRunning, BoardRunPopover, TaskRunChip, newBoardRunning } from "./BoardRun";
+import { NoteAgentChip } from "./BoardNoteAgent";
 import {
   BOARD_RUN_MAX_BOXES,
   type BoardRunMode,
@@ -399,7 +406,7 @@ import {
 } from "./RoomBoardEdge";
 import { TaskAssigneeDot, TaskDueChip, TaskPriorityMark } from "./BoardTaskMarks";
 import { MentionChips, useMentionPicker } from "./BoardMentions";
-import { useBoardFocusRequest } from "./boardFocus";
+import { type BoardFocus, useBoardFocusRequest } from "./boardFocus";
 import { boardStartRect } from "./boardFirstView";
 import { holdCaretIn } from "./boardTypeIn";
 import { firstBoardView } from "./boardFirstView.logic";
@@ -707,19 +714,99 @@ function scrollsInside(event: WheelEvent): boolean {
     : scrollWidth > clientWidth + 1;
 }
 
-type BoardCorner = "left" | "right";
+// How far a card's resize grips reach, in screen pixels at any zoom: a side's band 2px out and 5px
+// in, a corner's square 12px reaching 4px out. So a press just beside the card is the board's, and
+// its buttons, text and title bar stay their own. A finger gets more on a selected card.
+const GRIP_REACH = cn(
+  "[--o:calc(2px*var(--board-grip-scale,1))] [--i:calc(5px*var(--board-grip-scale,1))]",
+  "[--co:calc(4px*var(--board-grip-scale,1))] [--c:calc(12px*var(--board-grip-scale,1))]",
+  "pointer-coarse:group-data-[board-selected]/item:[--o:calc(10px*var(--board-grip-scale,1))]",
+  "pointer-coarse:group-data-[board-selected]/item:[--i:calc(8px*var(--board-grip-scale,1))]",
+  "pointer-coarse:group-data-[board-selected]/item:[--co:calc(12px*var(--board-grip-scale,1))]",
+  "pointer-coarse:group-data-[board-selected]/item:[--c:calc(28px*var(--board-grip-scale,1))]",
+);
+// A section's frame moves it, so only the outer 5px of its 16px edge band resizes it (`--i` is
+// negative: the band ends outside the frame), and its corners cover the band's corners.
+const FRAME_GRIP_REACH = cn(
+  "[--o:calc(8px*var(--board-line-scale,1))] [--i:calc(-3px*var(--board-line-scale,1))]",
+  "[--co:calc(8px*var(--board-line-scale,1))] [--c:calc(12px*var(--board-line-scale,1))]",
+  "pointer-coarse:group-data-[board-selected]/item:[--o:calc(14px*var(--board-line-scale,1))]",
+  "pointer-coarse:group-data-[board-selected]/item:[--co:calc(14px*var(--board-line-scale,1))]",
+  "pointer-coarse:group-data-[board-selected]/item:[--c:calc(28px*var(--board-line-scale,1))]",
+);
+// A side's band has no z-index: a card lying over this one's edge covers it, and the line grip in
+// the side's middle (z-10) is pressed before it.
+const GRIP_ROW =
+  "inset-x-[calc(var(--c)_-_var(--co))] h-[calc(var(--o)_+_var(--i))] cursor-ns-resize";
+const GRIP_COLUMN =
+  "inset-y-[calc(var(--c)_-_var(--co))] w-[calc(var(--o)_+_var(--i))] cursor-ew-resize";
+const GRIP_CORNER = "size-(--c)";
+// Only the bottom corners are marked and taken by a finger on a card that is not selected; a
+// finger on the other grips of such a card moves it or pans, as it always has.
+const GRIP_SELECTED_TOUCH =
+  "pointer-coarse:pointer-events-none pointer-coarse:group-data-[board-selected]/item:pointer-events-auto";
+
+/** Each grip a card is resized by: the bottom corners first, then the top ones, then the sides. */
+const RESIZE_GRIPS: ReadonlyArray<{
+  readonly name: string;
+  readonly edges: BoardResizeEdges;
+  readonly className: string;
+  readonly mark?: string;
+}> = [
+  {
+    name: "sw",
+    edges: { x: "start", y: "end" },
+    className: cn(GRIP_CORNER, "-bottom-(--co) -left-(--co) cursor-nesw-resize"),
+    mark: "bottom-(--co) left-(--co) rounded-bl-xs border-s-2",
+  },
+  {
+    name: "se",
+    edges: { x: "end", y: "end" },
+    className: cn(GRIP_CORNER, "-right-(--co) -bottom-(--co) cursor-nwse-resize"),
+    mark: "right-(--co) bottom-(--co) rounded-br-xs border-e-2",
+  },
+  {
+    name: "nw",
+    edges: { x: "start", y: "start" },
+    className: cn(GRIP_CORNER, GRIP_SELECTED_TOUCH, "-top-(--co) -left-(--co) cursor-nwse-resize"),
+  },
+  {
+    name: "ne",
+    edges: { x: "end", y: "start" },
+    className: cn(GRIP_CORNER, GRIP_SELECTED_TOUCH, "-top-(--co) -right-(--co) cursor-nesw-resize"),
+  },
+  { name: "n", edges: { y: "start" }, className: cn(GRIP_ROW, GRIP_SELECTED_TOUCH, "-top-(--o)") },
+  {
+    name: "e",
+    edges: { x: "end" },
+    className: cn(GRIP_COLUMN, GRIP_SELECTED_TOUCH, "-right-(--o)"),
+  },
+  {
+    name: "s",
+    edges: { y: "end" },
+    className: cn(GRIP_ROW, GRIP_SELECTED_TOUCH, "-bottom-(--o)"),
+  },
+  {
+    name: "w",
+    edges: { x: "start" },
+    className: cn(GRIP_COLUMN, GRIP_SELECTED_TOUCH, "-left-(--o)"),
+  },
+];
 
 /**
- * A bottom corner a card or note is resized by. It reports where the card was and how big when
+ * A side or corner a card or note is resized by. It reports where the card was and how big when
  * it was taken, in board pixels, and how far the pointer went since, in screen pixels, so the size
  * never drifts from the pointer.
  */
 function ResizeHandle({
-  corner,
+  className,
+  mark,
   onResize,
   onEnd,
 }: {
-  readonly corner: BoardCorner;
+  readonly className: string;
+  /** The small corner drawn on a bottom corner's grip, placed on the card's own corner. */
+  readonly mark: string | undefined;
   readonly onResize: (from: BoardRect, dx: number, dy: number) => void;
   readonly onEnd: () => void;
 }) {
@@ -730,17 +817,11 @@ function ResizeHandle({
     start.current = null;
     onEnd();
   };
-  // A 16px grip on the corner, reaching only 4px past it: it covers the card's corner padding and
-  // never its buttons or text, and a press just beside the card is the board's.
   return (
     <div
       aria-hidden
       data-board-grip
-      className={cn(
-        "absolute -bottom-1 z-10 grid size-4 touch-none place-items-center",
-        BOARD_HOVER_CHROME_CLASS,
-        corner === "right" ? "-right-1 cursor-nwse-resize" : "-left-1 cursor-nesw-resize",
-      )}
+      className={cn("absolute touch-none", BOARD_HOVER_CHROME_CLASS, className)}
       onPointerDown={(event) => {
         // A section's grips sit in a `display: contents` wrapper, which measures 0 by 0.
         const box = event.currentTarget.closest<HTMLElement>("[data-board-item]");
@@ -768,12 +849,9 @@ function ResizeHandle({
       onPointerUp={release}
       onPointerCancel={release}
     >
-      <span
-        className={cn(
-          "size-2 border-b-2 border-muted-foreground",
-          corner === "right" ? "rounded-br-xs border-e-2" : "rounded-bl-xs border-s-2",
-        )}
-      />
+      {mark === undefined ? null : (
+        <span className={cn("absolute size-2 border-b-2 border-muted-foreground", mark)} />
+      )}
     </div>
   );
 }
@@ -1623,6 +1701,45 @@ export function RoomBoard({
           : artifactEdges.has(id)
             ? "artifact"
             : "plain";
+  // Where each connected card stands with the agents its lines reach.
+  const noteStatuses = boardNoteAgentStatuses(contexts);
+  // A box's connected notes, or with `into` only those on that artifact.
+  const connectedNotes = (boxIds: ReadonlyArray<string>, into?: string) =>
+    boxIds.flatMap((boxId) =>
+      boardConnectedNotes(shown, noteStatuses, contexts.get(boxId)?.cards ?? [], into),
+    );
+  // Said on plain notes, marks among them: a task has its own status, a window its own bar.
+  const noteStatusOf = (note: RoomBoardNote) =>
+    note.kind === undefined ? noteStatuses.get(noteRef(note.id)) : undefined;
+  const noteStatusChip = (note: RoomBoardNote) => {
+    const status = noteStatusOf(note);
+    return status === undefined ? null : (
+      <NoteAgentChip
+        status={status}
+        boxName={boxName(status.boxId)}
+        onResend={canEdit && onChange !== undefined ? () => resendCard(status.card) : undefined}
+      />
+    );
+  };
+  // The notes with a line into an artifact, a view's being those of the artifact it shows.
+  const artifactNotes = (note: RoomBoardNote) => {
+    const source = roomArtifactSource(shown, note.id) ?? note;
+    return connectedNotes(
+      threadBoxes
+        .filter((box) => contexts.get(box.id)?.artifact?.id === source.id)
+        .map((box) => box.id),
+      noteRef(source.id),
+    );
+  };
+  // Only arms the card for the next prompt someone sends themselves; nothing is sent here.
+  const resendCard = (card: BoardPromptCard) => {
+    if (onChange === undefined) return;
+    for (const change of boardResendChanges(shown, card)) {
+      void queueChange(boardChangeQueueKey(shown, { kind: "edge", id: change.edgeId }, null), () =>
+        onChange(change),
+      );
+    }
+  };
   // Pinning takes one of the card's lines; unpinning clears every pinned one.
   const pinPromptCard = (card: BoardPromptCard, pinned: boolean) => {
     if (onChange === undefined) return;
@@ -2199,23 +2316,25 @@ export function RoomBoard({
     const last = held.current.get(noteRef(note.id));
     return last !== undefined && "text" in last ? last : note;
   };
-  // Where a resize from a bottom corner takes a card (`ref`, held as `key`): the pointer's way,
-  // its moving edges snapped unless Ctrl or Cmd is held. The left corner keeps the right edge.
+  // Where a resize from a side or corner takes a card (`ref`, held as `key`): the pointer's way,
+  // its moving edges snapped unless Ctrl or Cmd is held. The opposite edges stay where they are.
   const resized = (
     key: string,
     ref: string,
-    corner: BoardCorner,
+    edges: BoardResizeEdges,
     from: BoardRect,
     dx: number,
     dy: number,
     max?: number,
   ) => {
-    const x = dx / view.zoom;
-    const y = dy / view.zoom;
-    const pointed =
-      corner === "right"
-        ? { ...from, width: from.width + x, height: from.height + y }
-        : { ...from, x: from.x + x, width: from.width - x, height: from.height + y };
+    const x = edges.x === undefined ? 0 : dx / view.zoom;
+    const y = edges.y === undefined ? 0 : dy / view.zoom;
+    const pointed = {
+      x: edges.x === "start" ? from.x + x : from.x,
+      y: edges.y === "start" ? from.y + y : from.y,
+      width: from.width + (edges.x === "start" ? -x : x),
+      height: from.height + (edges.y === "start" ? -y : y),
+    };
     const now = gestureFor(key, () => ({
       key,
       items: [],
@@ -2226,32 +2345,44 @@ export function RoomBoard({
     }));
     let rect = pointed;
     if (now.targets !== null && !snapOff.current) {
-      const edge = corner === "right" ? "end" : "start";
-      const snapped = boardSnapResize(pointed, { x: edge, y: "end" }, now.targets, snapThreshold());
+      const snapped = boardSnapResize(pointed, edges, now.targets, snapThreshold());
       snapStore.set(snapped);
       rect = snapped.rect;
     } else snapStore.set(NO_SNAP_DRAWN);
-    return corner === "right"
-      ? { x: from.x, size: clampBoardSize({ w: rect.width, h: rect.height }, max) }
-      : resizeBoardFromLeft(from, rect.x - from.x, rect.height - from.height, max);
+    return resizeBoardRect(
+      from,
+      edges,
+      edges.x === "start" ? rect.x - from.x : rect.width - from.width,
+      edges.y === "start" ? rect.y - from.y : rect.height - from.height,
+      max,
+    );
   };
-  const resizeCard = (id: string, corner: BoardCorner, from: BoardRect, dx: number, dy: number) => {
+  // A left or top edge moves the card's origin as it resizes.
+  const movesOrigin = (edges: BoardResizeEdges) => edges.x === "start" || edges.y === "start";
+  const resizeCard = (
+    id: string,
+    edges: BoardResizeEdges,
+    from: BoardRect,
+    dx: number,
+    dy: number,
+  ) => {
     if (!canEdit) return;
-    const next = resized(boardEditKey({ kind: "size", id }), cardRef(id), corner, from, dx, dy);
+    const next = resized(boardEditKey({ kind: "size", id }), cardRef(id), edges, from, dx, dy);
     hold({ kind: "size", id }, next.size, true);
-    if (corner === "left") hold({ kind: "card", id }, { x: next.x, y: from.y }, true);
+    if (movesOrigin(edges)) hold({ kind: "card", id }, { x: next.x, y: next.y }, true);
     sendDrag();
   };
-  // A card's size and place are two changes; one queue sends them in order.
-  const endCardResize = (id: string, corner: BoardCorner) =>
+  // A card's size and place are two changes; one queue sends them in order, as one step to undo.
+  const endCardResize = (id: string, edges: BoardResizeEdges) =>
     release(() => {
       const queue = boardEditKey({ kind: "size", id });
       letGo({ kind: "size", id });
-      if (corner === "left") letGo({ kind: "card", id }, queue);
+      if (movesOrigin(edges)) letGo({ kind: "card", id }, queue);
     });
+  // A note's place and size are one value, so a resize from any side is one change.
   const resizeNote = (
     note: RoomBoardNote,
-    corner: BoardCorner,
+    edges: BoardResizeEdges,
     from: BoardRect,
     dx: number,
     dy: number,
@@ -2259,10 +2390,15 @@ export function RoomBoard({
     if (!canEdit) return;
     const now = noteNow(note);
     const ref = noteRef(note.id);
-    const next = resized(ref, ref, corner, from, dx, dy, boardMaxSide(note));
+    const next = resized(ref, ref, edges, from, dx, dy, boardMaxSide(note));
     hold(
       { kind: "note", id: note.id },
-      corner === "right" ? { ...now, size: next.size } : { ...now, x: next.x, size: next.size },
+      {
+        ...now,
+        ...(edges.x === "start" ? { x: next.x } : {}),
+        ...(edges.y === "start" ? { y: next.y } : {}),
+        size: next.size,
+      },
       true,
     );
     sendDrag();
@@ -4074,6 +4210,11 @@ export function RoomBoard({
     (note) => note.kind === "thread" && confirmingDelete?.includes(note.id) === true,
   );
   const boxChats = deletingBoxes.flatMap((box) => boxChatDeleter?.(box.id) ?? []);
+  // Plain notes go without asking, except the done ones someone clears away together.
+  const deletingDoneNotes =
+    confirmingDelete?.every(
+      (id) => shown.notes.find((note) => note.id === id)?.kind === undefined,
+    ) === true;
   // What is someone else's stays on the board, and selected; what goes leaves the selection with
   // it, and comes back selected with an undo.
   const deleteSelection = () => {
@@ -4132,6 +4273,7 @@ export function RoomBoard({
         plain && pickColor !== undefined
           ? {
               value: note.color,
+              section,
               onPick: section
                 ? (color) => changeNote(note, (current) => ({ ...current, color }))
                 : (color) => pickColor(note, color),
@@ -4170,6 +4312,7 @@ export function RoomBoard({
               },
             ]
           : []),
+        ...(note.kind === "artifact" ? removeDoneAction(artifactNotes(note)) : []),
         ...(canDelete
           ? [
               {
@@ -4506,7 +4649,11 @@ export function RoomBoard({
     const canAddArtifact = canEdit && !full && !artifactsFull && context !== undefined;
     // Offered once per box; a box's changes show in each window it has a line to.
     const canAddCode =
-      canEdit && !full && !codeFull && roomBoxCodeWindows(shown, box.id).length === 0;
+      machineTools &&
+      canEdit &&
+      !full &&
+      !codeFull &&
+      roomBoxCodeWindows(shown, box.id).length === 0;
     // The pull request the box's thread is linked to, once, beside the box.
     const linkedPullRequest =
       cards !== undefined || !canEdit || full || pullRequestsFull
@@ -4543,10 +4690,26 @@ export function RoomBoard({
       conversation: box.id === ROOM_BOARD_ROOM_BOX ? undefined : conversation,
     };
   };
+  // Clears away the notes an agent is done with; it asks first, and one Undo brings them back.
+  const removeDoneAction = (
+    notes: ReturnType<typeof boardConnectedNotes>,
+  ): ReadonlyArray<CardAction> => {
+    const done = canEdit ? boardDoneNoteIds(notes, viewer) : [];
+    return done.length === 0
+      ? []
+      : [
+          {
+            label: done.length === 1 ? "Remove 1 done note" : `Remove ${done.length} done notes`,
+            run: () => setConfirmingDelete(done),
+            destructive: true,
+          },
+        ];
+  };
   /** A thread box's actions as entries of its right-click menu. */
   const boxMenuActions = (box: BoardThreadBox): ReadonlyArray<CardAction> => {
     const { from, artifact, code, pullRequest, conversation } = boxActions(box);
     return [
+      ...removeDoneAction(connectedNotes([box.id])),
       ...(artifact ? [{ label: "New artifact", run: () => addBoxArtifact(from) }] : []),
       ...(code ? [{ label: "New code window", run: () => addBeside(from, "code", "from") }] : []),
       ...(pullRequest === null
@@ -4591,6 +4754,7 @@ export function RoomBoard({
             return onPromptBox(box.id, prompt);
           }}
           onPin={canEdit && onChange !== undefined ? pinPromptCard : undefined}
+          summary={boardNotesSummary(connectedNotes([box.id]))}
           draft={bringIn.draftFor(box.id)}
         />
       );
@@ -4805,8 +4969,19 @@ export function RoomBoard({
   const [planTask, setPlanTask] = useState<{ readonly id: string; readonly stamp: number } | null>(
     null,
   );
-  useBoardFocusRequest(shareId, (focus) => {
-    if (!shown.notes.some((note) => note.id === focus.noteId)) return room !== null;
+  const showFocus = (focus: BoardFocus) => {
+    const roomBox = focus.noteId === ROOM_BOARD_ROOM_BOX;
+    if (!roomBox && !shown.notes.some((note) => note.id === focus.noteId)) return room !== null;
+    if (roomBox) {
+      if (planShown) {
+        pickView("board");
+        return false;
+      }
+      // The room thread's own box is a card, not a note: a board without one lets the ask go.
+      if (drawnItem(boardBoxRef(focus.noteId)) === null) return room !== null;
+      showBox(focus.noteId);
+      return true;
+    }
     if (focus.plan && plannable) {
       if (!planShown) pickView("plan");
       setPlanTask({ id: focus.noteId, stamp: focus.stamp });
@@ -4819,7 +4994,10 @@ export function RoomBoard({
     if (drawnItem(noteRef(focus.noteId)) === null) return false;
     showCards([focus.noteId]);
     return true;
-  });
+  };
+  useBoardFocusRequest(shareId, showFocus);
+  // The owner's own board is asked by its view key: a board list knows no share id for it.
+  useBoardFocusRequest(viewKey, showFocus);
   const placeTasks = (
     placements: ReadonlyArray<{ id: string; status: RoomTaskStatus; order: number }>,
   ) => {
@@ -5963,7 +6141,9 @@ export function RoomBoard({
               ref={linesRef}
               {...lineHover}
               className={cn(
-                "group/lines absolute top-0 left-0 origin-top-left",
+                // Cards are placed and sized in board pixels, so spacing inside the world is
+                // pinned to pixels: a person's text size changes the words, never the geometry.
+                "group/lines absolute top-0 left-0 origin-top-left [--spacing:4px]",
                 following !== null && "transition-transform duration-200 ease-out",
               )}
               style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}
@@ -5985,9 +6165,10 @@ export function RoomBoard({
                       <ItemHandles
                         from={noteRef(note.id)}
                         link={link}
+                        frame
                         onResize={
                           canEdit
-                            ? (corner, from, dx, dy) => resizeNote(note, corner, from, dx, dy)
+                            ? (edges, from, dx, dy) => resizeNote(note, edges, from, dx, dy)
                             : undefined
                         }
                         onEnd={() => release(() => letGo(target))}
@@ -6401,6 +6582,8 @@ export function RoomBoard({
                     onReact={reactTo}
                     changedLabel={catchUpLabels.get(note.id)}
                     agentWork={agentWorkOf(note.id)}
+                    agentStatus={noteStatusChip(note)}
+                    agentDone={noteStatusOf(note)?.state === "done"}
                     compact={view.zoom < COMPACT_CARD_ZOOM}
                     menuOf={noteMenu}
                     box={
@@ -6602,20 +6785,26 @@ export function RoomBoard({
             <AlertDialogPopup>
               <AlertDialogHeader>
                 <AlertDialogTitle>
-                  {confirmingDelete?.length !== 1
-                    ? `Delete ${confirmingDelete?.length ?? 0} cards?`
-                    : deletingBoxes.length === 1
-                      ? "Delete this agent box?"
-                      : "Delete this card?"}
+                  {deletingDoneNotes
+                    ? confirmingDelete?.length === 1
+                      ? "Remove this done note?"
+                      : `Remove ${confirmingDelete?.length ?? 0} done notes?`
+                    : confirmingDelete?.length !== 1
+                      ? `Delete ${confirmingDelete?.length ?? 0} cards?`
+                      : deletingBoxes.length === 1
+                        ? "Delete this agent box?"
+                        : "Delete this card?"}
                 </AlertDialogTitle>
                 <AlertDialogDescription>
-                  {deletingBoxes.length === 0
-                    ? "What an agent wrote, a code window or a pull request window cannot be brought back with Undo."
-                    : `Undo can't bring ${deletingBoxes.length === 1 ? "the box" : "the boxes"} back. ${
-                        boxChats.length > 0
-                          ? `${boxChats.length === 1 ? "The chat stays" : "The chats stay"} in your list.`
-                          : "The chat stays with whoever runs the box."
-                      }`}
+                  {deletingDoneNotes
+                    ? "An agent finished with them. Undo brings them back."
+                    : deletingBoxes.length === 0
+                      ? "What an agent wrote, a code window or a pull request window cannot be brought back with Undo."
+                      : `Undo can't bring ${deletingBoxes.length === 1 ? "the box" : "the boxes"} back. ${
+                          boxChats.length > 0
+                            ? `${boxChats.length === 1 ? "The chat stays" : "The chats stay"} in your list.`
+                            : "The chat stays with whoever runs the box."
+                        }`}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               {boxChats.length > 0 ? (
@@ -6927,6 +7116,7 @@ const boardGridStyle = (view: BoardView) => ({
   backgroundPosition: `${view.x}px ${view.y}px`,
   "--board-touch-scale": boardTouchScale(view.zoom),
   "--board-line-scale": boardLineScale(view.zoom),
+  "--board-grip-scale": boardGripScale(view.zoom),
 });
 
 type DragBy = (target: BoardTarget, from: BoardPoint, dx: number, dy: number) => void;
@@ -6938,16 +7128,16 @@ interface LinkHandlers {
   readonly onStart: (from: string, event: PointerEvent<HTMLElement>) => void;
 }
 
-/** Resizes a card by its id and a bottom corner: while the corner is held, then once let go. */
+/** Resizes a card by its id and a side or corner: while the grip is held, then once let go. */
 interface CardResize {
   readonly onResize: (
     id: string,
-    corner: BoardCorner,
+    edges: BoardResizeEdges,
     from: BoardRect,
     dx: number,
     dy: number,
   ) => void;
-  readonly onEnd: (id: string, corner: BoardCorner) => void;
+  readonly onEnd: (id: string, edges: BoardResizeEdges) => void;
 }
 
 /**
@@ -7068,39 +7258,47 @@ function PinLinkHandle({
   return link === undefined ? null : <LinkHandle from={from} link={link} side="right" pin />;
 }
 
-/** The four side grips and both bottom corners of a card or note, for whoever may edit the board. */
+/**
+ * A card's, note's or section's grips, for whoever may edit the board: a line grip in the middle
+ * of each side, and a resize grip along every side and on every corner.
+ */
 function ItemHandles({
   from,
   link,
+  frame = false,
   onResize,
   onEnd,
 }: {
   readonly from: string;
   readonly link: LinkHandlers | undefined;
+  /** A section's: its frame moves it, so its sides resize it by their outer few pixels only. */
+  readonly frame?: boolean;
   readonly onResize:
-    | ((corner: BoardCorner, from: BoardRect, dx: number, dy: number) => void)
+    | ((edges: BoardResizeEdges, from: BoardRect, dx: number, dy: number) => void)
     | undefined;
-  readonly onEnd: (corner: BoardCorner) => void;
+  readonly onEnd: (edges: BoardResizeEdges) => void;
 }) {
   return (
     <>
       {link === undefined
         ? null
         : LINK_SIDES.map((side) => <LinkHandle key={side} from={from} link={link} side={side} />)}
-      {onResize === undefined ? null : (
-        <>
-          <ResizeHandle
-            corner="left"
-            onResize={(rect, dx, dy) => onResize("left", rect, dx, dy)}
-            onEnd={() => onEnd("left")}
-          />
-          <ResizeHandle
-            corner="right"
-            onResize={(rect, dx, dy) => onResize("right", rect, dx, dy)}
-            onEnd={() => onEnd("right")}
-          />
-        </>
-      )}
+      {onResize === undefined
+        ? null
+        : RESIZE_GRIPS.map((grip) => (
+            <ResizeHandle
+              key={grip.name}
+              className={cn(
+                frame ? FRAME_GRIP_REACH : GRIP_REACH,
+                // A card's corners stay above what it shows; a section's stay behind the cards.
+                !frame && grip.edges.x !== undefined && grip.edges.y !== undefined && "z-10",
+                grip.className,
+              )}
+              mark={grip.mark}
+              onResize={(rect, dx, dy) => onResize(grip.edges, rect, dx, dy)}
+              onEnd={() => onEnd(grip.edges)}
+            />
+          ))}
     </>
   );
 }
@@ -7175,6 +7373,8 @@ function BoardNote({
   menuOf,
   onAddNext,
   changedLabel,
+  agentStatus,
+  agentDone,
   agentWork,
   embed,
   bringIn,
@@ -7198,6 +7398,9 @@ function BoardNote({
     | undefined;
   /** Why it is marked as changed since this person was last here; absent when it is not. */
   readonly changedLabel?: string | undefined;
+  /** Where a connected note stands with the agent its line reaches, and whether that is done. */
+  readonly agentStatus?: ReactNode;
+  readonly agentDone?: boolean | undefined;
   /** The box whose agent just added or changed it, for a few seconds. */
   readonly agentWork?:
     | { readonly name: string; readonly color: string; readonly stamp: number }
@@ -7216,7 +7419,13 @@ function BoardNote({
   /** The start of the reply a comment is pinned to. */
   readonly quote: string | undefined;
   readonly onResize:
-    | ((note: RoomBoardNote, corner: BoardCorner, from: BoardRect, dx: number, dy: number) => void)
+    | ((
+        note: RoomBoardNote,
+        edges: BoardResizeEdges,
+        from: BoardRect,
+        dx: number,
+        dy: number,
+      ) => void)
     | undefined;
   readonly onMove: (
     note: RoomBoardNote,
@@ -7596,6 +7805,8 @@ function BoardNote({
               "resize-none bg-transparent px-3 pb-3 text-sm leading-snug outline-none placeholder:text-placeholder",
               paper && "pt-1 pb-1 placeholder:text-paint-ink-muted",
               note.kind === "task" && note.done === true && "text-paint-ink-muted line-through",
+              // Finished with, so it reads quieter; its words stay as they were written.
+              agentDone === true && "text-paint-ink-muted",
               titleLine
                 ? "shrink-0 pt-2.5 pb-2 font-semibold"
                 : size !== undefined && "min-h-0 flex-1",
@@ -7648,6 +7859,7 @@ function BoardNote({
           <TaskProgress note={note} people={people} worker={worker} boxName={boxName} />
         ) : null}
         {note.kind === "task" ? taskRun : null}
+        {agentStatus}
         {note.kind === "task" &&
         (note.priority !== undefined || note.due !== undefined || note.assignee !== undefined) ? (
           <div className="flex min-w-0 flex-wrap items-center gap-1 px-3 pb-2">
@@ -7770,7 +7982,7 @@ function BoardNote({
         onResize={
           onResize === undefined
             ? undefined
-            : (corner, from, dx, dy) => onResize(note, corner, from, dx, dy)
+            : (edges, from, dx, dy) => onResize(note, edges, from, dx, dy)
         }
         onEnd={() => onBlur(target)}
       />
@@ -7983,9 +8195,9 @@ function BoardCard({
         onResize={
           resize === undefined
             ? undefined
-            : (corner, from, dx, dy) => resize.onResize(id, corner, from, dx, dy)
+            : (edges, from, dx, dy) => resize.onResize(id, edges, from, dx, dy)
         }
-        onEnd={(corner) => resize?.onEnd(id, corner)}
+        onEnd={(edges) => resize?.onEnd(id, edges)}
       />
     </section>
   );

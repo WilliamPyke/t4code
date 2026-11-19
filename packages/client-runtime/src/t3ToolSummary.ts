@@ -333,6 +333,9 @@ export function summarizeT3ToolCalls(
     case "board-update":
       label = phrase("Changed", "change", `the board ${times}`);
       break;
+    case "board-arrange":
+      label = phrase("Arranged", "arrange", `the board ${times}`);
+      break;
     case "worktree-list":
       label = phrase("Listed", "list", `workspace branches ${times}`);
       break;

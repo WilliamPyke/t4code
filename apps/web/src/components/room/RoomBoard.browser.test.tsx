@@ -289,6 +289,28 @@ describe("RoomBoard sections", () => {
     if (put?.type !== "note.put") throw new Error("The section's size was not sent");
     expect(put.size?.w).toBeCloseTo(640 + 100 / zoom, -1);
     expect(put.size?.h).toBeCloseTo(420 + 60 / zoom, -1);
+
+    // Its top-left corner moves its origin and resizes it in one change, so one step to undo.
+    const sent = onChange.mock.calls.length;
+    const grip = section
+      .querySelectorAll("div[data-board-grip]:not([data-board-frame-edge])")[2]!
+      .getBoundingClientRect();
+    // The part of the corner left of the title that sits above it.
+    const topLeft = { x: grip.left + 2, y: grip.bottom - 2 };
+    await commands.mouse([
+      { type: "down", ...topLeft },
+      { type: "keydown", key: "Control" },
+      { type: "move", x: topLeft.x - 50, y: topLeft.y - 30 },
+      { type: "up", x: topLeft.x - 50, y: topLeft.y - 30 },
+      { type: "keyup", key: "Control" },
+    ]);
+    await vi.waitFor(() => expect(onChange.mock.calls.length).toBe(sent + 1));
+    const moved = onChange.mock.lastCall?.[0];
+    if (moved?.type !== "note.put") throw new Error("The section's resize was not sent");
+    expect(moved.x).toBeCloseTo(-50 / zoom, -1);
+    expect(moved.y).toBeCloseTo(-30 / zoom, -1);
+    expect(moved.size?.w).toBeCloseTo((put.size?.w ?? 0) + 50 / zoom, -1);
+    expect(moved.size?.h).toBeCloseTo((put.size?.h ?? 0) + 30 / zoom, -1);
   });
 });
 
@@ -1013,7 +1035,7 @@ describe("RoomBoard keys and pointer", () => {
     await expect.element(screen.getByRole("status")).toHaveTextContent("3 selected");
   });
 
-  it("keeps a card's resize grips on its corners, so a press just beside it is the board's", async () => {
+  it("keeps a card's resize grips on its edges and corners, so a press just beside it is the board's", async () => {
     await using _viewport = await boardSizedViewport();
     const board = renderBoard([{ id: "a", text: "First", x: 0, y: 0 }]);
     await using screen = await board.screen;
@@ -1025,6 +1047,15 @@ describe("RoomBoard keys and pointer", () => {
     expect(grip(rect.right - 3, rect.bottom - 3)).not.toBeNull();
     expect(grip(rect.right + 8, rect.bottom + 8)).toBeNull();
     expect(grip(rect.left - 8, rect.bottom + 8)).toBeNull();
+    // Every side and the top corners too, clear of the line grip in a side's middle.
+    const quarter = rect.top + rect.height / 4;
+    expect(grip(rect.left + 2, rect.top + 2)).not.toBeNull();
+    expect(grip(rect.right - 2, quarter)).not.toBeNull();
+    expect(grip(rect.left + 2, quarter)).not.toBeNull();
+    expect(grip(rect.left + rect.width / 4, rect.top + 2)).not.toBeNull();
+    expect(grip(rect.left + rect.width / 4, rect.bottom - 2)).not.toBeNull();
+    expect(grip(rect.right + 6, quarter)).toBeNull();
+    expect(grip(rect.right - 10, quarter)).toBeNull();
   });
 
   it("folds a small card's header buttons into one menu", async () => {
@@ -1099,6 +1130,38 @@ describe("RoomBoard controls", () => {
     await expect
       .element(page.getByText(`The board holds ${ROOM_BOARD_MAX_ARTIFACTS} artifacts at most`))
       .toBeVisible();
+  });
+});
+
+describe("RoomBoard notes and agents", () => {
+  it("says which notes an agent is done with, and arms one to go again only when asked", async () => {
+    const at = "2026-11-13T10:00:00.000Z";
+    const board = renderBoard(
+      [
+        { id: "fix", text: "Bigger title", x: 0, y: 0 },
+        { id: "new", text: "Dark mode", x: 260, y: 0 },
+      ],
+      undefined,
+      {
+        edges: [
+          { id: "fix>thread", from: "note:fix", to: "card:thread", sentAt: at, doneAt: at },
+          { id: "new>thread", from: "note:new", to: "card:thread" },
+        ],
+      },
+    );
+    const { onChange } = board;
+    await using screen = await board.screen;
+    const standing = (id: string) =>
+      screen.container
+        .querySelector(`[data-board-item="note:${id}"] [data-note-agent]`)
+        ?.getAttribute("data-note-agent");
+    await vi.waitFor(() => expect(standing("fix")).toBe("done"));
+    expect(standing("new")).toBe("going");
+    expect(onChange).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Not fixed, send again" }));
+    await vi.waitFor(() =>
+      expect(onChange.mock.calls).toEqual([[{ type: "edge.resend", edgeId: "fix>thread" }]]),
+    );
   });
 });
 

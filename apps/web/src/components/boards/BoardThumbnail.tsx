@@ -17,6 +17,15 @@ const NOTE_FILL: Readonly<Record<NonNullable<RoomBoardSummaryShape["color"]>, st
   purple: "fill-paint-purple",
   grey: "fill-paint-grey",
 };
+// A section's background as the board tints it; grey is a section with none.
+const SECTION_FILL: Readonly<Record<NonNullable<RoomBoardSummaryShape["color"]>, string>> = {
+  yellow: "fill-paint-yellow-deep/12 stroke-paint-yellow-deep/55",
+  green: "fill-paint-green-deep/12 stroke-paint-green-deep/55",
+  blue: "fill-paint-blue-deep/12 stroke-paint-blue-deep/55",
+  pink: "fill-paint-pink-deep/12 stroke-paint-pink-deep/55",
+  purple: "fill-paint-purple-deep/12 stroke-paint-purple-deep/55",
+  grey: "fill-paint-grey-deep/4 stroke-paint-grey-deep/45",
+};
 const WINDOW_FILL = "fill-card stroke-board-hairline";
 const KIND_FILL: Readonly<Record<RoomBoardSummaryShape["kind"], string>> = {
   note: NOTE_FILL.yellow,
@@ -27,14 +36,14 @@ const KIND_FILL: Readonly<Record<RoomBoardSummaryShape["kind"], string>> = {
   comment: "fill-primary",
   code: WINDOW_FILL,
   "pull-request": WINDOW_FILL,
-  section: "fill-paint-blue-deep/7 stroke-paint-blue-deep/30",
+  section: SECTION_FILL.grey,
   card: WINDOW_FILL,
 };
 function fillOf(shape: {
   kind: RoomBoardSummaryShape["kind"];
   color: RoomBoardSummaryShape["color"];
 }) {
-  if (shape.kind === "section") return KIND_FILL.section;
+  if (shape.kind === "section") return SECTION_FILL[shape.color ?? "grey"];
   if (shape.kind === "note" && shape.color !== undefined) return NOTE_FILL[shape.color];
   return KIND_FILL[shape.kind];
 }

@@ -66,10 +66,13 @@ export function BoardPromptBox({
   model,
   onPrompt,
   onPin,
+  summary,
   draft,
   artifacts = NO_ARTIFACTS,
   onPickArtifact,
 }: {
+  /** The box's connected notes in a few words: "3 notes: 2 done, 1 to send". */
+  readonly summary?: string | null | undefined;
   /** Every artifact the box has a line to, to pick which one the reply rewrites among several. */
   readonly artifacts?: ReadonlyArray<BoardPromptArtifact>;
   readonly onPickArtifact?: ((artifactId: string) => void) | undefined;
@@ -223,10 +226,15 @@ export function BoardPromptBox({
       )}
       {shown === 0 ? null : (
         <div className="flex flex-col gap-1">
-          <p className="text-2xs text-muted-foreground">
-            {attached.length === 0
-              ? "No connected cards go with the next prompt."
-              : "Goes with the next prompt"}
+          <p className="flex flex-wrap justify-between gap-x-2 text-2xs text-muted-foreground">
+            <span>
+              {attached.length === 0
+                ? "No connected cards go with the next prompt."
+                : "Goes with the next prompt"}
+            </span>
+            {summary == null || draft !== undefined ? null : (
+              <span data-notes-summary>{summary}</span>
+            )}
           </p>
           <ul className="flex flex-wrap gap-1">
             {chips.map((chip) => {

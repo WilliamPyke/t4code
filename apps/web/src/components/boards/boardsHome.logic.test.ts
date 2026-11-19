@@ -23,6 +23,7 @@ import {
   type HomeBoardSort,
   type NewBoardPlace,
   type OwnBoardSource,
+  boardOutlineShown,
   boardPaint,
   boardThumbnail,
   boardTimeLabel,
@@ -610,5 +611,29 @@ describe("board templates", () => {
       { type: "card.move", cardId: ROOM_BOARD_THREAD_CARD, x: 80, y: 72 },
     ]);
     expect(BOARD_TEMPLATES[0]).toBe(BLANK_BOARD_TEMPLATE);
+  });
+});
+
+describe("a board's outline in the sidebar", () => {
+  const items = (kinds: string) =>
+    [...kinds].map((letter, index) => ({
+      id: `${letter}${index}`,
+      kind: letter === "a" ? "artifact" : letter === "t" ? "thread" : "section",
+    }));
+  const ids = (kinds: string, max: number) => {
+    const { shown, more } = boardOutlineShown(items(kinds), max);
+    return [shown.map((item) => item.id).join(" "), more];
+  };
+
+  it("shows a short outline whole, in its order", () => {
+    expect(ids("aatts", 6)).toEqual(["a0 a1 t2 t3 s4", 0]);
+  });
+
+  it("cuts a long one so no kind pushes another out, and counts what it left out", () => {
+    // Ten artifacts, two agents, one section, six rows: the agents and the section all stay.
+    expect(ids("aaaaaaaaaatts", 6)).toEqual(["a0 a1 a2 t10 t11 s12", 7]);
+    // Rows a kind has no use for go to the kinds before it.
+    expect(ids("aaaaaaatttttt", 6)).toEqual(["a0 a1 a2 t7 t8 t9", 7]);
+    expect(ids("aaaaaaaa", 3)).toEqual(["a0 a1 a2", 5]);
   });
 });

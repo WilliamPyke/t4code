@@ -1,11 +1,18 @@
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts";
+import { ClientSettingsPatch } from "@t3tools/contracts/settings";
 import * as Duration from "effect/Duration";
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 import {
   backgroundActivitySharedPolicySettings,
   getChangedBrowserSettingLabels,
   hasChangedBackgroundActivitySettings,
+  TEXT_SIZE_OPTIONS,
+  TEXT_SIZE_PRESETS,
+  textSizePresetOf,
 } from "./SettingsPanels.logic";
+
+const isClientSettingsPatch = Schema.is(ClientSettingsPatch);
 
 describe("background activity settings restore", () => {
   it("detects legacy interval values even when the structured setting is at its default", () => {
@@ -86,5 +93,17 @@ describe("getChangedBrowserSettingLabels", () => {
         browserCustomSearchUrl: "https://search.example/?q=%s",
       }),
     ).toEqual(["Search engine"]);
+  });
+});
+
+describe("text size presets", () => {
+  it("names the preset the four sizes match, and none once one is set by hand", () => {
+    expect(textSizePresetOf(DEFAULT_UNIFIED_SETTINGS)).toBe("medium");
+    for (const { preset } of TEXT_SIZE_OPTIONS) {
+      const sizes = TEXT_SIZE_PRESETS[preset];
+      expect(textSizePresetOf({ ...DEFAULT_UNIFIED_SETTINGS, ...sizes })).toBe(preset);
+      expect(textSizePresetOf({ ...sizes, fontSizeCode: sizes.fontSizeCode + 1 })).toBeNull();
+      expect(isClientSettingsPatch(sizes)).toBe(true);
+    }
   });
 });

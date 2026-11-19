@@ -35,9 +35,15 @@ describe("summarizeRoomBoard", () => {
           },
         },
       },
-      { nowIso: now, online: 3 },
+      { nowIso: now, online: 3, outlineAs: "Launch plan" },
     );
     expect(summary).toMatchObject({ cards: 2, agentBoxes: 2, shared: false, online: 0 });
+    // Asked for, it also names the thread's own box, the boxes and the sections, and no note.
+    expect(summary?.outline?.items).toEqual([
+      { id: "thread", kind: "thread", name: "Launch plan" },
+      { id: "box", kind: "thread", name: "box" },
+      { id: "frame", kind: "section", name: "frame" },
+    ]);
     expect(summary?.shapes.map((shape) => shape.kind)).toEqual([
       "section",
       "thread",

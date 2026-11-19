@@ -891,6 +891,20 @@ export function applyRoomBoardChange(
         edges: board.edges?.map((candidate) => (candidate === edge ? next : candidate)),
       });
     }
+    // Anyone who may draw or remove a line may have it carry its card again.
+    case "edge.resend": {
+      const edge = board.edges?.find((candidate) => candidate.id === change.edgeId);
+      if (edge === undefined) return Result.fail("This arrow is not on the board.");
+      const next = roomEdgeToSendAgain(
+        edge,
+        change.card === undefined ? { kind: "all" } : { kind: "cards", cards: [change.card] },
+      );
+      return Result.succeed(
+        next === edge
+          ? board
+          : { ...board, edges: board.edges?.map((other) => (other === edge ? next : other)) },
+      );
+    }
     // Restoring or writing a view changes the artifact it shows.
     case "artifact.restore": {
       const note = roomArtifactSource(board, change.noteId);
@@ -1281,9 +1295,10 @@ export function roomCardRefsOf(
 }
 
 /**
- * The board with the lines that carried `refs` into a thread box marked sent at `at`: into the box
- * or its artifact in `sentAt`, into a card other boxes reach too in `sentFor` for this box, from a
- * section in `sentCards` per card. Lines no prompt from this box could carry stay as they were.
+ * The board with the lines that carried `refs` into a thread box marked sent at `at`: `sentAt`
+ * into the box or its artifact, `sentFor` into a card other boxes reach, `sentCards` from a
+ * section. With `settled`, the run that carried them ended: those sent marks get a done mark
+ * beside them, or a failed run's are dropped so the cards go again.
  */
 export function roomBoardWithCardsSent(
   board: RoomBoard,
@@ -1291,6 +1306,7 @@ export function roomBoardWithCardsSent(
   artifactId: string | undefined,
   refs: ReadonlyArray<string>,
   at: string,
+  settled?: "done" | "failed",
 ): RoomBoard {
   const edges = board.edges ?? [];
   const box = roomBoxRef(boxId);
@@ -1341,6 +1357,27 @@ export function roomBoardWithCardsSent(
   let changed = false;
   const next = edges.map((edge) => {
     const cards = held.get(edge.from);
+    if (settled !== undefined) {
+      const carried =
+        cards !== undefined
+          ? (roots.has(edge.to) || reached.has(edge.to)) && cards.some((ref) => sent.has(ref))
+          : sent.has(edge.from) && (roots.has(edge.to) || reached.has(edge.to));
+      if (!carried) return edge;
+      const took = cards?.filter((ref) => sent.has(ref));
+      const after =
+        settled === "done"
+          ? roomEdgeDone(edge, boxId, roots.has(edge.to), took, at)
+          : roomEdgeToSendAgain(
+              edge,
+              took !== undefined
+                ? { kind: "cards", cards: took, boxId }
+                : roots.has(edge.to)
+                  ? { kind: "shared" }
+                  : { kind: "box", boxId },
+            );
+      if (after !== edge) changed = true;
+      return after;
+    }
     if (cards !== undefined) {
       const took = cards.filter((ref) => sent.has(ref));
       if (took.length === 0 || (!roots.has(edge.to) && !reached.has(edge.to))) return edge;
@@ -1364,6 +1401,96 @@ export function roomBoardWithCardsSent(
     return { ...edge, sentFor: { ...edge.sentFor, [boxId]: at } };
   });
   return changed ? { ...board, edges: next } : board;
+}
+
+/** An edge with the sent marks a finished run from `boxId` carried along it marked done. */
+function roomEdgeDone(
+  edge: RoomBoardEdge,
+  boxId: string,
+  shared: boolean,
+  took: ReadonlyArray<string> | undefined,
+  at: string,
+): RoomBoardEdge {
+  if (took !== undefined) {
+    const sent = edge.sentCards?.[boxId] ?? {};
+    const before = edge.doneCards?.[boxId] ?? {};
+    const done = took.filter((ref) => sent[ref] !== undefined && before[ref] !== at);
+    if (done.length === 0) return edge;
+    // Like the sent marks, only cards the line still carries keep theirs.
+    const marks = Object.fromEntries([
+      ...Object.entries(before).filter(([ref]) => sent[ref] !== undefined),
+      ...done.map((ref) => [ref, at] as const),
+    ]);
+    return { ...edge, doneCards: { ...edge.doneCards, [boxId]: marks } };
+  }
+  if (shared) {
+    return edge.sentAt === undefined || edge.doneAt === at ? edge : { ...edge, doneAt: at };
+  }
+  return edge.sentFor?.[boxId] === undefined || edge.doneFor?.[boxId] === at
+    ? edge
+    : { ...edge, doneFor: { ...edge.doneFor, [boxId]: at } };
+}
+
+const withoutKeys = <V>(record: Readonly<Record<string, V>>, keys: ReadonlyArray<string>) =>
+  Object.fromEntries(Object.entries(record).filter(([key]) => !keys.includes(key)));
+
+/** Which of a line's sent and done marks go: every one, some cards' of a section's line, the
+ * shared ones of a line into a box or its artifact, or one box's on a line between cards. */
+type RoomEdgeMarks =
+  | { readonly kind: "all" }
+  | { readonly kind: "cards"; readonly cards: ReadonlyArray<string>; readonly boxId?: string }
+  | { readonly kind: "shared" }
+  | { readonly kind: "box"; readonly boxId: string };
+
+/** An edge without those marks, so the next prompt carries its card again. */
+function roomEdgeToSendAgain(edge: RoomBoardEdge, marks: RoomEdgeMarks): RoomBoardEdge {
+  if (marks.kind === "all") {
+    const {
+      sentAt: _a,
+      sentFor: _b,
+      sentCards: _c,
+      doneAt: _d,
+      doneFor: _e,
+      doneCards: _f,
+      ...rest
+    } = edge;
+    return Object.keys(rest).length === Object.keys(edge).length ? edge : rest;
+  }
+  if (marks.kind === "shared") {
+    if (edge.sentAt === undefined && edge.doneAt === undefined) return edge;
+    const { sentAt: _sentAt, doneAt: _doneAt, ...rest } = edge;
+    return rest;
+  }
+  const { sentFor, doneFor, sentCards, doneCards } = edge;
+  if (marks.kind === "box") {
+    if (sentFor?.[marks.boxId] === undefined && doneFor?.[marks.boxId] === undefined) return edge;
+    const { sentFor: _sentFor, doneFor: _doneFor, ...rest } = edge;
+    const others = (byBox: RoomBoardEdge["sentFor"]) => withoutKeys(byBox ?? {}, [marks.boxId]);
+    const some = (byBox: Record<string, string>) => Object.keys(byBox).length > 0;
+    return {
+      ...rest,
+      ...(some(others(sentFor)) ? { sentFor: others(sentFor) } : {}),
+      ...(some(others(doneFor)) ? { doneFor: others(doneFor) } : {}),
+    };
+  }
+  const named = (boxId: string) => marks.boxId === undefined || marks.boxId === boxId;
+  const marked = (byBox: RoomBoardEdge["sentCards"]) =>
+    Object.entries(byBox ?? {}).some(
+      ([boxId, cards]) => named(boxId) && marks.cards.some((ref) => cards[ref] !== undefined),
+    );
+  if (!marked(sentCards) && !marked(doneCards)) return edge;
+  const left = (byBox: NonNullable<RoomBoardEdge["sentCards"]>) =>
+    Object.fromEntries(
+      Object.entries(byBox).map(([boxId, cards]) => [
+        boxId,
+        named(boxId) ? withoutKeys(cards, marks.cards) : cards,
+      ]),
+    );
+  return {
+    ...edge,
+    ...(sentCards === undefined ? {} : { sentCards: left(sentCards) }),
+    ...(doneCards === undefined ? {} : { doneCards: left(doneCards) }),
+  };
 }
 
 /**

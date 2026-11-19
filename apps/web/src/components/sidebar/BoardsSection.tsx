@@ -18,6 +18,7 @@ import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
+import { BoardOutline, BoardOutlineToggle, useExpandedBoards } from "./BoardOutline";
 
 // Kept short: the section sits above the thread list, which keeps the rest of the height.
 const RECENT_BOARDS = 3;
@@ -33,6 +34,7 @@ export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
   const navigate = useNavigate();
   const startNewBoard = useStartNewBoard();
   const waiting = useNewBoardWaiting();
+  const expandedBoards = useExpandedBoards();
   const atHome = useLocation({ select: (location) => location.pathname === "/" });
   const openBoard = useParams({
     strict: false,
@@ -75,7 +77,10 @@ export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
         </SidebarMenuItem>
         {recent.map((board) =>
           board.kind === "team" ? null : (
-            <SidebarMenuItem key={board.key}>
+            <SidebarMenuItem
+              key={board.key}
+              data-expanded={expandedBoards.includes(board.key) ? "" : undefined}
+            >
               <SidebarMenuButton
                 size="sm"
                 isActive={openBoard === board.threadId}
@@ -115,6 +120,8 @@ export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
                   aria-hidden
                   className={cn(
                     "mx-0.5 size-3 shrink-0 rounded-xs ring-1 ring-foreground/10",
+                    // The outline's chevron takes the swatch's place whenever it shows.
+                    "group-hover/menu-item:invisible group-focus-within/menu-item:invisible group-data-[expanded]/menu-item:invisible pointer-coarse:invisible",
                     paintSwatchClassName(
                       boardPaint(board.kind === "joined" ? board : { key: board.key }),
                     ),
@@ -122,10 +129,17 @@ export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
                 />
                 <span className="min-w-0 truncate">{board.title}</span>
               </SidebarMenuButton>
+              {/* Over the swatch, in the row itself: the item grows once its outline is open. */}
+              <div className="absolute start-[calc(var(--sidebar-row-content-inset)-2px)] top-0 flex h-7 items-center opacity-0 group-hover/menu-item:opacity-100 group-focus-within/menu-item:opacity-100 group-data-[expanded]/menu-item:opacity-100 pointer-coarse:h-10 pointer-coarse:opacity-100">
+                <BoardOutlineToggle board={board} expanded={expandedBoards.includes(board.key)} />
+              </div>
               {board.kind === "joined" ? (
-                <div className="absolute end-1 top-1/2 -translate-y-1/2 opacity-0 group-hover/menu-item:opacity-100 has-[[data-popup-open]]:opacity-100 focus-within:opacity-100">
+                <div className="absolute end-1 top-0 flex h-7 items-center opacity-0 group-hover/menu-item:opacity-100 has-[[data-popup-open]]:opacity-100 focus-within:opacity-100 pointer-coarse:h-10">
                   <JoinedBoardMenu board={board} size="icon-micro" variant="ghost-muted" />
                 </div>
+              ) : null}
+              {expandedBoards.includes(board.key) ? (
+                <BoardOutline board={board} open={openBoard === board.threadId} />
               ) : null}
             </SidebarMenuItem>
           ),

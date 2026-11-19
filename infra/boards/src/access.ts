@@ -1,6 +1,7 @@
 import {
   CLOUD_BOARD_COPIES_ROUTE,
   CLOUD_BOARD_LINK_ROUTE,
+  CLOUD_BOARD_OUTLINE_ROUTE,
   CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
   CLOUD_BOARD_PEOPLE_ROLE_ROUTE,
   CLOUD_BOARD_ROUTE,
@@ -32,6 +33,7 @@ export const SESSION_ROUTES: Readonly<Record<string, { method: string; maxBytes:
   [CLOUD_BOARD_TITLE_ROUTE]: { method: "POST", maxBytes: JSON_MAX_BODY_BYTES },
   [SESSION_ROUTE]: { method: "GET", maxBytes: 0 },
   [STREAM_ROUTE]: { method: "GET", maxBytes: 0 },
+  [CLOUD_BOARD_OUTLINE_ROUTE]: { method: "GET", maxBytes: 0 },
   [GUEST_BOARD_ROUTE]: { method: "POST", maxBytes: JSON_MAX_BODY_BYTES },
   [GUEST_BOARD_CURSOR_ROUTE]: { method: "POST", maxBytes: CURSOR_MAX_BODY_BYTES },
   [GUEST_HANDOFF_ROUTE]: { method: "POST", maxBytes: JSON_MAX_BODY_BYTES },
@@ -45,7 +47,11 @@ export type BoardAccess = "edit" | "view" | "link";
 
 // Reading the board. Someone on it who can only look may still leave it, and manage it when they
 // are an owner of its workspace; those routes check that themselves.
-const LOOKING: ReadonlySet<string> = new Set([SESSION_ROUTE, STREAM_ROUTE]);
+const LOOKING: ReadonlySet<string> = new Set([
+  SESSION_ROUTE,
+  STREAM_ROUTE,
+  CLOUD_BOARD_OUTLINE_ROUTE,
+]);
 const ON_THE_BOARD: ReadonlySet<string> = new Set([
   CLOUD_BOARD_PEOPLE_REMOVE_ROUTE,
   CLOUD_BOARD_PEOPLE_ROLE_ROUTE,

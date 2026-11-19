@@ -56,6 +56,15 @@ import {
   roomTaskStatus,
   roomWindowBoxId,
 } from "@t3tools/shared/roomBoard";
+import {
+  BOARD_SECTION_PADDING,
+  BOARD_SECTION_TITLE_HEIGHT,
+  BOARD_TIDY_GAP,
+  boardFrameAround,
+  boardGrid,
+  boardReadingOrder,
+  boardSectionColumns,
+} from "@t3tools/shared/boardLayout";
 import { roomEmbedOf } from "@t3tools/shared/roomEmbed";
 import * as Schema from "effect/Schema";
 
@@ -844,19 +853,39 @@ export const boardChangeOutgrowsOlderHosts = (change: RoomBoardChange): boolean 
   return size !== undefined && Math.max(size.w, size.h) > ROOM_BOARD_LEGACY_MAX_CARD_SIZE;
 };
 
+/** Which edge a resize moves on each axis: one axis for a side, both for a corner. */
+export interface BoardResizeEdges {
+  readonly x?: "start" | "end";
+  readonly y?: "start" | "end";
+}
+
 /**
- * A card resized by its bottom-left corner, `dx`/`dy` board pixels from where it was taken: the
- * left edge follows the pointer and the right edge stays, within the bounds the room takes.
+ * A card resized by a side or a corner, its moving edges `dx`/`dy` board pixels from where they
+ * were taken. The opposite edges stay where they are, also at the bounds the room takes, so a
+ * left or top edge moves the card's origin; an axis with no moving edge keeps its length.
  */
-export function resizeBoardFromLeft(
+export function resizeBoardRect(
   from: BoardRect,
+  edges: BoardResizeEdges,
   dx: number,
   dy: number,
   max = ROOM_BOARD_MAX_CARD_SIZE,
 ): { readonly x: number; readonly y: number; readonly size: RoomBoardSize } {
-  const size = clampBoardSize({ w: from.width - dx, h: from.height + dy }, max);
-  return { x: from.x + from.width - size.w, y: from.y, size };
+  const grown = (side: "start" | "end" | undefined, by: number) =>
+    side === undefined ? 0 : side === "start" ? -by : by;
+  const size = clampBoardSize(
+    { w: from.width + grown(edges.x, dx), h: from.height + grown(edges.y, dy) },
+    max,
+  );
+  return {
+    x: edges.x === "start" ? from.x + from.width - size.w : from.x,
+    y: edges.y === "start" ? from.y + from.height - size.h : from.y,
+    size,
+  };
 }
+
+/** Resize grips keep their size on screen as the board zooms: from half to 4 times board pixels. */
+export const boardGripScale = (zoom: number): number => Math.min(4, Math.max(0.5, 1 / zoom));
 
 /** The size a note shows at, or undefined for one that grows with its text. */
 export const boardNoteSize = (
@@ -1834,6 +1863,10 @@ export interface BoardPromptCard {
   readonly excerpt: string;
   /** Whether it goes with the next prompt on its own; see `BoardPromptCardStatus`. */
   readonly status?: BoardPromptCardStatus | undefined;
+  /** When it was last sent, while `sent`. */
+  readonly sentAt?: string | undefined;
+  /** When the run that carried it finished, while `sent`. Absent: not finished, or not known. */
+  readonly doneAt?: string | undefined;
   /** The lines that carry it, which pinning it pins. */
   readonly edgeIds?: ReadonlyArray<string> | undefined;
   /** The section whose line carries it, and those lines, so its chips can show as one. */
@@ -2415,21 +2448,25 @@ export function boardPromptContext(
   const artifact = artifacts.find((note) => note === pickedSource) ?? artifacts[0];
   const roots = artifact === undefined ? [target] : [target, roomBoardNoteRef(artifact.id)];
   // A line into another card can carry it to several boxes, so its marks are each box's own.
-  const marked = (edge: RoomBoardEdge): Pick<RoomBoardEdge, "sentAt" | "pinned"> => {
+  const marked = (edge: RoomBoardEdge): BoardLineMarks => {
     if (roots.includes(edge.to)) return edge;
-    const { sentAt: _shared, ...rest } = edge;
+    const { sentAt: _shared, doneAt: _sharedDone, ...rest } = edge;
     const own = edge.sentFor?.[boxId];
-    return own === undefined ? rest : { ...rest, sentAt: own };
+    const done = edge.doneFor?.[boxId];
+    return {
+      ...rest,
+      ...(own === undefined ? {} : { sentAt: own }),
+      ...(done === undefined ? {} : { doneAt: done }),
+    };
   };
   // A section's line carries each card in it with that card's own marks for this box.
-  const sectionMarked = (
-    edge: RoomBoardEdge,
-    ref: string,
-  ): Pick<RoomBoardEdge, "sentAt" | "pinned"> => {
+  const sectionMarked = (edge: RoomBoardEdge, ref: string): BoardLineMarks => {
     const sentAt = edge.sentCards?.[boxId]?.[ref];
+    const doneAt = edge.doneCards?.[boxId]?.[ref];
     return {
       ...(edge.pinned === true ? { pinned: true as const } : {}),
       ...(sentAt === undefined ? {} : { sentAt }),
+      ...(doneAt === undefined ? {} : { doneAt }),
     };
   };
   const reached = new Set<string>();
@@ -2489,11 +2526,8 @@ export function boardPromptContext(
     const through = lines.filter(
       (edge) => held.get(edge.from)?.some((card) => card.id === note.id) === true,
     );
-    const status = boardPromptCardStatus(
-      boardLinkWithSnapshotChange(board, note),
-      [...own.map(marked), ...through.map((edge) => sectionMarked(edge, ref))],
-      boxId,
-    );
+    const marks = [...own.map(marked), ...through.map((edge) => sectionMarked(edge, ref))];
+    const status = boardPromptCardStatus(boardLinkWithSnapshotChange(board, note), marks, boxId);
     for (const edge of own) edgeStatus.set(edge.id, status);
     // A section's line reads as the most any card in it does.
     for (const edge of through) {
@@ -2510,6 +2544,7 @@ export function boardPromptContext(
       ...card,
       text,
       status,
+      ...(status === "sent" ? boardSentMarks(marks) : {}),
       edgeIds: [...own, ...through].map((edge) => edge.id),
       ...(section === undefined
         ? {}
@@ -2573,7 +2608,7 @@ const STATUS_RANK: Readonly<Record<BoardPromptCardStatus, number>> = {
  */
 function boardPromptCardStatus(
   note: RoomBoardNote,
-  lines: ReadonlyArray<Pick<RoomBoardEdge, "sentAt" | "pinned">>,
+  lines: ReadonlyArray<BoardLineMarks>,
   boxId: string,
 ): BoardPromptCardStatus {
   if (lines.some((edge) => edge.pinned === true)) return "pinned";
@@ -2582,6 +2617,161 @@ function boardPromptCardStatus(
   const oldest = Math.min(...sent.map((at) => Date.parse(at ?? "")));
   const changed = roomBoardCardChangedAt(note, boxId);
   return changed !== undefined && Date.parse(changed) > oldest ? "updated" : "sent";
+}
+
+/** A line's marks as one box's prompts read them. */
+type BoardLineMarks = Pick<RoomBoardEdge, "sentAt" | "doneAt" | "pinned">;
+
+const latest = (times: ReadonlyArray<string>): string | undefined =>
+  times.reduce<string | undefined>(
+    (last, at) => (last === undefined || Date.parse(at) > Date.parse(last) ? at : last),
+    undefined,
+  );
+
+/**
+ * When a sent card last went, and when the run that carried it finished: only once every line
+ * that carried it is marked done since it went along it.
+ */
+function boardSentMarks(
+  lines: ReadonlyArray<BoardLineMarks>,
+): Pick<BoardPromptCard, "sentAt" | "doneAt"> {
+  const sentAt = latest(lines.flatMap((line) => line.sentAt ?? []));
+  const done = lines.every(
+    (line) =>
+      line.sentAt !== undefined &&
+      line.doneAt !== undefined &&
+      Date.parse(line.doneAt) >= Date.parse(line.sentAt),
+  );
+  const doneAt = done ? latest(lines.flatMap((line) => line.doneAt ?? [])) : undefined;
+  return {
+    ...(sentAt === undefined ? {} : { sentAt }),
+    ...(doneAt === undefined ? {} : { doneAt }),
+  };
+}
+
+/**
+ * Where a note stands with the agents it has a line to: `going` with the next prompt, `working`
+ * while the run that carried it runs, `sent` with nothing saying that run finished, or `done`.
+ */
+type BoardNoteAgentState = "going" | "working" | "sent" | "done";
+
+export interface BoardNoteAgentStatus {
+  readonly state: Exclude<BoardNoteAgentState, "working">;
+  /** The box it says this of: the one that has done least with the note. */
+  readonly boxId: string;
+  readonly card: BoardPromptCard;
+}
+
+const AGENT_STATE_RANK: Readonly<Record<BoardNoteAgentStatus["state"], number>> = {
+  going: 0,
+  sent: 1,
+  done: 2,
+};
+
+/** Each connected card's standing, by ref, from what every box's next prompt does with it. */
+export function boardNoteAgentStatuses(
+  contexts: ReadonlyMap<string, Pick<BoardPromptContext, "cards">>,
+): ReadonlyMap<string, BoardNoteAgentStatus> {
+  const found = new Map<string, BoardNoteAgentStatus>();
+  for (const [boxId, context] of contexts) {
+    for (const card of context.cards) {
+      const state = card.status !== "sent" ? "going" : card.doneAt === undefined ? "sent" : "done";
+      const before = found.get(card.ref);
+      if (before === undefined || AGENT_STATE_RANK[state] < AGENT_STATE_RANK[before.state]) {
+        found.set(card.ref, { state, boxId, card });
+      }
+    }
+  }
+  return found;
+}
+
+/** A run starts around when its prompt's cards are marked sent, either one first. */
+const RUN_START_SLACK_MS = 60_000;
+
+/**
+ * A note's standing while its box's agent runs: a sent note is with the agent when it went with
+ * the prompt of the run now running, not one sent long before it.
+ */
+export function boardNoteAgentState(
+  status: BoardNoteAgentStatus,
+  progress: Pick<RoomBoxProgress, "startedAt"> | undefined,
+): BoardNoteAgentState {
+  const sentAt = status.card.sentAt;
+  return status.state === "sent" &&
+    progress !== undefined &&
+    sentAt !== undefined &&
+    Date.parse(sentAt) >= Date.parse(progress.startedAt) - RUN_START_SLACK_MS
+    ? "working"
+    : status.state;
+}
+
+/** The changes that make a sent card go with the next prompt again, along each line carrying it. */
+export const boardResendChanges = (
+  board: RoomBoard,
+  card: Pick<BoardPromptCard, "ref" | "edgeIds">,
+): ReadonlyArray<Extract<RoomBoardChange, { type: "edge.resend" }>> =>
+  (board.edges ?? [])
+    .filter((edge) => card.edgeIds?.includes(edge.id) === true)
+    .map((edge) => ({
+      type: "edge.resend" as const,
+      edgeId: edge.id,
+      // A section's line carries other cards too, which stay as they are.
+      ...(edge.from === card.ref ? {} : { card: card.ref }),
+    }));
+
+/** A plain note connected to a box, a mark among them, and where it stands. */
+interface BoardConnectedNote {
+  readonly note: RoomBoardNote;
+  readonly state: BoardNoteAgentStatus["state"];
+}
+
+/**
+ * The plain notes among a box's connected `cards`, each with its standing; with `into`, only
+ * those with a line into that card, as an artifact's own notes.
+ */
+export function boardConnectedNotes(
+  board: RoomBoard,
+  statuses: ReadonlyMap<string, BoardNoteAgentStatus>,
+  cards: ReadonlyArray<Pick<BoardPromptCard, "ref">>,
+  into?: string,
+): ReadonlyArray<BoardConnectedNote> {
+  return cards.flatMap((card) => {
+    const note = roomBoardNoteOfRef(board, card.ref);
+    const status = statuses.get(card.ref);
+    if (note === undefined || note.kind !== undefined || status === undefined) return [];
+    const joined =
+      into === undefined ||
+      board.edges?.some((edge) => edge.from === card.ref && edge.to === into) === true;
+    return joined ? [{ note, state: status.state }] : [];
+  });
+}
+
+/** The notes an agent is done with that `viewer` may delete, once each. */
+export const boardDoneNoteIds = (
+  notes: ReadonlyArray<BoardConnectedNote>,
+  viewer: string | null,
+): ReadonlyArray<string> => [
+  ...new Set(
+    notes
+      .filter(({ note, state }) => state === "done" && isRoomCardOwnedBy(note, viewer))
+      .map(({ note }) => note.id),
+  ),
+];
+
+/** What a box's connected notes come to: how many, how many an agent is done with, and the rest. */
+export function boardNotesSummary(
+  statuses: ReadonlyArray<Pick<BoardNoteAgentStatus, "state">>,
+): string | null {
+  if (statuses.length === 0) return null;
+  const count = (state: BoardNoteAgentStatus["state"]) =>
+    statuses.filter((status) => status.state === state).length;
+  const parts = [
+    [count("done"), "done"],
+    [count("sent"), "sent"],
+    [count("going"), "to send"],
+  ] as const;
+  const said = parts.flatMap(([many, word]) => (many === 0 ? [] : [`${many} ${word}`]));
+  return `${statuses.length} ${statuses.length === 1 ? "note" : "notes"}: ${said.join(", ")}`;
 }
 
 /** A thread box: the room thread's own card, or a thread note someone added. */
@@ -2929,8 +3119,8 @@ export function boardItemsInRect(
 
 /** How big a new section is when it frames nothing yet. */
 export const BOARD_SECTION_SIZE: RoomBoardSize = ROOM_BOARD_SECTION_SIZE;
-const SECTION_PADDING = 32;
-const SECTION_TITLE_HEIGHT = 40;
+const SECTION_PADDING = BOARD_SECTION_PADDING;
+const SECTION_TITLE_HEIGHT = BOARD_SECTION_TITLE_HEIGHT;
 
 /** The items whose centre is inside `area`, but `self`: what a section carries when dragged. */
 export const boardItemsCentredIn = (
@@ -2995,20 +3185,12 @@ export function boardSectionFrameAt<Section extends { readonly rect: BoardRect }
 export function boardSectionAround(
   rects: ReadonlyArray<BoardRect>,
 ): (BoardPoint & { readonly size: RoomBoardSize }) | null {
-  const bounds = boardBounds(rects);
-  if (bounds === null) return null;
-  const x = Math.round(bounds.x - SECTION_PADDING);
-  const y = Math.round(bounds.y - SECTION_PADDING - SECTION_TITLE_HEIGHT);
+  const frame = boardFrameAround(rects);
+  if (frame === null) return null;
   return {
-    x,
-    y,
-    size: clampBoardSize(
-      {
-        w: bounds.width + SECTION_PADDING * 2,
-        h: bounds.height + SECTION_PADDING * 2 + SECTION_TITLE_HEIGHT,
-      },
-      ROOM_BOARD_MAX_SECTION_SIZE,
-    ),
+    x: frame.x,
+    y: frame.y,
+    size: clampBoardSize({ w: frame.width, h: frame.height }, ROOM_BOARD_MAX_SECTION_SIZE),
   };
 }
 
@@ -3094,7 +3276,7 @@ export function boardCopySkipped(
   return `${list} are not copied.`;
 }
 
-const TIDY_GAP = 24;
+const TIDY_GAP = BOARD_TIDY_GAP;
 
 /**
  * Where Tidy puts these items: a near-square grid in reading order (or as `order` reorders it),
@@ -3108,8 +3290,8 @@ export function boardTidy<T extends { readonly ref: string; readonly rect: Board
 ): Array<{ readonly ref: string; readonly x: number; readonly y: number }> {
   const bounds = boardBounds(items.map(({ rect }) => rect));
   if (bounds === null) return [];
-  const ordered = tidyOrder(items, order);
-  const grid = tidyGrid(ordered, Math.ceil(Math.sqrt(ordered.length)));
+  const ordered = order(boardReadingOrder(items));
+  const grid = boardGrid(ordered, Math.ceil(Math.sqrt(ordered.length)));
   const origin = searchBoardSpot(
     { w: grid.width, h: grid.height },
     { x: bounds.x + grid.width / 2, y: bounds.y + grid.height / 2 },
@@ -3132,10 +3314,8 @@ export function boardTidySection<T extends { readonly ref: string; readonly rect
   readonly places: Array<{ readonly ref: string; readonly x: number; readonly y: number }>;
   readonly size: RoomBoardSize;
 } {
-  const ordered = tidyOrder(items, order);
-  const cell = Math.max(0, ...ordered.map(({ rect }) => rect.width));
-  const fit = Math.floor((section.width - SECTION_PADDING * 2 + TIDY_GAP) / (cell + TIDY_GAP));
-  const grid = tidyGrid(ordered, Math.max(1, Math.min(ordered.length, fit)));
+  const ordered = order(boardReadingOrder(items));
+  const grid = boardGrid(ordered, boardSectionColumns(ordered, section.width));
   return {
     places: grid.at({
       x: section.x + SECTION_PADDING,
@@ -3205,56 +3385,6 @@ export function boardPushedBelow(
   }
   // Each once, however often it was drawn, so nothing moves twice.
   return { dy, refs: [...new Set([...moved].map(({ ref }) => ref))] };
-}
-
-/** Items in reading order (rows by their tops, then left to right), or as `order` reorders it. */
-function tidyOrder<T extends { readonly rect: BoardRect }>(
-  items: ReadonlyArray<T>,
-  order: (inReadingOrder: ReadonlyArray<T>) => ReadonlyArray<T>,
-): ReadonlyArray<T> {
-  const rows: Array<Array<T>> = [];
-  let rowEnd = -Infinity;
-  for (const item of items.toSorted((left, right) => left.rect.y - right.rect.y)) {
-    const row = rows.at(-1);
-    if (row === undefined || item.rect.y >= rowEnd) {
-      rows.push([item]);
-      rowEnd = item.rect.y + item.rect.height / 2;
-    } else row.push(item);
-  }
-  return order(rows.flatMap((row) => row.toSorted((left, right) => left.rect.x - right.rect.x)));
-}
-
-/** Tidy's grid: columns as wide as the widest item, rows as tall as their tallest, even gaps. */
-function tidyGrid(
-  ordered: ReadonlyArray<{ readonly ref: string; readonly rect: BoardRect }>,
-  columns: number,
-) {
-  const cell = Math.max(0, ...ordered.map(({ rect }) => rect.width));
-  const heights: Array<number> = [];
-  ordered.forEach(({ rect }, index) => {
-    const row = Math.floor(index / columns);
-    heights[row] = Math.max(heights[row] ?? 0, rect.height);
-  });
-  const used = Math.min(columns, ordered.length);
-  return {
-    width: used * cell + Math.max(0, used - 1) * TIDY_GAP,
-    height:
-      heights.reduce((sum, rowHeight) => sum + rowHeight, 0) +
-      Math.max(0, heights.length - 1) * TIDY_GAP,
-    at: (origin: BoardPoint) =>
-      ordered.map(({ ref }, index) => {
-        const row = Math.floor(index / columns);
-        return {
-          ref,
-          x: Math.round(origin.x + (index % columns) * (cell + TIDY_GAP)),
-          y: Math.round(
-            origin.y +
-              heights.slice(0, row).reduce((sum, rowHeight) => sum + rowHeight, 0) +
-              row * TIDY_GAP,
-          ),
-        };
-      }),
-  };
 }
 
 /** A selected card or note and where it is now. */
@@ -3673,7 +3803,19 @@ export function boardAgentTurnLine(turn: RoomBoardAgentTurn): string {
   const tasks = added.filter((card) => card.after.kind === "task").length;
   const sections = added.filter((card) => card.after.section === true).length;
   const notes = added.length - tasks - sections;
-  const changed = turn.cards.length - added.length;
+  // Only moved or resized: what it says and plans is as the turn found it.
+  const arranged = turn.cards.filter(
+    ({ before, after }) =>
+      before !== undefined &&
+      before.text === after.text &&
+      (before.done === true) === (after.done === true) &&
+      before.status === after.status &&
+      before.due === after.due &&
+      before.priority === after.priority &&
+      (before.assignee === undefined) === (after.assignee === undefined) &&
+      before.assignee?.guestId === after.assignee?.guestId,
+  ).length;
+  const changed = turn.cards.length - added.length - arranged;
   const lines = turn.edges?.length ?? 0;
   const adds = [
     tasks === 0 ? "" : counted(tasks, "task", "tasks"),
@@ -3683,6 +3825,7 @@ export function boardAgentTurnLine(turn: RoomBoardAgentTurn): string {
   const line = [
     adds.length === 0 ? "" : `added ${listed(adds)}`,
     changed === 0 ? "" : `changed ${counted(changed, "card", "cards")}`,
+    arranged === 0 ? "" : `arranged ${counted(arranged, "card", "cards")}`,
     lines === 0 ? "" : `drew ${counted(lines, "line", "lines")}`,
   ]
     .filter((part) => part !== "")

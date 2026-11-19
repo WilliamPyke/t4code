@@ -11,6 +11,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   accountsOn,
   linkAccount,
+  outlineFor,
   retitledAccountBoard,
   withAccountBoard,
   withAccountSession,
@@ -164,6 +165,33 @@ describe("accounts on a cloud board", () => {
     // An account not on the board gets nothing, nor one that was never linked.
     expect(Result.isFailure(withAccountSession(room, "user_eve", "device-three"))).toBe(true);
     expect(Result.isFailure(withAccountSession(boardWithTwo(), "user_grace", "x"))).toBe(true);
+  });
+
+  it("names what is on the board only to whoever could open it with no invite", () => {
+    const linked = Result.getOrThrow(link(boardWithTwo(), "user_grace", "two-session")).room;
+    const room: CloudRoom = {
+      ...linked,
+      workspaceId: "ws-one-0000",
+      board: {
+        positions: {},
+        notes: [
+          { id: "n1", text: "Secret plan", x: 0, y: 0 },
+          { id: "a1", text: "Pricing page", x: 0, y: 0, kind: "artifact" },
+        ],
+      },
+    };
+    const outline = { items: [{ id: "a1", kind: "artifact", name: "Pricing page" }] };
+    expect(outlineFor(room, { account: "user_grace" })).toEqual(outline);
+    expect(outlineFor(room, { workspaceId: "ws-one-0000" })).toEqual(outline);
+    // Not an account on it, not the workspace it is in, taken out of it, or a board that ended.
+    expect(outlineFor(room, { account: "user_eve" })).toBeNull();
+    expect(outlineFor(room, { workspaceId: "ws-two-0000" })).toBeNull();
+    expect(outlineFor(linked, { workspaceId: "ws-one-0000" })).toBeNull();
+    const locked = room.guests.map((guest) =>
+      guest.accountId === "user_grace" ? { ...guest, locked: true as const } : guest,
+    );
+    expect(outlineFor({ ...room, guests: locked }, { account: "user_grace" })).toBeNull();
+    expect(outlineFor(null, { account: "user_grace" })).toBeNull();
   });
 
   it("keeps the newest few device sessions", () => {

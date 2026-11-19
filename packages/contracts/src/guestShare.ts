@@ -784,6 +784,16 @@ export const RoomBoardEdge = Schema.Struct({
   sentCards: Schema.optional(
     Schema.Record(Schema.String, Schema.Record(Schema.String, IsoDateTime)),
   ),
+  /**
+   * When a run that carried the card along this line finished, beside `sentAt`, `sentFor` and
+   * `sentCards` each. Only the server that records the run sets them. Absent: not finished, or a
+   * server from before runs were marked.
+   */
+  doneAt: Schema.optional(IsoDateTime),
+  doneFor: Schema.optional(Schema.Record(Schema.String, IsoDateTime)),
+  doneCards: Schema.optional(
+    Schema.Record(Schema.String, Schema.Record(Schema.String, IsoDateTime)),
+  ),
   /** The card goes with every prompt along this line, not only while it is new. */
   pinned: Schema.optional(Schema.Literal(true)),
   /** Drawn with straight runs and square corners, around other cards. Absent: a curve. */
@@ -924,6 +934,98 @@ export const RoomBoardAgentUpdateInput = Schema.Struct({
 });
 export type RoomBoardAgentUpdateInput = typeof RoomBoardAgentUpdateInput.Type;
 
+/** Steps one arrange call takes at most, and the cards they move between them. */
+const ROOM_BOARD_AGENT_MAX_OPS = 20;
+export const ROOM_BOARD_AGENT_MAX_ARRANGED = 60;
+const ROOM_BOARD_AGENT_OPS_CAP = `At most ${ROOM_BOARD_AGENT_MAX_OPS} ops per call; send the rest in a second call.`;
+export const ROOM_BOARD_AGENT_ARRANGED_CAP = `At most ${ROOM_BOARD_AGENT_MAX_ARRANGED} cards per call; send the rest in a second call.`;
+const RoomBoardAgentSection = RoomBoardAgentCardText.annotate({
+  description: "A section's id or title.",
+});
+const RoomBoardAgentNewSection = RoomBoardAgentCardText.annotate({
+  description: "A section's id or title. A title no section has makes a new one.",
+});
+// Any number: what is out of range is clamped, or refused with a reason the model can read.
+const RoomBoardAgentNumber = Schema.Finite;
+
+/** One step of arranging the board. Each is done whole or refused, apart from the others. */
+export const RoomBoardAgentArrangeOp = Schema.Union([
+  Schema.Struct({
+    do: Schema.Literal("layout"),
+    cards: Schema.Array(RoomBoardAgentCardId)
+      .check(
+        Schema.isMinLength(1),
+        Schema.isMaxLength(ROOM_BOARD_AGENT_MAX_ARRANGED, {
+          message: ROOM_BOARD_AGENT_ARRANGED_CAP,
+        }),
+      )
+      .annotate({ description: "Card ids, in the order they should sit." }),
+    as: Schema.Literals(["row", "column", "grid"]),
+    in: Schema.optional(RoomBoardAgentNewSection),
+    columns: Schema.optional(
+      Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 12 })).annotate({
+        description: "For a grid. Absent: as many as fit the section, or a near-square.",
+      }),
+    ),
+  }),
+  Schema.Struct({
+    do: Schema.Literal("place"),
+    card: RoomBoardAgentCardId,
+    side: Schema.Literals(["right", "left", "above", "below"]),
+    of: RoomBoardAgentCardId,
+  }),
+  Schema.Struct({ do: Schema.Literal("tidy"), section: RoomBoardAgentSection }),
+  Schema.Struct({ do: Schema.Literal("fit"), section: RoomBoardAgentSection }),
+  Schema.Struct({
+    do: Schema.Literal("move"),
+    card: RoomBoardAgentCardId,
+    x: RoomBoardAgentNumber,
+    y: RoomBoardAgentNumber,
+  }),
+  Schema.Struct({
+    do: Schema.Literal("resize"),
+    card: RoomBoardAgentCardId,
+    w: RoomBoardAgentNumber,
+    h: RoomBoardAgentNumber,
+  }),
+  Schema.Struct({
+    do: Schema.Literal("rename"),
+    card: RoomBoardAgentCardId,
+    title: RoomBoardAgentCardText,
+  }),
+]);
+export type RoomBoardAgentArrangeOp = typeof RoomBoardAgentArrangeOp.Type;
+
+export const RoomBoardAgentArrangeInput = Schema.Struct({
+  ops: Schema.Array(RoomBoardAgentArrangeOp)
+    .check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(ROOM_BOARD_AGENT_MAX_OPS, { message: ROOM_BOARD_AGENT_OPS_CAP }),
+    )
+    .annotate({ description: ROOM_BOARD_AGENT_OPS_CAP }),
+});
+export type RoomBoardAgentArrangeInput = typeof RoomBoardAgentArrangeInput.Type;
+
+/** What an arrange call changed, and the ops, by their place in the call, the board refused. */
+export const RoomBoardAgentArrangeResult = Schema.Struct({
+  moved: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      x: Schema.Number,
+      y: Schema.Number,
+      w: Schema.Number,
+      h: Schema.Number,
+    }),
+  ),
+  renamed: Schema.Array(Schema.Struct({ id: Schema.String, title: Schema.String })),
+  /** Sections a layout made, for a title no section had. */
+  sections: Schema.optional(
+    Schema.Array(Schema.Struct({ id: Schema.String, title: Schema.String })),
+  ),
+  refused: Schema.Array(Schema.Struct({ op: Schema.Number, reason: Schema.String })),
+});
+export type RoomBoardAgentArrangeResult = typeof RoomBoardAgentArrangeResult.Type;
+
 export const RoomBoardAgentView = Schema.Struct({
   /** The id of this thread's own box. */
   you: Schema.String,
@@ -943,6 +1045,12 @@ export const RoomBoardAgentView = Schema.Struct({
       /** Its top left corner on the board. */
       x: Schema.optional(Schema.Number),
       y: Schema.optional(Schema.Number),
+      /** Its size as the board draws it. Absent from an older server, as `color` and `url` are. */
+      w: Schema.optional(Schema.Number),
+      h: Schema.optional(Schema.Number),
+      color: Schema.optional(Schema.String),
+      /** A link card's address. */
+      url: Schema.optional(Schema.String),
     }),
   ),
   lines: Schema.Array(Schema.Struct({ from: Schema.String, to: Schema.String })),
@@ -980,6 +1088,8 @@ export const RoomBoardAgentChangeRequest = Schema.Struct({
   change: Schema.Union([
     Schema.Struct({ add: RoomBoardAgentAddInput }),
     Schema.Struct({ update: RoomBoardAgentUpdateInput }),
+    /** A host from before it refuses the request as not valid. */
+    Schema.Struct({ arrange: RoomBoardAgentArrangeInput }),
   ]),
 });
 export type RoomBoardAgentChangeRequest = typeof RoomBoardAgentChangeRequest.Type;
@@ -1092,6 +1202,15 @@ export const RoomBoardChange = Schema.Union([
     type: Schema.Literal("edge.pin"),
     edgeId: RoomBoardEdge.fields.id,
     pinned: Schema.Boolean,
+  }),
+  /**
+   * Forgets that a prompt carried the card along this arrow, and that a run finished with it, so
+   * it goes with the next prompt someone sends. `card`: only that card of a section's line.
+   */
+  Schema.Struct({
+    type: Schema.Literal("edge.resend"),
+    edgeId: RoomBoardEdge.fields.id,
+    card: Schema.optional(RoomBoardEdge.fields.from),
   }),
   /**
    * Swaps an artifact's content with the version it replaced, so a second restore undoes the

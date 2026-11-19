@@ -236,7 +236,8 @@ describe("a person's own machine on a cloud board", () => {
       ),
     );
     expect(planned.result.refused).toEqual([]);
-    const tasks = planned.room.board?.notes.filter((note) => planned.result.done.includes(note.id));
+    const made = "done" in planned.result ? planned.result.done : [];
+    const tasks = planned.room.board?.notes.filter((note) => made.includes(note.id));
     expect(tasks?.map((note) => [note.kind, note.assignee, note.priority])).toEqual([
       ["task", { guestId: grace }, "high"],
       ["task", { guestId: ada }, undefined],
@@ -255,6 +256,47 @@ describe("a person's own machine on a cloud board", () => {
     );
     expect(lined.result.refused[0]?.reason).toContain("Grace's agent");
     expect(lined.room.board?.edges ?? []).toEqual([]);
+
+    // Arranging is the person's too: their cards move, Grace's box does not, and undo puts back.
+    const arranged = Result.getOrThrow(
+      changeBoardAsAgent(
+        planned.room,
+        ada,
+        {
+          boxId: "box-ada",
+          turnId: "run-3",
+          change: {
+            arrange: {
+              ops: [
+                { do: "layout", cards: ["card-3", "card-2"], as: "row" },
+                { do: "resize", card: "card-2", w: 300, h: 300 },
+                { do: "move", card: "box-grace", x: 900, y: 900 },
+              ],
+            },
+          },
+        },
+        NOW,
+        () => `id-${++id}`,
+      ),
+    );
+    const placed = (room: CloudRoom, noteId: string) => {
+      const note = room.board?.notes.find((candidate) => candidate.id === noteId);
+      return note && [note.x, note.y, note.size];
+    };
+    const [before2, before3] = [placed(planned.room, "card-2"), placed(planned.room, "card-3")];
+    expect(arranged.result).toMatchObject({
+      moved: [expect.objectContaining({ id: "card-2", w: 300, h: 300 })],
+      renamed: [],
+      refused: [{ op: 2, reason: expect.stringContaining("Grace's agent's box") }],
+    });
+    expect(placed(arranged.room, "card-3")).toEqual(before3);
+    expect(placed(arranged.room, "box-grace")).toEqual(placed(planned.room, "box-grace"));
+    const back = change(arranged.room, ada, {
+      type: "agent-turn.undo",
+      turnId: "run-3",
+      undone: true,
+    });
+    expect(placed(back, "card-2")).toEqual(before2);
   });
 
   it("answers a task run in a box when the box's turn comes, leaving it in progress", () => {

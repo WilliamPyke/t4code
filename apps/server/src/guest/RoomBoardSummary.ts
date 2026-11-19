@@ -8,6 +8,7 @@ import {
   type RoomBoardSummaryShape,
   type ThreadId,
 } from "@t3tools/contracts";
+import { boardOutline } from "@t3tools/shared/boardOutline";
 import {
   ROOM_BOARD_CARD_SIZE,
   ROOM_THREAD_CARD_SIZE,
@@ -48,7 +49,12 @@ function noteShape(note: RoomBoardNote): RoomBoardSummaryShape {
  */
 export function summarizeRoomBoard(
   thread: SummarizedThread,
-  options: { readonly nowIso: string; readonly online: number },
+  options: {
+    readonly nowIso: string;
+    readonly online: number;
+    /** The thread's title, when the summary should also name what is on the board. */
+    readonly outlineAs?: string | undefined;
+  },
 ): RoomBoardSummary | null {
   const share = thread.guestShare ?? null;
   const board = share?.board ?? thread.roomBoard?.board ?? null;
@@ -89,5 +95,8 @@ export function summarizeRoomBoard(
       : [],
     online: live ? options.online : 0,
     shapes,
+    ...(options.outlineAs === undefined
+      ? {}
+      : { outline: boardOutline(board ?? undefined, options.outlineAs) }),
   };
 }

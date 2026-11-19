@@ -35,6 +35,7 @@ import {
   type RoomAgentsEvent,
   type RoomBoxProgress,
   type RoomArtifactRead,
+  type RoomBoardAgentArrangeResult,
   type RoomBoardAgentChangeRequest,
   type RoomBoardAgentResult,
   type RoomBoardAgentView,
@@ -471,7 +472,7 @@ export class GuestShareService extends Context.Service<
       roomToken: string,
       request: RoomBoardAgentChangeRequest,
     ) => Effect.Effect<
-      RoomBoardAgentResult,
+      RoomBoardAgentResult | RoomBoardAgentArrangeResult,
       GuestShareAccessError | RoomBoardAgent.RoomBoardAgentError
     >;
     /**
@@ -486,6 +487,7 @@ export class GuestShareService extends Context.Service<
     /** What the owner's board list shows of each named thread's board, for those that have one. */
     readonly boardSummaries: (
       threadIds: ReadonlyArray<ThreadId>,
+      outline?: boolean,
     ) => Effect.Effect<RoomBoardSummaries>;
     /**
      * Changes one card or note on a shared thread's board: for its owner, who names the thread,
@@ -1998,6 +2000,9 @@ const make = Effect.gen(function* () {
       ...(request.turnId === undefined ? {} : { turnId: request.turnId }),
       ...(request.model === undefined ? {} : { model: request.model }),
     };
+    if ("arrange" in request.change) {
+      return yield* boardAgent.arrange(asked, request.change.arrange);
+    }
     return yield* "add" in request.change
       ? boardAgent.add(asked, request.change.add)
       : boardAgent.update(asked, request.change.update);
@@ -2116,6 +2121,7 @@ const make = Effect.gen(function* () {
 
   const boardSummaries = Effect.fn("GuestShareService.boardSummaries")(function* (
     threadIds: ReadonlyArray<ThreadId>,
+    outline = false,
   ) {
     const nowIso = DateTime.formatIso(yield* DateTime.now);
     const viewers = yield* SubscriptionRef.get(viewing);
@@ -2127,6 +2133,7 @@ const make = Effect.gen(function* () {
             summarizeRoomBoard(records.thread, {
               nowIso,
               online: viewers.get(threadId)?.size ?? 0,
+              ...(outline ? { outlineAs: records.thread.title } : {}),
             }),
           ),
           // A thread gone since the list was read has no board to show.

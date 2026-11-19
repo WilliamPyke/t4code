@@ -20,15 +20,24 @@ const NOTE_COLOR_CLASSES: Readonly<Record<RoomBoardNoteColor, string>> = {
   grey: "bg-paint-grey",
 };
 
-/** A section's frame and faint fill in each colour, quieter than a note so cards read over it. */
+/**
+ * A section's background in each colour: a soft tint of the paint's deeper hue under a stronger
+ * frame, so the cards over it still read. Grey is "None": the plain frame, as before any colour.
+ */
 const SECTION_COLOR_CLASSES: Readonly<Record<RoomBoardNoteColor, string>> = {
-  yellow: "border-paint-yellow-deep/35 bg-paint-yellow-deep/7",
-  green: "border-paint-green-deep/35 bg-paint-green-deep/7",
-  blue: "border-paint-blue-deep/35 bg-paint-blue-deep/7",
-  pink: "border-paint-pink-deep/35 bg-paint-pink-deep/7",
-  purple: "border-paint-purple-deep/35 bg-paint-purple-deep/7",
-  grey: "border-paint-grey-deep/30 bg-paint-grey-deep/4",
+  yellow: "border-paint-yellow-deep/55 bg-paint-yellow-deep/12",
+  green: "border-paint-green-deep/55 bg-paint-green-deep/12",
+  blue: "border-paint-blue-deep/55 bg-paint-blue-deep/12",
+  pink: "border-paint-pink-deep/55 bg-paint-pink-deep/12",
+  purple: "border-paint-purple-deep/55 bg-paint-purple-deep/12",
+  grey: "border-paint-grey-deep/45 bg-paint-grey-deep/4",
 };
+
+/** A section's backgrounds as its menu lists them: none first, which a section starts with. */
+const SECTION_COLORS: ReadonlyArray<RoomBoardNoteColor> = [
+  "grey",
+  ...ROOM_BOARD_NOTE_COLORS.filter((color) => color !== "grey"),
+];
 
 export const sectionColorClassName = (color: RoomBoardNoteColor | undefined) =>
   SECTION_COLOR_CLASSES[color ?? "grey"];
@@ -79,14 +88,22 @@ export const useLastNoteColor = () =>
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
 
-/** The swatches a plain note is coloured from, on its header. */
+/** A choice's name: a section's grey is no background at all. */
+const colorName = (color: RoomBoardNoteColor, section: boolean) =>
+  section && color === "grey" ? "None" : COLOR_NAMES[color];
+
+/** The swatches a plain note is coloured from, or a section's background, on its header. */
 export function NoteColorPicker({
   color,
   onPick,
+  section = false,
 }: {
   readonly color: RoomBoardNoteColor | undefined;
   readonly onPick: (color: RoomBoardNoteColor) => void;
+  /** A section's: its background, with "None" for the plain frame. */
+  readonly section?: boolean;
 }) {
+  const label = section ? "Background" : "Colour";
   return (
     <Menu>
       <Tooltip>
@@ -96,7 +113,7 @@ export function NoteColorPicker({
               render={
                 <button
                   type="button"
-                  aria-label={`Colour: ${COLOR_NAMES[color ?? "yellow"]}`}
+                  aria-label={`${label}: ${colorName(color ?? (section ? "grey" : "yellow"), section)}`}
                   className={BOARD_ICON_BUTTON_CLASS}
                   onPointerDown={stopPointer}
                 />
@@ -106,39 +123,45 @@ export function NoteColorPicker({
         >
           <PaletteIcon className="size-3.5" />
         </TooltipTrigger>
-        <TooltipPopup side="top">Colour</TooltipPopup>
+        <TooltipPopup side="top">{label}</TooltipPopup>
       </Tooltip>
       <MenuPopup align="end">
-        <NoteColorChoices color={color} onPick={onPick} />
+        <NoteColorChoices color={color} onPick={onPick} section={section} />
       </MenuPopup>
     </Menu>
   );
 }
 
-/** The colours a plain note can take, as items of a menu. */
+/** The colours a plain note can take, or a section's backgrounds, as items of a menu. */
 export function NoteColorChoices({
   color,
   onPick,
+  section = false,
 }: {
   readonly color: RoomBoardNoteColor | undefined;
   readonly onPick: (color: RoomBoardNoteColor) => void;
+  readonly section?: boolean;
 }) {
   return (
     <MenuRadioGroup
-      value={color ?? "yellow"}
+      value={color ?? (section ? "grey" : "yellow")}
       onValueChange={(value) => {
         const picked = ROOM_BOARD_NOTE_COLORS.find((choice) => choice === value);
         if (picked !== undefined) onPick(picked);
       }}
     >
-      {ROOM_BOARD_NOTE_COLORS.map((choice) => (
+      {(section ? SECTION_COLORS : ROOM_BOARD_NOTE_COLORS).map((choice) => (
         <MenuRadioItem key={choice} value={choice} closeOnClick>
           <span className="flex items-center gap-2">
             <span
               aria-hidden
-              className={cn("size-3 rounded-sm ring-1 ring-foreground/10", SWATCH_CLASSES[choice])}
+              className={cn(
+                "size-3 rounded-sm ring-1 ring-foreground/10",
+                // No background is an empty swatch; the others show their paint.
+                section && choice === "grey" ? "bg-transparent" : SWATCH_CLASSES[choice],
+              )}
             />
-            {COLOR_NAMES[choice]}
+            {colorName(choice, section)}
           </span>
         </MenuRadioItem>
       ))}
