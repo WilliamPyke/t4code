@@ -136,7 +136,9 @@ enum AppUpdater {
         try? fm.removeItem(at: zip)
         let bundle = unpacked.appendingPathComponent(Bundle.main.bundleURL.lastPathComponent)
         guard ditto.succeeded, let found = info(of: bundle),
-              found.identifier == Config.bundleIdentifier, found.version == release.version
+              found.identifier == Config.bundleIdentifier, found.version == release.version,
+              release.build == nil || found.build == release.build,
+              isNewerThanRunning(version: found.version, build: found.build)
         else {
             try? fm.removeItem(at: workDir)
             throw SetupError(Plain.updateCheckFailed, detail: "the new version of the app was not a Tinkjam Sync build")

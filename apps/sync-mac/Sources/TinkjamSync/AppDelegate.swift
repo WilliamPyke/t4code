@@ -343,7 +343,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             defer { busy = false }
             do {
                 try await takeOver(staged: nil)
-                startSync()
+                if UserDefaults.standard.bool(forKey: Defaults.disconnected) {
+                    phase = .notConnected(nil)
+                } else {
+                    startSync()
+                }
             } catch {
                 let failure = SetupError.from(error, doing: "starting again")
                 log.app("Could not start again: \(failure.logLine)")
@@ -626,34 +630,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let installed = SyncPackage.installedVersion(in: paths.app)
         guard SyncPackage.isNewer(release.version, than: installed) else { return .current }
         guard !busy else { return .notNow }
-        if !interruptingAgents {
-            if child?.agentsRunning == true {
-                log.app("Tinkjam Sync \(release.version) installs once no agent is running")
-                return .waitingForAgent
-            }
-            if case .awaitingApproval = phase { return .notNow }
-        }
+        if let deferral = syncUpdateDeferral(release, interruptingAgents: interruptingAgents) { return deferral }
         busy = true
         defer { busy = false }
         log.app("Updating Tinkjam Sync from \(installed ?? "?") to \(release.version)")
         let staging = try await SyncPackage.stage(release, paths: paths, log: log) { _, _ in }
+        defer { try? FileManager.default.removeItem(at: staging) }
+        if let deferral = syncUpdateDeferral(release, interruptingAgents: interruptingAgents) { return deferral }
         await stopSync()
-        let mayRun = !UserDefaults.standard.bool(forKey: Defaults.disconnected)
         do {
             try await takeOver(staged: staging)
         } catch {
-            if mayRun, SyncPackage.isInstalled(paths) {
+            if !UserDefaults.standard.bool(forKey: Defaults.disconnected), SyncPackage.isInstalled(paths) {
                 log.app("The update was not installed; starting the Tinkjam Sync that was here")
                 restarts = []
                 startSync()
             }
             throw error
         }
-        if mayRun {
+        if !UserDefaults.standard.bool(forKey: Defaults.disconnected) {
             restarts = []
             startSync()
         }
         return .installed
+    }
+
+    private func syncUpdateDeferral(_ release: SyncRelease, interruptingAgents: Bool) -> SyncUpdate? {
+        if case .working = phase { return .notNow }
+        guard !interruptingAgents else { return nil }
+        if child?.agentsRunning == true {
+            log.app("Tinkjam Sync \(release.version) installs once no agent is running")
+            return .waitingForAgent
+        }
+        if case .awaitingApproval = phase { return .notNow }
+        return nil
     }
 
     /// The version a swap was started for is this copy's when it worked. One that did not take is
@@ -867,6 +877,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
         Task { @MainActor in
+            UserDefaults.standard.set(true, forKey: Defaults.disconnected)
             disarmRetry()
             phase = .working("Disconnecting…")
             await stopSync()
@@ -874,9 +885,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                                 "--base-dir", paths.base.path],
                                    environment: nodeEnvironment(), timeout: 120)
             log.app("--disconnect: \(result.tail(4))")
-            // The person asked for this Mac to be off, so Sync stays off either way; what may be
-            // left is the account still listing it.
-            UserDefaults.standard.set(true, forKey: Defaults.disconnected)
             let stillListed = !result.succeeded || result.output.contains("Could not remove this computer")
             phase = .notConnected(stillListed ? Plain.stillListed : nil)
         }

@@ -85,7 +85,10 @@ final class SyncChild {
     /// Something besides its tunnel helper runs under Sync: an agent session, which Sync ends 30
     /// minutes after that agent's last turn.
     var agentsRunning: Bool {
-        watchQueue.sync { descendants.values.contains { !$0.hasSuffix("/cloudflared") } }
+        watchQueue.sync {
+            recordDescendants()
+            return descendants.values.contains { !$0.hasSuffix("/cloudflared") }
+        }
     }
 
     /// Lines arrive on a background queue; exit on the main queue.
