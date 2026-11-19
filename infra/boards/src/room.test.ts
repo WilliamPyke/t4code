@@ -31,6 +31,7 @@ import {
   changeBoard,
   checkDelete,
   checkInvite,
+  checkViewLink,
   invitePreviewOf,
   checkViewerRoom,
   STREAMS_PER_SEAT,
@@ -476,14 +477,34 @@ describe("link sharing", () => {
     expect(checkInvite(shared("off"), "invite-hash")).toMatchObject({
       status: 403,
       reason: "invalid",
-      message: expect.stringContaining("Link sharing is off"),
+      detail: "sharing_off",
+      message:
+        "Link sharing is off for this board. Ask whoever shared it to turn it on or add you.",
     });
     expect(checkInvite(shared("view"), "invite-hash")).toMatchObject({
       reason: "invalid",
-      message: expect.stringContaining("only lets people look"),
+      detail: "view_only",
+      message:
+        "This board's link now only lets people look at it. Ask whoever shared it for the view link.",
     });
+    // A link that was made anew and one that never opened anything look the same to the board.
     expect(checkInvite(shared("edit"), "wrong")).toMatchObject({
-      message: "This board link is not valid.",
+      detail: "replaced",
+      message: "This link does not open the board any more. Ask whoever shared it for a new one.",
+    });
+    expect(checkInvite(null, "invite-hash")).toMatchObject({ detail: "ended" });
+  });
+
+  it("says why the view link did not open the board, with the same details", () => {
+    expect(checkViewLink(shared("view"), "fresh-view")).toBeNull();
+    expect(checkViewLink(shared("view"), "wrong")).toMatchObject({ detail: "replaced" });
+    expect(checkViewLink(null, "fresh-view")).toMatchObject({ detail: "ended" });
+    const off = Result.getOrThrow(
+      withSharing(shared("view"), true, { sharing: "off", renew: false, fresh }, NOW),
+    );
+    expect(checkViewLink(off, "fresh-view")).toMatchObject({
+      reason: "invalid",
+      detail: "sharing_off",
     });
   });
 

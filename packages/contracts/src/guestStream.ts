@@ -125,6 +125,10 @@ export const GuestStreamEvent = Schema.Union([
   // ignores these.
   RoomAgentsEvent,
   RoomCursorsEvent,
-  Schema.Struct({ type: Schema.Literal("ended") }),
+  Schema.Struct({
+    type: Schema.Literal("ended"),
+    /** Why it ended, where the host can name it; absent from an older host or a lost session. */
+    detail: Schema.optional(Schema.String),
+  }),
 ]);
 export type GuestStreamEvent = typeof GuestStreamEvent.Type;
