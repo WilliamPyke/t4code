@@ -1211,6 +1211,54 @@ describe("RoomBoard lines", () => {
     });
     await expect.element(screen.getByRole("button", { name: "Delete line" })).toBeVisible();
   });
+
+  it("selects a line 6px off the line, where a card's grip band covers it", async () => {
+    const board = render(
+      <RoomBoard
+        title="Launch"
+        room={{
+          messages: [],
+          board: {
+            positions: {},
+            notes: [
+              { id: "a", text: "First", x: 0, y: 0 },
+              { id: "b", text: "Second", x: 212, y: 0 },
+            ],
+            edges: [{ id: "line", from: "note:a", to: "note:b" }],
+          },
+        }}
+        online={[]}
+        messages={[]}
+        viewer={null}
+        ownerName={undefined}
+        cursorLayer={null}
+        onOpenThread={() => {}}
+        onOpenReply={() => {}}
+        onChange={async () => true}
+        onCursor={undefined}
+        onUseNote={undefined}
+      />,
+      { container: sizedContainer() },
+    );
+    await using screen = await board;
+    const rectOf = (id: string) => {
+      const element = screen.container.querySelector(`[data-board-item="note:${id}"]`);
+      if (element === null) throw new Error(`The board did not draw note ${id}`);
+      return element.getBoundingClientRect();
+    };
+    const surface = screen.getByRole("application", { name: "Room board" });
+    const under = surface.element().getBoundingClientRect();
+    const a = rectOf("a");
+    // The card's east grip band reaches a couple of px past its edge, over the line's
+    // hit path; 6px off the line the press is the line's, never a resize's.
+    await userEvent.click(surface, {
+      position: {
+        x: a.right + 1 - under.left,
+        y: (a.top + a.bottom) / 2 + 6 - under.top,
+      },
+    });
+    await expect.element(screen.getByRole("button", { name: "Delete line" })).toBeVisible();
+  });
 });
 
 describe("RoomBoard live drags", () => {
