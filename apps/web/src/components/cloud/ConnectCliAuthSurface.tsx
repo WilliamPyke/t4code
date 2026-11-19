@@ -95,7 +95,7 @@ export function ConnectCliAuthorizeSurface() {
       </ul>
       <div className="flex flex-col gap-3">
         <div
-          className="flex min-h-9 flex-wrap items-center gap-x-2 gap-y-1 text-sm"
+          className="flex min-h-13 flex-wrap content-center items-center gap-x-2 gap-y-1 text-sm"
           data-connect-account
         >
           {!isLoaded ? (
@@ -128,7 +128,12 @@ export function ConnectCliAuthorizeSurface() {
                 size="xs"
                 variant="ghost-muted"
                 disabled={connecting}
-                onClick={() => void clerk.signOut({ redirectUrl: window.location.href })}
+                // The address only differs by its fragment, so going to it reloads nothing by itself.
+                onClick={() =>
+                  void clerk
+                    .signOut({ redirectUrl: window.location.href })
+                    .finally(() => window.location.reload())
+                }
               >
                 Use a different account
               </Button>

@@ -85,6 +85,7 @@ import {
 } from "~/guest/guestShares";
 import { CLOUD_BOARD_PATH } from "~/guest/boardAddress";
 import { boardLinksOf } from "~/guest/boardLinks.logic";
+import { boardAccountsEnabled, useBoardAccount } from "~/guest/boardAccount";
 import { cloudBoardsHost } from "~/guest/cloudBoardsHost";
 import { copyCloudBoard, renameCloudBoard } from "~/guest/cloudBoards";
 import { useIncrementalTimelineEntries } from "~/hooks/useIncrementalTimelineEntries";
@@ -159,6 +160,7 @@ import {
   boardThreadBoxTitle,
 } from "../room/roomBoard.logic";
 import { RoomLiveContext, type RoomLiveStore, createRoomLiveStore } from "../room/roomBoardLive";
+import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { Button } from "../ui/button";
 import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
@@ -359,15 +361,33 @@ const LANE = "chat-content-lane px-4";
 export function GuestNotice({
   title,
   detail,
+  children,
 }: {
   readonly title: string;
   readonly detail?: string;
+  readonly children?: ReactNode;
 }) {
   return (
     <div className="m-auto flex max-w-sm flex-col gap-1 rounded-board border border-board-hairline bg-card p-6 text-center text-card-foreground shadow-board">
       <p className="text-sm font-semibold">{title}</p>
       {detail ? <p className="text-xs text-muted-foreground">{detail}</p> : null}
+      {children ? <div className="mt-3 flex justify-center">{children}</div> : null}
     </div>
+  );
+}
+
+/** A board's own address with no session here: a member who signs in opens it as themselves. */
+function SignedOutBoardNotice() {
+  const { openAuthPrompt } = useT3ConnectAuthPrompt();
+  return (
+    <GuestNotice
+      title="Sign in to open this board"
+      detail="If you were given a link to it instead, open that link, or ask whoever shared it for a new one."
+    >
+      <Button type="button" onClick={openAuthPrompt}>
+        Sign in
+      </Button>
+    </GuestNotice>
   );
 }
 
@@ -390,6 +410,7 @@ export function GuestThreadRoute({ threadRef }: { readonly threadRef: ScopedThre
     reopening,
     cloud: share === null && cloudBoardsHost() !== null,
   });
+  const signedOut = useBoardAccount().status === "signed-out" && boardAccountsEnabled();
   // A cloud board opened at its long address (a bookmark, an old link) moves to its own.
   const atLongAddress = useParams({
     strict: false,
@@ -405,6 +426,8 @@ export function GuestThreadRoute({ threadRef }: { readonly threadRef: ScopedThre
       ) : null}
       {share === null && step === "opening" ? (
         <TinkjamLoading cover={isLandingOnBoard()} label="Opening the board" />
+      ) : share === null && signedOut && cloudBoardsHost() !== null ? (
+        <SignedOutBoardNotice />
       ) : share === null || share.threadId !== threadRef.threadId ? (
         <GuestNotice
           title="This board has ended, or the link is not valid"
