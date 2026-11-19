@@ -44,12 +44,13 @@ export function ConnectComputerDialogHost() {
 
 function ConnectComputerDialog() {
   return (
-    <DialogPopup className="max-w-2xl" data-connect-computer>
+    // One height whatever it shows, so picking a computer or one connecting moves no button.
+    <DialogPopup className="h-180 max-w-2xl" data-connect-computer>
       <DialogHeader>
         <DialogTitle>Connect a computer</DialogTitle>
         <DialogDescription>
           Use the agents on your computer, such as Claude Code or Codex, on your boards. They run
-          under your own account, and only you can start them.
+          there, under your own account, and only you can start them.
         </DialogDescription>
       </DialogHeader>
       <DialogPanel>
@@ -98,7 +99,7 @@ export function ConnectComputerSteps() {
   const connected = computers.find((computer) => computer.status === "ready");
   return (
     <div className="flex flex-col gap-5">
-      <ConnectComputerRoutes withAccount={withAccount} signedIn={signedIn} />
+      {/* Above the steps, so a computer that connects shows where the wait was and moves nothing. */}
       {computers.length === 0 && !(withAccount && signedIn) ? null : (
         <section className="flex flex-col gap-2" data-your-computers>
           <h3 className="text-sm font-medium">Your computers</h3>
@@ -122,7 +123,7 @@ export function ConnectComputerSteps() {
           ) : list.loading ? (
             <ComputersLoading />
           ) : list.failed ? null : (
-            <WaitingForComputer />
+            <WaitingForComputer next="Then open a board and press Bring my agent." />
           )}
           {list.failed ? <ComputersNotLoaded onRetry={list.refresh} /> : null}
           {connected === undefined ? null : (
@@ -132,6 +133,7 @@ export function ConnectComputerSteps() {
           )}
         </section>
       )}
+      <ConnectComputerRoutes withAccount={withAccount} signedIn={signedIn} />
     </div>
   );
 }

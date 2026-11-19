@@ -37,6 +37,7 @@ import {
   DialogPopup,
   DialogTitle,
 } from "../ui/dialog";
+import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { type BringAgentComputer, agentsChecked } from "./bringAgent.logic";
@@ -98,6 +99,10 @@ export function BringAgentDialog({
   const [pending, setPending] = useState<BringTarget | null>(null);
   // Counts closes, so work that finishes after one does not write into the next opening.
   const opening = useRef(0);
+  // Chosen as it opens and kept until it has closed, so nothing that happens inside resizes it:
+  // short for someone whose computers are already known, tall when the steps show.
+  const [size, setSize] = useState<"compact" | "tall" | null>(null);
+  if (open && size === null) setSize(computers.length > 0 ? "compact" : "tall");
 
   const changeOpen = (next: boolean) => {
     if (!next) {
@@ -197,23 +202,29 @@ export function BringAgentDialog({
 
   const setup = <ConnectComputerRoutes withAccount={withAccount} signedIn={signedIn} />;
   const waitingForFirst = withAccount && signedIn && !list.failed;
+  const setupInline = size !== "compact" || computers.length === 0;
   return (
     <Dialog
       open={open}
       onOpenChange={changeOpen}
       onOpenChangeComplete={(isOpen) => {
-        if (isOpen || !brought) return;
+        if (isOpen) return;
+        setSize(null);
+        if (!brought) return;
         setBrought(false);
         onBrought();
       }}
     >
       {/* After an agent came, the caret goes to its box on the board, not back to a button. */}
-      <DialogPopup className="max-w-2xl" finalFocus={brought ? false : undefined}>
+      <DialogPopup
+        className={size === "compact" ? "h-104 max-w-2xl" : "h-180 max-w-2xl"}
+        finalFocus={brought ? false : undefined}
+      >
         <DialogHeader>
           <DialogTitle>Bring your agent to this board</DialogTitle>
           <DialogDescription>
-            Your agent runs on your own computer, with your own Claude, Codex or other AI account.
-            Only you can start it. Others see what it makes.
+            Your agent runs on your own computer, under your own Claude, Codex or other AI account.
+            Only you can start it. Everyone on the board sees what it makes.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -263,8 +274,15 @@ export function BringAgentDialog({
                   })}
                 </ul>
               </section>
-            ) : list.loading ? (
-              <ComputersLoading />
+            ) : list.loading || waitingForFirst ? (
+              <section className="flex flex-col gap-2">
+                <h3 className="text-sm font-medium">Your computers</h3>
+                {list.loading ? (
+                  <ComputersLoading />
+                ) : (
+                  <WaitingForComputer next="Then press Bring my agent, beside its name." />
+                )}
+              </section>
             ) : null}
             {list.failed ? <ComputersNotLoaded onRetry={list.refresh} /> : null}
             {error === null ? null : (
@@ -282,7 +300,9 @@ export function BringAgentDialog({
                 )}
               </div>
             )}
-            {computers.length > 0 ? (
+            {setupInline ? (
+              setup
+            ) : (
               <Collapsible>
                 <CollapsibleTrigger render={<Button size="sm" variant="ghost" />}>
                   Connect another computer
@@ -291,11 +311,6 @@ export function BringAgentDialog({
                   <div className="pt-3">{setup}</div>
                 </CollapsiblePanel>
               </Collapsible>
-            ) : list.loading ? null : (
-              <>
-                {setup}
-                {waitingForFirst ? <WaitingForComputer /> : null}
-              </>
             )}
           </div>
         </DialogPanel>
@@ -307,12 +322,28 @@ export function BringAgentDialog({
   );
 }
 
-/** Under the steps: this page is looking, so nobody reloads it after pressing Connect. */
-export function WaitingForComputer() {
+/**
+ * Where the first computer will show: this page is looking, so nobody reloads it after pressing
+ * Connect. The dot is the app's stepped status pulse, not a spinner, and still under reduced motion.
+ */
+export function WaitingForComputer({ next }: { readonly next: string }) {
   return (
-    <p role="status" className="text-xs text-muted-foreground" data-waiting-for-computer>
-      Waiting for your computer… It shows up here by itself once you press Connect.
-    </p>
+    <div
+      role="status"
+      className="flex items-center gap-3 rounded-lg border border-dashed border-border px-3 py-2.5"
+      data-waiting-for-computer
+    >
+      <span
+        aria-hidden
+        className="size-2 shrink-0 rounded-full bg-primary motion-safe:animate-status-pulse"
+      />
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-medium">Waiting for your computer…</span>
+        <span className="block text-xs text-muted-foreground">
+          It shows up here by itself once you press Connect. {next}
+        </span>
+      </span>
+    </div>
   );
 }
 
@@ -414,11 +445,18 @@ export function ConnectComputerRoutes({
   readonly signedIn: boolean;
 }) {
   const [os, setOs] = useState<Os | null>(detectOs);
+  const signIn = withAccount && !signedIn;
+  const connect = "Your browser opens by itself. Sign in if it asks, then press Connect.";
   return (
     <div className="flex flex-col gap-3" data-bring-agent-steps>
       <section className="flex flex-col gap-3 rounded-xl border border-border p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold">Get Tinkjam Sync for your computer</h3>
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold">Install Tinkjam Sync</h3>
+            <p className="text-xs text-muted-foreground">
+              The small app that lets your boards reach the agents on your computer.
+            </p>
+          </div>
           <ToggleGroup
             aria-label="Your computer"
             value={os === null ? [] : [os]}
@@ -443,95 +481,176 @@ export function ConnectComputerRoutes({
               Or pick that computer above to read the steps here.
             </p>
           </div>
-        ) : os === "linux" ? (
-          <ol className="flex flex-col gap-2.5 text-sm">
-            <Step number={1}>
-              Open a terminal, paste this and press Enter. It needs Node.js 22.16 or newer:
-              <CopyLine text={TINKJAM_SYNC_COMMAND} mono />
-            </Step>
-            <Step number={2}>
-              Open the link it prints and press Connect. It then runs in the background and starts
-              when you log in.
-            </Step>
-            {withAccount && !signedIn ? (
-              <Step number={3}>
-                <SignInHere />
-              </Step>
-            ) : null}
-          </ol>
         ) : (
-          <ol className="flex flex-col gap-2.5 text-sm">
-            {os === "mac" ? (
-              <Step number={1}>
-                Open the Terminal app (press Command and Space, type Terminal, press Return). Paste
-                this line and press Return:
-                <CopyLine text={TINKJAM_SYNC_MAC_COMMAND} mono />
-                <span className="mt-1 block text-xs text-muted-foreground">
-                  You only do this once. It asks for no password and changes no settings. It puts
-                  Tinkjam Sync in your Applications folder and opens it. You can close Terminal
-                  afterwards.
-                </span>
-              </Step>
-            ) : (
-              <Step number={1}>
-                <span className="flex flex-wrap items-center gap-2">
-                  Download it and open it.
-                  <Button
-                    size="sm"
-                    render={<a href={TINKJAM_SYNC_WINDOWS_DOWNLOAD} download />}
-                    data-sync-download
-                  >
-                    <DownloadIcon />
-                    Download for Windows
-                  </Button>
-                </span>
-                <span className="mt-1 block text-xs text-muted-foreground">
-                  Open the file. If Windows says it protected your PC, choose More info, then Run
-                  anyway.
-                </span>
-              </Step>
-            )}
-            <Step number={2}>
-              Your browser opens by itself. Sign in if it asks, then press Connect. That is all:
-              Tinkjam Sync sits in your {os === "mac" ? "menu bar" : "system tray"}, starts with
-              your computer and keeps itself up to date.
-            </Step>
-            {withAccount && !signedIn ? (
-              <Step number={3}>
-                <SignInHere />
-              </Step>
-            ) : null}
-          </ol>
+          // All three share one cell, so the tallest sets its height and picking another moves nothing.
+          <div className="grid">
+            <OsSteps shown={os === "mac"}>
+              <ol className="flex flex-col gap-2.5 text-sm">
+                <Step number={1}>
+                  Open Terminal: press Command and Space, type Terminal, press Return.
+                </Step>
+                <Step number={2}>
+                  Paste this line and press Return.
+                  <CopyLine text={TINKJAM_SYNC_MAC_COMMAND} mono />
+                  <StepNote>
+                    One time only. It asks for no password and changes no settings: it downloads
+                    Tinkjam Sync, checks the file is intact, puts it in your Applications folder and
+                    opens it.
+                  </StepNote>
+                </Step>
+                <Step number={3}>{connect}</Step>
+                {signIn ? (
+                  <Step number={4}>
+                    <SignInHere />
+                  </Step>
+                ) : null}
+              </ol>
+              <p className="text-xs text-muted-foreground">
+                Why Terminal? Apple has not checked Tinkjam Sync yet (it is not notarized), so macOS
+                would refuse to open a normal download. Once installed it sits in your menu bar,
+                starts with your Mac and keeps itself up to date.
+              </p>
+              <AgentRoute />
+            </OsSteps>
+            <OsSteps shown={os === "windows"}>
+              <ol className="flex flex-col gap-2.5 text-sm">
+                <Step number={1}>
+                  <span className="flex flex-wrap items-center gap-2">
+                    Download Tinkjam Sync and open the file.
+                    <Button
+                      size="sm"
+                      render={<a href={TINKJAM_SYNC_WINDOWS_DOWNLOAD} download />}
+                      data-sync-download
+                    >
+                      <DownloadIcon />
+                      Download for Windows
+                    </Button>
+                  </span>
+                  <StepNote>
+                    Windows does not recognise Tinkjam Sync yet, so it says it protected your PC.
+                    Choose More info, then Run anyway.
+                  </StepNote>
+                </Step>
+                <Step number={2}>{connect}</Step>
+                {signIn ? (
+                  <Step number={3}>
+                    <SignInHere />
+                  </Step>
+                ) : null}
+              </ol>
+              <p className="text-xs text-muted-foreground">
+                Once installed it sits in your system tray, starts with your computer and keeps
+                itself up to date.
+              </p>
+              <AgentRoute />
+            </OsSteps>
+            <OsSteps shown={os === "linux"}>
+              <ol className="flex flex-col gap-2.5 text-sm">
+                <Step number={1}>
+                  Open a terminal, paste this line and press Enter. It needs Node.js 22.16 or newer.
+                  <CopyLine text={TINKJAM_SYNC_COMMAND} mono />
+                </Step>
+                <Step number={2}>
+                  Open the link it prints and press Connect. It then runs in the background and
+                  starts when you log in.
+                </Step>
+                {signIn ? (
+                  <Step number={3}>
+                    <SignInHere />
+                  </Step>
+                ) : null}
+              </ol>
+            </OsSteps>
+          </div>
         )}
-        {os === null || os === "linux" ? null : (
-          <Collapsible>
-            <CollapsibleTrigger render={<Button size="xs" variant="ghost" />}>
-              Or have your coding agent install it
-            </CollapsibleTrigger>
-            <CollapsiblePanel>
-              <div className="flex flex-col gap-2 pt-2 text-sm">
-                <p>Paste this into Claude Code, Codex or another coding agent on your computer:</p>
-                <CopyLine text={TINKJAM_AGENT_PROMPT} />
-              </div>
-            </CollapsiblePanel>
-          </Collapsible>
-        )}
-        <p className="text-xs text-muted-foreground">
-          Tinkjam Sync lets your boards use the agents on this computer, such as Claude Code or
-          Codex, under your own account; they can use what those agents can on it. Nothing anyone
-          else writes reaches your agent unless you press Send. Quit it from its menu to stop it.
-        </p>
-        {withAccount ? null : (
+      </section>
+      <p className="text-xs text-muted-foreground">
+        Tinkjam Sync lets your boards use the agents on this computer, such as Claude Code or Codex,
+        under your own account, with the access they already have on it. Nothing anyone else writes
+        reaches your agent unless you press Send. To stop it, quit it from its menu.
+      </p>
+      {withAccount ? null : (
+        <div>
           <Button size="sm" variant="outline" render={<Link to="/settings/connections" />}>
             Add my computer
           </Button>
-        )}
-      </section>
+        </div>
+      )}
     </div>
   );
 }
 
-/** A prompt or command to copy, shown whole, with a Copy button anyone can find. */
+/** One computer's steps. The ones not picked keep their place, unseen and out of reach. */
+function OsSteps({ shown, children }: { readonly shown: boolean; readonly children: ReactNode }) {
+  return (
+    <div
+      inert={!shown}
+      className={cn("col-start-1 row-start-1 flex flex-col gap-3", !shown && "invisible")}
+    >
+      {children}
+    </div>
+  );
+}
+
+const StepNote = ({ children }: { readonly children: ReactNode }) => (
+  <span className="mt-1 block text-xs text-muted-foreground">{children}</span>
+);
+
+/** Two labels in one cell, so the button is as wide copied as not. */
+function CopyLabel({ copied, children }: { readonly copied: boolean; readonly children: string }) {
+  return (
+    <span className="grid">
+      <span className={cn("col-start-1 row-start-1", copied && "invisible")}>{children}</span>
+      <span className={cn("col-start-1 row-start-1", !copied && "invisible")}>Copied</span>
+    </span>
+  );
+}
+
+/**
+ * The other way to install: the person's coding agent does it. The request is written for that
+ * agent, so it is copied whole and only shown to whoever asks to read it.
+ */
+function AgentRoute() {
+  const { copyToClipboard, isCopied } = useCopyToClipboard({ timeout: 2000, target: "command" });
+  return (
+    <div
+      className="flex flex-wrap items-center gap-x-2 gap-y-2 border-t border-border pt-3"
+      data-sync-agent-route
+    >
+      <p className="min-w-48 flex-1 text-xs text-muted-foreground">
+        <span className="font-medium text-foreground">Rather have your coding agent do it?</span>{" "}
+        Copy a ready-made request and paste it into Claude Code, Codex or another coding agent on
+        this computer.
+      </p>
+      <Popover>
+        <PopoverTrigger render={<Button size="sm" variant="ghost" />}>Read it</PopoverTrigger>
+        <PopoverPopup side="top" align="end" width="md">
+          <div className="flex flex-col gap-2">
+            <PopoverTitle>What the request says</PopoverTitle>
+            <p className="rounded-lg border border-border bg-muted/50 px-3 py-2 text-xs break-words select-all">
+              {TINKJAM_AGENT_PROMPT}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              It is written for your agent, not for you. Its last sentence is your permission for
+              the agent to run the installer.
+            </p>
+          </div>
+        </PopoverPopup>
+      </Popover>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={() => copyToClipboard(TINKJAM_AGENT_PROMPT, undefined)}
+        data-sync-agent-copy
+      >
+        {isCopied ? <CheckIcon /> : <CopyIcon />}
+        <CopyLabel copied={isCopied}>Copy request</CopyLabel>
+      </Button>
+    </div>
+  );
+}
+
+/** A link or command to copy, shown whole, with a Copy button anyone can find. */
 function CopyLine({ text, mono = false }: { readonly text: string; readonly mono?: boolean }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard({ timeout: 2000, target: "command" });
   return (
@@ -546,7 +665,7 @@ function CopyLine({ text, mono = false }: { readonly text: string; readonly mono
       </p>
       <Button size="sm" onClick={() => copyToClipboard(text, undefined)}>
         {isCopied ? <CheckIcon /> : <CopyIcon />}
-        {isCopied ? "Copied" : "Copy"}
+        <CopyLabel copied={isCopied}>Copy</CopyLabel>
       </Button>
     </div>
   );

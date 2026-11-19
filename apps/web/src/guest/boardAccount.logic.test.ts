@@ -8,6 +8,7 @@ import {
   boardsToClaim,
   browserAfterSignIn,
   friendlyName,
+  resolveBoardName,
   sharedNameIds,
   sharesOfOtherAccounts,
 } from "./boardAccount.logic";
@@ -98,6 +99,37 @@ describe("the name a person joins a board under", () => {
   ] as const)("%s", (_case, current, accounts, name, seed) => {
     const { identity } = browserAfterSignIn({ name, accounts, current }, "user_b");
     expect(accountNameSeed(identity, "user_b")).toBe(seed);
+  });
+
+  // Every name field reads this, so a person is asked at most once and offered one suggestion.
+  it.each([
+    [
+      "signed out with nothing typed: unknown, and the browser's one suggestion",
+      { account: null, signedOutName: null },
+      { known: null, suggested: "Calm Otter" },
+    ],
+    [
+      "signed out after typing a name: known, never asked again",
+      { account: null, signedOutName: " Bo " },
+      { known: "Bo", suggested: "Bo" },
+    ],
+    [
+      "signed in with a name: the account's, over whatever this browser kept",
+      { account: { name: "Ada Lovelace", seed: "Bo" }, signedOutName: "Bo" },
+      { known: "Ada Lovelace", suggested: "Ada Lovelace" },
+    ],
+    [
+      "signed in with only an email: unknown, starting from what they typed signed out",
+      { account: { name: null, seed: "Bo" }, signedOutName: "Bo" },
+      { known: null, suggested: "Bo" },
+    ],
+    [
+      "signed in with only an email on a browser someone else used: the suggestion, not their name",
+      { account: { name: null, seed: null }, signedOutName: "QA One" },
+      { known: null, suggested: "Calm Otter" },
+    ],
+  ] as const)("%s", (_case, input, resolved) => {
+    expect(resolveBoardName({ ...input, suggestion: "Calm Otter" })).toEqual(resolved);
   });
 
   it("clears the last account's things on sign-out or a switch, and only then", () => {

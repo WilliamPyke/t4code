@@ -91,6 +91,20 @@ export const accountNameSeed = (identity: BrowserIdentity, userId: string): stri
   identity.accounts.every((account) => account === userId) ? fitName(identity.name) : null;
 
 /**
+ * The one name a person goes by here, and what a name field starts with while they have none.
+ * `account` is who is signed in (null: nobody): then only the account's own name is known, never
+ * one this browser kept. `suggestion` is this browser's friendly name, the same every time.
+ */
+export function resolveBoardName(input: {
+  readonly account: { readonly name: string | null; readonly seed: string | null } | null;
+  readonly signedOutName: string | null;
+  readonly suggestion: string;
+}): { readonly known: string | null; readonly suggested: string } {
+  const known = input.account === null ? fitName(input.signedOutName) : fitName(input.account.name);
+  return { known, suggested: known ?? fitName(input.account?.seed) ?? input.suggestion };
+}
+
+/**
  * This browser after `signedIn` (null: nobody) is seen signed in, and whether the last account's
  * things must go from it: on sign-out or a switch, so the next person sees nothing of theirs,
  * its signed-out name included.

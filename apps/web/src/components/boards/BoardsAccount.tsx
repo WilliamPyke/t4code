@@ -1,27 +1,14 @@
 import { useClerk, useUser } from "@clerk/react";
-import { GUEST_NAME_MAX_LENGTH } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import * as Schema from "effect/Schema";
-import {
-  LogInIcon,
-  LogOutIcon,
-  SettingsIcon,
-  UserRoundIcon,
-  WrenchIcon,
-  XIcon,
-} from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { LogInIcon, LogOutIcon, SettingsIcon, UserRoundIcon, WrenchIcon } from "lucide-react";
 
-import { boardAccountsEnabled, saveBoardAccountName, useBoardAccount } from "~/guest/boardAccount";
-import { useAccountNameSeed } from "~/guest/browserIdentity";
-import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
+import { boardAccountsEnabled, useBoardAccount } from "~/guest/boardAccount";
 import { setShellMode, useShellMode } from "~/shellMode";
 
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
-import { toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 /**
  * Sign in, so a person's cloud boards follow them to every device; signed in, who they are and
@@ -57,15 +44,15 @@ function ConfiguredBoardsAccount() {
   const { openAuthPrompt } = useT3ConnectAuthPrompt();
   if (account.status === "signed-out") {
     return (
-      <Button
-        variant="outline"
-        onClick={openAuthPrompt}
-        title="Sign in to see your boards on every device"
-        data-boards-sign-in
-      >
-        <LogInIcon />
-        Sign in
-      </Button>
+      <Tooltip>
+        <TooltipTrigger
+          render={<Button variant="outline" onClick={openAuthPrompt} data-boards-sign-in />}
+        >
+          <LogInIcon />
+          Sign in
+        </TooltipTrigger>
+        <TooltipPopup>Sign in or create an account to see your boards on every device</TooltipPopup>
+      </Tooltip>
     );
   }
   if (account.status !== "signed-in") return null;
@@ -135,106 +122,5 @@ function AccountMenu({ name }: { readonly name: string | null }) {
         </MenuItem>
       </MenuPopup>
     </Menu>
-  );
-}
-
-// Per browser: the accounts already asked for a name, so each is asked once.
-const NAME_ASKED_KEY = "t3code:account-name-asked:v1";
-const NameAsked = Schema.Array(Schema.String);
-
-const readNameAsked = (): ReadonlyArray<string> => {
-  try {
-    return getLocalStorageItem(NAME_ASKED_KEY, NameAsked) ?? [];
-  } catch {
-    return [];
-  }
-};
-
-const rememberNameAsked = (userId: string) => {
-  try {
-    setLocalStorageItem(NAME_ASKED_KEY, [...readNameAsked(), userId].slice(-20), NameAsked);
-  } catch {
-    // Blocked storage only means asking again next time.
-  }
-};
-
-/**
- * Once per account, when it has no name of its own (signed up with only an email): what everyone
- * should call them, kept on the account so it follows them. The field starts with the name typed
- * here signed out only when no other account ever signed in here; never anything from an email.
- */
-export function AccountNameAsk() {
-  if (!boardAccountsEnabled()) return null;
-  return <ConfiguredAccountNameAsk />;
-}
-
-function ConfiguredAccountNameAsk() {
-  const account = useBoardAccount();
-  const { user } = useUser();
-  const seed = useAccountNameSeed(user?.id ?? null);
-  const [asked, setAsked] = useState(readNameAsked);
-  const [typed, setTyped] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  if (account.status !== "signed-in" || account.realName || user == null) return null;
-  if (asked.includes(user.id)) return null;
-  const name = typed ?? seed ?? "";
-  const done = () => {
-    rememberNameAsked(user.id);
-    setAsked((before) => [...before, user.id]);
-  };
-  const save = async (event: FormEvent) => {
-    event.preventDefault();
-    const trimmed = name.trim().slice(0, GUEST_NAME_MAX_LENGTH).trim();
-    if (trimmed === "" || saving) return;
-    setSaving(true);
-    // On this browser at once; on the account when it takes it.
-    const saved = (await saveBoardAccountName(trimmed)) ?? false;
-    setSaving(false);
-    if (!saved) {
-      toastManager.add({
-        type: "info",
-        title: "Saved on this browser",
-        description: "Your account could not keep the name, so other devices may ask again.",
-      });
-    }
-    done();
-  };
-  return (
-    <form
-      className="flex flex-wrap items-center gap-2 rounded-board border border-board-hairline bg-card px-3 py-2 text-card-foreground shadow-paint"
-      onSubmit={save}
-      data-account-name-ask
-    >
-      <label htmlFor="account-name-ask" className="text-sm font-medium">
-        What should we call you?
-      </label>
-      <div className="w-48">
-        <Input
-          id="account-name-ask"
-          size="sm"
-          autoComplete="name"
-          maxLength={GUEST_NAME_MAX_LENGTH}
-          placeholder="Your name"
-          value={name}
-          onChange={(event) => setTyped(event.currentTarget.value)}
-        />
-      </div>
-      <Button type="submit" size="sm" disabled={saving || name.trim() === ""}>
-        Save
-      </Button>
-      <Button
-        type="button"
-        size="icon-sm"
-        variant="ghost"
-        aria-label="Not now"
-        title="Not now"
-        onClick={done}
-      >
-        <XIcon />
-      </Button>
-      <span className="basis-full text-xs text-muted-foreground">
-        Everyone on your boards sees it.
-      </span>
-    </form>
   );
 }

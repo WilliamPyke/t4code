@@ -275,6 +275,10 @@ describe("the home's order and what it shows", () => {
     expect(
       homeContent({ boards: 0, workspaces: 1, machinesLoaded: true, accountLoaded: true }),
     ).toBe("boards");
+    // Signing in from the welcome keeps its form up until the account's boards say otherwise.
+    const signingIn = { workspaces: 0, machinesLoaded: true, accountLoaded: false, welcomed: true };
+    expect(homeContent({ ...signingIn, boards: 0 })).toBe("welcome");
+    expect(homeContent({ ...signingIn, boards: 1 })).toBe("boards");
   });
 
   it("says when in words", () => {

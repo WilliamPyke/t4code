@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveClerkSignInProps } from "./authRedirect";
+import { resolveClerkSignInProps, staysInApp } from "./authRedirect";
 
 describe("resolveClerkSignInProps", () => {
   it("removes a Clerk virtual pathname and callback params while preserving the desktop route", () => {
@@ -23,5 +23,24 @@ describe("resolveClerkSignInProps", () => {
     expect(resolveClerkSignInProps("https://app.example.org/", false).forceRedirectUrl).toBe(
       "https://app.example.org/",
     );
+  });
+});
+
+describe("staysInApp", () => {
+  const origin = "https://app.example.org";
+  it.each([
+    ["the home, where signing in from the welcome and signing out both land", "/", true],
+    ["the home with a query", "/?from=invite", true],
+    // These read an invite or a pairing as they load, so they keep their new document.
+    ["a join page", "/guest?share=abc", false],
+    [
+      "the home with a fragment, which a plain move would only scroll to",
+      "/?signed-in=1#code",
+      false,
+    ],
+    ["another site", "https://accounts.example.org/", false],
+    ["an address that does not parse", "http://[", false],
+  ] as const)("%s", (_case, to, stays) => {
+    expect(staysInApp(to, origin)).toBe(stays);
   });
 });

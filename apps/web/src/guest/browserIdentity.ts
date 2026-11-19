@@ -9,7 +9,12 @@ import {
   setLocalStorageItem,
 } from "../hooks/useLocalStorage";
 import { appAtomRegistry } from "../rpc/atomRegistry";
-import { type BrowserIdentity, accountNameSeed, browserAfterSignIn } from "./boardAccount.logic";
+import {
+  type BrowserIdentity,
+  accountNameSeed,
+  browserAfterSignIn,
+  friendlyName,
+} from "./boardAccount.logic";
 
 // Per browser: who used it, for the names it shows (see BrowserIdentity).
 const IDENTITY_KEY = "t3code:browser-identity:v1";
@@ -18,6 +23,8 @@ const LEGACY_NAME_KEY = "t3code:board-name:v1";
 const LEGACY_ASKED_KEY = "t3code:account-name-asked:v1";
 // Per account signed in here: the name it saved where its account could not keep one.
 const ACCOUNT_NAMES_KEY = "t3code:account-names:v1";
+// Per browser: the friendly name offered to whoever has none, so every name field offers the same.
+const SUGGESTION_KEY = "t3code:board-name-suggestion:v1";
 
 const StoredIdentity = Schema.Struct({
   name: Schema.NullOr(Schema.String),
@@ -80,14 +87,22 @@ export function rememberSignedOutName(name: string) {
   setIdentity({ ...appAtomRegistry.get(identityAtom), name: kept });
 }
 
-/** What "What should we call you?" starts with for this account, or null. */
+/** The name typed here signed out that this account may take as its own, or null. */
 export const readAccountNameSeed = (userId: string) =>
   accountNameSeed(appAtomRegistry.get(identityAtom), userId);
 
-export const useAccountNameSeed = (userId: string | null) => {
-  const identity = useAtomValue(identityAtom);
-  return userId === null ? null : accountNameSeed(identity, userId);
-};
+// Kept in memory too, so blocked storage still offers one name for the life of the page.
+let suggestion: string | null = null;
+
+/** The friendly name this browser offers a person with none: made once, then always the same. */
+export function readNameSuggestion(): string {
+  suggestion ??= read(SUGGESTION_KEY, Schema.String);
+  if (suggestion === null) {
+    suggestion = friendlyName((count) => Math.floor(Math.random() * count));
+    write(SUGGESTION_KEY, suggestion, Schema.String);
+  }
+  return suggestion;
+}
 
 /** The name this account saved on this browser, when its account could not keep it. */
 export const useAccountSavedName = (userId: string | null) => {
@@ -112,8 +127,11 @@ export function noteSignedInAccount(userId: string | null): boolean {
   if (identity !== appAtomRegistry.get(identityAtom)) setIdentity(identity);
   if (clear) {
     appAtomRegistry.set(accountNamesAtom, {});
+    // The next person here may have gone by the suggestion; they get one of their own.
+    suggestion = null;
     try {
       removeLocalStorageItem(ACCOUNT_NAMES_KEY);
+      removeLocalStorageItem(SUGGESTION_KEY);
     } catch {}
   }
   return clear;

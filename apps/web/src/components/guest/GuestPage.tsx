@@ -379,8 +379,7 @@ function SignInInstead({ credential }: { readonly credential: string }) {
   const { openAuthPrompt } = useT3ConnectAuthPrompt();
   if (account.status !== "signed-out") return null;
   return (
-    <p className="flex items-center justify-center gap-1 text-sm text-muted-foreground">
-      Have an account?
+    <p className="flex flex-wrap items-center justify-center text-center text-sm text-muted-foreground">
       <Button
         variant="link"
         size="sm"
@@ -390,8 +389,9 @@ function SignInInstead({ credential }: { readonly credential: string }) {
         }}
         data-guest-sign-in
       >
-        Sign in
+        Sign in or create an account
       </Button>
+      to find this board on every device.
     </p>
   );
 }

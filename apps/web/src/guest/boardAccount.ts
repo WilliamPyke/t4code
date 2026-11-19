@@ -15,7 +15,12 @@ import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { isElectron } from "../env";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { boardsToClaim, sharesOfOtherAccounts } from "./boardAccount.logic";
-import { noteSignedInAccount, rememberAccountSavedName } from "./browserIdentity";
+import { toastManager } from "../components/ui/toast";
+import {
+  noteSignedInAccount,
+  readAccountNameSeed,
+  rememberAccountSavedName,
+} from "./browserIdentity";
 import { cloudBoardsHost, cloudBoardsOrigin } from "./cloudBoardsHost";
 import {
   type JoinedGuestShare,
@@ -25,6 +30,7 @@ import {
   readGuestShares,
   rememberGuestShare,
 } from "./guestShares";
+import { clearWelcomeDraft } from "./welcomeDraft";
 
 /** Who is signed in to Tinkjam here, and how to get their current session token. */
 interface BoardAccountSession {
@@ -97,6 +103,8 @@ export function saveBoardAccountName(name: string): Promise<boolean> | null {
   const account = readBoardAccount();
   if (account === null) return null;
   rememberAccountSavedName(account.userId, name);
+  // Known from this moment, before sign-in reports it back: nothing after this asks for it again.
+  appAtomRegistry.set(boardAccountAtom, { ...account, name, realName: true });
   return account.saveName(name);
 }
 
@@ -235,7 +243,13 @@ export function syncBoardAccount(session: BoardAccountSession | null): void {
   // Claimed before claims were marked: known as the last account's only by its list.
   if (clear) for (const board of listedBefore) leaving.add(board.shareId);
   for (const shareId of leaving) forgetGuestShare(shareId);
+  if (clear) clearWelcomeDraft();
+  // Said here, where a sign-out is seen whether or not it loaded the page again.
+  if (clear && session === null) toastManager.add({ type: "success", title: "Signed out" });
   if (session === null || cloudBoardsOrigin() === null) return;
+  // An account with no name takes the one its person typed here signed out, so it is asked once.
+  const typed = session.realName ? null : readAccountNameSeed(session.userId);
+  if (typed !== null) void saveBoardAccountName(typed);
   void refreshAccountBoards().then(claimLocalBoards);
 }
 

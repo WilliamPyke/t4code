@@ -12,6 +12,7 @@ import {
   KeyboardIcon,
   LayoutGridIcon,
   LinkIcon,
+  ListChecksIcon,
   ListTodoIcon,
   MessagesSquareIcon,
   MousePointer2Icon,
@@ -129,6 +130,8 @@ export interface BoardPowerProps {
   readonly onAddOwnBox?: (() => string | null) | undefined;
   readonly onBringAgent?: (() => void) | undefined;
   readonly onToggleChat?: (() => void) | undefined;
+  /** Brings the first-run guide back; absent for someone it has no steps for. */
+  readonly onShowGuide?: (() => void) | undefined;
 }
 
 const mac = () => typeof navigator !== "undefined" && isMacPlatform(navigator.platform);
@@ -542,6 +545,13 @@ export function useBoardPower(props: BoardPowerProps): {
         icon: icon(ImageDownIcon),
         run: exports.downloadPng,
       },
+      ...has(props.onShowGuide, (run) => ({
+        id: "getting-started",
+        title: "Getting started",
+        keywords: ["guide", "help", "first steps", "tour"],
+        icon: icon(ListChecksIcon),
+        run,
+      })),
       {
         id: "shortcuts",
         title: "Keyboard shortcuts",
@@ -777,6 +787,12 @@ export function useBoardPower(props: BoardPowerProps): {
           </MenuItem>
         </MenuGroup>
         <MenuSeparator />
+        {props.onShowGuide === undefined ? null : (
+          <MenuItem onClick={props.onShowGuide}>
+            <ListChecksIcon />
+            Getting started
+          </MenuItem>
+        )}
         <MenuItem onClick={() => openCommandPalette()}>
           <CommandIcon />
           Command menu

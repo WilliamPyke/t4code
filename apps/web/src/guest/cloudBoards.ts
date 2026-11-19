@@ -33,8 +33,13 @@ import {
   refreshAccountBoards,
   saveBoardAccountName,
 } from "./boardAccount";
-import { friendlyName } from "./boardAccount.logic";
-import { readAccountNameSeed, readSignedOutName, rememberSignedOutName } from "./browserIdentity";
+import { resolveBoardName } from "./boardAccount.logic";
+import {
+  readAccountNameSeed,
+  readNameSuggestion,
+  readSignedOutName,
+  rememberSignedOutName,
+} from "./browserIdentity";
 import { cloudBoardsHost, cloudBoardsOrigin } from "./cloudBoardsHost";
 import {
   type JoinedGuestShare,
@@ -54,23 +59,23 @@ const decodeLinkResult = Schema.decodeUnknownOption(CloudBoardLinkResult);
  * The name to join a board under without asking: signed in, the account's own; signed out, the
  * one typed here signed out. Null when that person has none yet.
  */
-export const knownBoardName = (): string | null => {
-  const account = readBoardAccountProfile();
-  return account === null ? readSignedOutName() : account.name;
-};
+export const knownBoardName = (): string | null => boardName().known;
 
 /**
  * The name a name field starts with: the known one, else, for an account with none, what it
- * typed here signed out before it signed in, else a friendly one to keep or replace.
+ * typed here signed out before it signed in, else this browser's one friendly name.
  */
-export const suggestedBoardName = (): string => {
+export const suggestedBoardName = (): string => boardName().suggested;
+
+function boardName() {
   const account = readBoardAccountProfile();
-  return (
-    knownBoardName() ??
-    (account === null ? null : readAccountNameSeed(account.userId)) ??
-    friendlyName((count) => Math.floor(Math.random() * count))
-  );
-};
+  return resolveBoardName({
+    account:
+      account === null ? null : { name: account.name, seed: readAccountNameSeed(account.userId) },
+    signedOutName: readSignedOutName(),
+    suggestion: readNameSuggestion(),
+  });
+}
 
 /**
  * Keeps the name this person typed for boards: signed in, as their account's (on the account

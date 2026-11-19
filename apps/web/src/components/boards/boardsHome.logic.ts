@@ -390,8 +390,11 @@ export function homeContent(input: {
   readonly machinesLoaded: boolean;
   /** Sign-in has said who this is and, signed in, their boards arrived (or could not). */
   readonly accountLoaded: boolean;
+  /** The welcome already showed: a sign-in made from it must not take the form away meanwhile. */
+  readonly welcomed?: boolean;
 }): "boards" | "loading" | "welcome" {
   if (input.boards > 0 || input.workspaces > 0) return "boards";
+  if (input.welcomed === true) return "welcome";
   return input.machinesLoaded && input.accountLoaded ? "welcome" : "loading";
 }
 

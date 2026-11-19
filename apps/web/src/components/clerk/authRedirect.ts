@@ -21,6 +21,20 @@ export function resolveClerkSignInProps(href: string, isElectron: boolean): Cler
 }
 
 /**
+ * Whether Clerk's move to `to` after a sign-in or sign-out can happen inside the app, with no page
+ * load: only to the home, which follows the account as it changes. Other pages read what they
+ * need as they load (an invite, a pairing), so they still get the new document Clerk gives them.
+ */
+export function staysInApp(to: string, origin: string): boolean {
+  try {
+    const url = new URL(to, origin);
+    return url.origin === origin && url.pathname === "/" && url.hash === "";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The page to come back to after signing in, as a new document. Going to this same page with a
  * fragment (an invite's code) only scrolls, and Clerk then holds back the session it just made,
  * which leaves the page signed out; a mark in the query makes it a new page load.

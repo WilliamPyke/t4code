@@ -128,6 +128,7 @@ import {
   boardLocalModelPick,
   boardNewBoxModel,
 } from "../room/boardBoxModel.logic";
+import { markBoardGuideStep } from "../room/boardGuideState";
 import { BoardMentionsProvider } from "../room/BoardMentions";
 import { BoardSplit } from "../room/BoardSplit";
 import { BoardThreadPicker } from "../room/BoardThreadPicker";
@@ -1090,6 +1091,7 @@ function GuestThreadSession({
         onOpenChange={setBringingAgent}
         onBring={bringAgentFrom}
         onBrought={() => {
+          markBoardGuideStep("agent");
           if (ownBox.current?.() == null) return;
           toastManager.add({
             type: "info",

@@ -59,11 +59,12 @@ import { Group, GroupSeparator } from "../ui/group";
 import { Input } from "../ui/input";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
 import { SidebarInset } from "../ui/sidebar";
-import { Skeleton } from "../ui/skeleton";
 import { Spinner } from "../ui/spinner";
+import { TinkjamLoading } from "../TinkjamLoading";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { toastManager } from "../ui/toast";
-import { AccountNameAsk, BoardsAccount } from "./BoardsAccount";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { BoardsAccount } from "./BoardsAccount";
 import { BoardsWelcome } from "./BoardsWelcome";
 import { ConnectComputerNudge } from "./ConnectComputerNudge";
 import { InboxBell } from "./InboxBell";
@@ -185,13 +186,16 @@ export function BoardsHome() {
       ? sortHomeBoards(inScope, "recent").slice(0, HOME_RECENT_COUNT)
       : [];
   const showWorkspace = searching || scope === "all";
+  const [welcomed, setWelcomed] = useState(false);
   const content = homeContent({
     // A board only looked at from a view link (the sample) leaves the welcome in place.
     boards: all.length,
     workspaces: workspaces?.length ?? 0,
     machinesLoaded: bootstrapped,
     accountLoaded: accountSettled,
+    welcomed,
   });
+  if (content === "welcome" && !welcomed) setWelcomed(true);
   // One summary request per machine, for its most recent boards; every tile there shares it.
   const threadIdsByEnvironment = new Map<string, Array<ThreadId>>();
   for (const board of all) {
@@ -238,72 +242,87 @@ export function BoardsHome() {
       {content === "welcome" ? (
         <BoardsWelcome />
       ) : content === "loading" ? (
-        <HomeSkeleton />
+        <TinkjamLoading label="Loading your boards" />
       ) : (
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-6 sm:px-6">
-          <header className="flex flex-wrap items-center gap-3" data-boards-home-header>
-            <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <h1 className="truncate text-2xl leading-tight font-semibold">
-                {workspace?.name ?? (scope === "personal" ? "My boards" : "Boards")}
-              </h1>
-              <p className="text-sm text-muted-foreground">
-                Where you, your team and everyone's agents work on the same thing.
-              </p>
+          {/* Two rows: the title and what is the person's own, then what acts on the boards. */}
+          <header className="flex flex-col gap-4" data-boards-home-header>
+            <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+              {/* A basis, so the controls wrap under the title before they squeeze it. */}
+              <div className="flex min-w-0 flex-1 basis-80 flex-col gap-1">
+                <h1 className="line-clamp-2 text-2xl leading-tight font-semibold wrap-anywhere">
+                  {workspace?.name ?? (scope === "personal" ? "My boards" : "Boards")}
+                </h1>
+                <p className="text-sm text-muted-foreground">
+                  Where you, your team and everyone's agents work on the same thing.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-1">
+                <Button variant="ghost-muted" render={<Link to="/whats-new" />} data-whats-new-link>
+                  <MegaphoneIcon />
+                  What's new
+                  {whatsNew.unseen ? (
+                    <>
+                      <span aria-hidden className="size-1.5 rounded-full bg-primary" />
+                      <span className="sr-only">(new)</span>
+                    </>
+                  ) : null}
+                </Button>
+                <MyTasks />
+                <InboxBell />
+                <BoardsAccount />
+              </div>
             </div>
-            {workspaces === null ? null : (
-              <WorkspaceSwitcher scope={scope} workspaces={workspaces} />
-            )}
-            {workspace === null ? null : <WorkspacePeople workspace={workspace} />}
-            <Button variant="ghost-muted" render={<Link to="/whats-new" />} data-whats-new-link>
-              <MegaphoneIcon />
-              What's new
-              {whatsNew.unseen ? (
-                <>
-                  <span aria-hidden className="size-1.5 rounded-full bg-primary" />
-                  <span className="sr-only">(new)</span>
-                </>
-              ) : null}
-            </Button>
-            <MyTasks />
-            <InboxBell />
-            <BoardsAccount />
-            {all.length > 0 ? (
-              <label className="flex w-full items-center gap-2 sm:w-64">
-                <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-                <Input
-                  type="search"
-                  value={query}
-                  placeholder="Search boards"
-                  aria-label="Search boards"
-                  onChange={(event) => setQuery(event.currentTarget.value)}
-                />
-              </label>
-            ) : null}
-            <Group aria-label="New board">
-              <Button
-                disabled={waiting}
-                aria-busy={waiting || undefined}
-                onClick={() => void startNewBoard()}
-                data-new-board
-              >
-                {newBoardIcon}
-                New board
-              </Button>
-              <GroupSeparator />
-              <Button
-                size="icon"
-                aria-label="New board from a template"
-                title="New board from a template"
-                onClick={openBoardTemplates}
-                data-new-board-template
-              >
-                <ChevronDownIcon />
-              </Button>
-            </Group>
+            <div className="flex flex-wrap items-center gap-3">
+              {workspaces === null ? null : (
+                <WorkspaceSwitcher scope={scope} workspaces={workspaces} />
+              )}
+              {workspace === null ? null : <WorkspacePeople workspace={workspace} />}
+              <div className="ms-auto flex w-full items-center gap-3 sm:w-auto">
+                {all.length > 0 ? (
+                  <label className="flex min-w-0 flex-1 items-center gap-2 sm:w-64 sm:flex-none">
+                    <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                    <Input
+                      type="search"
+                      value={query}
+                      placeholder="Search boards"
+                      aria-label="Search boards"
+                      onChange={(event) => setQuery(event.currentTarget.value)}
+                    />
+                  </label>
+                ) : null}
+                <Group aria-label="New board">
+                  <Button
+                    disabled={waiting}
+                    aria-busy={waiting || undefined}
+                    onClick={() => void startNewBoard()}
+                    data-new-board
+                  >
+                    {newBoardIcon}
+                    New board
+                  </Button>
+                  <GroupSeparator />
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          size="icon"
+                          aria-label="New board from a template"
+                          onClick={openBoardTemplates}
+                          data-new-board-template
+                        />
+                      }
+                    >
+                      <ChevronDownIcon />
+                    </TooltipTrigger>
+                    <TooltipPopup side="bottom">New board from a template</TooltipPopup>
+                  </Tooltip>
+                </Group>
+              </div>
+            </div>
           </header>
           <ConnectComputerNudge />
           <SignInNudge cloudBoards={joined.some(isCloudShare)} />
-          <AccountNameAsk />
           {workspace !== null &&
           !searching &&
           (workspace.members.length === 1 || shown.length === 0) ? (
@@ -391,37 +410,6 @@ export function BoardsHome() {
         </div>
       )}
     </SidebarInset>
-  );
-}
-
-/** Where the boards will be, while the home cannot yet say whether there are any. */
-function HomeSkeleton() {
-  return (
-    <div
-      className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-6 sm:px-6"
-      aria-busy
-      aria-label="Loading your boards"
-      data-boards-loading
-    >
-      <div className="flex flex-col gap-2">
-        <Skeleton className="h-7 w-40" />
-        <Skeleton className="h-4 w-72 max-w-full" />
-      </div>
-      <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {["a", "b", "c", "d"].map((key) => (
-          <li
-            key={key}
-            className="flex flex-col overflow-hidden rounded-board border border-board-hairline bg-card shadow-paint"
-          >
-            <Skeleton className="aspect-video w-full" />
-            <div className="flex flex-col gap-2 p-3">
-              <Skeleton className="h-4 w-2/3" />
-              <Skeleton className="h-3 w-1/3" />
-            </div>
-          </li>
-        ))}
-      </ul>
-    </div>
   );
 }
 

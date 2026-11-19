@@ -274,7 +274,9 @@ import {
 } from "./roomBoardNavigation";
 import { RoomArtifactLive } from "./RoomBoardArtifact";
 import { useBoardDrawnHeights } from "./roomBoardHeights";
-import { BoardFirstRunHint } from "./BoardFirstRunHint";
+import { BoardGuide } from "./BoardGuide";
+import { boardGuideStepOfChange } from "./boardGuide.logic";
+import { markBoardGuideStep, showBoardGuide } from "./boardGuideState";
 import { BoardEmbedIcon, RoomEmbedBody, useBoardSurfaceSize } from "./RoomBoardEmbed";
 import { boardEmbedTitleOf, boardEmbedTitleUrl, boardLiveEmbeds } from "./boardEmbed.logic";
 import { type ReadRoomCodePatch, RoomCodeWindow } from "./RoomBoardCode";
@@ -565,7 +567,11 @@ function BoardTool({
 }: ComponentProps<typeof Button> & { readonly label: string; readonly hint?: string }) {
   return (
     <Tooltip>
-      <TooltipTrigger render={<Button size="icon" variant="ghost" aria-label={label} {...props} />}>
+      {/* A tool's name shows soon after the pointer rests on it: the tools are icons only. */}
+      <TooltipTrigger
+        delay={200}
+        render={<Button size="icon" variant="ghost" aria-label={label} {...props} />}
+      >
         {children}
       </TooltipTrigger>
       <TooltipPopup side="top">{hint ?? label}</TooltipPopup>
@@ -1653,8 +1659,10 @@ export function RoomBoard({
     const queue = after ?? boardChangeQueueKey(shown, target, value);
     setEdits((current) => putBoardEdit(board, current, target, value, false));
     const change = boardChangeOf(target, value);
+    const guideStep = boardGuideStepOfChange(change, before === null);
     void queueChange(queue, () => onChange(change)).then((taken) => {
       if (!taken) setEdits((current) => dropBoardEdit(current, target, value));
+      else if (guideStep !== null) markBoardGuideStep(guideStep);
     });
   };
   // A drag, nudge or resize (`frame`) renders the board once as it starts; after that each step
@@ -4610,10 +4618,31 @@ export function RoomBoard({
   };
   const canAddOwnBox =
     cards === undefined && holds.agents && bringAgent === undefined && cannotAddThread === null;
+  // The guide's steps, stable so a pan or a drag does not render the guide again. The invite link
+  // and Share live in the header the host gives the board.
+  const inviteFromGuide = useStableCallback(() => {
+    const control = (selector: string) =>
+      surfaceRef.current?.parentElement?.querySelector<HTMLElement>(selector) ?? null;
+    (
+      control("[data-cloud-board-invite]") ??
+      control("[data-board-share], [data-cloud-board-people]") ??
+      control("[data-board-share-more]")
+    )?.click();
+  });
+  const noteFromGuide = useStableCallback((event: MouseEvent<HTMLElement>) =>
+    pickCardTool("note", event),
+  );
+  const lineFromGuide = useStableCallback(startLineTool);
   const power = useBoardPower({
     surfaceRef,
     onBoard: !planShown,
     viewOnly,
+    onShowGuide: canEdit
+      ? () => {
+          if (planShown) pickView("board");
+          showBoardGuide();
+        }
+      : undefined,
     onAddTaskInPlan:
       planShown && canEdit && cannotAdd === null
         ? () => setPlanAdd((stamp) => stamp + 1)
@@ -4755,7 +4784,18 @@ export function RoomBoard({
               </BoardFloat>
             )}
           </div>
-          <div className="pointer-events-auto ms-auto flex shrink-0 items-center gap-2">
+          <div
+            className="pointer-events-auto ms-auto flex shrink-0 items-center gap-2"
+            // Copying the invite link, from here or from the guide, is the guide's invite step.
+            onClickCapture={(event) => {
+              if (
+                event.target instanceof Element &&
+                event.target.closest("[data-cloud-board-invite]") !== null
+              ) {
+                markBoardGuideStep("invite");
+              }
+            }}
+          >
             {cards !== undefined || room === null ? null : (
               <BoardAgents
                 entries={agentEntries}
@@ -4801,7 +4841,12 @@ export function RoomBoard({
                   <Popover>
                     <PopoverTrigger
                       render={
-                        <Button size="icon-sm" variant="ghost" aria-label="Share and people" />
+                        <Button
+                          size="icon-sm"
+                          variant="ghost"
+                          aria-label="Share and people"
+                          data-board-share-more
+                        />
                       }
                     >
                       <EllipsisIcon />
@@ -4900,13 +4945,22 @@ export function RoomBoard({
                   ) : (
                     <Menu>
                       <WhyNot reason={cannotAddThread}>
-                        <MenuTrigger
-                          disabled={cannotAddThread !== null}
-                          render={<Button size="sm" variant="ghost" aria-label="Thread" />}
-                        >
-                          <BotIcon />
-                          <ChevronDownIcon className="-ms-1.5 size-3 opacity-60" />
-                        </MenuTrigger>
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <MenuTrigger
+                                disabled={cannotAddThread !== null}
+                                render={<Button size="sm" variant="ghost" aria-label="Thread" />}
+                              />
+                            }
+                          >
+                            <BotIcon />
+                            <ChevronDownIcon className="-ms-1.5 size-3 opacity-60" />
+                          </TooltipTrigger>
+                          <TooltipPopup side="top">
+                            Thread box: an agent the room can prompt
+                          </TooltipPopup>
+                        </Tooltip>
                       </WhyNot>
                       {/* The new box's name field keeps the caret it took. */}
                       <MenuPopup
@@ -5219,6 +5273,26 @@ export function RoomBoard({
             {cards === undefined && room !== null ? <LineLegend /> : null}
           </BoardFloat>
         </div>
+        <BoardGuide
+          canEdit={canEdit && !viewOnly}
+          canInvite={sharing !== undefined && (marksStart ?? viewer === null)}
+          othersJoined={guests.some((guest) => guest.id !== viewer)}
+          agent={
+            cards !== undefined || !holds.agents
+              ? "none"
+              : bringAgent !== undefined
+                ? "absent"
+                : takeAgentAway !== undefined
+                  ? "here"
+                  : "none"
+          }
+          hidden={planShown}
+          noteColor={noteColor ?? undefined}
+          onNote={cannotAdd === null ? noteFromGuide : undefined}
+          onLine={cannotAddLine === null ? lineFromGuide : undefined}
+          onInvite={inviteFromGuide}
+          onAgent={bringAgent}
+        />
         <div
           ref={surfaceRef}
           role="application"
@@ -6241,6 +6315,16 @@ export function RoomBoard({
               onClick={pickLineEnd}
             />
           ) : null}
+          {armedTool === null ? null : (
+            <p
+              data-board-place-hint
+              className="pointer-events-none absolute inset-x-0 bottom-20 z-30 flex justify-center px-4"
+            >
+              <span className="rounded-board border border-board-hairline bg-card px-3 py-1.5 text-center text-xs text-muted-foreground shadow-board">
+                Click the board where the {armedTool} goes. Esc to stop.
+              </span>
+            </p>
+          )}
           {lineTool ? (
             <p
               role="status"
@@ -6261,9 +6345,6 @@ export function RoomBoard({
                 Share this thread with guests and each person who joins gets a card here.
               </span>
             </p>
-          ) : canEdit ? (
-            // Above the toolbar: once per person, on the first board they open as a board.
-            <BoardFirstRunHint bringAgent={bringAgent} hidden={planShown || lineTool} />
           ) : null}
         </div>
         {planColumns === null || planAttachments === null ? null : (

@@ -49,6 +49,11 @@ function renderBoard(
   } = {},
 ) {
   const onChange = vi.fn(takes);
+  // The first-run guide floats over the bottom right corner, where these tests click the board.
+  localStorage.setItem(
+    "t3code:board-guide:v1",
+    JSON.stringify({ hidden: true, collapsed: false, done: [] }),
+  );
   const element = (
     <RoomBoard
       title="Launch"
@@ -728,6 +733,30 @@ describe("RoomBoard keys and pointer", () => {
     await expect
       .element(screen.getByRole("textbox", { name: "Note", exact: true }).last())
       .toHaveFocus();
+  });
+
+  it("brings the hidden first-run guide back from the board menu, and ticks a step once the board takes the note", async () => {
+    await using _viewport = await boardSizedViewport();
+    const board = renderBoard([{ id: "a", text: "First", x: 0, y: 0 }]);
+    await using screen = await board.screen;
+    const guide = screen.getByRole("region", { name: "Getting started" });
+    await expect.element(guide).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Board menu" }));
+    await userEvent.click(page.getByRole("menuitem", { name: "Getting started" }));
+    await expect.element(guide).toBeVisible();
+    const noteStep = () => screen.container.querySelector('[data-board-guide-step="note"]');
+    expect(noteStep()?.hasAttribute("data-done")).toBe(false);
+
+    // The step only picks the Note tool; the note the board then takes is what ticks it.
+    await userEvent.click(screen.getByRole("button", { name: "Add a note" }));
+    expect(noteStep()?.hasAttribute("data-done")).toBe(false);
+    const layer = screen.container.querySelector<HTMLElement>('[data-board-place="note"]');
+    if (layer === null) throw new Error("The guide's step did not pick the Note tool");
+    await userEvent.click(layer, { position: { x: 300, y: 250 } });
+    await vi.waitFor(() => expect(noteStep()?.hasAttribute("data-done")).toBe(true));
+
+    await userEvent.click(screen.getByRole("button", { name: "Hide getting started" }));
+    await expect.element(guide).not.toBeInTheDocument();
   });
 
   it("adds the Note tool's note centred where the board is clicked next, at any zoom, ready to write in", async () => {
