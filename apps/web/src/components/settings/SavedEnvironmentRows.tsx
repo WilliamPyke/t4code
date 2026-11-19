@@ -490,7 +490,9 @@ function T3ConnectTunnelUsage({ tunnelLimit }: { readonly tunnelLimit: number | 
         action={
           // At the cap the alert below carries the same actions.
           !openAccountPage || showLimitAlert ? null : usage.upgrade ? (
-            <InlineButton onClick={() => openAccountPage("t3-chat")}>Get more tunnels</InlineButton>
+            <InlineButton onClick={() => openAccountPage("t3-connect")}>
+              Get more tunnels
+            </InlineButton>
           ) : usage.used >= usage.limit ? (
             <InlineButton onClick={() => openAccountPage("t3-connect")}>
               Manage tunnels
@@ -507,7 +509,7 @@ function T3ConnectTunnelUsage({ tunnelLimit }: { readonly tunnelLimit: number | 
           {showLimitAlert ? (
             <TunnelLimitAlert
               upgrade={usage.upgrade}
-              onLinkT3Chat={openAccountPage ? () => openAccountPage("t3-chat") : null}
+              onLinkT3Chat={openAccountPage ? () => openAccountPage("t3-connect") : null}
               onManageTunnels={openAccountPage ? () => openAccountPage("t3-connect") : null}
             />
           ) : null}

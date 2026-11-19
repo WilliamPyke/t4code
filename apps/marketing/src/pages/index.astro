@@ -54,7 +54,7 @@ const faqs = [
   },
   {
     q: "Can others run my agent?",
-    a: "No. Your agent runs on your own computer, under your own Claude or Codex account. Teammates can write a message for it or hand it a task, but nothing anyone else writes reaches it unless you press Send.",
+    a: "No. Your agent runs on your own computer, under your own Claude or Codex account. Teammates can leave notes for it or assign you a task, but nothing anyone else writes reaches it unless you press Send.",
   },
 ];
 ---
@@ -357,9 +357,9 @@ const faqs = [
         </div>
         <ul class="ticks">
           <li><Icon name="check" />Kanban and list views, with priority, due dates and filters</li>
-          <li><Icon name="check" />Assign tasks to people or to agents</li>
+          <li><Icon name="check" />Assign tasks to the people on the board</li>
           <li><Icon name="check" />Agents plan with you; one undo takes a whole turn back</li>
-          <li><Icon name="check" />Hand a task to an agent; its owner presses Send</li>
+          <li><Icon name="check" />Take a task to your own agent; nothing runs until you send it</li>
         </ul>
       </div>
 
@@ -387,11 +387,11 @@ const faqs = [
             </div>
             <div class="ptask">
               <span class="ptask__title">Check sign-up on small phones</span>
-              <span class="ptask__handoff"><Icon name="spark" />For Codex. Waiting for Sam to press Send</span>
+              <span class="ptask__handoff"><Icon name="spark" />Sam's draft for Codex. Not sent yet</span>
               <span class="ptask__meta">
                 <span class="prio prio--med"><i></i><i></i><i></i></span>
                 <span class="due">Fri</span>
-                <span class="agent-glyph agent-glyph--codex agent-glyph--sm"><Icon name="spark" /></span>
+                <span class="avatar avatar--sm" style="background:var(--sam)">S</span>
               </span>
             </div>
             <div class="ptask ptask--ghost"></div>
@@ -407,7 +407,7 @@ const faqs = [
               <span class="ptask__meta">
                 <span class="prio prio--urgent">!</span>
                 <span class="due">Today</span>
-                <span class="agent-glyph agent-glyph--sm"><Icon name="spark" /></span>
+                <span class="avatar avatar--sm" style="background:var(--maya)">M</span>
               </span>
             </div>
             <div class="ptask ptask--slot"></div>
