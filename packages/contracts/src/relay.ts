@@ -1248,7 +1248,7 @@ export const RelayWakeHeldHooksResponse = Schema.Struct({
 export type RelayWakeHeldHooksResponse = typeof RelayWakeHeldHooksResponse.Type;
 
 /** Readable stand-in for a guest link: three words, e.g. `tulip-otter-harbor`. */
-export const RELAY_GUEST_LINK_NAME_PATTERN = /^[a-z]{2,12}(?:-[a-z]{2,12}){2}$/;
+export const RELAY_GUEST_LINK_NAME_PATTERN = /^[a-z]{2,12}(?:-[a-z]{2,12}){2,3}$/;
 
 export const RelayGuestLinkTarget = Schema.Struct({
   host: TrimmedNonEmptyString,

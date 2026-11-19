@@ -358,7 +358,12 @@ function csvCellText(cell: Element): string {
 }
 
 function csvCell(value: string): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
+  const collapsed = value.replace(/\s+/g, " ").trim();
+  // A spreadsheet runs a cell that starts like a formula; a plain number is left as it is.
+  const normalized =
+    /^[=+\-@\t\r]/.test(collapsed) && !/^[+-]?\d+(?:\.\d+)?$/.test(collapsed)
+      ? `'${collapsed}`
+      : collapsed;
   return /[",\n]/.test(normalized) ? `"${normalized.replaceAll('"', '""')}"` : normalized;
 }
 

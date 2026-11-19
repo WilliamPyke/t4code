@@ -59,7 +59,7 @@ function syncPackageManifest(input: {
     license: serverPackageJson.license,
     type: "module",
     bin: { [SYNC_PACKAGE_NAME]: "./bin/tinkjam-sync.mjs" },
-    files: ["bin", "dist"],
+    files: ["bin", "dist", "npm-shrinkwrap.json"],
     engines: { node: input.nodeEngine },
     dependencies: input.dependencies,
     // Tinkjam Sync for Mac reads this to know it may run `sync --app`; older copies lack it.
@@ -72,6 +72,51 @@ function run(command: string, args: ReadonlyArray<string>, cwd: string) {
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(" ")} exited with ${result.status ?? result.signal}.`);
   }
+}
+
+/**
+ * Locks the staged package's whole dependency tree, with integrity hashes, for `npm ci` in the
+ * unpacked package. `npm install <sync.tgz>` and npx ignore it: npm 11 reads no shrinkwrap from a
+ * tarball that did not come from a registry.
+ */
+function writeShrinkwrap(stage: string) {
+  // Fixed arguments only, so one shell command line runs npm's .cmd shim on Windows too.
+  const npm = (args: ReadonlyArray<string>) => {
+    const result = NodeChildProcess.spawnSync(`npm ${args.join(" ")}`, {
+      cwd: stage,
+      stdio: "inherit",
+      shell: true,
+    });
+    if (result.status !== 0) {
+      throw new Error(`npm ${args.join(" ")} exited with ${result.status ?? result.signal}.`);
+    }
+  };
+  npm(["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"]);
+  npm(["shrinkwrap"]);
+  const missing = packagesWithoutIntegrity(
+    JSON.parse(NodeFS.readFileSync(NodePath.join(stage, "npm-shrinkwrap.json"), "utf8")),
+  );
+  if (missing.length > 0) {
+    throw new Error(`npm-shrinkwrap.json has no integrity for ${missing.join(", ")}.`);
+  }
+}
+
+interface LockEntry {
+  readonly integrity?: string;
+  readonly link?: boolean;
+  readonly inBundle?: boolean;
+}
+
+/** Every package a lockfile would download must carry the hash npm checks it against. */
+export function packagesWithoutIntegrity(lock: {
+  readonly packages?: Readonly<Record<string, LockEntry>>;
+}): ReadonlyArray<string> {
+  return Object.entries(lock.packages ?? {})
+    .filter(
+      ([path, entry]) =>
+        path !== "" && entry.link !== true && entry.inBundle !== true && !entry.integrity,
+    )
+    .map(([path]) => path);
 }
 
 function main() {
@@ -135,6 +180,8 @@ function main() {
       2,
     )}\n`,
   );
+
+  writeShrinkwrap(stage);
 
   const tarball = NodePath.join(outputDir, "sync.tgz");
   NodeFS.rmSync(tarball, { force: true });

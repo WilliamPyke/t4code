@@ -236,6 +236,30 @@ export const CLOUD_BOARD_MAX_VIEWERS = 200;
 export const checkViewerRoom = (viewing: number): RoomFailure | null =>
   viewing >= CLOUD_BOARD_MAX_VIEWERS ? roomFailure("viewers_full") : null;
 
+/** Open pages one seat keeps, and view-link pages one address keeps, before the oldest closes. */
+export const STREAMS_PER_SEAT = 8;
+export const VIEWER_STREAMS_PER_ADDRESS = 10;
+
+/** The open pages to close, oldest first, so a new one keeps its seat or address within its cap. */
+export function streamsPastCap<
+  S extends {
+    readonly guestId: string;
+    readonly viewHash: string | null;
+    readonly address: string | null;
+  },
+>(open: Iterable<S>, opening: { readonly guestId: string } | { readonly address: string }): S[] {
+  const viewer = "address" in opening;
+  const same = [...open].filter((stream) =>
+    viewer
+      ? stream.viewHash !== null && stream.address === opening.address
+      : stream.guestId === opening.guestId,
+  );
+  return same.slice(
+    0,
+    Math.max(0, same.length - (viewer ? VIEWER_STREAMS_PER_ADDRESS : STREAMS_PER_SEAT) + 1),
+  );
+}
+
 export const canChange = (guest: CloudGuest): boolean => guest.role !== "viewer";
 
 /**

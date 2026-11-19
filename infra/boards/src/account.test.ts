@@ -112,6 +112,7 @@ describe("accounts on a cloud board", () => {
         positions: { [`guest:${two}`]: { x: 5, y: 5 }, [`guest:${maker}`]: { x: 1, y: 1 } },
         // A card whose text is the id itself is still only text.
         notes: [note("note-a", two, two), note("note-b", maker, "Hers already")],
+        edges: [{ id: "edge-1", from: `card:guest:${two}`, to: "note:note-b" }],
       },
       turns: [],
       machines: [{ guestId: two, hash: "machine-hash", kind: "room" }],
@@ -132,6 +133,7 @@ describe("accounts on a cloud board", () => {
     ]);
     expect(folded.room.board?.notes[0]?.reactions).toEqual([{ emoji: "👀", guestId: maker }]);
     expect(folded.room.board?.positions).toEqual({ [`guest:${maker}`]: { x: 1, y: 1 } });
+    expect(folded.room.board?.edges?.[0]?.from).toBe(`card:guest:${maker}`);
     expect(JSON.stringify({ ...folded.room.board, notes: [] })).not.toContain(two);
     // Claiming again from either browser changes nothing more.
     const again = Result.getOrThrow(link(folded.room, "user_ada", "two-session"));

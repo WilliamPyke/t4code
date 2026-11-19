@@ -1,6 +1,7 @@
 import {
   CLOUD_BOARD_ACCOUNT_MAX_BOARDS,
   roomBoardAgentCard,
+  roomBoardCardRef,
   roomBoardGuestCard,
   type CloudBoardAccountBoard,
   type GuestId,
@@ -28,6 +29,10 @@ const SESSIONS_PER_ACCOUNT = 8;
 
 export const accountGuestOf = (room: CloudRoom | null, account: string): CloudGuest | undefined =>
   room?.guests.find((guest) => guest.accountId === account);
+
+/** Locked out of the board's workspace: a fresh seat from the edit link is no way back in either. */
+export const accountLockedOut = (room: CloudRoom | null, account: string): boolean =>
+  accountGuestOf(room, account)?.locked === true;
 
 /** What the account's list keeps of a board it is on. */
 export const accountBoardOf = (
@@ -92,6 +97,9 @@ function mergeSeat(room: CloudRoom, from: CloudGuest, into: CloudGuest): CloudRo
     [from.id, into.id],
     [roomBoardGuestCard(from.id), roomBoardGuestCard(into.id)],
     [roomBoardAgentCard(from.id), roomBoardAgentCard(into.id)],
+    // Arrows name those cards as refs.
+    [roomBoardCardRef(roomBoardGuestCard(from.id)), roomBoardCardRef(roomBoardGuestCard(into.id))],
+    [roomBoardCardRef(roomBoardAgentCard(from.id)), roomBoardCardRef(roomBoardAgentCard(into.id))],
   ]);
   const sessions = [
     ...(into.accountSessions ?? []),

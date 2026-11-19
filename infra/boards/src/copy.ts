@@ -26,10 +26,18 @@ export const BOARD_MAKING_WINDOW_MS = 60 * 60_000;
 export function takeBoardMaking(
   made: ReadonlyArray<number>,
   now: number,
+  limit: { readonly count: number; readonly windowMs: number } = {
+    count: BOARD_MAKING_LIMIT,
+    windowMs: BOARD_MAKING_WINDOW_MS,
+  },
 ): ReadonlyArray<number> | null {
-  const recent = made.filter((at) => at > now - BOARD_MAKING_WINDOW_MS);
-  return recent.length >= BOARD_MAKING_LIMIT ? null : [...recent, now];
+  const recent = made.filter((at) => at > now - limit.windowMs);
+  return recent.length >= limit.count ? null : [...recent, now];
 }
+
+/** Joins from one address, and link checks from one address: other counts kept the same way. */
+export const JOINS_PER_ADDRESS = { count: 30, windowMs: 10 * 60_000 } as const;
+export const FRAME_CHECKS_PER_ADDRESS = { count: 300, windowMs: 10 * 60_000 } as const;
 
 /**
  * Why the caller may not copy the board, or null when they may: someone on it (`seat`) or looking

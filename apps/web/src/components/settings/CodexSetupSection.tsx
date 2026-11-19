@@ -48,6 +48,7 @@ import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SettingsRow } from "./settingsLayout";
 import { AddCodexAccountDialog } from "./AddCodexAccountDialog";
 import { getOnboardingProviderState } from "../../onboarding/providerReadiness.logic";
+import { expectProviderAuthDelivery } from "../../providerAuthDelivery";
 import { getProviderSummary } from "./providerStatus";
 import {
   settleAuthorizationPage,
@@ -752,7 +753,15 @@ function ManagedCodexSetup({
         {handoffUrl ? (
           <details>
             <summary className="cursor-pointer">Other ways to connect</summary>
-            <Button className="mt-2" size="sm" variant="outline" render={<a href={handoffUrl} />}>
+            <Button
+              className="mt-2"
+              size="sm"
+              variant="outline"
+              render={<a href={handoffUrl} />}
+              onClick={() => {
+                if (auth?.flowId) expectProviderAuthDelivery(environmentId, auth.flowId);
+              }}
+            >
               Use T3 desktop for automatic return
             </Button>
           </details>

@@ -40,7 +40,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import * as RelayDb from "../db.ts";
-import { threeWordName } from "../guestLinks/GuestLinks.ts";
+import { wordName } from "../guestLinks/GuestLinks.ts";
 import {
   relayTeamBoards,
   relayTeamInvites,
@@ -428,7 +428,7 @@ const make = Effect.gen(function* () {
         const [inserted] = yield* db
           .insert(relayTeamInvites)
           .values({
-            name: yield* threeWordName(random),
+            name: yield* wordName(random, 3),
             teamId: team.id,
             createdByUserId: input.userId,
             expiresAt,

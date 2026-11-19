@@ -218,5 +218,10 @@ describe("copying a board", () => {
     expect(takeBoardMaking(made, BOARD_MAKING_LIMIT)).toBeNull();
     // An hour after the first, there is room for one more.
     expect(takeBoardMaking(made, BOARD_MAKING_WINDOW_MS)).toHaveLength(BOARD_MAKING_LIMIT);
+    // Another count keeps its own limit and window.
+    const joins = { count: 2, windowMs: 1_000 };
+    const twice = takeBoardMaking(takeBoardMaking([], 0, joins) ?? [], 1, joins) ?? [];
+    expect(takeBoardMaking(twice, 2, joins)).toBeNull();
+    expect(takeBoardMaking(twice, 1_000, joins)).toEqual([1, 1_000]);
   });
 });

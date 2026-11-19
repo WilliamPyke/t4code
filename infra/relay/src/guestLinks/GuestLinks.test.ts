@@ -72,7 +72,7 @@ const setup = (script: Array<number> = []) =>
     const names = Effect.promise(() =>
       pg.query<{ name: string }>("select name from relay_guest_links order by name"),
     ).pipe(Effect.map((result) => result.rows.map((row) => row.name)));
-    return { links, names };
+    return { links, names, pg };
   });
 
 const HOUR = "1970-01-01T01:00:00.000Z";
@@ -92,6 +92,7 @@ describe("GuestLinks", () => {
       const name = yield* links.register(link("invite-1"));
       expect(yield* links.register(link("invite-1", "1970-01-01T02:00:00.000Z"))).toBe(name);
       expect(name).toMatch(RELAY_GUEST_LINK_NAME_PATTERN);
+      expect(name.split("-")).toHaveLength(4);
       expect(yield* names).toEqual([name]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -113,11 +114,30 @@ describe("GuestLinks", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("still resolves a three-word name registered before names grew to four words", () =>
+    Effect.gen(function* () {
+      const { links, pg } = yield* setup();
+      const name = nameOf(1, 2, 3);
+      yield* Effect.promise(() =>
+        pg.query(
+          "insert into relay_guest_links (name, environment_id, host, credential, expires_at, created_at) values ($1, 'environment-1', 'owner.example.org', 'invite-old', $2, '1970-01-01T00:00:00.000Z')",
+          [name, HOUR],
+        ),
+      );
+      expect(yield* links.resolve(name)).toEqual({
+        host: "owner.example.org",
+        credential: "invite-old",
+      });
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("resolves an unknown or malformed name to null", () =>
     Effect.gen(function* () {
       const { links } = yield* setup();
       yield* links.register(link("invite-1"));
       expect(yield* links.resolve(nameOf(824, 824, 824))).toBeNull();
+      expect(yield* links.resolve(nameOf(824, 824, 824, 824))).toBeNull();
+      expect(yield* links.resolve(nameOf(824, 824, 824, 824, 824))).toBeNull();
       expect(yield* links.resolve("Not a name")).toBeNull();
     }).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -125,26 +145,34 @@ describe("GuestLinks", () => {
   it.effect("draws another name when the first is taken", () =>
     Effect.gen(function* () {
       // 65535 is past the largest multiple of the word count, so that pick is drawn again.
-      const { links } = yield* setup([0, 0, 0, 0, 0, 0, 65_535, 0, 0, 1]);
-      expect(yield* links.register(link("invite-1"))).toBe(nameOf(0, 0, 0));
-      expect(yield* links.register(link("invite-2"))).toBe(nameOf(0, 0, 1));
+      const { links } = yield* setup([0, 0, 0, 0, 0, 0, 0, 0, 65_535, 0, 0, 0, 1]);
+      expect(yield* links.register(link("invite-1"))).toBe(nameOf(0, 0, 0, 0));
+      expect(yield* links.register(link("invite-2"))).toBe(nameOf(0, 0, 0, 1));
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("fails after five taken names", () =>
     Effect.gen(function* () {
       // One name for the first link, then the same name on all five tries for the second.
-      const { links, names } = yield* setup(Array.from({ length: 3 + 5 * 3 }, () => 0));
+      const { links, names } = yield* setup(Array.from({ length: 4 + 5 * 4 }, () => 0));
       yield* links.register(link("invite-1"));
       const error = yield* Effect.flip(links.register(link("invite-2")));
       expect(error).toMatchObject({ _tag: "GuestLinkPersistenceError", operation: "register" });
-      expect(yield* names).toEqual([nameOf(0, 0, 0)]);
+      expect(yield* names).toEqual([nameOf(0, 0, 0, 0)]);
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("refuses a lookup the rate limiter could not count", () =>
+    Effect.gen(function* () {
+      expect(yield* GuestLinks.refuseWhenUncounted(Effect.fail("limiter down"))).toBe(false);
+      expect(yield* GuestLinks.refuseWhenUncounted(Effect.succeed(true))).toBe(true);
+    }),
   );
 
   it("gives every word a shape the name pattern accepts", () => {
     for (const word of GUEST_LINK_WORDS) {
       expect(`${word}-${word}-${word}`).toMatch(RELAY_GUEST_LINK_NAME_PATTERN);
+      expect(`${word}-${word}-${word}-${word}`).toMatch(RELAY_GUEST_LINK_NAME_PATTERN);
     }
   });
 });

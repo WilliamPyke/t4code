@@ -104,6 +104,10 @@ it("fetches a shared thread only from a public-looking https host", () => {
     "printer.local",
     "db.internal",
     "intranet",
+    "0x7f.1",
+    "127.1",
+    "10.0x0.0.5",
+    "sam.t3.0x7f",
     "",
   ]) {
     assert.isNull(SharedThreadJoin.sharedThreadExportUrl(host), host);

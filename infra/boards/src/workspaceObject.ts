@@ -19,6 +19,7 @@ import {
   joinWorkspace,
   leaveWorkspace,
   memberOf,
+  nextBoardWork,
   previewOf,
   removeMember,
   renameWorkspace,
@@ -46,10 +47,12 @@ const BOARDS_PER_STEP = 25;
  * Work on the workspace's boards that runs in steps: taking someone's way in away on each, or
  * letting every board go once the workspace is deleted. `after` is the last board done.
  */
-type BoardWork = { readonly workspaceId: string; readonly after?: string } & (
-  | { readonly kind: "lock"; readonly account: string }
-  | { readonly kind: "release" }
-);
+type BoardWork = {
+  readonly workspaceId: string;
+  readonly after?: string;
+  /** Boards a step could not tell, asked again on their own. */
+  readonly retry?: { readonly shareIds: ReadonlyArray<string>; readonly attempt: number };
+} & ({ readonly kind: "lock"; readonly account: string } | { readonly kind: "release" });
 
 /**
  * One workspace: its people and its list of boards. Only the Worker calls it, with an account it
@@ -280,25 +283,30 @@ export class BoardWorkspace extends DurableObject<WorkspaceEnv> {
   private async step(): Promise<void> {
     const [work, ...rest] = (await this.ctx.storage.get<ReadonlyArray<BoardWork>>(WORK_KEY)) ?? [];
     if (work === undefined) return;
-    const listed = await this.ctx.storage.list<CloudWorkspaceBoard>({
-      prefix: BOARD_PREFIX,
-      ...(work.after === undefined ? {} : { startAfter: BOARD_PREFIX + work.after }),
-      limit: BOARDS_PER_STEP,
-    });
-    const boards = [...listed.values()];
-    // A board that missed this still opens nothing new: the workspace is asked on every open.
-    await Promise.allSettled(
-      boards.map((board) =>
+    const boards =
+      work.retry?.shareIds ??
+      [
+        ...(
+          await this.ctx.storage.list<CloudWorkspaceBoard>({
+            prefix: BOARD_PREFIX,
+            ...(work.after === undefined ? {} : { startAfter: BOARD_PREFIX + work.after }),
+            limit: BOARDS_PER_STEP,
+          })
+        ).values(),
+      ].map((board) => board.shareId);
+    // A board still unreached opens nothing new: the workspace is asked on every open.
+    const told = await Promise.allSettled(
+      boards.map((shareId) =>
         work.kind === "lock"
-          ? boardOf(this.env, board.shareId).lockOut(work.account, work.workspaceId)
-          : boardOf(this.env, board.shareId).leaveWorkspace(work.workspaceId),
+          ? boardOf(this.env, shareId).lockOut(work.account, work.workspaceId)
+          : boardOf(this.env, shareId).leaveWorkspace(work.workspaceId),
       ),
     );
-    const done = boards.length < BOARDS_PER_STEP;
-    const next = done ? rest : [{ ...work, after: boards.at(-1)!.shareId }, ...rest];
+    const failed = boards.filter((_, index) => told[index]?.status === "rejected");
+    const next = nextBoardWork(work, rest, boards, failed, BOARDS_PER_STEP);
     if (next.length > 0) {
       await this.ctx.storage.put(WORK_KEY, next);
-      await this.ctx.storage.setAlarm(Date.now() + 1_000);
+      await this.ctx.storage.setAlarm(Date.now() + (failed.length > 0 ? 30_000 : 1_000));
       return;
     }
     if (work.kind === "release" && (await this.state()) === null) {

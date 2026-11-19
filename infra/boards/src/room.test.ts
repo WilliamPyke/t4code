@@ -31,6 +31,9 @@ import {
   checkInvite,
   invitePreviewOf,
   checkViewerRoom,
+  STREAMS_PER_SEAT,
+  streamsPastCap,
+  VIEWER_STREAMS_PER_ADDRESS,
   createRoom,
   cursorsEventFor,
   guestBySession,
@@ -361,6 +364,28 @@ describe("cloud room", () => {
       status: 409,
       reason: "viewers_full",
     });
+  });
+
+  it("closes a seat's or an address's oldest open pages past its cap, and nobody else's", () => {
+    const seat = (n: number) => ({ guestId: "guest-two", viewHash: null, address: null, n });
+    const viewer = (n: number, address: string) => ({
+      guestId: `viewer-${n}`,
+      viewHash: "view-hash",
+      address,
+      n,
+    });
+    const open = [
+      ...Array.from({ length: STREAMS_PER_SEAT }, (_, n) => seat(n)),
+      { guestId: "guest-three", viewHash: null, address: null, n: 99 },
+      ...Array.from({ length: VIEWER_STREAMS_PER_ADDRESS }, (_, n) => viewer(n, "203.0.113.1")),
+      viewer(50, "203.0.113.2"),
+    ];
+    expect(streamsPastCap(open, { guestId: "guest-two" }).map((stream) => stream.n)).toEqual([0]);
+    expect(
+      streamsPastCap(open, { address: "203.0.113.1" }).map((stream) => stream.guestId),
+    ).toEqual(["viewer-0"]);
+    expect(streamsPastCap(open, { address: "203.0.113.2" })).toEqual([]);
+    expect(streamsPastCap(open, { guestId: "guest-three" })).toEqual([]);
   });
 
   it("shows each guest everyone else's pointer, until they leave", () => {

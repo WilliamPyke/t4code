@@ -228,6 +228,13 @@ export const layer = Api.make(
         period: GuestLinks.GUEST_LINK_RESOLVE_RATE_LIMIT.periodSeconds,
       },
     });
+    const guestLinkGlobalRateLimit = yield* Cloudflare.RateLimit("GUEST_LINK_GLOBAL_RATE_LIMIT", {
+      namespaceId: 1008,
+      simple: {
+        limit: GuestLinks.GUEST_LINK_GLOBAL_RESOLVE_RATE_LIMIT.limit,
+        period: GuestLinks.GUEST_LINK_GLOBAL_RESOLVE_RATE_LIMIT.periodSeconds,
+      },
+    });
     const teamRateLimit = yield* Cloudflare.RateLimit("TEAM_RATE_LIMIT", {
       namespaceId: 1005,
       simple: {
@@ -404,6 +411,15 @@ export const layer = Api.make(
             ),
           ),
         );
+    const allowOrRefuse =
+      (limiter: typeof hookRateLimit) =>
+      (key: string): Effect.Effect<boolean> =>
+        GuestLinks.refuseWhenUncounted(
+          limiter.limit({ key }).pipe(
+            Effect.map((result) => result.success),
+            Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+          ),
+        );
     const layerHookRateLimiter = Layer.succeed(HookForwarder.HookRateLimiter, {
       allowHook: allowWith(hookRateLimit),
       allowEndpoint: allowWith(hookEndpointRateLimit),
@@ -465,7 +481,8 @@ export const layer = Api.make(
         Layer.provide(
           Layer.mergeAll(
             Layer.succeed(GuestLinks.GuestLinkRateLimiter, {
-              allow: allowWith(guestLinkRateLimit, "relay.guest_links.rate_limiter_failed_open"),
+              allow: allowOrRefuse(guestLinkRateLimit),
+              allowGlobal: allowOrRefuse(guestLinkGlobalRateLimit)("all"),
             }),
             Layer.succeed(Teams.TeamRateLimiter, {
               allow: allowWith(teamRateLimit, "relay.teams.rate_limiter_failed_open"),

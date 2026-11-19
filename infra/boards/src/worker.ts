@@ -102,6 +102,7 @@ import {
   checkInvite,
   invitePreviewOf,
   checkViewerRoom,
+  streamsPastCap,
   createRoom,
   cursorsEventFor,
   guestBySession,
@@ -132,6 +133,7 @@ import {
 import {
   accountBoardOf,
   accountGuestOf,
+  accountLockedOut,
   accountOfGuest,
   accountsOn,
   linkAccount,
@@ -150,10 +152,13 @@ import {
   openRequestOf,
 } from "./accessRequests.ts";
 import {
+  BOARD_MAKING_LIMIT,
   BOARD_MAKING_WINDOW_MS,
   copiedBoard,
   copyRefusal,
   copyTitle,
+  FRAME_CHECKS_PER_ADDRESS,
+  JOINS_PER_ADDRESS,
   takeBoardMaking,
 } from "./copy.ts";
 import { clerkKeys, verifyClerkSession, type ClerkKeyLookup } from "./clerk.ts";
@@ -401,6 +406,20 @@ async function accountRoute(request: Request, env: Env, url: URL): Promise<Respo
   return failureResponse(roomFailure("unavailable"));
 }
 
+/** One address's count of something other than making boards, in the same store under its own key. */
+function takeForAddress(
+  env: Env,
+  request: Request,
+  kind: "join" | "frame-check",
+  limit: { readonly count: number; readonly windowMs: number },
+): Promise<boolean> {
+  const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+  return env.CREATE_LIMITS.get(env.CREATE_LIMITS.idFromName(`${kind}:${ip}`)).take(
+    Date.now(),
+    limit,
+  );
+}
+
 /**
  * Answers only a page on an allowed origin, and only with one of three words, so it is no way to
  * read another site through this host. Kept by the browser for an hour.
@@ -410,6 +429,9 @@ async function frameCheckRoute(request: Request, env: Env, url: URL): Promise<Re
   const address = url.searchParams.get("url");
   if (pageOrigin === null || address === null || address.length > 2048) {
     return failureResponse(roomFailure("bad_request"));
+  }
+  if (!(await takeForAddress(env, request, "frame-check", FRAME_CHECKS_PER_ADDRESS))) {
+    return failureResponse(roomFailure("too_fast"));
   }
   const frame = await frameCheck({
     address,
@@ -495,6 +517,9 @@ async function route(request: Request, env: Env): Promise<Response> {
     (path === INVITE_ROUTE || path === REDEEM_ROUTE || path === CLOUD_BOARD_VIEW_ROUTE) &&
     request.method === "POST"
   ) {
+    if (path === REDEEM_ROUTE && !(await takeForAddress(env, request, "join", JOINS_PER_ADDRESS))) {
+      return failureResponse(roomFailure("too_fast"));
+    }
     // Looking on from the view link is nobody's seat: no account comes into it.
     const account = path === REDEEM_ROUTE ? await optionalAccountOf(request, env) : null;
     if (account !== null && typeof account !== "string") return failureResponse(account);
@@ -517,6 +542,11 @@ async function route(request: Request, env: Env): Promise<Response> {
         title: opened.board.title,
       };
       return Response.json(result, { headers: NO_STORE });
+    }
+    if (await board.locksOut(account)) {
+      return failureResponse(
+        roomFailure("not_member", "You are no longer in this board's workspace."),
+      );
     }
     const redeemed = await board.fetch(url.toString(), { method: "POST", body });
     return linkedResponse(env, account, redeemed, (text) => {
@@ -590,6 +620,8 @@ interface OpenStream {
   guestId: GuestId;
   /** The view link the page was opened with; null for someone on the board. */
   readonly viewHash: string | null;
+  /** Where a view-link page was opened from, to cap how many one address holds. */
+  readonly address: string | null;
   /** Whether the person manages the board, as it was when the page opened or became theirs. */
   manages: boolean;
   readonly writer: WritableStreamDefaultWriter<Uint8Array>;
@@ -745,7 +777,10 @@ export class BoardRoom extends DurableObject<Env> {
     if (room !== null && guest === undefined && isViewLink(room, hash)) {
       const refused = checkAccess("link", url.pathname);
       if (refused !== null) return failureResponse(refused);
-      if (url.pathname === STREAM_ROUTE) return this.openStream(room, null, request.signal, hash);
+      if (url.pathname === STREAM_ROUTE) {
+        const address = request.headers.get("cf-connecting-ip") ?? "unknown";
+        return this.openStream(room, null, request.signal, hash, false, address);
+      }
       if (url.pathname === CLOUD_BOARD_OUTLINE_ROUTE) return outlined(room);
       return noContent();
     }
@@ -1163,6 +1198,11 @@ export class BoardRoom extends DurableObject<Env> {
   /** Called by the Worker once it verified who reads: the board's outline, or null if they may not. */
   async outlineFor(reader: OutlineReader): Promise<RoomBoardOutline | null> {
     return outlineFor(this.room, reader);
+  }
+
+  /** Called by the Worker once it verified `account`, before it lets them join from a link. */
+  async locksOut(account: string): Promise<boolean> {
+    return accountLockedOut(this.room, account);
   }
 
   /** Called by the Worker once it verified `account`: a new session as the account's person here. */
@@ -1636,7 +1676,14 @@ export class BoardRoom extends DurableObject<Env> {
     signal: AbortSignal,
     viewHash: string | null,
     manages = false,
+    address: string | null = null,
   ): Response {
+    for (const old of streamsPastCap(
+      this.streams,
+      guest === null ? { address: address ?? "unknown" } : { guestId: guest.id },
+    )) {
+      this.drop(old);
+    }
     if (guest === null) {
       const full = checkViewerRoom(this.viewing());
       if (full !== null) return failureResponse(full);
@@ -1645,6 +1692,7 @@ export class BoardRoom extends DurableObject<Env> {
     const stream: OpenStream = {
       guestId: guest?.id ?? GuestId.make(`viewer-${crypto.randomUUID()}`),
       viewHash: guest === null ? viewHash : null,
+      address: guest === null ? (address ?? "unknown") : null,
       manages,
       writer: writable.getWriter(),
       pingTaken: true,
@@ -1856,13 +1904,19 @@ export class BoardAccount extends DurableObject<Env> {
 
 /** Counts the boards one address made in the last hour. */
 export class CreateLimit extends DurableObject<Env> {
-  async take(now: number): Promise<boolean> {
+  async take(
+    now: number,
+    limit: { readonly count: number; readonly windowMs: number } = {
+      count: BOARD_MAKING_LIMIT,
+      windowMs: BOARD_MAKING_WINDOW_MS,
+    },
+  ): Promise<boolean> {
     const stored = (await this.ctx.storage.get<ReadonlyArray<number>>("recent")) ?? [];
-    const recent = takeBoardMaking(stored, now);
+    const recent = takeBoardMaking(stored, now, limit);
     if (recent === null) return false;
     await this.ctx.storage.put("recent", recent);
-    // Nothing is kept for an address that made no board for an hour.
-    await this.ctx.storage.setAlarm(now + BOARD_MAKING_WINDOW_MS);
+    // Nothing is kept for an address that took nothing for a whole window.
+    await this.ctx.storage.setAlarm(now + limit.windowMs);
     return true;
   }
 

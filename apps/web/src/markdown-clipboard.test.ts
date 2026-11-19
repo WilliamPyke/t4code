@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   serializeRenderedMarkdownFragment,
+  serializeTableElementToCsv,
   serializeTableElementToMarkdown,
 } from "./markdown-clipboard";
 import { EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
@@ -318,5 +319,20 @@ describe("copying rendered Markdown tables", () => {
       type: "link",
       url: "https://example.com/?q=a|b",
     });
+  });
+
+  it("copies cells a spreadsheet would run as formulas as plain text", () => {
+    const table = renderedTable(
+      [new FakeText("Cell"), new FakeText("Other")],
+      [new FakeText('=HYPERLINK("https://x.example","a,b")'), new FakeText("+1+2")],
+      [new FakeText("-2+3"), new FakeText("@SUM(A1)")],
+      [new FakeText("-5"), new FakeText("plain")],
+    );
+    expect(serializeTableElementToCsv(table as unknown as Element).split("\n")).toEqual([
+      "Cell,Other",
+      `"'=HYPERLINK(""https://x.example"",""a,b"")",'+1+2`,
+      "'-2+3,'@SUM(A1)",
+      "-5,plain",
+    ]);
   });
 });

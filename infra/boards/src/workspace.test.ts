@@ -9,7 +9,7 @@ import {
 import * as Result from "effect/Result";
 import { describe, expect, it } from "vite-plus/test";
 
-import { linkAccount, withAccountSession } from "./account.ts";
+import { accountLockedOut, linkAccount, withAccountSession } from "./account.ts";
 import { machineGuestOf } from "./machines.ts";
 import { changeBoard, createRoom, guestBySession, joinRoom, type CloudRoom } from "./room.ts";
 import {
@@ -18,6 +18,8 @@ import {
   joinWorkspace,
   leaveWorkspace,
   lockOutAccount,
+  BOARD_WORK_ATTEMPTS,
+  nextBoardWork,
   placeBoard,
   previewOf,
   removeMember,
@@ -229,6 +231,11 @@ describe("boards in a workspace", () => {
     expect(guestBySession(locked.room, "grace-1")).toBeUndefined();
     expect(machineGuestOf(locked.room, "grace-machine", "room", Date.parse(NOW))).toBeUndefined();
     expect(Result.isFailure(withAccountSession(locked.room, "user_grace", "grace-2"))).toBe(true);
+    // Nor may the account join again as a spare seat from the edit link.
+    expect([
+      accountLockedOut(locked.room, "user_grace"),
+      accountLockedOut(noted, "user_grace"),
+    ]).toEqual([true, false]);
     expect(locked.room.board?.notes.find((note) => note.id === "note-1")?.guestId).toBe(graceId);
     expect(locked.room.guests.map((guest) => guest.name)).toEqual(["Ada", "Grace"]);
     // Again, or on a board not in that workspace, there is nothing to take.
@@ -252,5 +259,24 @@ describe("boards in a workspace", () => {
     );
     expect(lockOutAccount(joined, "user_grace", "ws-one-0000")).toBeNull();
     expect(guestBySession(joined, "link-session")?.id).toBe("guest-link");
+  });
+
+  it("asks again the boards a lock-out step could not reach, a few times", () => {
+    const lock = { kind: "lock", account: "user_grace", workspaceId: "ws-one-0000" } as const;
+    const release = { kind: "release", workspaceId: "ws-one-0000" } as const;
+    type Work = (typeof lock | typeof release) & {
+      readonly after?: string;
+      readonly retry?: { readonly shareIds: ReadonlyArray<string>; readonly attempt: number };
+    };
+    expect(nextBoardWork<Work>(lock, [release], ["a", "b"], ["b"], 2)).toEqual([
+      { ...lock, after: "b" },
+      release,
+      { ...lock, retry: { shareIds: ["b"], attempt: 1 } },
+    ]);
+    // A retry asks only its boards, and stops after the last attempt.
+    const retry = { ...lock, retry: { shareIds: ["b"], attempt: 1 } };
+    expect(nextBoardWork<Work>(retry, [], ["b"], [], 2)).toEqual([]);
+    const last = { ...lock, retry: { shareIds: ["b"], attempt: BOARD_WORK_ATTEMPTS - 1 } };
+    expect(nextBoardWork<Work>(last, [], ["b"], ["b"], 2)).toEqual([]);
   });
 });

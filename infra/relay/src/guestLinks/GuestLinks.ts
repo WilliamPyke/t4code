@@ -12,6 +12,8 @@ import { relayGuestLinks } from "../persistence/schema.ts";
 import { GUEST_LINK_WORDS } from "./words.ts";
 
 export const GUEST_LINK_RESOLVE_RATE_LIMIT = { limit: 10, periodSeconds: 60 } as const;
+/** Every lookup from every address, so guessing from many addresses is bounded too. */
+export const GUEST_LINK_GLOBAL_RESOLVE_RATE_LIMIT = { limit: 600, periodSeconds: 60 } as const;
 
 const NAME_ATTEMPTS = 5;
 
@@ -29,11 +31,27 @@ export class GuestLinkPersistenceError extends Schema.TaggedError<GuestLinkPersi
 
 const isPersistenceError = Schema.is(GuestLinkPersistenceError);
 
-/** Per caller address: the name is short enough to guess, so guesses are counted. */
+/** Guesses are counted per caller address and across all callers; an unreachable limiter refuses. */
 export class GuestLinkRateLimiter extends Context.Service<
   GuestLinkRateLimiter,
-  { readonly allow: (key: string) => Effect.Effect<boolean> }
+  {
+    readonly allow: (key: string) => Effect.Effect<boolean>;
+    readonly allowGlobal: Effect.Effect<boolean>;
+  }
 >()("t3code-relay/guestLinks/GuestLinks/GuestLinkRateLimiter") {}
+
+/** A guess the limiter could not count is refused: unlike telemetry, a name is a bearer invite. */
+export const refuseWhenUncounted = <E>(check: Effect.Effect<boolean, E>): Effect.Effect<boolean> =>
+  check.pipe(
+    Effect.catch((error) =>
+      Effect.logWarning("Guest link rate limiter unavailable; refusing", { error }).pipe(
+        Effect.andThen(
+          Effect.annotateCurrentSpan({ "relay.guest_links.rate_limiter_failed_closed": true }),
+        ),
+        Effect.as(false),
+      ),
+    ),
+  );
 
 export class GuestLinks extends Context.Service<
   GuestLinks,
@@ -60,22 +78,28 @@ const pick = (random: SecureRandom.SecureRandom["Service"], size: number): Effec
     ),
   );
 
-/** Three words from the list, as `tulip-otter-harbor`. Team invites use it too. */
-export const threeWordName = (
+/** Words from the list, as `tulip-otter-harbor`. Team invites use three. */
+export const wordName = (
   random: SecureRandom.SecureRandom["Service"],
+  count: number,
 ): Effect.Effect<string> => {
   const word = Effect.map(
     pick(random, GUEST_LINK_WORDS.length),
     (index) => GUEST_LINK_WORDS[index],
   );
-  return Effect.map(Effect.all([word, word, word]), (words) => words.join("-"));
+  return Effect.map(Effect.all(Array.from({ length: count }, () => word)), (words) =>
+    words.join("-"),
+  );
 };
+
+/** A guessed name is a working invite, so new names take four words; older three-word ones still resolve. */
+const GUEST_LINK_NAME_WORDS = 4;
 
 const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;
   const random = yield* SecureRandom.SecureRandom;
 
-  const makeName = threeWordName(random);
+  const makeName = wordName(random, GUEST_LINK_NAME_WORDS);
 
   const register: GuestLinks["Service"]["register"] = Effect.fn("relay.guest_links.register")(
     function* (input) {

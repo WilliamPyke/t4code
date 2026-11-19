@@ -187,10 +187,19 @@ export function CloudBoardSharing({
       await run(() => removeFromCloudBoard(share, guest.id), `${guest.name} was removed`);
     })();
   const setRole = (guest: ThreadGuest, role: CloudBoardRole) =>
-    void run(
-      () => setCloudBoardRole(share, guest.id, role),
-      role === "view" ? `${guest.name} can only view now` : `${guest.name} can edit now`,
-    );
+    void (async () => {
+      if (role === "view") {
+        const question = [
+          `Let ${guest.name} only view this board?`,
+          "If they kept the edit link, they can join with it again to edit. A new edit link ends the old one.",
+        ];
+        if (!(await confirmed(question, "Only view"))) return;
+      }
+      await run(
+        () => setCloudBoardRole(share, guest.id, role),
+        role === "view" ? `${guest.name} can only view now` : `${guest.name} can edit now`,
+      );
+    })();
 
   const shareLabel = `Share this board. ${here.length <= 1 ? "Only you" : `${here.length} people`} here now.`;
   // A narrow board keeps two faces and the word; the narrowest phones, the faces alone.

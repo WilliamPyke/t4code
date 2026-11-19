@@ -168,6 +168,8 @@ export function sharedThreadRouteUrl(host: string, route: string): string | null
   const cloud = configuredCloudBoardsUrl();
   if (cloud !== null && cloud.host === name) return `${cloud.origin}${route}`;
   if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(name) || /^[0-9.]+$/.test(name)) return null;
+  // A last label of digits or 0x hex makes the URL parser read the name as an IPv4 address.
+  if (/(^|\.)(\d+|0x[0-9a-f]*)$/.test(name)) return null;
   if (name.endsWith(".local") || name.endsWith(".localhost") || name.endsWith(".internal")) {
     return null;
   }

@@ -496,9 +496,10 @@ export const layerGuestLinksApi = HttpApiBuilder.group(
       "resolve",
       Effect.fn("relay.api.guestLinks.resolve")(
         function* ({ params, request }) {
-          if (!(yield* rateLimiter.allow(request.headers["cf-connecting-ip"] ?? "unknown"))) {
-            return yield* new RelayRateLimitedError({ code: "rate_limited" });
-          }
+          const allowed =
+            (yield* rateLimiter.allow(request.headers["cf-connecting-ip"] ?? "unknown")) &&
+            (yield* rateLimiter.allowGlobal);
+          if (!allowed) return yield* new RelayRateLimitedError({ code: "rate_limited" });
           return { link: yield* guestLinks.resolve(params.name) };
         },
         Effect.catchTags({

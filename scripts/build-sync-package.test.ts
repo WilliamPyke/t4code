@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { readWorkspaceCatalog } from "./build-sync-package.ts";
+import { packagesWithoutIntegrity, readWorkspaceCatalog } from "./build-sync-package.ts";
 
 describe("readWorkspaceCatalog", () => {
   it("reads only the catalog block, with quoted and scoped names", () => {
@@ -19,5 +19,21 @@ describe("readWorkspaceCatalog", () => {
       "@effect/platform-node": "4.1.2",
       effect: "4.1.2",
     });
+  });
+});
+
+describe("packagesWithoutIntegrity", () => {
+  it("names each downloaded package the lock does not pin by hash", () => {
+    expect(
+      packagesWithoutIntegrity({
+        packages: {
+          "": {},
+          "node_modules/node-pty": { integrity: "sha512-abc" },
+          "node_modules/zod": {},
+          "node_modules/linked": { link: true },
+          "node_modules/a/node_modules/bundled": { inBundle: true },
+        },
+      }),
+    ).toEqual(["node_modules/zod"]);
   });
 });

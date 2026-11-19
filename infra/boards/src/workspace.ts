@@ -438,3 +438,35 @@ export function lockOutAccount(
     guestId: guest.id,
   };
 }
+
+/** Times a board that failed a step is asked again before it is left to its next open. */
+export const BOARD_WORK_ATTEMPTS = 5;
+
+/**
+ * The work queue once one step told `boards` (at most `perStep`, in order) and `failed` of them
+ * failed: the same work goes on after the last board, and the failed ones are asked again later.
+ */
+export function nextBoardWork<
+  W extends {
+    readonly after?: string;
+    readonly retry?: { readonly shareIds: ReadonlyArray<string>; readonly attempt: number };
+  },
+>(
+  work: W,
+  rest: ReadonlyArray<W>,
+  boards: ReadonlyArray<string>,
+  failed: ReadonlyArray<string>,
+  perStep: number,
+): ReadonlyArray<W> {
+  const { retry, after: _after, ...base } = work;
+  const more =
+    retry === undefined && boards.length >= perStep
+      ? [{ ...base, after: boards.at(-1)! } as W]
+      : [];
+  const attempt = (retry?.attempt ?? 0) + 1;
+  const again =
+    failed.length > 0 && attempt < BOARD_WORK_ATTEMPTS
+      ? [{ ...base, retry: { shareIds: failed, attempt } } as W]
+      : [];
+  return [...more, ...rest, ...again];
+}
