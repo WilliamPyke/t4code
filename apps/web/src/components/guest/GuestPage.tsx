@@ -193,7 +193,11 @@ export function GuestPage() {
     <BoardBackdrop className="relative flex h-dvh flex-col px-4 text-foreground">
       {open === null ? <AccountCorner /> : null}
       {open !== null ? (
-        <Navigate {...guestShareLocation(open)} replace />
+        <>
+          <Navigate {...guestShareLocation(open)} replace />
+          {/* Until the board's page has loaded and takes over with a cover of its own. */}
+          <TinkjamLoading cover label="Opening the board" />
+        </>
       ) : checking !== null || (step.step === "invalid" && accountStep === "opening") ? (
         <TinkjamLoading cover label="Opening the board" />
       ) : step.step === "invalid" || host === null || credential === null ? (

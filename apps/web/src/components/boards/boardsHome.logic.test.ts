@@ -28,6 +28,7 @@ import {
   boardTimeLabel,
   boardsInScope,
   homeContent,
+  homeIsFocused,
   sortHomeBoards,
   joinedBoardSources,
   listHomeBoards,
@@ -279,6 +280,22 @@ describe("the home's order and what it shows", () => {
     const signingIn = { workspaces: 0, machinesLoaded: true, accountLoaded: false, welcomed: true };
     expect(homeContent({ ...signingIn, boards: 0 })).toBe("welcome");
     expect(homeContent({ ...signingIn, boards: 1 })).toBe("boards");
+    // The first board made from the welcome: it stays put until the board's page takes over.
+    expect(homeContent({ ...signingIn, boards: 1, leaving: true })).toBe("welcome");
+    expect(homeContent({ ...signingIn, boards: 1, welcomed: false, leaving: true })).toBe("boards");
+  });
+
+  it("gives the home the window to itself until it has boards, only where that is offered", () => {
+    const focused = (shown: "boards" | "loading" | "welcome" | null, pathname = "/") =>
+      homeIsFocused({ offered: true, pathname, shown });
+    expect(focused("welcome")).toBe(true);
+    // Before the home has shown anything, so the sidebar never stands beside the welcome first.
+    expect(focused(null)).toBe(true);
+    expect(focused("loading")).toBe(true);
+    expect(focused("boards")).toBe(false);
+    expect(focused("welcome", "/settings/general")).toBe(false);
+    // Desktop, a person's own server, and Advanced keep their sidebar.
+    expect(homeIsFocused({ offered: false, pathname: "/", shown: "welcome" })).toBe(false);
   });
 
   it("says when in words", () => {

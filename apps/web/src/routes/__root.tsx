@@ -7,6 +7,7 @@ import {
   createRootRoute,
   type ErrorComponentProps,
   useLocation,
+  useMatches,
   useRouter,
 } from "@tanstack/react-router";
 import { Check, Copy } from "lucide";
@@ -19,6 +20,7 @@ import { CustomSnoozeDialogHost } from "../components/CustomSnoozeDialog";
 import { GuestShareDialogHost } from "../components/chat/GuestShareControls";
 import { UseInAnotherAppDialogHost } from "../components/mcp/UseInAnotherAppDialog";
 import { NewTeamDialogHost } from "../components/teams/NewTeamDialog";
+import { useHomeFocus } from "../components/boards/homeFocus";
 import { NewBoardDialogHost } from "../components/boards/newBoard";
 import { AddProjectToMachineDialogHost } from "../components/AddProjectToMachineDialog";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
@@ -167,6 +169,9 @@ function RootRouteView() {
 
 function RootRouteBranch() {
   const pathname = useLocation({ select: (location) => location.pathname });
+  // The location moves when a navigation starts; the page drawn stays until the next has loaded.
+  const drawnPathname = useMatches({ select: (matches) => matches.at(-1)?.pathname ?? pathname });
+  const homeFocused = useHomeFocus(drawnPathname);
   const { authGateState } = Route.useRouteContext();
   const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
   // A sync IPC read; the setting only changes across a relaunch.
@@ -176,7 +181,8 @@ function RootRouteBranch() {
   );
   const advancedOnlyPage = useShellMode() === "simple" ? advancedOnlyPageName(pathname) : null;
 
-  if (isGuestEntryPath(pathname)) return <Outlet />;
+  // By the page drawn: a guest's page keeps the window, and its cover, until the board has loaded.
+  if (isGuestEntryPath(drawnPathname)) return <Outlet />;
 
   if (pathname === "/pair" || pathname === "/connect" || pathname === "/connect-agent") {
     return <Outlet />;
@@ -225,8 +231,9 @@ function RootRouteBranch() {
   );
   const appShell = (
     <CommandPalette>
-      {/* Setup starts with an empty workspace, so the Welcome page has no thread list. */}
-      <AppSidebarLayout showSidebar={!isWelcome}>
+      {/* Setup starts with an empty workspace, so the Welcome page has no thread list. Nor has the
+          boards home before a first board. */}
+      <AppSidebarLayout showSidebar={!isWelcome && !homeFocused}>
         {advancedOnlyPage === null ? <Outlet /> : <AdvancedOnlyPage name={advancedOnlyPage} />}
       </AppSidebarLayout>
     </CommandPalette>

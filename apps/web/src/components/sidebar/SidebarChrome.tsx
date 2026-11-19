@@ -23,6 +23,7 @@ import { cn } from "../../lib/utils";
 import { isGuestEnvironment } from "@t3tools/client-runtime/environment";
 import { useShellMode } from "../../shellMode";
 import { useEnvironments, usePullRequestsSupported } from "../../state/environments";
+import { useBeforeFirstBoard } from "../boards/homeFocus";
 import { openConnectComputer } from "../ConnectComputerDialog";
 import { TinkjamMark, TinkjamWord } from "../TinkjamLogo";
 import {
@@ -271,6 +272,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     void navigate({ to: "/usage" });
   };
   const whatsNew = useWhatsNewSeen();
+  const beforeFirstBoard = useBeforeFirstBoard();
   const handleWhatsNewClick = () => {
     closeMobileSidebar();
     void navigate({ to: "/whats-new" });
@@ -315,7 +317,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             icon={<MegaphoneIcon />}
             label="What's new"
             onClick={handleWhatsNewClick}
-            marked={whatsNew.unseen}
+            marked={whatsNew.unseen && !beforeFirstBoard}
           />
         </>
       )}
@@ -331,6 +333,7 @@ function SidebarConnectComputer() {
   const hasComputer = useEnvironments().environments.some(
     (environment) => !isGuestEnvironment(environment.environmentId),
   );
+  const beforeFirstBoard = useBeforeFirstBoard();
   if (hasComputer) return null;
   return (
     <SidebarMenu>
@@ -344,7 +347,9 @@ function SidebarConnectComputer() {
         >
           <LaptopIcon />
           <span className="font-medium text-foreground">Connect a computer</span>
-          <span aria-hidden className="ms-auto size-2 shrink-0 rounded-full bg-primary" />
+          {beforeFirstBoard ? null : (
+            <span aria-hidden className="ms-auto size-2 shrink-0 rounded-full bg-primary" />
+          )}
         </SidebarMenuButton>
       </SidebarMenuItem>
     </SidebarMenu>

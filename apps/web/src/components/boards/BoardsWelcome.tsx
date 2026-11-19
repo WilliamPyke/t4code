@@ -1,5 +1,6 @@
 import { CLOUD_BOARD_TITLE_MAX_LENGTH, GUEST_NAME_MAX_LENGTH } from "@t3tools/contracts";
 import { CheckIcon } from "lucide-react";
+import { useLocation } from "@tanstack/react-router";
 import { type FormEvent, useId, useState } from "react";
 
 import { boardAccountsEnabled, useBoardAccount } from "~/guest/boardAccount";
@@ -43,7 +44,9 @@ export function BoardsWelcome() {
   const [suggested] = useState(suggestedBoardName);
   const [submitted, setSubmitted] = useState(false);
   const [starting, setStarting] = useState(false);
-  const busy = starting || waiting;
+  // The board is made and its page is loading: the button keeps saying so until it takes over.
+  const leaving = useLocation({ select: (location) => location.pathname !== "/" });
+  const busy = starting || waiting || leaving;
   const template =
     STARTER_BOARD_TEMPLATES.find((choice) => choice.id === draft.templateId) ??
     STARTER_BOARD_TEMPLATES[0]!;

@@ -445,6 +445,16 @@ export function GuestThreadRoute({ threadRef }: { readonly threadRef: ScopedThre
   );
 }
 
+/**
+ * Ends the way in from a link once a board is on screen; from there a wait leaves the sidebar
+ * where it is. On commit, because a render React sets aside has put no board on screen.
+ */
+function BoardLanded() {
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- notes in guestPage's module state that this page load has drawn a board
+  useEffect(endBoardLanding, []);
+  return null;
+}
+
 function GuestThreadSession({
   share,
   threadRef,
@@ -622,8 +632,6 @@ function GuestThreadSession({
       />
     );
   }
-  // A board is on screen: from here a wait leaves the sidebar where it is.
-  endBoardLanding();
   const historyControls: MessagesTimelineHistoryControls | undefined = shouldShowLoadEarlierControl(
     thread.history,
   )
@@ -944,6 +952,7 @@ function GuestThreadSession({
     );
   return (
     <RoomLiveContext value={live}>
+      <BoardLanded />
       <GuestBoardLive shareId={share.shareId} running={running} live={live} />
       <BoardSplit
         open={!cloud && panelOpen}

@@ -1,28 +1,15 @@
-import { useAtomValue } from "@effect/atom-react";
 import { isGuestEnvironment, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { Link, useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import { LayoutGridIcon, PlusIcon } from "lucide-react";
 
 import { sharedThreadLocationOf } from "~/guest/boardAddress";
-import {
-  accountBoardsAtom,
-  guestShareLocation,
-  guestSharesAtom,
-  isCloudShare,
-} from "~/guest/guestShares";
+import { guestShareLocation } from "~/guest/guestShares";
 import { openListedBoard, useWorkspaceScope, useWorkspaces } from "~/guest/workspaces";
 import { cn } from "~/lib/utils";
-import { useThreadShells } from "~/state/entities";
 
-import {
-  boardPaint,
-  boardsInScope,
-  joinedBoardSources,
-  listHomeBoards,
-  sortHomeBoards,
-  withWorkspaceBoards,
-} from "../boards/boardsHome.logic";
+import { boardPaint, boardsInScope, sortHomeBoards } from "../boards/boardsHome.logic";
+import { useListedBoards } from "../boards/homeFocus";
 import { useNewBoardWaiting, useStartNewBoard } from "../boards/newBoard";
 import { JoinedBoardMenu } from "../boards/removeJoinedBoard";
 import { roomBoardLocation } from "../room/roomBoardNavigation";
@@ -40,9 +27,7 @@ const RECENT_BOARDS = 3;
  * follow under their own heading.
  */
 export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
-  const threads = useThreadShells();
-  const joined = useAtomValue(guestSharesAtom);
-  const accountBoards = useAtomValue(accountBoardsAtom);
+  const boards = useListedBoards();
   const workspaces = useWorkspaces();
   const scope = useWorkspaceScope();
   const navigate = useNavigate();
@@ -57,32 +42,7 @@ export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
       null,
   });
   // The home's workspace decides which boards these are.
-  const recent = sortHomeBoards(
-    boardsInScope(
-      listHomeBoards({
-        threads,
-        // Signed in, the account's and its workspaces' boards too, before any is opened here.
-        joined: withWorkspaceBoards(
-          joinedBoardSources({
-            // A board only looked at from a view link is not one of theirs: it is under Viewed.
-            local: joined
-              .filter((share) => share.viewOnly !== true)
-              .map((share) => ({
-                ...share,
-                cloud: isCloudShare(share),
-                maker: share.made === true,
-              })),
-            listed: accountBoards,
-          }),
-          workspaces,
-        ),
-        teams: [],
-        isOwnEnvironment: (environmentId) => !isGuestEnvironment(environmentId),
-      }),
-      scope,
-    ),
-    "recent",
-  ).slice(0, RECENT_BOARDS);
+  const recent = sortHomeBoards(boardsInScope(boards, scope), "recent").slice(0, RECENT_BOARDS);
   const scopeName =
     scope === "all"
       ? "All boards"

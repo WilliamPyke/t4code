@@ -1,14 +1,17 @@
 import { createRouter, RouterHistory } from "@tanstack/react-router";
 
 import { routeTree } from "./routeTree.gen";
+import { keepPreloadingMatchesCached } from "./routerPreloadGuard";
 
 export function getRouter(history: RouterHistory) {
-  return createRouter({
-    routeTree,
-    history,
-    context: {},
-    defaultPreload: "intent",
-  });
+  return keepPreloadingMatchesCached(
+    createRouter({
+      routeTree,
+      history,
+      context: {},
+      defaultPreload: "intent",
+    }),
+  );
 }
 
 export type AppRouter = ReturnType<typeof getRouter>;

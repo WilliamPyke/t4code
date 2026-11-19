@@ -38,15 +38,20 @@ export function boardShareControls(input: {
 }
 
 /**
- * The line above Share's list of people. The list is everyone who joined, so it counts them all
- * first, then says how many are here now; `here` counts this person too.
+ * The line above Share's list of people. The list is everyone who joined, so it counts them all,
+ * and says how many are here now once someone else is: the list itself marks who is away.
+ * `here` counts this person too.
  */
 export function boardPeopleSummary(input: {
   readonly joined: number;
   readonly here: number;
   readonly viewing: number;
 }): string {
-  const now = input.here <= 1 ? "only you here now" : `${input.here} here now`;
-  const people = input.joined <= 1 ? "Just you so far" : `${input.joined} people · ${now}`;
+  const people =
+    input.joined <= 1
+      ? "Just you so far"
+      : input.here <= 1
+        ? `${input.joined} people on this board`
+        : `${input.joined} people · ${input.here} here now`;
   return input.viewing > 0 ? `${people} · ${viewingLabel(input.viewing)}` : people;
 }

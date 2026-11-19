@@ -392,10 +392,29 @@ export function homeContent(input: {
   readonly accountLoaded: boolean;
   /** The welcome already showed: a sign-in made from it must not take the form away meanwhile. */
   readonly welcomed?: boolean;
-}): "boards" | "loading" | "welcome" {
+  /** Another page is loading: the welcome stays as it is until that page takes over. */
+  readonly leaving?: boolean;
+}): HomeContent {
+  if (input.welcomed === true && input.leaving === true) return "welcome";
   if (input.boards > 0 || input.workspaces > 0) return "boards";
   if (input.welcomed === true) return "welcome";
   return input.machinesLoaded && input.accountLoaded ? "welcome" : "loading";
+}
+
+export type HomeContent = "boards" | "loading" | "welcome";
+
+/**
+ * Whether the home has the window to itself, with no sidebar beside it: where that is offered,
+ * until it has boards to list. Before it has shown anything it counts as having none, so the
+ * sidebar arrives with the boards and never leaves a welcome it stood beside.
+ */
+export function homeIsFocused(input: {
+  readonly offered: boolean;
+  /** The page drawn, not one still loading. */
+  readonly pathname: string;
+  readonly shown: HomeContent | null;
+}): boolean {
+  return input.offered && input.pathname === "/" && input.shown !== "boards";
 }
 
 // A team board's thread and member cards, at about the size the board draws them.

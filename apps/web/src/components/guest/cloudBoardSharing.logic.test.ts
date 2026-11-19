@@ -57,12 +57,13 @@ describe("boardShareControls", () => {
 describe("boardPeopleSummary", () => {
   it.each([
     { joined: 1, here: 1, viewing: 0, says: "Just you so far" },
-    { joined: 3, here: 1, viewing: 0, says: "3 people · only you here now" },
+    { joined: 3, here: 1, viewing: 0, says: "3 people on this board" },
     // This person's own page may not be counted as here yet.
-    { joined: 3, here: 0, viewing: 0, says: "3 people · only you here now" },
+    { joined: 3, here: 0, viewing: 0, says: "3 people on this board" },
     { joined: 3, here: 2, viewing: 0, says: "3 people · 2 here now" },
     { joined: 2, here: 2, viewing: 4, says: "2 people · 2 here now · 4 viewing" },
     { joined: 1, here: 1, viewing: 1, says: "Just you so far · 1 viewing" },
+    { joined: 2, here: 1, viewing: 1, says: "2 people on this board · 1 viewing" },
   ])("$joined joined, $here here, $viewing viewing", ({ says, ...input }) => {
     expect(boardPeopleSummary(input)).toBe(says);
   });

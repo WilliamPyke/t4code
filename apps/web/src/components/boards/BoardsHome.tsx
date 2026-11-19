@@ -8,7 +8,7 @@ import {
   type RoomBoardSummaryShape,
 } from "@t3tools/contracts";
 import { decodeBoardPreview } from "@t3tools/shared/boardPreview";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
 import {
   ArrowDownUpIcon,
@@ -17,7 +17,7 @@ import {
   PlusIcon,
   SearchIcon,
 } from "lucide-react";
-import { type MouseEvent, useEffect, useState } from "react";
+import { type MouseEvent, useEffect, useLayoutEffect, useState } from "react";
 
 import { isElectron } from "~/env";
 import { refreshAccountBoards, useBoardAccount } from "~/guest/boardAccount";
@@ -86,6 +86,7 @@ import {
   teamBoardShapes,
   withWorkspaceBoards,
 } from "./boardsHome.logic";
+import { noteHomeShown, useFirstRunFocusOffered } from "./homeFocus";
 import { openBoardTemplates, useNewBoardWaiting, useStartNewBoard } from "./newBoard";
 import { JoinedBoardMenu } from "./removeJoinedBoard";
 import { WorkspaceInvite, WorkspacePeople, WorkspaceSwitcher } from "./Workspaces";
@@ -185,6 +186,8 @@ export function BoardsHome() {
       : [];
   const showWorkspace = searching || scope === "all";
   const [welcomed, setWelcomed] = useState(false);
+  // The home is only drawn at "/": any other address is a page still loading.
+  const leaving = useLocation({ select: (location) => location.pathname !== "/" });
   const content = homeContent({
     // A board only looked at from a view link (the sample) leaves the welcome in place.
     boards: all.length,
@@ -192,8 +195,13 @@ export function BoardsHome() {
     machinesLoaded: bootstrapped,
     accountLoaded: accountSettled,
     welcomed,
+    leaving,
   });
   if (content === "welcome" && !welcomed) setWelcomed(true);
+  // Before paint, so the sidebar the app shell holds back arrives in the frame the boards do.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- tells the app shell, which draws the sidebar around this page, whether the home has boards to list
+  useLayoutEffect(() => noteHomeShown(content), [content]);
+  const alone = useFirstRunFocusOffered() && content !== "boards";
   // One summary request per machine, for its most recent boards; every tile there shares it.
   const threadIdsByEnvironment = new Map<string, Array<ThreadId>>();
   for (const board of all) {
@@ -233,7 +241,7 @@ export function BoardsHome() {
     >
       {isElectron ? (
         <WorkspacePageHeader electron />
-      ) : (
+      ) : alone ? null : (
         // Room for the floating sidebar button on phones.
         <WorkspacePageHeader className="md:hidden" />
       )}
