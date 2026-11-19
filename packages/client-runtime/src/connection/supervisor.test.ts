@@ -476,23 +476,27 @@ describe("EnvironmentSupervisor", () => {
     }),
   );
 
-  it.effect("keeps blocked failures idle until an external signal requests another attempt", () =>
+  it.effect("tries a refused sign-in once more by itself, then waits for an external signal", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
         prepare: (attempt) =>
-          attempt === 1 ? Effect.fail(blocked()) : Effect.succeed(PREPARED_CONNECTION),
+          attempt <= 2 ? Effect.fail(blocked()) : Effect.succeed(PREPARED_CONNECTION),
       });
       const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
         initiallyDesired: true,
       }).pipe(Effect.provide(harness.dependencies));
 
       yield* awaitState(supervisor.state, (state) => state.phase === "blocked");
-      yield* TestClock.adjust("1 hour");
       expect(yield* Ref.get(harness.prepareCount)).toBe(1);
+      yield* TestClock.adjust("5 seconds");
+      yield* awaitState(supervisor.state, (state) => state.phase === "blocked");
+      expect(yield* Ref.get(harness.prepareCount)).toBe(2);
+      yield* TestClock.adjust("1 hour");
+      expect(yield* Ref.get(harness.prepareCount)).toBe(2);
 
       yield* supervisor.retryNow;
       yield* awaitState(supervisor.state, (state) => state.phase === "connected");
-      expect(yield* Ref.get(harness.prepareCount)).toBe(2);
+      expect(yield* Ref.get(harness.prepareCount)).toBe(3);
     }).pipe(Effect.provide(TestClock.layer())),
   );
 

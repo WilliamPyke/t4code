@@ -231,6 +231,8 @@ function makeLinks(
     findActiveManagedForEnvironment: () => Effect.succeed([]),
     setHoldWebhooksWhileOffline: () => Effect.void,
     revokeForUser: () => Effect.succeed(false),
+    wasRemovedByUser: () => Effect.succeed(false),
+    listOtherUsersForEnvironmentKey: () => Effect.succeed([]),
   };
 }
 

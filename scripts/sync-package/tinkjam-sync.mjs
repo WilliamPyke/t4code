@@ -8,6 +8,7 @@ import * as NodeURL from "node:url";
 
 import {
   installedMacApp,
+  installedWindowsApp,
   logTail,
   parseSyncArgs,
   resolveBaseDir,
@@ -139,12 +140,26 @@ const printUpdateNotice = async (options) => {
 
 const uninstallCommand = `npx -y ${SYNC_URL} --uninstall`;
 
-// The Mac app runs the default home's Sync and is its own login item.
+// The Mac app runs the default home's Sync and is its own login item. Its own calls name the home.
 const macApp =
   // oxlint-disable-next-line t3code/no-global-process-runtime -- The plain-Node launcher has no Effect runtime to inject it.
-  process.platform === "darwin" && baseDir === resolveBaseDir(undefined, undefined)
+  process.platform === "darwin" &&
+  parsed.baseDir === undefined &&
+  baseDir === resolveBaseDir(undefined, undefined)
     ? installedMacApp(NodeOS.homedir())
     : undefined;
+
+// So does the Windows app. Its own calls name the home (and set TINKJAM_SYNC_FROM_APP) and go
+// through; a person or an agent typing the published command does neither.
+const windowsApp =
+  // oxlint-disable-next-line t3code/no-global-process-runtime -- The plain-Node launcher has no Effect runtime to inject it.
+  process.platform === "win32" &&
+  parsed.baseDir === undefined &&
+  !process.env.TINKJAM_SYNC_FROM_APP &&
+  baseDir === resolveBaseDir(undefined, undefined)
+    ? installedWindowsApp(process.env.LOCALAPPDATA || `${NodeOS.homedir()}\\AppData\\Local`)
+    : undefined;
+const WINDOWS_ICON = "its icon near the clock (click the ^ arrow if it is not showing)";
 
 if (parsed.action === "status") {
   const items = service.installed();
@@ -153,7 +168,9 @@ if (parsed.action === "status") {
       ? `Tinkjam Sync starts when you log in: ${items.map((item) => item.location).join(", ")}`
       : macApp !== undefined
         ? `Tinkjam Sync for Mac (${macApp}) runs Tinkjam Sync; its menu bar icon shows whether it is connected.`
-        : "Tinkjam Sync is not set up to start when you log in.",
+        : windowsApp !== undefined
+          ? `Tinkjam Sync for Windows (${windowsApp}) runs Tinkjam Sync; ${WINDOWS_ICON} shows whether it is connected.`
+          : "Tinkjam Sync is not set up to start when you log in.",
   );
   await runSync(ownEntry, ["--processes", ...homeArgs]);
   console.log(`Log: ${service.paths.log}`);
@@ -173,6 +190,14 @@ if (macApp !== undefined && (parsed.action === "uninstall" || disconnecting)) {
       `Tinkjam Sync for Mac (${macApp}) runs Tinkjam Sync. To remove it, choose Quit in its menu bar menu, then move it to the Trash.`,
     );
   }
+  process.exit(0);
+}
+if (windowsApp !== undefined && (parsed.action === "uninstall" || disconnecting)) {
+  console.log(
+    disconnecting
+      ? `Tinkjam Sync for Windows (${windowsApp}) runs Tinkjam Sync. To disconnect this computer, click ${WINDOWS_ICON} and choose "Disconnect this computer…".`
+      : `Tinkjam Sync for Windows (${windowsApp}) runs Tinkjam Sync. To remove it, open Windows Settings, go to Apps, then Installed apps, and uninstall Tinkjam Sync.`,
+  );
   process.exit(0);
 }
 if (parsed.action === "uninstall" || disconnecting) {
@@ -196,6 +221,14 @@ if (parsed.action === "install") {
       `Tinkjam Sync for Mac is installed (${macApp}). It runs Tinkjam Sync and starts it when you log in, so nothing else is needed. Opening it.`,
     );
     NodeChildProcess.spawnSync("open", [macApp]);
+    process.exit(0);
+  }
+  if (windowsApp !== undefined) {
+    console.log(
+      `Tinkjam Sync for Windows is installed (${windowsApp}). It runs Tinkjam Sync and starts it with Windows, so nothing else is needed. Opening it.`,
+    );
+    // Starting it again only brings the running copy forward, or starts it if it had stopped.
+    NodeChildProcess.spawn(windowsApp, [], { detached: true, stdio: "ignore" }).unref();
     process.exit(0);
   }
   await printUpdateNotice({ install: true });

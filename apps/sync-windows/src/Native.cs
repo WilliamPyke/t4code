@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -106,6 +107,54 @@ namespace TinkjamSync
 
         /// <summary>Lets --self-test and --dump-state print in the terminal that started them.</summary>
         public static void AttachParentConsole() => AttachConsole(-1);
+
+        /// <summary>Every process on the computer with its parent, in one snapshot.</summary>
+        public static List<ProcessRow> Processes()
+        {
+            var rows = new List<ProcessRow>();
+            var snapshot = CreateToolhelp32Snapshot(2, 0);
+            if (snapshot == new IntPtr(-1)) throw new Win32Exception();
+            try
+            {
+                var entry = new PROCESSENTRY32 { dwSize = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32)) };
+                for (var more = Process32FirstW(snapshot, ref entry); more; more = Process32NextW(snapshot, ref entry))
+                    rows.Add(new ProcessRow { Pid = (int)entry.th32ProcessID, ParentPid = (int)entry.th32ParentProcessID, Name = entry.szExeFile });
+            }
+            finally { CloseHandle(snapshot); }
+            return rows;
+        }
+
+        /// <summary>
+        /// Windows marks a downloaded file, and a copy of it, as from the internet and warns before
+        /// running it. The installed copy is one the person already chose to run.
+        /// </summary>
+        public static void RemoveDownloadMark(string path) => DeleteFileW(path + ":Zone.Identifier");
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct PROCESSENTRY32
+        {
+            public uint dwSize, cntUsage, th32ProcessID;
+            public IntPtr th32DefaultHeapID;
+            public uint th32ModuleID, cntThreads, th32ParentProcessID;
+            public int pcPriClassBase;
+            public uint dwFlags;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szExeFile;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        static extern bool Process32FirstW(IntPtr snapshot, ref PROCESSENTRY32 entry);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        static extern bool Process32NextW(IntPtr snapshot, ref PROCESSENTRY32 entry);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        static extern bool DeleteFileW(string path);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool CloseHandle(IntPtr handle);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         static extern bool IsWow64Process2(IntPtr process, out ushort processMachine, out ushort nativeMachine);

@@ -8,14 +8,16 @@ import {
 
 /**
  * `ready`: connected here, its agent can join now. `online`: Tinkjam Sync runs on it, not yet
- * connected here. `offline`: Tinkjam Sync is not running. `unsupported`: an incompatible version.
- * `gone`: saved here, but no longer on the person's account.
+ * connected here. `offline`: Tinkjam Sync is not running. `unchecked`: the account could not say
+ * whether it is up. `unsupported`: an incompatible version. `gone`: saved here, but no longer on
+ * the person's account.
  */
 export type BringAgentComputerStatus =
   | "ready"
   | "online"
   | "connecting"
   | "offline"
+  | "unchecked"
   | "unsupported"
   | "gone";
 
@@ -34,8 +36,9 @@ const ORDER: Record<BringAgentComputerStatus, number> = {
   online: 1,
   connecting: 2,
   offline: 3,
-  unsupported: 4,
-  gone: 5,
+  unchecked: 4,
+  unsupported: 5,
+  gone: 6,
 };
 
 export interface DiscoveredComputer {
@@ -65,6 +68,16 @@ export function steadyDiscovered(
       ? { ...computer, availability: known.availability, unsupported: known.unsupported }
       : computer;
   });
+}
+
+/**
+ * What was shown once the account has gone unanswered too long to trust: the same computers,
+ * with nothing said about whether each is up.
+ */
+export function uncheckedDiscovered(
+  shown: ReadonlyArray<DiscoveredComputer>,
+): ReadonlyArray<DiscoveredComputer> {
+  return shown.map((computer) => ({ ...computer, availability: "error" as const }));
 }
 
 /**
@@ -107,7 +120,9 @@ export function bringAgentComputers(input: {
                     entry.phase === "available" ||
                     accountSays === "online"
                   ? "connecting"
-                  : "offline";
+                  : accountSays === "error"
+                    ? "unchecked"
+                    : "offline";
     return {
       environmentId: entry.environmentId,
       name: entry.name,
@@ -125,7 +140,9 @@ export function bringAgentComputers(input: {
           ? "online"
           : entry.availability === "checking"
             ? "connecting"
-            : "offline";
+            : entry.availability === "error"
+              ? "unchecked"
+              : "offline";
       return {
         environmentId: entry.environmentId,
         name: entry.name,
@@ -181,9 +198,13 @@ export function computersBackOnline(
 
 const AGENT_NAMES: Partial<Record<string, string>> = { claudeAgent: "Claude Code", codex: "Codex" };
 const SIGN_IN_HINTS: Partial<Record<string, string>> = {
-  claudeAgent: "open a terminal on it, run `claude` and sign in",
-  codex: "open a terminal on it and run `codex login`",
+  claudeAgent: "Open Claude Code on that computer and sign in.",
+  codex: "Open the ChatGPT or Codex app on that computer and sign in.",
 };
+
+/** How a person signs an agent in again, on the computer it runs on. No terminal. */
+export const agentSignInHint = (driver: string, name: string): string =>
+  SIGN_IN_HINTS[driver] ?? `Open ${name} on that computer and sign in.`;
 
 type AgentState = "ready" | "checking" | "signed-out" | "broken" | "turned-off" | "not-installed";
 const AGENT_STATE_ORDER: ReadonlyArray<AgentState> = [
@@ -214,28 +235,30 @@ const agentState = (provider: ProviderSummary): AgentState =>
           ? "broken"
           : "ready";
 
-const describeAgent = (driver: string, state: AgentState): string => {
+/** Whether a computer has said how each of its agents is, so bringing one would not be a guess. */
+export const agentsChecked = (providers: ReadonlyArray<ProviderSummary>): boolean =>
+  providers.length > 0 && providers.every((provider) => agentState(provider) !== "checking");
+
+const describeAgent = (driver: string, name: string, state: AgentState): string => {
   switch (state) {
     case "not-installed":
-      return "not installed";
+      return "not installed.";
     case "checking":
-      return "still being checked";
+      return "still being checked.";
     case "turned-off":
-      return "turned off in Tinkjam settings";
+      return "turned off in Tinkjam settings.";
     case "broken":
-      return "installed, but it did not start";
+      return "installed, but it did not start.";
     case "ready":
-      return "ready, but it has no model to use";
-    case "signed-out": {
-      const hint = SIGN_IN_HINTS[driver];
-      return hint === undefined ? "not signed in" : `not signed in (${hint})`;
-    }
+      return "ready, but it has no model to use.";
+    case "signed-out":
+      return `not signed in. ${agentSignInHint(driver, name)}`;
   }
 };
 
 /**
  * Why a computer's agent cannot come to a board, from that computer's agents: Claude Code and
- * Codex always, other agents only when installed and turned on.
+ * Codex always, other agents only when installed and turned on. One line per agent.
  */
 export function noAgentMessage(input: {
   readonly computerName: string;
@@ -283,6 +306,32 @@ export function noAgentMessage(input: {
     : `Tinkjam Sync found no signed-in agent on ${input.computerName}.`;
   return [
     heading,
-    ...lines.map((line) => `${line.name}: ${describeAgent(line.driver, line.state)}.`),
-  ].join(" ");
+    ...lines.map((line) => `${line.name}: ${describeAgent(line.driver, line.name, line.state)}`),
+  ].join("\n");
+}
+
+const OWN_AGENT_FAILURES: Partial<Record<string, string>> = {
+  invalid_host: "Your computer could not open this board. Try again.",
+  invalid_response:
+    "Your computer could not read this board. Open Tinkjam Sync on it, choose Check for Updates, then try again.",
+  unreachable:
+    "Your computer could not reach this board. Check its internet connection, then try again.",
+  expired: "That took too long. Try again.",
+  launch_failed: "Your computer could not start your agent. Try again.",
+  leave_failed: "Could not take your agent off this board. Try again.",
+  not_in_room: "Your agent is no longer on this board. Press Bring my agent to bring it back.",
+  room_ended: "Your agent is no longer on this board. Press Bring my agent to bring it back.",
+  too_fast: "Too many tries in a row. Wait a minute, then try again.",
+  thread_unavailable: "That chat cannot go on this board. It may be on a board already.",
+};
+
+/**
+ * What to tell a person when their own computer refused something for a board, in their words.
+ * The computer's own wording is for whoever debugs it, so it goes to the console.
+ */
+export function ownAgentFailureMessage(cause: unknown, fallback: string): string {
+  console.error("[bring-agent]", cause);
+  const reason =
+    typeof cause === "object" && cause !== null && "reason" in cause ? cause.reason : undefined;
+  return (typeof reason === "string" ? OWN_AGENT_FAILURES[reason] : undefined) ?? fallback;
 }

@@ -1,34 +1,52 @@
 const escapeHtml = (value: string) =>
   value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-/** The page the browser lands on once it approved this computer; the terminal says the rest. */
-export function renderLoopbackAuthorizationCompleteHtml(): string {
+// Where a person's boards are when the caller does not say; a fork passes its own.
+const DEFAULT_BOARDS_URL = "https://app.trellium.org/";
+
+/** The page the browser lands on once it approved this computer: done, and the way back. */
+export function renderLoopbackAuthorizationCompleteHtml(
+  input: { readonly boardsUrl?: string } = {},
+): string {
   return renderPage(
     "Connected to Tinkjam",
     `<h1>This computer is connected</h1>
-      <p class="description">You can close this window. Tinkjam Sync finishes setting up on this computer.</p>`,
+      <p class="description">Tinkjam Sync finishes setting up by itself. Go back to your board and press Bring my agent; this computer is in the list.</p>
+      <a class="button" href="${escapeHtml(input.boardsUrl ?? DEFAULT_BOARDS_URL)}">Back to your boards</a>
+      <p class="fine">You can close this window.</p>`,
+  );
+}
+
+/** An approval that came back stale or refused: nothing was connected, and how to start again. */
+export function renderLoopbackAuthorizationFailedHtml(): string {
+  return renderPage(
+    "Not connected",
+    `<h1>This computer was not connected</h1>
+      <p class="description">This approval link is no longer valid, or the approval was not given. Nothing changed on your account.</p>
+      <p class="description">To start again, open Tinkjam Sync on this computer and choose Connect.</p>`,
   );
 }
 
 /**
- * The first page a person opens from Tinkjam Sync: what connecting does, in plain words, before
- * any sign-in form.
+ * The first page a person opens from Tinkjam Sync. It goes straight on to the hosted page, which
+ * says what connecting does; the link is for a browser that does not follow by itself.
  */
 export function renderLoopbackAuthorizationStartHtml(input: {
   readonly computerName: string;
   readonly continueUrl: string;
 }): string {
   const computer = escapeHtml(input.computerName);
+  const continueUrl = escapeHtml(input.continueUrl);
   return renderPage(
     `Connect ${computer} to Tinkjam`,
-    `<h1>Connect ${computer} to Tinkjam</h1>
-      <p class="description">This links ${computer} to your Tinkjam account, so your boards can use the agents on it, such as Claude Code or Codex. They run here, on your own sign-in, and only when you send them something.</p>
-      <p class="description">Next, sign in to Tinkjam to approve it.</p>
-      <a class="button" href="${escapeHtml(input.continueUrl)}">Continue</a>`,
+    `<h1>Opening Tinkjam…</h1>
+      <p class="description">Taking you to Tinkjam to connect ${computer}.</p>
+      <a class="button" href="${continueUrl}">Continue</a>`,
+    `<meta http-equiv="refresh" content="0;url=${continueUrl}" />`,
   );
 }
 
-function renderPage(title: string, body: string): string {
+function renderPage(title: string, body: string, head = ""): string {
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -36,6 +54,7 @@ function renderPage(title: string, body: string): string {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
     <title>${title}</title>
+    ${head}
     <style>
       :root {
         --bg: #fff7ec;
@@ -83,6 +102,7 @@ function renderPage(title: string, body: string): string {
       }
       h1 { margin: 0; font-size: clamp(24px, 5vw, 30px); line-height: 1.15; letter-spacing: -0.02em; }
       p.description { margin: 12px 0 0; color: var(--muted); font-size: 15px; line-height: 1.6; }
+      p.fine { margin: 16px 0 0; color: var(--muted); font-size: 13px; }
       a.button {
         display: inline-block;
         margin-top: 22px;

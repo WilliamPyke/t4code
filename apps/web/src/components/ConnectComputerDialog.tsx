@@ -1,12 +1,17 @@
+import {
+  RelayConnectionRegistration,
+  RelayConnectionTarget,
+} from "@t3tools/client-runtime/connection";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useState } from "react";
+import { useEffect, useEffectEvent, useRef } from "react";
 import { create } from "zustand";
 
-import { hasCloudPublicConfig } from "~/cloud/publicConfig";
-import { boardAccountsEnabled, useBoardAccount } from "~/guest/boardAccount";
+import { environmentCatalog } from "~/connection/catalog";
+import { useAtomCommand } from "~/state/use-atom-command";
 
-import { CloudEnvironmentConnectRows } from "./cloud/CloudEnvironmentConnectList";
-import { ConnectComputerRoutes } from "./guest/BringAgentDialog";
+import { ConnectComputerRoutes, WaitingForComputer } from "./guest/BringAgentDialog";
+import { ComputerRow, ComputersLoading, ComputersNotLoaded } from "./guest/ComputerRow";
+import { useRemoveComputer, useYourComputers } from "./guest/yourComputers";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -18,6 +23,8 @@ import {
   DialogPopup,
   DialogTitle,
 } from "./ui/dialog";
+
+const DISCOVERY_REFRESH_MS = 4_000;
 
 const useConnectComputerStore = create<{ readonly open: boolean }>(() => ({ open: false }));
 
@@ -36,12 +43,6 @@ export function ConnectComputerDialogHost() {
 }
 
 function ConnectComputerDialog() {
-  const account = useBoardAccount();
-  const withAccount = boardAccountsEnabled() && hasCloudPublicConfig();
-  const signedIn = account.status === "signed-in";
-  // A computer that shows up while this is open connects at once.
-  const [autoAddedComputers] = useState(() => new Set<EnvironmentId>());
-  const [selectedIds, setSelectedIds] = useState<ReadonlySet<EnvironmentId>>(() => new Set());
   return (
     <DialogPopup className="max-w-2xl" data-connect-computer>
       <DialogHeader>
@@ -52,37 +53,85 @@ function ConnectComputerDialog() {
         </DialogDescription>
       </DialogHeader>
       <DialogPanel>
-        <div className="flex flex-col gap-5">
-          <ConnectComputerRoutes withAccount={withAccount} signedIn={signedIn} />
-          {withAccount && signedIn ? (
-            <section className="flex flex-col gap-2">
-              <h3 className="text-sm font-medium">Your computers</h3>
-              <CloudEnvironmentConnectRows
-                primaryEnvironmentId={null}
-                savedEnvironments={[]}
-                refreshWhileEmpty
-                selection={{
-                  autoSelectedComputers: autoAddedComputers,
-                  selectedIds,
-                  onChange: (environmentId, selected) =>
-                    setSelectedIds((current) => {
-                      const next = new Set(current);
-                      if (selected) next.add(environmentId);
-                      else next.delete(environmentId);
-                      return next;
-                    }),
-                }}
-                empty={
-                  <p className="text-xs text-muted-foreground">Waiting for your computer...</p>
-                }
-              />
-            </section>
-          ) : null}
-        </div>
+        <ConnectComputerSteps />
       </DialogPanel>
       <DialogFooter variant="bare">
         <DialogClose render={<Button variant="outline" />}>Done</DialogClose>
       </DialogFooter>
     </DialogPopup>
+  );
+}
+
+/**
+ * How to get Tinkjam Sync, and the person's computers as every list shows them. A computer that
+ * comes online while this shows is added to this browser at once, so it is ready on a board.
+ */
+export function ConnectComputerSteps() {
+  const list = useYourComputers({ active: true, pollEveryMs: DISCOVERY_REFRESH_MS });
+  const { computers, withAccount, signedIn } = list;
+  const removeComputer = useRemoveComputer();
+  const registerEnvironment = useAtomCommand(environmentCatalog.register, {
+    reportFailure: false,
+  });
+  const added = useRef(new Set<EnvironmentId>());
+  const newlyOnline = computers.filter((computer) => computer.status === "online");
+  const newlyOnlineKey = newlyOnline.map((computer) => computer.environmentId).join("\n");
+  const addNewlyOnline = useEffectEvent(() => {
+    for (const computer of newlyOnline) {
+      if (added.current.has(computer.environmentId)) continue;
+      added.current.add(computer.environmentId);
+      void registerEnvironment(
+        new RelayConnectionRegistration({
+          target: new RelayConnectionTarget({
+            environmentId: computer.environmentId,
+            label: computer.name,
+          }),
+        }),
+      );
+    }
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens this browser's connection to a computer the account says just came online
+  useEffect(() => {
+    if (newlyOnlineKey !== "") addNewlyOnline();
+  }, [newlyOnlineKey]);
+
+  const connected = computers.find((computer) => computer.status === "ready");
+  return (
+    <div className="flex flex-col gap-5">
+      <ConnectComputerRoutes withAccount={withAccount} signedIn={signedIn} />
+      {computers.length === 0 && !(withAccount && signedIn) ? null : (
+        <section className="flex flex-col gap-2" data-your-computers>
+          <h3 className="text-sm font-medium">Your computers</h3>
+          {computers.length > 0 ? (
+            <ul className="flex flex-col gap-2">
+              {computers.map((computer) => (
+                <ComputerRow
+                  key={computer.environmentId}
+                  computer={computer}
+                  thisComputer={list.primaryIds.has(computer.environmentId)}
+                  onRetry={() => list.retry(computer)}
+                  onRemove={
+                    list.primaryIds.has(computer.environmentId)
+                      ? null
+                      : () => removeComputer.remove(computer)
+                  }
+                  removeQuestion={removeComputer.question(computer.name)}
+                />
+              ))}
+            </ul>
+          ) : list.loading ? (
+            <ComputersLoading />
+          ) : list.failed ? null : (
+            <WaitingForComputer />
+          )}
+          {list.failed ? <ComputersNotLoaded onRetry={list.refresh} /> : null}
+          {connected === undefined ? null : (
+            <p role="status" className="text-sm" data-computer-connected>
+              {connected.name} is connected. Open a board and press Bring my agent.
+            </p>
+          )}
+        </section>
+      )}
+    </div>
   );
 }

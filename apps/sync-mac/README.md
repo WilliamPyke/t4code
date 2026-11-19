@@ -9,8 +9,14 @@ AppKit and SwiftPM only; no Xcode project.
 - The app is the only Sync: it removes the npx-installed LaunchAgent with the package's own
   `--uninstall` (the account stays connected), ends any other Sync of the home, runs Sync as its
   child and stops the whole tree on Quit. It is its own login item (`SMAppService.mainApp`).
-- It checks `sync.json` and `downloads/mac.json` on launch and daily, installs a newer Sync by
-  itself, and offers "Restart to Update" for a newer app.
+- It checks `sync.json` and `downloads/mac.json` on launch, hourly and on waking. A newer Sync
+  installs by itself once no agent is running; `sync.json` must carry the tarball's `sha256`. A
+  newer app is downloaded, checked, and installed at the next launch or when no agent is running;
+  the menu also offers "Restart to Update".
+- The menu follows `~/.tinkjam/userdata/sync-status.json`, which Sync rewrites every 30 seconds,
+  so "Connected" turns into "Reconnecting…" when boards cannot reach this Mac.
+- When it gives up (Sync keeps stopping, setup fails), it tries again every 15 minutes, on waking
+  and when the network returns.
 
 ## Build
 
@@ -47,13 +53,17 @@ Launch arguments (or `defaults write org.trellium.tinkjam-sync-app <key> <value>
 - `-SyncManifestURL`, `-AppManifestURL`, `-SyncPackageURL`, `-HostedAppURL`: point at a local server.
 - `-SkipMoveToApplications YES`: no "Move to Applications?" prompt when run from elsewhere.
 
-`open -a "<path to the app>" "tinkjam-sync://<action>"` runs a menu action in that copy:
-`connect`, `check-for-updates`, `restart-to-update`, `start-at-login?enabled=0|1`, `menu`, `quit`.
-Name the copy with `-a`; a bare `open tinkjam-sync://…` may start another copy against `~/.tinkjam`.
+`open -a "<path to the app>" "tinkjam-sync://<action>"` runs an action in that copy: `connect`,
+`disconnect` (asks first), `check-for-updates` (never stops a working agent), `show` (the status
+window) and `menu`. Any web page can open these links, so none of them quits the app or changes a
+setting; to quit a copy from a script, send it SIGTERM. Name the copy with `-a`; a bare
+`open tinkjam-sync://…` may start another copy against `~/.tinkjam`.
 
-Everything the app and Sync say goes to `~/.tinkjam/logs/sync.log` (menu: Show Log).
+Everything the app and Sync say goes to `~/.tinkjam/logs/sync.log` (menu: Show Log). The menu and
+the windows show plain sentences from `Sources/TinkjamSync/Words.swift`; the technical cause of a
+failure is only in the log.
 
 ## Uninstall
 
-Quit it from the menu, delete `/Applications/Tinkjam Sync.app`. To also disconnect this Mac from
-the account: `npx -y https://trellium.org/sync.tgz --disconnect`.
+To disconnect this Mac from the account, choose Disconnect this Mac… from the menu first. Then
+quit it from the menu and delete `/Applications/Tinkjam Sync.app`.

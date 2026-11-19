@@ -56,6 +56,30 @@ namespace TinkjamSync
             Check("status reachable", StatusFile.Parse("{\"pid\":7,\"status\":\"reachable\"}", 7)?.Reachable == true);
             Check("status other pid ignored", StatusFile.Parse(waiting, 99) == null);
             Check("status garbage ignored", StatusFile.Parse("{nope", 4242) == null);
+            // Health: an answer with no time is trusted; one Sync stopped refreshing is stale.
+            var timed = StatusFile.Parse("{\"pid\":7,\"status\":\"reachable\",\"checkedAt\":\"2026-11-17T11:59:30.000Z\"}", 7);
+            Check("status checkedAt read as UTC", timed?.CheckedAt == now.AddSeconds(-30) && timed.CheckedAt.Value.Kind == DateTimeKind.Utc);
+            Check("fresh reachable", StatusFile.HealthOf(timed, now) == Health.Reachable);
+            Check("stale reachable", StatusFile.HealthOf(timed, now.AddMinutes(5)) == Health.Stale);
+            Check("no checkedAt trusted", StatusFile.HealthOf(StatusFile.Parse("{\"pid\":7,\"status\":\"reachable\"}", 7), now.AddDays(3)) == Health.Reachable);
+            Check("unreachable", StatusFile.HealthOf(parsed, now) == Health.Unreachable);
+            Check("no status unknown", StatusFile.HealthOf(null, now) == Health.Unknown);
+
+            // Agents: anything under Sync besides its own helpers.
+            Func<int, int, string, ProcessRow> row = (pid, parent, name) => new ProcessRow { Pid = pid, ParentPid = parent, Name = name };
+            var idle = new[] { row(10, 1, "node.exe"), row(11, 10, "cloudflared.exe"), row(12, 10, "conhost.exe"), row(20, 1, "claude.exe") };
+            Check("helpers are not agents", !Agents.Running(idle, 10));
+            Check("a child is an agent", Agents.Running(idle.Concat(new[] { row(13, 10, "cmd.exe") }), 10));
+            Check("a grandchild is an agent", Agents.Running(idle.Concat(new[] { row(14, 12, "claude.exe") }), 10));
+
+            // What Node and npm say about the network.
+            Check("offline", Failures.Classify("npm error code ENOTFOUND") == NetworkTrouble.Offline);
+            Check("restricted", Failures.Classify("npm error code SELF_SIGNED_CERT_IN_CHAIN") == NetworkTrouble.Restricted);
+            Check("other failure", Failures.Classify("npm error code EBADENGINE") == NetworkTrouble.None);
+
+            Check("path merge", PathList.Merge(@"C:\a;C:\b\", @"c:\B; C:\c", null) == @"C:\a;C:\b\;C:\c");
+            Check("sha looks valid", Checksum.LooksValid(new string('a', 64)) && !Checksum.LooksValid("abc") && !Checksum.LooksValid(null));
+            Check("short version", Versions.Short("0.1.1+202611181200") == "0.1.1");
 
             // Sync's words.
             Check("approval url", SyncOutput.ParseApprovalUrl("  http://127.0.0.1:34338") == "http://127.0.0.1:34338");
@@ -71,27 +95,41 @@ namespace TinkjamSync
             Func<string> ids = () => string.Join(",", MenuModel.Items(view).Select(i => i.Id));
             view.Phase = Phase.Connected;
             Check("connected menu", ids() == "status,computer,-,open,disconnect,-,autostart,log,update,-,exit");
-            Check("connected colored", MenuModel.Colored(view));
+            Check("connected colored", MenuModel.Icon(view) == TrayIcon.Color);
+            view.Phase = Phase.Reconnecting;
+            Check("reconnecting menu", ids() == "status,computer,-,open,disconnect,-,autostart,log,update,-,exit");
+            Check("reconnecting grey", MenuModel.Icon(view) == TrayIcon.Grey && MenuModel.StatusLine(view) == "Reconnecting…");
             view.Phase = Phase.Approving;
             Check("approving menu", ids() == "status,computer,-,open-again,open,-,autostart,log,update,-,exit");
             Check("approving tooltip", MenuModel.Tooltip(view) == "Tinkjam Sync: Waiting for you to approve in your browser…");
-            Check("approving grey", !MenuModel.Colored(view));
+            Check("approving asks for attention", MenuModel.Icon(view) == TrayIcon.Attention);
             view.Phase = Phase.Stopped;
-            view.Detail = "port 34338 is in use by another program, so the sign-in page can't open.";
-            Check("stopped menu", ids() == "status,computer,-,retry,open,connect,-,autostart,log,update,-,exit");
-            Check("stopped status", MenuModel.StatusLine(view).StartsWith("Stopped: port 34338"));
+            view.Detail = Words.SignInPageBlocked + " It tries again in 15 minutes, or choose Try again.";
+            Check("stopped menu", ids().StartsWith("status,detail,detail,") && ids().EndsWith(",computer,-,retry,open,-,autostart,log,update,-,exit"));
+            Check("stopped detail wraps", MenuModel.Items(view).Where(i => i.Id == "detail").All(i => i.Text.Length <= 48));
+            Check("stopped status", MenuModel.StatusLine(view).StartsWith("Stopped: Another program"));
+            Check("stopped asks for attention", MenuModel.Icon(view) == TrayIcon.Attention);
             Check("tooltip fits 63", MenuModel.Tooltip(view).Length <= 63);
             view.Phase = Phase.NotConnected;
             view.Detail = null;
             Check("not connected menu", ids() == "status,computer,-,open,connect,-,autostart,log,update,-,exit");
+            view.Phase = Phase.SettingUp;
+            view.Detail = "downloading";
+            view.Percent = 37;
+            Check("progress in words", MenuModel.StatusLine(view) == "Setting up… downloading (37%)");
+            view.Percent = null;
             view.Phase = Phase.Connecting;
-            view.Detail = "waiting on: The tunnel is not routed yet";
-            Check("slow connecting says why", MenuModel.StatusLine(view) == "Connecting… waiting on: The tunnel is not routed yet");
+            view.Detail = "this is taking longer than usual; it keeps trying";
+            Check("slow connecting says so", MenuModel.StatusLine(view) == "Connecting… this is taking longer than usual; it keeps trying");
             view.Busy = true;
             Check("busy disables disconnect", !MenuModel.Items(view).First(i => i.Id == "disconnect").Enabled);
+            Check("version item", MenuModel.Items(view).First(i => i.Id == "update").Text == "Version 0.1.0 · Check for updates");
             view.UpdateVersion = "0.2.0";
-            Check("update ready item", MenuModel.Items(view).First(i => i.Id == "update").Text == "Restart to update (version 0.2.0)");
+            Check("update ready item", MenuModel.Items(view).First(i => i.Id == "update").Text == "Restart to update to version 0.2.0");
+            view.CheckingForUpdates = true;
+            Check("checking item", MenuModel.Items(view).First(i => i.Id == "update").Text == "Checking for updates…" && !MenuModel.Items(view).First(i => i.Id == "update").Enabled);
             Check("autostart checked", MenuModel.Items(view).First(i => i.Id == "autostart").Checked);
+            Check("capitalized copes with nothing", Words.Capitalized("") == "" && Words.Capitalized(null) == "" && Words.Capitalized("ab") == "Ab");
 
             // Command lines and names.
             Check("quote plain", CommandLine.Quote(@"C:\x\node.exe") == @"C:\x\node.exe");
@@ -106,8 +144,8 @@ namespace TinkjamSync
             Check("never the package's name", !testHome.RunValueName.StartsWith("Tinkjam Sync"));
             var defaults = Home.Resolve(new AppArgs { BaseDir = Home.DefaultBaseDir() });
             Check("default names", defaults.Suffix == "" && defaults.RunValueName == "TinkjamSync" && defaults.PassThrough().Count == 0);
-            var parsedArgs = AppArgs.Parse(new[] { "/uninstall", "/SILENT", "--base-dir", @"C:\x" });
-            Check("args", parsedArgs.Uninstall && parsedArgs.Silent && parsedArgs.BaseDir == @"C:\x");
+            var parsedArgs = AppArgs.Parse(new[] { "/uninstall", "/SILENT", "--after-update", "--base-dir", @"C:\x" });
+            Check("args", parsedArgs.Uninstall && parsedArgs.Silent && parsedArgs.AfterUpdate && parsedArgs.BaseDir == @"C:\x");
 
             Console.WriteLine("self-test: " + passed + " passed, " + failed + " failed");
             return failed == 0 ? 0 : 1;

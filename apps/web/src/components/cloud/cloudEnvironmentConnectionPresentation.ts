@@ -33,7 +33,7 @@ export function presentSavedCloudEnvironmentConnection(
       };
     case "unsupported":
       return {
-        buttonLabel: "Client not supported",
+        buttonLabel: "Out of date",
         statusText: connectionStatusText(connection),
         tone: "idle",
       };

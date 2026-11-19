@@ -31,6 +31,8 @@ export const SYNC_SLOW_MESSAGE =
 // and the first of those usually comes before Cloudflare routes a new tunnel. So this asks
 // itself, often, until it answers; then never again.
 const CHECK_INTERVAL = Duration.seconds(2);
+/** Once connected, how often the status file says whether boards can still reach this computer. */
+const KEEP_CHECKING_INTERVAL = Duration.seconds(30);
 const SLOW_AFTER = Duration.seconds(90);
 
 /**
@@ -105,10 +107,18 @@ export const layer = Layer.effectDiscard(
         }
       });
     const installCommand = `npx -y ${yield* SYNC_URL} --install`;
-    yield* announceWhenReachable({
-      check: reachability.check.pipe(Effect.map((result) => inSyncWords(result, installCommand))),
-      say: Console.log,
-      record,
-    }).pipe(Effect.forkScoped);
+    const check = reachability.check.pipe(
+      Effect.map((result) => inSyncWords(result, installCommand)),
+    );
+    // The apps show "Connected" from this file, so it keeps saying what is true after the first yes.
+    const keepRecording = check.pipe(
+      Effect.flatMap(record),
+      Effect.delay(KEEP_CHECKING_INTERVAL),
+      Effect.forever,
+    );
+    yield* announceWhenReachable({ check, say: Console.log, record }).pipe(
+      Effect.andThen(keepRecording),
+      Effect.forkScoped,
+    );
   }),
 );

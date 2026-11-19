@@ -9,6 +9,7 @@ import {
   autostartEntry,
   classifyLoginItem,
   installedMacApp,
+  installedWindowsApp,
   launchAgentPlist,
   leftoverMarkers,
   parseSyncArgs,
@@ -55,6 +56,14 @@ describe("Tinkjam Sync for Mac", () => {
       ),
     ).toBe("/Applications/Tinkjam Sync.app");
     expect(installedMacApp("/Users/a", found([]))).toBeUndefined();
+  });
+});
+
+describe("Tinkjam Sync for Windows", () => {
+  it("is found where its installer puts it, and otherwise not at all", () => {
+    const app = "C:\\Users\\a b\\AppData\\Local\\Programs\\Tinkjam Sync\\TinkjamSync.exe";
+    expect(installedWindowsApp("C:\\Users\\a b\\AppData\\Local", (path) => path === app)).toBe(app);
+    expect(installedWindowsApp("C:\\Users\\a b\\AppData\\Local", () => false)).toBeUndefined();
   });
 });
 

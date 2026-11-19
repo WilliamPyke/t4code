@@ -332,6 +332,12 @@ export const RelayEnvironmentLinkRequest = Schema.Struct({
   notificationsEnabled: Schema.Boolean,
   liveActivitiesEnabled: Schema.Boolean,
   managedTunnelsEnabled: Schema.Boolean,
+  freshApproval: Schema.optionalKey(
+    Schema.Boolean.annotate({
+      description:
+        "Set by a computer whose link was just approved in a browser; required to link again after the account removed it.",
+    }),
+  ),
 }).annotate({ description: "Links an authenticated cloud user to a T3 environment." });
 export type RelayEnvironmentLinkRequest = typeof RelayEnvironmentLinkRequest.Type;
 
@@ -608,6 +614,19 @@ export class RelayInternalError extends Schema.TaggedError<RelayInternalError>()
   }
 }
 
+export class RelayEnvironmentLinkRemovedError extends Schema.TaggedError<RelayEnvironmentLinkRemovedError>()(
+  "RelayEnvironmentLinkRemovedError",
+  {
+    code: Schema.Literal("environment_link_removed"),
+    traceId: TrimmedNonEmptyString,
+  },
+  { httpApiStatus: 403 },
+) {
+  override get message(): string {
+    return "This computer was removed from the account and must be approved again";
+  }
+}
+
 export const RelayProtectedError = Schema.Union([
   RelayAuthInvalidError,
   RelayEnvironmentLinkProofExpiredError,
@@ -618,6 +637,7 @@ export const RelayProtectedError = Schema.Union([
   RelayEnvironmentLinkFailedError,
   RelayEnvironmentLinkUnavailableError,
   RelayEnvironmentLinkLimitExceededError,
+  RelayEnvironmentLinkRemovedError,
   RelayAgentActivityPublishProofExpiredError,
   RelayAgentActivityPublishProofInvalidError,
   RelayInternalError,
@@ -632,6 +652,7 @@ const RelayEnvironmentLinkErrors = [
   RelayEnvironmentLinkProofInvalidError,
   RelayEnvironmentLinkUnavailableError,
   RelayEnvironmentLinkLimitExceededError,
+  RelayEnvironmentLinkRemovedError,
   RelayEnvironmentLinkFailedError,
   RelayInternalError,
 ] as const;
@@ -656,6 +677,8 @@ export class RelayClientPrincipal extends Context.Service<
   {
     readonly userId: string;
     readonly token: string;
+    /** A person's app session, or the long-lived sign-in a linked computer holds. */
+    readonly mode?: "session" | "computer";
     readonly proofKeyThumbprint?: string;
     readonly dpopScopes?: ReadonlyArray<RelayDpopAccessTokenScope>;
   }

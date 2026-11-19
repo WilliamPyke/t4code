@@ -1,7 +1,7 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { ChevronRightIcon, LaptopIcon, PaletteIcon } from "lucide-react";
-import { type ReactNode, useEffect, useEffectEvent, useState } from "react";
+import { type ReactNode, useState } from "react";
 
 import { dispatchCommandPalette } from "~/commandPaletteStore";
 import { requestConfirmDialog } from "~/confirmDialog";
@@ -9,22 +9,19 @@ import { boardAccountsEnabled, useBoardAccount } from "~/guest/boardAccount";
 import { useTheme } from "~/hooks/useTheme";
 import { cn } from "~/lib/utils";
 import { setShellMode } from "~/shellMode";
-import { useEnvironments, useRelayEnvironmentDiscovery } from "~/state/environments";
-import { relayEnvironmentDiscovery } from "~/state/relay";
-import { useAtomCommand } from "~/state/use-atom-command";
 import type { ThemePreferenceMode } from "~/themePalette";
 
 import { AppRouteModalClose } from "../AppRouteModal";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { openConnectComputer } from "../ConnectComputerDialog";
-import { type BringAgentComputer, bringAgentComputers } from "../guest/bringAgent.logic";
+import type { BringAgentComputer } from "../guest/bringAgent.logic";
+import { ComputersLoading, ComputersNotLoaded } from "../guest/ComputerRow";
 import {
   COMPUTER_STATUS_DOT,
+  canRetryComputer,
   computerStatusLine,
-  discoveredComputers,
-  removeComputerQuestion,
-  savedComputers,
   useRemoveComputer,
+  useYourComputers,
 } from "../guest/yourComputers";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
@@ -160,39 +157,19 @@ function AppearanceSection() {
 }
 
 function ComputersSection() {
-  const { environments } = useEnvironments();
-  const account = useBoardAccount();
-  const discovery = useRelayEnvironmentDiscovery();
+  // The account's computers too, so one this browser never opened can still be removed.
+  const list = useYourComputers({ active: true, pollEveryMs: null });
   const removeComputer = useRemoveComputer();
   const [removing, setRemoving] = useState<EnvironmentId | null>(null);
-  // The account's computers too, so one this browser never opened can still be removed.
-  const signedIn = boardAccountsEnabled() && account.status === "signed-in";
-  const refreshDiscovery = useAtomCommand(relayEnvironmentDiscovery.refresh, {
-    reportFailure: false,
-  });
-  const askAccount = useEffectEvent(() => void refreshDiscovery());
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- asks the account for its computers when Settings opens, so the list matches it
-  useEffect(() => {
-    if (signedIn) askAccount();
-  }, [signedIn]);
-  const computers = bringAgentComputers({
-    saved: savedComputers(environments),
-    discovered: signedIn ? discoveredComputers(discovery) : [],
-    listed: signedIn && discovery.listed,
-  });
-  const primaryIds = new Set(
-    environments
-      .filter((environment) => environment.entry.target._tag === "PrimaryConnectionTarget")
-      .map((environment) => environment.environmentId),
-  );
+  const [retrying, setRetrying] = useState<EnvironmentId | null>(null);
   const remove = async (computer: BringAgentComputer) => {
+    const question = removeComputer.question(computer.name);
     const confirmed =
-      (await requestConfirmDialog(removeComputerQuestion(computer.name), {
-        variant: "destructive",
-      })) ?? window.confirm(removeComputerQuestion(computer.name));
+      (await requestConfirmDialog(question, { variant: "destructive" })) ??
+      window.confirm(question);
     if (!confirmed) return;
     setRemoving(computer.environmentId);
-    const failed = await removeComputer(computer);
+    const failed = await removeComputer.remove(computer);
     setRemoving(null);
     if (failed !== null) {
       toastManager.add({
@@ -202,10 +179,15 @@ function ComputersSection() {
       });
     }
   };
+  const retry = async (computer: BringAgentComputer) => {
+    setRetrying(computer.environmentId);
+    await list.retry(computer);
+    setRetrying(null);
+  };
   return (
     <Section title="Your computers">
-      {computers.map((computer) => {
-        const thisComputer = primaryIds.has(computer.environmentId);
+      {list.computers.map((computer) => {
+        const thisComputer = list.primaryIds.has(computer.environmentId);
         const status = computerStatusLine(computer);
         return (
           <Row
@@ -224,21 +206,42 @@ function ComputersSection() {
             }
             description={thisComputer ? `This computer · ${status}` : status}
           >
-            {thisComputer ? undefined : (
+            {canRetryComputer(computer) ? (
+              <Button
+                variant="outline"
+                disabled={retrying !== null}
+                onClick={() => void retry(computer)}
+                data-retry-computer
+              >
+                {retrying === computer.environmentId ? "Checking…" : "Try again"}
+              </Button>
+            ) : null}
+            {thisComputer ? null : (
               <Button
                 variant="outline"
                 disabled={removing !== null}
                 onClick={() => void remove(computer)}
+                aria-label={`Remove ${computer.name}`}
                 data-remove-computer
               >
-                {removing === computer.environmentId ? "Removing..." : "Remove"}
+                {removing === computer.environmentId ? "Removing…" : "Remove"}
               </Button>
             )}
           </Row>
         );
       })}
+      {list.loading && list.computers.length === 0 ? (
+        <div className="px-4 py-3">
+          <ComputersLoading />
+        </div>
+      ) : null}
+      {list.failed ? (
+        <div className="px-4 py-3">
+          <ComputersNotLoaded onRetry={list.refresh} />
+        </div>
+      ) : null}
       <Row
-        label={computers.length === 0 ? "No computer connected" : "Another computer"}
+        label={list.computers.length === 0 ? "No computer connected" : "Another computer"}
         description="Use the agents on your computer, such as Claude Code or Codex, on your boards."
       >
         <Button onClick={openConnectComputer}>

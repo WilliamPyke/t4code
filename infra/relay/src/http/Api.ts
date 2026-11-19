@@ -46,6 +46,7 @@ import {
   RelayEnvironmentLinkProofInvalidError,
   RelayEnvironmentLinkUnavailableError,
   RelayEnvironmentLinkLimitExceededError,
+  RelayEnvironmentLinkRemovedError,
   RelayEnvironmentPrincipal,
   RelayRateLimitedError,
   RelayTeamRequestError,
@@ -349,6 +350,7 @@ export const layerClientAuth = Layer.effect(
           Effect.provideService(RelayClientPrincipal, {
             userId: verified.sub,
             token,
+            mode: verified.mode === "clerk_oauth_bearer" ? "computer" : "session",
           }),
         );
       }),
@@ -691,6 +693,8 @@ const revokeEnvironmentLinkRecord = Effect.fn("relay.api.client.revokeEnvironmen
     readonly userId: string;
     readonly environmentId: string;
     readonly environmentPublicKey: string;
+    /** The same key just linked to another account, whose new credential must survive. */
+    readonly keepCredentials?: boolean;
   }) {
     const transactions = yield* RelayDb.RelayTransactions;
     const links = yield* EnvironmentLinks.EnvironmentLinks;
@@ -701,7 +705,7 @@ const revokeEnvironmentLinkRecord = Effect.fn("relay.api.client.revokeEnvironmen
           userId: input.userId,
           environmentId: input.environmentId,
         });
-        if (revoked) {
+        if (revoked && input.keepCredentials !== true) {
           yield* credentials.revokeForEnvironmentPublicKey({
             environmentId: input.environmentId,
             environmentPublicKey: input.environmentPublicKey,
@@ -718,6 +722,7 @@ export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnviron
     readonly userId: string;
     readonly environmentId: string;
     readonly managedEndpointNamespace?: string | undefined;
+    readonly keepCredentials?: boolean;
   }) {
     const links = yield* EnvironmentLinks.EnvironmentLinks;
     const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
@@ -736,6 +741,7 @@ export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnviron
             userId: input.userId,
             environmentId: link.environmentId,
             environmentPublicKey: link.environmentPublicKey,
+            ...(input.keepCredentials === true ? { keepCredentials: true } : {}),
           });
     if (unlinked) {
       // Its tunnel goes too, so the threads it listed on teams can no longer be opened.
@@ -752,11 +758,23 @@ export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnviron
         );
     }
     // Deprovision after revocation commits; retry even if already revoked to finish failed Cloudflare cleanup.
-    const deprovisioned = yield* managedEndpointProvider.deprovision({
-      userId: input.userId,
-      environmentId: input.environmentId,
-      target: deprovisionTarget,
-    });
+    const deprovisioned = yield* managedEndpointProvider
+      .deprovision({
+        userId: input.userId,
+        environmentId: input.environmentId,
+        target: deprovisionTarget,
+      })
+      .pipe(
+        // The computer is already off the account; the tunnel sweep finishes what this left.
+        Effect.catchIf(
+          () => unlinked,
+          (error) =>
+            Effect.logWarning("Unlinked a machine but could not remove its tunnel yet", {
+              environmentId: input.environmentId,
+              errorTag: error._tag,
+            }).pipe(Effect.as(true)),
+        ),
+      );
     const endpointKey =
       deprovisionTarget && input.managedEndpointNamespace
         ? HeldHooks.endpointKeyForTunnelName(
@@ -784,6 +802,38 @@ export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnviron
     }
     return unlinked;
   },
+);
+
+/**
+ * A computer serves one account. When its key links to another, the earlier account's entry
+ * goes, so it is not left listing a computer it can no longer reach.
+ */
+const supersedeOtherAccountLinks = Effect.fn("relay.api.client.supersedeOtherAccountLinks")(
+  function* (input: {
+    readonly userId: string;
+    readonly environmentId: string;
+    readonly environmentPublicKey: string;
+    readonly managedEndpointNamespace?: string | undefined;
+  }) {
+    const links = yield* EnvironmentLinks.EnvironmentLinks;
+    const others = yield* links.listOtherUsersForEnvironmentKey(input);
+    yield* Effect.forEach(
+      others,
+      (otherUserId) =>
+        unlinkEnvironmentRecord({
+          userId: otherUserId,
+          environmentId: input.environmentId,
+          managedEndpointNamespace: input.managedEndpointNamespace,
+          keepCredentials: true,
+        }),
+      { discard: true },
+    );
+  },
+  Effect.catch((error) =>
+    Effect.logWarning("Could not remove a computer's link to its previous account", {
+      errorTag: error._tag,
+    }),
+  ),
 );
 
 type EnvironmentTunnelRecoveryProofInput = {
@@ -1076,8 +1126,18 @@ export const layerClientApi = HttpApiBuilder.group(
           function* (args) {
             const { payload } = args;
             yield* appendRelayCredentialResponseHeaders;
-            const { userId } = yield* RelayClientPrincipal;
-            const result = yield* linker.link({ userId, request: payload });
+            const { userId, mode } = yield* RelayClientPrincipal;
+            const result = yield* linker.link({
+              userId,
+              request: payload,
+              mayRestoreRemovedLink: mode !== "computer" || payload.freshApproval === true,
+            });
+            yield* supersedeOtherAccountLinks({
+              userId,
+              environmentId: result.environmentId,
+              environmentPublicKey: result.environmentPublicKey,
+              managedEndpointNamespace: config.managedEndpointNamespace,
+            });
             return {
               ok: true,
               cloudUserId: userId,
@@ -1119,6 +1179,11 @@ export const layerClientApi = HttpApiBuilder.group(
               new RelayEnvironmentLinkProofInvalidError({
                 code: "environment_link_proof_invalid",
                 reason: "origin_not_allowed",
+                traceId,
+              }),
+            EnvironmentLinkRemoved: (_error, traceId) =>
+              new RelayEnvironmentLinkRemovedError({
+                code: "environment_link_removed",
                 traceId,
               }),
             ManagedTunnelLimitExceeded: (limitError, traceId) =>

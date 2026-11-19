@@ -108,7 +108,7 @@ export function useBoardBringIn(input: {
     if (!hasOwnBox) {
       if (input.bringAgent !== undefined) {
         return {
-          label: "Bring your agent to read this",
+          label: "Bring my agent to read this",
           hint: "Your agent opens links with the tools you connected to it. Bring it to this board first.",
           run: input.bringAgent,
         };

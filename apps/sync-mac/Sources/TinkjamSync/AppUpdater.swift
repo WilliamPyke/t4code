@@ -13,11 +13,14 @@ struct AppRelease: Decodable {
 }
 
 /// The app updates itself: download the zip, check its SHA-256 and signature, unpack it beside
-/// the caches, and swap bundles only when the person chooses "Restart to Update".
+/// the caches, and swap bundles when no agent is running or the person chooses "Restart to Update".
 enum AppUpdater {
     struct Staged {
         let version: String
+        let build: String
         let bundle: URL
+        /// Matches `Machine.appIdentity` of the copy it becomes.
+        var identity: String { "\(version) (\(build))" }
     }
 
     enum Outcome {
@@ -32,9 +35,70 @@ enum AppUpdater {
         candidate.compare(current, options: .numeric) == .orderedDescending
     }
 
+    private static func isNewerThanRunning(version: String, build: String) -> Bool {
+        isNewer(version, than: Machine.appVersion)
+            || (version == Machine.appVersion && isNewer(build, than: Machine.appBuild))
+    }
+
     private static var workDir: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(Config.bundleIdentifier).appendingPathComponent("update")
+    }
+
+    /// Names the version whose checked bundle waits in `workDir`, so a later launch can use it.
+    private static var recordFile: URL { workDir.appendingPathComponent("staged.json") }
+
+    private static var canReplaceInstalled: Bool {
+        let installed = Bundle.main.bundleURL
+        return FileManager.default.isWritableFile(atPath: installed.deletingLastPathComponent().path)
+            && FileManager.default.isWritableFile(atPath: installed.path)
+    }
+
+    private static func info(of bundle: URL) -> (identifier: String, version: String, build: String)? {
+        guard let plist = NSDictionary(contentsOf: bundle.appendingPathComponent("Contents/Info.plist")),
+              let identifier = plist["CFBundleIdentifier"] as? String,
+              let version = plist["CFBundleShortVersionString"] as? String,
+              let build = plist["CFBundleVersion"] as? String
+        else { return nil }
+        return (identifier, version, build)
+    }
+
+    /// A broken or altered bundle fails this; a Developer ID build must also come from our team.
+    private static func signatureProblem(of bundle: URL) -> String? {
+        let verify = runBlocking(URL(fileURLWithPath: "/usr/bin/codesign"),
+                                 ["--verify", "--deep", "--strict", bundle.path], timeout: 120)
+        guard verify.succeeded else { return "codesign --verify failed: \(verify.tail())" }
+        if let ours = teamIdentifier(Bundle.main.bundleURL), teamIdentifier(bundle) != ours {
+            return "signed by another team"
+        }
+        return nil
+    }
+
+    /// The bundle an earlier check downloaded and verified, if it is still intact and still newer
+    /// than this copy. Anything else found there is removed.
+    static func stagedOnDisk(log: LogFile) -> Staged? {
+        guard let data = try? Data(contentsOf: recordFile) else { return nil }
+        guard canReplaceInstalled,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+              let version = json["version"]
+        else {
+            try? FileManager.default.removeItem(at: workDir)
+            return nil
+        }
+        let bundle = workDir.appendingPathComponent(version)
+            .appendingPathComponent(Bundle.main.bundleURL.lastPathComponent)
+        guard let found = info(of: bundle), found.identifier == Config.bundleIdentifier, found.version == version,
+              isNewerThanRunning(version: found.version, build: found.build)
+        else {
+            try? FileManager.default.removeItem(at: workDir)
+            return nil
+        }
+        if let problem = signatureProblem(of: bundle) {
+            log.app("The downloaded app update is no longer usable: \(problem)")
+            try? FileManager.default.removeItem(at: workDir)
+            return nil
+        }
+        return Staged(version: found.version, build: found.build, bundle: bundle)
     }
 
     static func check(log: LogFile) async throws -> Outcome {
@@ -42,20 +106,18 @@ enum AppUpdater {
         do { release = try await fetchJSON(AppRelease.self, from: Config.appManifestURL) } catch {
             throw SetupError.from(error, doing: "checking for a new version of the app")
         }
-        let sameVersionNewerBuild = release.version == Machine.appVersion &&
-            isNewer(release.build ?? "", than: Machine.appBuild)
-        guard isNewer(release.version, than: Machine.appVersion) || sameVersionNewerBuild else { return .upToDate }
+        guard isNewerThanRunning(version: release.version, build: release.build ?? "") else { return .upToDate }
         if let minimum = release.minimumSystemVersion {
             let parts = minimum.split(separator: ".").compactMap { Int($0) }
             let required = OperatingSystemVersion(majorVersion: parts.first ?? 0,
                                                   minorVersion: parts.count > 1 ? parts[1] : 0, patchVersion: 0)
             if !ProcessInfo.processInfo.isOperatingSystemAtLeast(required) { return .upToDate }
         }
-        let installed = Bundle.main.bundleURL
-        guard FileManager.default.isWritableFile(atPath: installed.deletingLastPathComponent().path),
-              FileManager.default.isWritableFile(atPath: installed.path)
-        else { return .manual(release.version) }
-        guard let url = URL(string: release.url) else { return .manual(release.version) }
+        guard canReplaceInstalled, let url = URL(string: release.url) else { return .manual(release.version) }
+        if let staged = stagedOnDisk(log: log), staged.version == release.version,
+           release.build == nil || release.build == staged.build {
+            return .staged(staged)
+        }
 
         let fm = FileManager.default
         try? fm.removeItem(at: workDir)
@@ -67,29 +129,26 @@ enum AppUpdater {
         }
         guard try sha256(of: zip) == release.sha256.lowercased() else {
             try? fm.removeItem(at: workDir)
-            throw SetupError("The new version of the app did not match its checksum, so it was not installed.")
+            throw SetupError(Plain.updateCheckFailed, detail: "the new version of the app did not match its checksum")
         }
         try fm.createDirectory(at: unpacked, withIntermediateDirectories: true)
         let ditto = await run(URL(fileURLWithPath: "/usr/bin/ditto"), ["-x", "-k", zip.path, unpacked.path])
         try? fm.removeItem(at: zip)
-        let bundle = unpacked.appendingPathComponent(installed.lastPathComponent)
-        guard ditto.succeeded, let candidate = Bundle(url: bundle),
-              candidate.bundleIdentifier == Config.bundleIdentifier,
-              (candidate.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) == release.version
+        let bundle = unpacked.appendingPathComponent(Bundle.main.bundleURL.lastPathComponent)
+        guard ditto.succeeded, let found = info(of: bundle),
+              found.identifier == Config.bundleIdentifier, found.version == release.version
         else {
-            throw SetupError("The new version of the app was not a Tinkjam Sync build, so it was not installed.")
+            try? fm.removeItem(at: workDir)
+            throw SetupError(Plain.updateCheckFailed, detail: "the new version of the app was not a Tinkjam Sync build")
         }
-        // A broken or altered bundle fails this; a Developer ID build must also come from our team.
-        let verify = await run(URL(fileURLWithPath: "/usr/bin/codesign"), ["--verify", "--deep", "--strict", bundle.path])
-        guard verify.succeeded else {
-            log.app("codesign --verify failed: \(verify.tail())")
-            throw SetupError("The new version of the app has a broken signature, so it was not installed.")
+        if let problem = signatureProblem(of: bundle) {
+            try? fm.removeItem(at: workDir)
+            throw SetupError(Plain.updateCheckFailed, detail: "the new version of the app was not installed: \(problem)")
         }
-        if let ours = teamIdentifier(Bundle.main.bundleURL), teamIdentifier(bundle) != ours {
-            throw SetupError("The new version of the app was signed by someone else, so it was not installed.")
-        }
-        log.app("Tinkjam Sync for Mac \(release.version) is ready; it installs on Restart to Update")
-        return .staged(Staged(version: release.version, bundle: bundle))
+        let record = try JSONSerialization.data(withJSONObject: ["version": found.version, "build": found.build])
+        try record.write(to: recordFile)
+        log.app("Tinkjam Sync for Mac \(found.version) (\(found.build)) is ready to install")
+        return .staged(Staged(version: found.version, build: found.build, bundle: bundle))
     }
 
     private static func teamIdentifier(_ bundle: URL) -> String? {

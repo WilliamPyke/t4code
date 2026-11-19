@@ -57,6 +57,24 @@ export const syncNeedsApproval = (link: {
   readonly revoked: boolean;
 }) => !link.signedIn || !link.desired || link.mode !== "managed" || link.revoked;
 
+/**
+ * Signed in unless the account itself asks for a new sign-in. A check that could not finish
+ * (no network yet at log-in) is no answer, so a stored sign-in still counts and the server
+ * retries it.
+ */
+export const syncSignedIn = Effect.fn("cli.sync.signed_in")(function* (
+  tokens: Pick<CliTokenManager.CloudCliTokenManager["Service"], "getExisting" | "hasCredential">,
+) {
+  return yield* tokens.getExisting.pipe(
+    Effect.map(Option.isSome),
+    Effect.catch((error) =>
+      CliTokenManager.isCloudCliCredentialRefreshError(error) && error.requiresLogin
+        ? Effect.succeed(false)
+        : tokens.hasCredential.pipe(Effect.orElseSucceed(() => false)),
+    ),
+  );
+});
+
 const FALLBACK_COMPUTER_NAME = "This computer";
 
 /**
@@ -117,10 +135,7 @@ const approveIfNeeded = Effect.fn("cli.sync.approve_if_needed")(function* (input
 }) {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const tokens = yield* CliTokenManager.CloudCliTokenManager;
-  const signedIn = yield* tokens.getExisting.pipe(
-    Effect.map(Option.isSome),
-    Effect.orElseSucceed(() => false),
-  );
+  const signedIn = yield* syncSignedIn(tokens);
   const needsApproval = syncNeedsApproval({
     desired: yield* CliState.readCliDesiredCloudLink,
     mode: yield* CliState.readCliDesiredLinkMode,
@@ -157,7 +172,9 @@ const approveIfNeeded = Effect.fn("cli.sync.approve_if_needed")(function* (input
   });
   yield* tokens.store(token);
   yield* CliState.setCliDesiredCloudLink(true, "managed");
-  yield* CliState.dropRevokedCloudLink;
+  // The approval may be for another account than last time; the next link is made for it.
+  yield* CliState.forgetLinkedAccount;
+  yield* CliState.markFreshApproval;
   yield* Console.log("Approved.");
   return true;
 });

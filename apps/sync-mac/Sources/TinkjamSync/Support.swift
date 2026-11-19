@@ -1,31 +1,48 @@
 import CryptoKit
 import Foundation
 
-/// A failure worded for the person, shown in the menu as "Stopped: …".
+/// A failure worded for the person, shown in the menu and the setup window.
 struct SetupError: LocalizedError {
     let message: String
-    /// Set for network failures, so the app tries again by itself once the Mac is back online.
+    /// Set for network failures, so the app tries again sooner and when the Mac is back online.
     var offline = false
-    init(_ message: String, offline: Bool = false) {
+    /// The technical cause, for the log only.
+    var detail: String?
+    init(_ message: String, offline: Bool = false, detail: String? = nil) {
         self.message = message
         self.offline = offline
+        self.detail = detail
     }
     var errorDescription: String? { message }
+    var logLine: String {
+        if let detail { return "\(message) [\(detail)]" }
+        return message
+    }
 
     static func from(_ error: Error, doing what: String) -> SetupError {
         if let setup = error as? SetupError { return setup }
+        let ns = error as NSError
+        let raw = "\(what): \(ns.domain) \(ns.code) \(error.localizedDescription)"
+        if isOutOfSpace(ns) { return SetupError(Plain.diskFull, detail: raw) }
         if let url = error as? URLError {
             switch url.code {
             case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed, .internationalRoamingOff:
-                return SetupError("No internet connection while \(what). It tries again when you're back online.", offline: true)
-            case .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed, .timedOut:
-                let host = url.failingURL?.host ?? "the server"
-                return SetupError("Could not reach \(host) while \(what). It tries again in a few minutes.", offline: true)
+                return SetupError(Plain.offline, offline: true, detail: raw)
+            case .secureConnectionFailed, .serverCertificateUntrusted, .serverCertificateHasBadDate,
+                 .serverCertificateNotYetValid, .serverCertificateHasUnknownRoot:
+                return SetupError(Plain.networkSignIn, offline: true, detail: raw)
             default:
-                return SetupError("Could not finish \(what): \(url.localizedDescription)")
+                return SetupError(Plain.unreachable, offline: true, detail: raw)
             }
         }
-        return SetupError("Could not finish \(what): \(error.localizedDescription)")
+        return SetupError(Plain.setupFailed, detail: raw)
+    }
+
+    private static func isOutOfSpace(_ error: NSError) -> Bool {
+        if error.domain == NSCocoaErrorDomain && error.code == NSFileWriteOutOfSpaceError { return true }
+        if error.domain == NSPOSIXErrorDomain && error.code == Int(ENOSPC) { return true }
+        if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError { return isOutOfSpace(underlying) }
+        return false
     }
 }
 
@@ -61,15 +78,56 @@ func runBlocking(_ executable: URL, _ arguments: [String], environment: [String:
     process.standardOutput = pipe
     process.standardError = pipe
     process.standardInput = FileHandle.nullDevice
+    let collected = OutputBox()
+    let exited = DispatchSemaphore(value: 0)
+    let drained = DispatchSemaphore(value: 0)
+    let reader = pipe.fileHandleForReading
+    reader.readabilityHandler = { handle in
+        let data = handle.availableData
+        if data.isEmpty {
+            handle.readabilityHandler = nil
+            drained.signal()
+        } else {
+            collected.append(data)
+        }
+    }
+    process.terminationHandler = { _ in exited.signal() }
     do { try process.run() } catch {
+        reader.readabilityHandler = nil
         return RunResult(status: -1, output: "Could not start \(executable.lastPathComponent): \(error.localizedDescription)")
     }
-    let timer = DispatchWorkItem { if process.isRunning { process.terminate() } }
-    DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timer)
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
-    timer.cancel()
-    return RunResult(status: process.terminationStatus, output: String(decoding: data, as: UTF8.self))
+    var timedOut = false
+    if exited.wait(timeout: .now() + timeout) == .timedOut {
+        timedOut = true
+        process.terminate()
+        // An interactive shell may ignore SIGTERM.
+        if exited.wait(timeout: .now() + 3) == .timedOut {
+            kill(process.processIdentifier, SIGKILL)
+            _ = exited.wait(timeout: .now() + 3)
+        }
+    }
+    // Something the program started may hold the pipe open for good, so its end is not waited for.
+    if drained.wait(timeout: .now() + 2) == .timedOut { reader.readabilityHandler = nil }
+    let output = String(decoding: collected.value, as: UTF8.self)
+    if timedOut || process.isRunning { return RunResult(status: -2, output: output) }
+    return RunResult(status: process.terminationStatus, output: output)
+}
+
+private final class OutputBox {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ more: Data) {
+        lock.lock()
+        data.append(more)
+        lock.unlock()
+    }
+
+    var value: Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return data
+    }
 }
 
 /// Downloads to a file with progress; fails on any HTTP status other than 2xx.
@@ -104,7 +162,8 @@ final class FileDownload: NSObject, URLSessionDownloadDelegate {
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
         if let http = downloadTask.response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            moveError = SetupError("the server answered \(http.statusCode) for \(downloadTask.originalRequest?.url?.absoluteString ?? "a download")")
+            moveError = SetupError(Plain.serverTrouble, offline: true,
+                                   detail: "the server answered \(http.statusCode) for \(downloadTask.originalRequest?.url?.absoluteString ?? "a download")")
             return
         }
         do {
@@ -128,7 +187,8 @@ func fetchJSON<T: Decodable>(_ type: T.Type, from url: URL) async throws -> T {
     request.setValue("Tinkjam Sync for Mac/\(Machine.appVersion)", forHTTPHeaderField: "User-Agent")
     let (data, response) = try await URLSession.shared.data(for: request)
     if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-        throw SetupError("the server answered \(http.statusCode) for \(url.absoluteString)")
+        throw SetupError(Plain.serverTrouble, offline: true,
+                         detail: "the server answered \(http.statusCode) for \(url.absoluteString)")
     }
     return try JSONDecoder().decode(T.self, from: data)
 }
@@ -191,7 +251,9 @@ func spawnDetachedScript(_ script: String, _ arguments: [String], output: URL) t
     defer { argv.forEach { free($0) } }
     var pid: pid_t = 0
     let status = posix_spawn(&pid, "/bin/sh", &actions, &attributes, argv, environ)
-    guard status == 0 else { throw SetupError("Could not start the installer: \(String(cString: strerror(status)))") }
+    guard status == 0 else {
+        throw SetupError(Plain.setupFailed, detail: "posix_spawn /bin/sh: \(String(cString: strerror(status)))")
+    }
 }
 
 /// Process table via sysctl, for ending Sync's whole tree (Sync itself and its cloudflared).

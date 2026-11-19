@@ -173,6 +173,7 @@ import {
   unplacedGuestMessages,
 } from "./guestStream.logic";
 import { guestTurnItemSource } from "./guestTurnItemSource";
+import { ownAgentFailureMessage } from "./bringAgent.logic";
 import { useJoinBoardOnComputer } from "./joinBoardOnComputer";
 import {
   announceRoomMachineJoined,
@@ -434,7 +435,7 @@ function GuestThreadSession({
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const navigate = useNavigate();
   // The guest's own machine in this room, whose agent runs their thread boxes.
-  const { machine, setBoxThread } = useOwnRoomMachine(share);
+  const { machine, away, forget, setBoxThread } = useOwnRoomMachine(share);
   const joinBoardOnComputer = useJoinBoardOnComputer();
   // Their agent joined from this page; this page learns which machine it is a moment later.
   const agentJoined = useRef(false);
@@ -447,7 +448,7 @@ function GuestThreadSession({
       endpoint,
       GUEST_HANDOFF_ROUTE,
       decodeHandoff,
-      "Could not start the handoff. Try again.",
+      "Could not reach this board. Try again.",
     );
     if (typeof handoff === "string") return handoff;
     const failed = await joinBoardOnComputer({
@@ -460,6 +461,30 @@ function GuestThreadSession({
       announceRoomMachineJoined(share.shareId);
     }
     return failed;
+  };
+  const leaveBoard = useAtomCommand(serverEnvironment.leaveSharedRoom, { reportFailure: false });
+  // The way back out of Bring my agent: their computer leaves the board, their boxes stay.
+  const takeAgentAway = async (own: OwnRoomMachine) => {
+    const result = await leaveBoard({
+      environmentId: own.environmentId,
+      input: { threadId: own.threadId },
+    });
+    if (result._tag === "Failure") {
+      if (isAtomCommandInterrupted(result)) return;
+      toastManager.add({
+        type: "error",
+        title: "Could not take your agent off this board",
+        description: ownAgentFailureMessage(squashAtomCommandFailure(result), "Try again."),
+      });
+      return;
+    }
+    agentJoined.current = false;
+    forget();
+    toastManager.add({
+      type: "info",
+      title: "Your agent is off this board",
+      description: "Press Bring my agent to bring it back.",
+    });
   };
   const ownProviders = useEnvironmentProviders();
   const promptOwnBox = useAtomCommand(serverEnvironment.promptSharedRoomBox, {
@@ -709,13 +734,20 @@ function GuestThreadSession({
       return true;
     }
     if (result._tag === "Failure" && isAtomCommandInterrupted(result)) return false;
+    // The computer answered that it is not on this board: the way to bring it comes back.
+    if (result._tag === "Success") forget();
     toastManager.add({
       type: "error",
       title: "Could not run it on your agent",
       description:
-        result._tag === "Success"
-          ? "Your machine is no longer in this room. Choose Continue on my machine again."
-          : messageOfFailure(squashAtomCommandFailure(result)),
+        result._tag === "Failure"
+          ? ownAgentFailureMessage(
+              squashAtomCommandFailure(result),
+              "Your computer did not answer. Check that Tinkjam Sync is running on it, then try again.",
+            )
+          : isCloudShare(share) || view.cloud === true
+            ? "Your agent is no longer on this board. Press Bring my agent to bring it back."
+            : "Your computer is no longer on this board. Choose Continue on my machine again.",
     });
     return false;
   };
@@ -786,7 +818,7 @@ function GuestThreadSession({
     }
     // A cloud board has no owner to send a request to: only their own agent can run it.
     if (cloud) {
-      if (agentJoined.current) {
+      if (agentJoined.current && !away) {
         toastManager.add({
           type: "info",
           title: "Your agent is still joining",
@@ -893,6 +925,12 @@ function GuestThreadSession({
               onTakeTask={agents ? takeTask : undefined}
               onGiveNote={agents ? giveNote : undefined}
               cloud={roomCloud}
+              ownAgentAway={away}
+              takeAgentAway={
+                roomCloud?.agents === true && machine != null
+                  ? () => takeAgentAway(machine)
+                  : undefined
+              }
               bringAgent={
                 roomCloud?.agents === true && machine == null
                   ? () => setBringingAgent(true)
@@ -981,9 +1019,11 @@ function GuestThreadSession({
                 viewOnly ? null : machine == null ? (
                   <span className="truncate text-2xs text-muted-foreground">
                     {machine === null
-                      ? cloud
-                        ? "Your agent is not here"
-                        : "Goes to the owner"
+                      ? !cloud
+                        ? "Goes to the owner"
+                        : away
+                          ? "Your computer is not connected"
+                          : "Your agent is not here"
                       : ""}
                   </span>
                 ) : (

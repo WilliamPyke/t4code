@@ -227,13 +227,13 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
 
       let generation = yield* Ref.get(accountGeneration);
       yield* Ref.set(refreshGeneration, generation);
-      yield* SubscriptionRef.set(state, {
-        environments: new Map(),
-        listed: false,
+      // The list stays as it is while it is checked again; only another account empties it.
+      yield* SubscriptionRef.update(state, (current) => ({
+        ...current,
         refreshing: true,
         offline: false,
         error: Option.none(),
-      });
+      }));
 
       // Sign-out triggers credentials-changed refreshes and must settle to an empty list.
       // Only session-level missing credentials are benign; relay-side auth failures must surface.
@@ -264,6 +264,11 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
       ) {
         generation = yield* Ref.updateAndGet(accountGeneration, (current) => current + 1);
         yield* Ref.set(refreshGeneration, generation);
+        yield* SubscriptionRef.update(state, (current) => ({
+          ...current,
+          environments: new Map(),
+          listed: false,
+        }));
       }
       yield* Ref.set(activeAccountId, accountId);
 
@@ -273,20 +278,24 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
       if ((yield* Ref.get(accountGeneration)) !== generation) {
         return;
       }
-      const next = new Map<string, RelayDiscoveredEnvironment>();
-      for (const environment of environments) {
-        next.set(environment.environmentId, {
-          environment,
-          availability: "checking",
-          status: Option.none(),
-          error: Option.none(),
-        });
-      }
-      yield* SubscriptionRef.update(state, (current) => ({
-        ...current,
-        environments: next,
-        listed: true,
-      }));
+      yield* SubscriptionRef.update(state, (current) => {
+        const next = new Map<string, RelayDiscoveredEnvironment>();
+        for (const environment of environments) {
+          const known = current.environments.get(environment.environmentId);
+          next.set(
+            environment.environmentId,
+            known === undefined
+              ? {
+                  environment,
+                  availability: "checking",
+                  status: Option.none(),
+                  error: Option.none(),
+                }
+              : { ...known, environment },
+          );
+        }
+        return { ...current, environments: next, listed: true };
+      });
 
       yield* Effect.forEach(
         environments,

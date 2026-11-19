@@ -5,6 +5,7 @@ import * as HttpClientError from "effect/http/HttpClientError";
 
 import {
   filterRelayResponse,
+  linkFailureFor,
   relayRequestError,
   relayRetryAfterMillis,
   shouldRetryRelayRequest,
@@ -66,6 +67,62 @@ it.effect("retries an expired link proof but not a revoked bearer, both 401", ()
     expect(shouldRetryRelayRequest(expired)).toBe(true);
     expect(revoked).toMatchObject({ rejection: "unauthorized" });
     expect(shouldRetryRelayRequest(revoked)).toBe(false);
+  }),
+);
+
+it.effect("says what the person can do when retrying cannot fix a refusal", () =>
+  Effect.gen(function* () {
+    const refusal = (
+      status: number,
+      body: Record<string, unknown>,
+      headers?: Record<string, string>,
+    ) =>
+      filterRelayResponse(response(status, body, headers)).pipe(
+        Effect.mapError(relayRequestError),
+        Effect.flip,
+        Effect.map(linkFailureFor),
+      );
+    const bearer = {
+      _tag: "RelayAuthInvalidError",
+      code: "auth_invalid",
+      reason: "not_authorized",
+      traceId: "trace-auth",
+    };
+
+    expect(
+      yield* refusal(403, {
+        _tag: "RelayEnvironmentLinkRemovedError",
+        code: "environment_link_removed",
+        traceId: "trace-removed",
+      }),
+    ).toMatchObject({ kind: "removed" });
+    expect(
+      yield* refusal(403, {
+        _tag: "RelayEnvironmentLinkLimitExceededError",
+        code: "environment_link_limit_exceeded",
+        maxTunnels: 3,
+        traceId: "trace-limit",
+      }),
+    ).toMatchObject({ kind: "limit", fix: expect.stringContaining("remove a computer") });
+    expect(
+      yield* refusal(401, {
+        _tag: "RelayEnvironmentLinkProofExpiredError",
+        code: "environment_link_proof_expired",
+        traceId: "trace-expired",
+      }),
+    ).toMatchObject({ kind: "clock" });
+    // A 401 from a relay whose clock is far from ours is the clock, not a removal.
+    expect(yield* refusal(401, bearer, { date: "Mon, 01 Jan 2035 00:00:00 GMT" })).toMatchObject({
+      kind: "clock",
+    });
+    // The test clock starts at the epoch.
+    expect(yield* refusal(401, bearer, { date: "Thu, 01 Jan 1970 00:00:10 GMT" })).toMatchObject({
+      kind: "refused",
+    });
+    expect(yield* refusal(503, {})).toBeNull();
+    expect(linkFailureFor({ _tag: "CloudLinkAccountMismatchError" })).toMatchObject({
+      kind: "account",
+    });
   }),
 );
 

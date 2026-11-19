@@ -29,6 +29,13 @@ enum Config {
     /// waking from sleep ask. A little under an hour, so a timer that fires early still counts.
     static let updateCheckInterval: TimeInterval = 55 * 60
 
+    /// After giving up, the app tries again this often by itself; sooner when the cause was the network.
+    static let slowRetryInterval: TimeInterval = 15 * 60
+    static let offlineRetryInterval: TimeInterval = 5 * 60
+
+    /// Sync rewrites sync-status.json every 30 seconds once connected; older than this, it is not trusted.
+    static let statusStaleAfter: TimeInterval = 120
+
     private static func url(_ key: String, _ fallback: String) -> URL {
         if let value = UserDefaults.standard.string(forKey: key), let url = URL(string: value) {
             return url
@@ -89,4 +96,6 @@ enum Machine {
     static var appBuild: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
     }
+
+    static var appIdentity: String { "\(appVersion) (\(appBuild))" }
 }

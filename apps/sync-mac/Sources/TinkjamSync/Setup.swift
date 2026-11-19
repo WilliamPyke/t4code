@@ -31,20 +31,21 @@ enum NodeRuntime {
         let actual = try sha256(of: tarball)
         guard actual == Config.nodeSHA256[Machine.nodeArch] else {
             log.app("Node.js checksum mismatch: expected \(Config.nodeSHA256[Machine.nodeArch] ?? "?"), got \(actual)")
-            throw SetupError("The Node.js download did not match its checksum, so it was not used. Choose Retry; if it happens again, your network may be altering downloads.")
+            throw SetupError(Plain.damaged, detail: "Node.js checksum mismatch")
         }
         try? fm.removeItem(at: unpack)
         try fm.createDirectory(at: unpack, withIntermediateDirectories: true)
         let untar = await run(URL(fileURLWithPath: "/usr/bin/tar"), ["-xJf", tarball.path, "-C", unpack.path])
         guard untar.succeeded else {
             log.app("tar failed: \(untar.tail())")
-            throw SetupError("Could not unpack Node.js: \(untar.tail(1))")
+            throw SetupError(untar.output.contains("No space left") ? Plain.diskFull : Plain.setupFailed,
+                             detail: "could not unpack Node.js: \(untar.tail(1))")
         }
         try? fm.removeItem(at: paths.nodeHome)
         try fm.moveItem(at: unpack.appendingPathComponent(name), to: paths.nodeHome)
         let check = await run(paths.node, ["--version"], timeout: 30)
         guard check.succeeded, check.output.trimmingCharacters(in: .whitespacesAndNewlines) == Config.nodeVersion else {
-            throw SetupError("Node.js was unpacked but does not run: \(check.tail(1))")
+            throw SetupError(Plain.setupFailed, detail: "Node.js was unpacked but does not run: \(check.tail(1))")
         }
         // Older runtimes this app kept go once the new one works.
         for item in (try? fm.contentsOfDirectory(atPath: paths.runtime.path)) ?? []
@@ -56,7 +57,7 @@ enum NodeRuntime {
     }
 }
 
-/// sync.json, published beside sync.tgz. `sha256` is newer than the first builds, so optional.
+/// sync.json, published beside sync.tgz. A release without `sha256` is never installed.
 struct SyncRelease: Decodable {
     let version: String
     let url: String
@@ -116,6 +117,9 @@ enum SyncPackage {
     static func stage(_ release: SyncRelease, paths: Paths, log: LogFile,
                       progress: @escaping (String, Double?) -> Void) async throws -> URL {
         let fm = FileManager.default
+        guard let expected = release.sha256?.lowercased(), !expected.isEmpty else {
+            throw SetupError(Plain.serverTrouble, detail: "sync.json names no sha256 for \(release.version); not installed")
+        }
         let staging = paths.staging
         let downloads = paths.runtime.appendingPathComponent("downloads")
         let tarball = downloads.appendingPathComponent("sync.tgz")
@@ -140,13 +144,11 @@ enum SyncPackage {
             try? fm.removeItem(at: staging)
             throw SetupError.from(error, doing: "downloading Tinkjam Sync")
         }
-        if let expected = release.sha256 {
-            let actual = try sha256(of: tarball)
-            guard actual == expected.lowercased() else {
-                log.app("Tinkjam Sync checksum mismatch: expected \(expected), got \(actual)")
-                try? fm.removeItem(at: staging)
-                throw SetupError("The Tinkjam Sync download did not match its checksum, so it was not used.")
-            }
+        let actual = try sha256(of: tarball)
+        guard actual == expected else {
+            log.app("Tinkjam Sync checksum mismatch: expected \(expected), got \(actual)")
+            try? fm.removeItem(at: staging)
+            throw SetupError(Plain.damaged, detail: "Tinkjam Sync checksum mismatch")
         }
         progress("Installing Tinkjam Sync…", nil)
         let environment = [
@@ -165,9 +167,11 @@ enum SyncPackage {
             try? fm.removeItem(at: staging)
             let offline = install.output.contains("ENOTFOUND") || install.output.contains("EAI_AGAIN")
                 || install.output.contains("ECONNREFUSED") || install.output.contains("ETIMEDOUT")
+            let detail = "npm install ended with \(install.status)"
+            if install.output.contains("ENOSPC") { throw SetupError(Plain.diskFull, detail: detail) }
             throw offline
-                ? SetupError("No internet connection while installing Tinkjam Sync. It tries again when you're back online.", offline: true)
-                : SetupError("Could not install Tinkjam Sync (npm exit code \(install.status)). Show log has the details.")
+                ? SetupError(Plain.offline, offline: true, detail: detail)
+                : SetupError(Plain.setupFailed, detail: detail)
         }
         return staging
     }
@@ -180,10 +184,20 @@ enum SyncPackage {
     }
 
     /// Makes the staged copy the installed one. Sync must not be running from `app` now.
+    /// The copy it replaces is set aside first and put back if the swap fails.
     static func activate(_ staging: URL, paths: Paths) throws {
         let fm = FileManager.default
-        if fm.fileExists(atPath: paths.app.path) { try fm.removeItem(at: paths.app) }
-        try fm.moveItem(at: staging, to: paths.app)
+        let previous = paths.base.appendingPathComponent("app-previous")
+        try? fm.removeItem(at: previous)
+        let hadApp = fm.fileExists(atPath: paths.app.path)
+        if hadApp { try fm.moveItem(at: paths.app, to: previous) }
+        do {
+            try fm.moveItem(at: staging, to: paths.app)
+        } catch {
+            if hadApp { try? fm.moveItem(at: previous, to: paths.app) }
+            throw error
+        }
+        DispatchQueue.global(qos: .utility).async { try? FileManager.default.removeItem(at: previous) }
     }
 }
 

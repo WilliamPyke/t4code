@@ -11,18 +11,22 @@ namespace TinkjamSync
 {
     // Everything here is pure (or reads one file it is given) so --self-test can cover it.
 
-    public enum Phase { SettingUp, Approving, Connecting, Connected, NotConnected, Stopped }
+    public enum Phase { SettingUp, Approving, Connecting, Connected, Reconnecting, NotConnected, Disconnecting, Stopped }
+
+    public enum TrayIcon { Color, Grey, Attention }
 
     /// <summary>What the tray shows. The engine fills it; MenuModel turns it into words.</summary>
     public sealed class AppView
     {
         public Phase Phase = Phase.SettingUp;
         public string Detail;
+        public int? Percent;
         public string ComputerName = "";
         public bool StartWithWindows = true;
         public string Version = "";
         public string UpdateVersion;
         public bool Busy;
+        public bool CheckingForUpdates;
     }
 
     public sealed class MenuEntry
@@ -35,19 +39,57 @@ namespace TinkjamSync
         public static MenuEntry Sep() => new MenuEntry { Id = "-", Text = "" };
     }
 
+    /// <summary>What the person reads when something is in the way. The raw cause goes to the log.</summary>
+    public static class Words
+    {
+        public const string Offline = "Can't reach the internet.";
+        public const string Restricted =
+            "This network is blocking part of Tinkjam Sync. On a work network or VPN, try another network, or ask whoever runs it to allow trellium.org, nodejs.org and registry.npmjs.org.";
+        public const string ServerTrouble = "Tinkjam's servers aren't answering right now.";
+        public const string Damaged = "The download didn't arrive in one piece.";
+        public const string DiskFull = "This computer's disk is full, so Tinkjam Sync can't finish setting up. Free up some space.";
+        public const string InstallFailed = "Tinkjam Sync couldn't finish installing.";
+        public const string Unexpected = "Something went wrong while setting up Tinkjam Sync.";
+        public const string CouldNotStart = "Tinkjam Sync couldn't start.";
+        public const string KeepsStopping = "Tinkjam Sync keeps stopping.";
+        public const string SignInPageBlocked =
+            "Another program on this computer is in the way of the sign-in page. Restart your computer.";
+        public const string CantCheckConnection = "Couldn't check whether this computer is connected.";
+        public const string FindTheIcon = "Its icon is near the clock: click the ^ arrow if you don't see it.";
+
+        public static string Capitalized(string text) =>
+            string.IsNullOrEmpty(text) ? "" : char.ToUpper(text[0]) + text.Substring(1);
+    }
+
     public static class MenuModel
     {
-        public static string StatusLine(AppView view)
+        public static string Title(AppView view)
         {
             switch (view.Phase)
             {
-                case Phase.SettingUp: return view.Detail == null ? "Setting up…" : "Setting up… " + view.Detail;
+                case Phase.SettingUp: return "Setting up…";
                 case Phase.Approving: return "Waiting for you to approve in your browser…";
-                case Phase.Connecting: return view.Detail == null ? "Connecting…" : "Connecting… " + view.Detail;
+                case Phase.Connecting: return "Connecting…";
                 case Phase.Connected: return "Connected";
-                case Phase.NotConnected: return view.Detail == null ? "Not connected" : "Not connected: " + view.Detail;
-                default: return "Stopped: " + (view.Detail ?? "unknown reason");
+                case Phase.Reconnecting: return "Reconnecting…";
+                case Phase.NotConnected: return "Not connected";
+                case Phase.Disconnecting: return "Disconnecting…";
+                default: return "Stopped";
             }
+        }
+
+        public static string DetailText(AppView view)
+        {
+            if (string.IsNullOrWhiteSpace(view.Detail)) return null;
+            return view.Percent == null ? view.Detail : view.Detail + " (" + view.Percent + "%)";
+        }
+
+        public static string StatusLine(AppView view)
+        {
+            var detail = DetailText(view);
+            if (detail == null) return Title(view);
+            var stated = view.Phase == Phase.Stopped || view.Phase == Phase.NotConnected;
+            return Title(view) + (stated ? ": " : " ") + detail;
         }
 
         /// <summary>Windows cuts a tray tooltip at 63 characters (and .NET Framework throws past it).</summary>
@@ -57,31 +99,55 @@ namespace TinkjamSync
             return text.Length <= 63 ? text : text.Substring(0, 62) + "…";
         }
 
-        public static bool Colored(AppView view) => view.Phase == Phase.Connected;
+        public static TrayIcon Icon(AppView view)
+        {
+            switch (view.Phase)
+            {
+                case Phase.Connected: return TrayIcon.Color;
+                case Phase.Approving:
+                case Phase.Stopped: return TrayIcon.Attention;
+                default: return TrayIcon.Grey;
+            }
+        }
+
+        public static List<string> Wrap(string text, int width)
+        {
+            var lines = new List<string>();
+            var line = "";
+            foreach (var word in (text ?? "").Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (line.Length > 0 && line.Length + word.Length + 1 > width) { lines.Add(line); line = ""; }
+                line += (line.Length == 0 ? "" : " ") + word;
+            }
+            if (line.Length > 0) lines.Add(line);
+            return lines;
+        }
 
         public static List<MenuEntry> Items(AppView view)
         {
-            var items = new List<MenuEntry>
-            {
-                new MenuEntry { Id = "status", Text = StatusLine(view), Enabled = false },
-                new MenuEntry { Id = "computer", Text = "This computer: " + view.ComputerName, Enabled = false },
-                MenuEntry.Sep(),
-            };
-            if (view.Phase == Phase.Approving) items.Add(new MenuEntry { Id = "open-again", Text = "Open again" });
-            if (view.Phase == Phase.Stopped) items.Add(new MenuEntry { Id = "retry", Text = "Retry", Enabled = !view.Busy });
+            var items = new List<MenuEntry> { new MenuEntry { Id = "status", Text = Title(view), Enabled = false } };
+            foreach (var line in Wrap(DetailText(view), 48))
+                items.Add(new MenuEntry { Id = "detail", Text = line, Enabled = false });
+            items.Add(new MenuEntry { Id = "computer", Text = "This computer: " + view.ComputerName, Enabled = false });
+            items.Add(MenuEntry.Sep());
+            if (view.Phase == Phase.Approving) items.Add(new MenuEntry { Id = "open-again", Text = "Open the approval page again" });
+            if (view.Phase == Phase.Stopped) items.Add(new MenuEntry { Id = "retry", Text = "Try again", Enabled = !view.Busy });
             items.Add(new MenuEntry { Id = "open", Text = "Open Tinkjam" });
-            if (view.Phase == Phase.NotConnected || view.Phase == Phase.Stopped)
+            if (view.Phase == Phase.NotConnected)
                 items.Add(new MenuEntry { Id = "connect", Text = "Connect…", Enabled = !view.Busy });
-            else if (view.Phase == Phase.Connected || view.Phase == Phase.Connecting)
+            else if (view.Phase == Phase.Connected || view.Phase == Phase.Connecting || view.Phase == Phase.Reconnecting)
                 items.Add(new MenuEntry { Id = "disconnect", Text = "Disconnect this computer…", Enabled = !view.Busy });
             items.Add(MenuEntry.Sep());
             items.Add(new MenuEntry { Id = "autostart", Text = "Start with Windows", Checked = view.StartWithWindows });
-            items.Add(new MenuEntry { Id = "log", Text = "Show log" });
-            items.Add(view.UpdateVersion != null
-                ? new MenuEntry { Id = "update", Text = "Restart to update (version " + view.UpdateVersion + ")" }
-                : new MenuEntry { Id = "update", Text = "Version " + view.Version + " · Check for updates" });
+            items.Add(new MenuEntry { Id = "log", Text = "Show technical log" });
+            if (view.CheckingForUpdates)
+                items.Add(new MenuEntry { Id = "update", Text = "Checking for updates…", Enabled = false });
+            else if (view.UpdateVersion != null)
+                items.Add(new MenuEntry { Id = "update", Text = "Restart to update to version " + view.UpdateVersion });
+            else
+                items.Add(new MenuEntry { Id = "update", Text = "Version " + view.Version + " · Check for updates" });
             items.Add(MenuEntry.Sep());
-            items.Add(new MenuEntry { Id = "exit", Text = "Exit" });
+            items.Add(new MenuEntry { Id = "exit", Text = "Quit Tinkjam Sync" });
             return items;
         }
 
@@ -92,7 +158,7 @@ namespace TinkjamSync
             {
                 "phase: " + view.Phase,
                 "tooltip: " + Tooltip(view),
-                "icon: " + (Colored(view) ? "color" : "grey"),
+                "icon: " + Icon(view).ToString().ToLowerInvariant(),
                 "menu:",
             };
             foreach (var item in Items(view))
@@ -125,6 +191,9 @@ namespace TinkjamSync
             }
             return string.CompareOrdinal(theirs.Groups[4].Value, mine.Groups[4].Value) > 0;
         }
+
+        /// <summary>The version without its build stamp, as a person reads it.</summary>
+        public static string Short(string version) => (version ?? "").Split('+')[0];
     }
 
     public static class Checksum
@@ -139,6 +208,8 @@ namespace TinkjamSync
         public static bool Matches(string path, string expectedHex) =>
             !string.IsNullOrWhiteSpace(expectedHex) &&
             string.Equals(Sha256File(path), expectedHex.Trim(), StringComparison.OrdinalIgnoreCase);
+
+        public static bool LooksValid(string hex) => hex != null && Regex.IsMatch(hex.Trim(), "^[0-9a-fA-F]{64}$");
     }
 
     /// <summary>Restarts after a crash: 2, 4, 8, 16 seconds; a fifth crash within ten minutes stops.</summary>
@@ -160,10 +231,17 @@ namespace TinkjamSync
     {
         public bool Reachable;
         public string Reason;
+        /// <summary>When Sync last checked. Sync packages that stop writing once connected leave it out.</summary>
+        public DateTime? CheckedAt;
     }
+
+    public enum Health { Unknown, Reachable, Unreachable, Stale }
 
     public static class StatusFile
     {
+        // Sync rewrites the file every 30 seconds; several missed turns mean it is stuck or asleep.
+        public static readonly TimeSpan StaleAfter = TimeSpan.FromSeconds(150);
+
         /// <summary>sync-status.json as Sync writes it, if it was written by `pid`.</summary>
         public static SyncStatus Parse(string json, int pid)
         {
@@ -173,7 +251,12 @@ namespace TinkjamSync
                 if (value == null || !value.TryGetValue("pid", out var owner) || Convert.ToInt64(owner) != pid) return null;
                 var reachable = value.TryGetValue("status", out var status) && "reachable".Equals(status as string);
                 value.TryGetValue("reason", out var reason);
-                return new SyncStatus { Reachable = reachable, Reason = reason as string };
+                DateTime? checkedAt = null;
+                if (value.TryGetValue("checkedAt", out var at) && at is string text &&
+                    DateTime.TryParse(text, System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var parsed))
+                    checkedAt = parsed;
+                return new SyncStatus { Reachable = reachable, Reason = reason as string, CheckedAt = checkedAt };
             }
             catch (Exception)
             {
@@ -186,6 +269,85 @@ namespace TinkjamSync
             try { return Parse(File.ReadAllText(path), pid); }
             catch (IOException) { return null; }
             catch (UnauthorizedAccessException) { return null; }
+        }
+
+        /// <summary>An answer with no time is trusted as it stands; one with an old time is stale.</summary>
+        public static Health HealthOf(SyncStatus status, DateTime utcNow)
+        {
+            if (status == null) return Health.Unknown;
+            if (status.CheckedAt != null && utcNow - status.CheckedAt.Value > StaleAfter) return Health.Stale;
+            return status.Reachable ? Health.Reachable : Health.Unreachable;
+        }
+    }
+
+    public sealed class ProcessRow
+    {
+        public int Pid, ParentPid;
+        public string Name;
+    }
+
+    public static class Agents
+    {
+        // What Sync runs for itself: its tunnel helper, and the console host Windows adds to a child.
+        static readonly string[] Helpers = { "cloudflared.exe", "cloudflared", "conhost.exe" };
+
+        /// <summary>Whether anything besides Sync's own helpers runs under `root`: an agent at work.</summary>
+        public static bool Running(IEnumerable<ProcessRow> rows, int root)
+        {
+            var all = rows.ToList();
+            var seen = new HashSet<int> { root };
+            var queue = new Queue<int>();
+            queue.Enqueue(root);
+            while (queue.Count > 0)
+            {
+                var parent = queue.Dequeue();
+                foreach (var row in all.Where(row => row.ParentPid == parent && seen.Add(row.Pid)))
+                {
+                    if (!Helpers.Contains(row.Name ?? "", StringComparer.OrdinalIgnoreCase)) return true;
+                    queue.Enqueue(row.Pid);
+                }
+            }
+            return false;
+        }
+    }
+
+    public enum NetworkTrouble { None, Offline, Restricted }
+
+    public static class Failures
+    {
+        static readonly string[] OfflineSigns = { "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "ENETDOWN", "getaddrinfo" };
+        static readonly string[] RestrictedSigns =
+        {
+            "SELF_SIGNED_CERT", "UNABLE_TO_GET_ISSUER_CERT", "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "CERT_HAS_EXPIRED",
+            "DEPTH_ZERO_SELF_SIGNED_CERT", "ERR_TLS", "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ESOCKETTIMEDOUT",
+            "E403", "E407", "407 Proxy", "EPROXY", "ERR_SOCKET_TIMEOUT", "fetch failed",
+        };
+
+        /// <summary>What Node or npm's own words say about the network, if anything.</summary>
+        public static NetworkTrouble Classify(string output)
+        {
+            var text = output ?? "";
+            if (OfflineSigns.Any(sign => text.IndexOf(sign, StringComparison.OrdinalIgnoreCase) >= 0)) return NetworkTrouble.Offline;
+            if (RestrictedSigns.Any(sign => text.IndexOf(sign, StringComparison.OrdinalIgnoreCase) >= 0)) return NetworkTrouble.Restricted;
+            return NetworkTrouble.None;
+        }
+    }
+
+    public static class PathList
+    {
+        /// <summary>PATH lists joined in order, each folder once.</summary>
+        public static string Merge(params string[] lists)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var folders = new List<string>();
+            foreach (var list in lists)
+                foreach (var entry in (list ?? "").Split(';'))
+                {
+                    var folder = entry.Trim();
+                    if (folder.Length == 0 || !seen.Add(folder.TrimEnd('\\'))) continue;
+                    folders.Add(folder);
+                }
+            return string.Join(";", folders);
         }
     }
 

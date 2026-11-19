@@ -113,6 +113,7 @@ function layerTest(input?: {
   readonly upsert?: EnvironmentLinks.EnvironmentLinks["Service"]["upsert"];
   readonly consume?: DpopProofs.DpopProofReplay["Service"]["consume"];
   readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
+  readonly removedByUser?: boolean;
 }) {
   return EnvironmentLinker.layer.pipe(
     Layer.provideMerge(RelayTokens.layer.pipe(Layer.provide(CloudMintSigner.layer))),
@@ -132,6 +133,8 @@ function layerTest(input?: {
           findActiveManagedForEnvironment: () => Effect.succeed([]),
           setHoldWebhooksWhileOffline: () => Effect.void,
           revokeForUser: () => Effect.succeed(false),
+          wasRemovedByUser: () => Effect.succeed(input?.removedByUser ?? false),
+          listOtherUsersForEnvironmentKey: () => Effect.succeed([]),
         }),
         Layer.succeed(EnvironmentCredentials.EnvironmentCredentials, {
           create: () => Effect.succeed("t3env_credential_secret"),
@@ -165,7 +168,11 @@ describe("EnvironmentLinker", () => {
     return Effect.gen(function* () {
       const { request, payload } = yield* makeRequest;
       const linker = yield* EnvironmentLinker.EnvironmentLinker;
-      const result = yield* linker.link({ userId: "user_123", request });
+      const result = yield* linker.link({
+        userId: "user_123",
+        request,
+        mayRestoreRemovedLink: false,
+      });
       expect(result.environmentId).toBe(payload.environmentId);
       expect(result.environmentCredential).toBe("t3env_credential_secret");
       expect(persistedEnvironmentId).toBe(payload.environmentId);
@@ -231,7 +238,11 @@ describe("EnvironmentLinker", () => {
         managedTunnelsEnabled: false,
       } satisfies RelayEnvironmentLinkRequest;
       const linker = yield* EnvironmentLinker.EnvironmentLinker;
-      const result = yield* linker.link({ userId: "user_123", request });
+      const result = yield* linker.link({
+        userId: "user_123",
+        request,
+        mayRestoreRemovedLink: false,
+      });
       expect(result.environmentCredential).toBe("t3env_credential_secret");
       expect(result.endpointRuntime).toBeNull();
       expect(persistedEndpoint).toBe("http://127.0.0.1:3773/");
@@ -262,7 +273,9 @@ describe("EnvironmentLinker", () => {
       segments[2] = `${signature.startsWith("A") ? "B" : "A"}${signature.slice(1)}`;
       const tampered = { ...request, proof: segments.join(".") };
       const linker = yield* EnvironmentLinker.EnvironmentLinker;
-      const result = yield* Effect.result(linker.link({ userId: "user_123", request: tampered }));
+      const result = yield* Effect.result(
+        linker.link({ userId: "user_123", request: tampered, mayRestoreRemovedLink: false }),
+      );
       expect(Result.isFailure(result)).toBe(true);
       if (Result.isFailure(result)) {
         expect(isEnvironmentLinkProofInvalid(result.failure)).toBe(true);
@@ -289,11 +302,43 @@ describe("EnvironmentLinker", () => {
     );
   });
 
+  it.effect("keeps a removed computer off the account until a fresh approval", () => {
+    const upserts: Array<string> = [];
+    return Effect.gen(function* () {
+      const linker = yield* EnvironmentLinker.EnvironmentLinker;
+      const leftover = yield* Effect.result(
+        linker.link({ ...(yield* makeRequest), userId: "user_123", mayRestoreRemovedLink: false }),
+      );
+      expect(Result.isFailure(leftover) && leftover.failure._tag).toBe("EnvironmentLinkRemoved");
+      expect(upserts).toEqual([]);
+
+      const approved = yield* linker.link({
+        ...(yield* makeRequest),
+        userId: "user_123",
+        mayRestoreRemovedLink: true,
+      });
+      expect(approved.environmentId).toBe("env-link-test");
+      expect(upserts).toEqual(["env-link-test"]);
+    }).pipe(
+      Effect.provide(
+        layerTest({
+          removedByUser: true,
+          upsert: (input) =>
+            Effect.sync(() => {
+              upserts.push(input.proof.environmentId);
+            }),
+        }),
+      ),
+    );
+  });
+
   it.effect("rejects replayed JWT ids", () =>
     Effect.gen(function* () {
       const { request } = yield* makeRequest;
       const linker = yield* EnvironmentLinker.EnvironmentLinker;
-      const result = yield* Effect.result(linker.link({ userId: "user_123", request }));
+      const result = yield* Effect.result(
+        linker.link({ userId: "user_123", request, mayRestoreRemovedLink: false }),
+      );
       expect(Result.isFailure(result)).toBe(true);
       if (Result.isFailure(result)) {
         expect(isEnvironmentLinkProofInvalid(result.failure)).toBe(true);

@@ -63,8 +63,22 @@ export class EnvironmentLinkProofInvalid extends Schema.TaggedError<EnvironmentL
   }
 }
 
+export class EnvironmentLinkRemoved extends Schema.TaggedError<EnvironmentLinkRemoved>()(
+  "EnvironmentLinkRemoved",
+  {
+    userId: Schema.String,
+    environmentId: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Environment '${this.environmentId}' was removed by its account and needs a fresh approval`;
+  }
+}
+
 export type EnvironmentLinkError =
   | EnvironmentLinkProofExpired
+  | EnvironmentLinkRemoved
+  | EnvironmentLinks.EnvironmentLinkLookupPersistenceError
   | EnvironmentLinkProofInvalid
   | DpopProofs.DpopProofReplayPersistenceError
   | EnvironmentLinks.EnvironmentLinkUpsertPersistenceError
@@ -77,9 +91,12 @@ export class EnvironmentLinker extends Context.Service<
     readonly link: (input: {
       readonly userId: string;
       readonly request: RelayEnvironmentLinkRequest;
+      /** False for a computer's own sign-in that carries no fresh browser approval. */
+      readonly mayRestoreRemovedLink: boolean;
     }) => Effect.Effect<
       {
         readonly environmentId: RelayEnvironmentLinkProofPayload["environmentId"];
+        readonly environmentPublicKey: string;
         readonly endpoint: RelayEnvironmentLinkProofPayload["endpoint"];
         readonly endpointRuntime:
           | ManagedEndpointProvider.ManagedEndpointProvisioningResult["runtime"]
@@ -288,6 +305,19 @@ const make = Effect.gen(function* () {
           stage: "validate_origin",
         });
       }
+      // Remove must stick: a leftover process holding the account's sign-in cannot undo it.
+      if (
+        !input.mayRestoreRemovedLink &&
+        (yield* links.wasRemovedByUser({
+          userId: input.userId,
+          environmentId: verified.environmentId,
+        }))
+      ) {
+        return yield* new EnvironmentLinkRemoved({
+          userId: input.userId,
+          environmentId: verified.environmentId,
+        });
+      }
       // Non-tunnel links must release provisioned tunnel/DNS resources; best-effort deprovision is idempotent.
       if (!input.request.managedTunnelsEnabled) {
         yield* managedEndpointProvider
@@ -329,6 +359,7 @@ const make = Effect.gen(function* () {
       });
       return {
         environmentId: verified.environmentId,
+        environmentPublicKey: verified.environmentPublicKey,
         endpoint,
         endpointRuntime: provisioned?.runtime ?? null,
         environmentCredential,

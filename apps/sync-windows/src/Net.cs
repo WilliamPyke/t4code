@@ -4,16 +4,17 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Security.Authentication;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace TinkjamSync
 {
-    /// <summary>A failure in words for the person. `Offline` ones try again by themselves.</summary>
+    /// <summary>A failure in words for the person. `RetrySoon` ones try again within a minute.</summary>
     public sealed class SetupException : Exception
     {
-        public readonly bool Offline;
-        public SetupException(string message, bool offline = false) : base(message) { Offline = offline; }
+        public readonly bool RetrySoon;
+        public SetupException(string message, bool retrySoon = false) : base(message) { RetrySoon = retrySoon; }
     }
 
     public static class Net
@@ -23,20 +24,69 @@ namespace TinkjamSync
         static HttpClient CreateClient()
         {
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-            var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+            // A work proxy that signs people in with their Windows account answers 407 without this.
+            var handler = new HttpClientHandler { DefaultProxyCredentials = CredentialCache.DefaultCredentials };
+            var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
             client.DefaultRequestHeaders.UserAgent.ParseAdd("TinkjamSync/" + AppInfo.ShortVersion);
             client.DefaultRequestHeaders.CacheControl = new CacheControlHeaderValue { NoCache = true };
             return client;
         }
 
+        /// <summary>The proxy Windows uses for the open internet, as Node wants it, or null for none.</summary>
+        public static string SystemProxy()
+        {
+            try
+            {
+                var target = new Uri("https://registry.npmjs.org/");
+                var proxy = WebRequest.GetSystemWebProxy();
+                if (proxy == null || proxy.IsBypassed(target)) return null;
+                var address = proxy.GetProxy(target);
+                return address == null || address == target ? null : address.GetLeftPart(UriPartial.Authority);
+            }
+            catch (Exception error)
+            {
+                Log.App("Couldn't read the system proxy: " + error.Message);
+                return null;
+            }
+        }
+
+        static bool Blocked(Exception error)
+        {
+            for (var cause = error; cause != null; cause = cause.InnerException)
+            {
+                if (cause is AuthenticationException) return true;
+                if (cause is WebException web &&
+                    (web.Status == WebExceptionStatus.TrustFailure || web.Status == WebExceptionStatus.SecureChannelFailure ||
+                     web.Status == WebExceptionStatus.RequestProhibitedByProxy || web.Status == WebExceptionStatus.ProxyNameResolutionFailure))
+                    return true;
+            }
+            return false;
+        }
+
+        static bool DiskFull(Exception error)
+        {
+            var code = error.HResult & 0xFFFF;
+            return error is IOException && (code == 0x70 || code == 0x27);
+        }
+
         static SetupException Explain(Exception error, string what)
         {
             if (error is SetupException setup) return setup;
-            // A dropped connection mid-download is an IOException around the socket error; a full disk has none.
+            Log.App("Couldn't " + what + ": " + error.GetType().Name + ": " + error.GetBaseException().Message);
+            if (Blocked(error)) return new SetupException(Words.Restricted, retrySoon: true);
+            if (DiskFull(error)) return new SetupException(Words.DiskFull);
+            // A dropped connection mid-download is an IOException around the socket error.
             if (error is HttpRequestException || error is WebException || error is OperationCanceledException ||
                 (error is IOException && error.InnerException != null))
-                return new SetupException("can't reach the internet to " + what + ".", offline: true);
-            return new SetupException("Couldn't " + what + ": " + error.Message);
+                return new SetupException(Words.Offline, retrySoon: true);
+            return new SetupException(Words.Unexpected);
+        }
+
+        static SetupException Refused(HttpStatusCode status, string what)
+        {
+            Log.App("Couldn't " + what + ": the server answered " + (int)status);
+            var blocked = status == HttpStatusCode.ProxyAuthenticationRequired || status == HttpStatusCode.Forbidden || (int)status == 451;
+            return new SetupException(blocked ? Words.Restricted : Words.ServerTrouble, retrySoon: true);
         }
 
         public static async Task<Dictionary<string, object>> GetJson(string url, string what)
@@ -46,8 +96,7 @@ namespace TinkjamSync
                 using (var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(20)))
                 using (var response = await Client.GetAsync(url, cancel.Token).ConfigureAwait(false))
                 {
-                    if (!response.IsSuccessStatusCode)
-                        throw new SetupException("Couldn't " + what + ": the server answered " + (int)response.StatusCode + ".");
+                    if (!response.IsSuccessStatusCode) throw Refused(response.StatusCode, what);
                     return Json.Parse(await response.Content.ReadAsStringAsync().ConfigureAwait(false));
                 }
             }
@@ -64,8 +113,7 @@ namespace TinkjamSync
                 using (var cancel = new CancellationTokenSource(TimeSpan.FromMinutes(20)))
                 using (var response = await Client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancel.Token).ConfigureAwait(false))
                 {
-                    if (!response.IsSuccessStatusCode)
-                        throw new SetupException("Couldn't " + what + ": the server answered " + (int)response.StatusCode + ".");
+                    if (!response.IsSuccessStatusCode) throw Refused(response.StatusCode, what);
                     var total = response.Content.Headers.ContentLength;
                     using (var source = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
                     using (var target = new FileStream(partial, FileMode.Create, FileAccess.Write, FileShare.None))

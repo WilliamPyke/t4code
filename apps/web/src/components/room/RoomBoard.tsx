@@ -879,6 +879,8 @@ export function RoomBoard({
   roomModel,
   cloud,
   bringAgent,
+  ownAgentAway = false,
+  takeAgentAway,
   ownBoxHandle,
   view: viewMode,
   onViewChange,
@@ -1009,6 +1011,10 @@ export function RoomBoard({
    * Attach my agent open this instead, which says how to bring one.
    */
   readonly bringAgent?: (() => void) | undefined;
+  /** The viewer's agent was on this board, and their computer is not connected now. */
+  readonly ownAgentAway?: boolean | undefined;
+  /** The viewer's agent is on this board: takes it off again, the way out of bringing it. */
+  readonly takeAgentAway?: (() => Promise<void>) | undefined;
   /**
    * Set by the board: adds the viewer's own agent box mid-view, selected, with the caret in its
    * prompt, as when their agent has just come. Returns its id, or null when it cannot.
@@ -1516,6 +1522,15 @@ export function RoomBoard({
       ? bringAgent !== undefined
       : !online.some((id) => id === box.guestId) &&
         !running.some((agent) => agent.guestId === box.guestId));
+  // Why a box cannot run now, in the words of whoever looks at it: their own is theirs to fix.
+  const boxOfflineNote = (box: Pick<BoardThreadBox, "guestId">) =>
+    !boxOffline(box)
+      ? undefined
+      : box.guestId !== viewer
+        ? "Offline"
+        : ownAgentAway
+          ? "Your computer is not connected"
+          : "Your agent is not here";
   const boxName = (boxId: string) =>
     boardBoxName(
       threadBoxes.find((box) => box.id === boxId) ?? { id: boxId, guestId: undefined, title: "" },
@@ -4431,6 +4446,8 @@ export function RoomBoard({
       activity: boardAgentActivity([turn?.at, work?.at]),
       turnKey: `${isRoom ? (messages.at(-1)?.id ?? "") : (turn?.id ?? "")}|${work?.id ?? ""}|${work?.at ?? ""}`,
       offline: boxOffline(box),
+      offlineOwn:
+        !boxOffline(box) || box.guestId !== viewer ? undefined : ownAgentAway ? "away" : "absent",
       fallback:
         !isRoom || hasProgress
           ? undefined
@@ -4757,6 +4774,7 @@ export function RoomBoard({
                 hasThreadBoxes={threadBoxes.some((box) => box.id !== ROOM_BOARD_ROOM_BOX)}
                 cloud={!holds.agents}
                 bringAgent={bringAgent}
+                takeAgentAway={takeAgentAway}
                 recent={agentRecent}
                 renderNeeds={(entry, need) =>
                   need === "approval" ? (
@@ -5969,7 +5987,7 @@ export function RoomBoard({
                       box === undefined
                         ? undefined
                         : {
-                            label: `${boardBoxAgentLabel(note, people, note.thread?.turns.at(-1))}${boxOffline(note) ? " · Offline" : ""}`,
+                            label: `${boardBoxAgentLabel(note, people, note.thread?.turns.at(-1))}${boxOffline(note) ? ` · ${boxOfflineNote(note)}` : ""}`,
                             body: box.body,
                             footer: box.prompt,
                           }

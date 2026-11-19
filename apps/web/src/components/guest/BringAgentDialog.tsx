@@ -7,23 +7,21 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
 import { CheckIcon, CopyIcon, DownloadIcon } from "lucide-react";
-import { type ReactNode, useEffect, useEffectEvent, useState } from "react";
+import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import {
   TINKJAM_AGENT_PROMPT,
   TINKJAM_SYNC_COMMAND,
   TINKJAM_SYNC_MAC_COMMAND,
+  TINKJAM_SYNC_URL,
   TINKJAM_SYNC_WINDOWS_DOWNLOAD,
 } from "~/branding";
-import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { environmentCatalog } from "~/connection/catalog";
-import { boardAccountsEnabled, useBoardAccount } from "~/guest/boardAccount";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import { cn } from "~/lib/utils";
 import { useProjects } from "~/state/entities";
-import { useEnvironments, useRelayEnvironmentDiscovery } from "~/state/environments";
-import { relayEnvironmentDiscovery } from "~/state/relay";
+import { useEnvironmentProviders } from "~/state/environments";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
@@ -41,29 +39,26 @@ import {
 } from "../ui/dialog";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
-import {
-  type BringAgentComputer,
-  type DiscoveredComputer,
-  bringAgentComputers,
-  steadyDiscovered,
-} from "./bringAgent.logic";
-import {
-  COMPUTER_STATUS_DOT,
-  computerStatusLine,
-  discoveredComputers,
-  removeComputerQuestion,
-  savedComputers,
-  useRemoveComputer,
-} from "./yourComputers";
+import { type BringAgentComputer, agentsChecked } from "./bringAgent.logic";
+import { ComputerRow, ComputersLoading, ComputersNotLoaded } from "./ComputerRow";
+import { useRemoveComputer, useYourComputers } from "./yourComputers";
 
-// Discovery lists the account's computers; asked again while the dialog is open, so one that
-// just connected shows up without a reload.
+// The account's list is asked again while the dialog is open, so a computer that just connected
+// shows up without a reload.
 const DISCOVERY_REFRESH_MS = 4_000;
+// How long a computer may take to connect and check its agents before the wait is given up.
+const BRING_WAIT_MS = 30_000;
 
 type BringAgent = (
   environmentId: EnvironmentId,
   project: EnvironmentProject | null,
 ) => Promise<string | null>;
+
+interface BringTarget {
+  readonly environmentId: EnvironmentId;
+  readonly name: string;
+  readonly project: EnvironmentProject | null;
+}
 
 /**
  * How a person brings their own agent to a cloud board, which has none of its own: pick one of
@@ -83,88 +78,99 @@ export function BringAgentDialog({
   /** Once the dialog has closed after an agent came: the board shows it, ready to prompt. */
   readonly onBrought: () => void;
 }) {
-  const account = useBoardAccount();
-  const withAccount = boardAccountsEnabled() && hasCloudPublicConfig();
-  const signedIn = account.status === "signed-in";
-  const { environments } = useEnvironments();
-  const discovery = useRelayEnvironmentDiscovery();
-  const refreshDiscovery = useAtomCommand(relayEnvironmentDiscovery.refresh, {
-    reportFailure: false,
-  });
+  const list = useYourComputers({ active: open, pollEveryMs: DISCOVERY_REFRESH_MS });
+  const { computers, withAccount, signedIn } = list;
+  const providersByEnvironment = useEnvironmentProviders();
   const registerEnvironment = useAtomCommand(environmentCatalog.register, {
     reportFailure: false,
   });
-  const [discovered, setDiscovered] = useState<ReadonlyArray<DiscoveredComputer>>([]);
-  // Each ask for the account's list starts unlisted; once one answered, `discovered` holds it.
-  const [listedOnce, setListedOnce] = useState(false);
-  const withComputerList = withAccount && signedIn;
-  if (listedOnce !== (withComputerList && (listedOnce || discovery.listed))) {
-    setListedOnce(!listedOnce);
-  }
-  const steady = withComputerList
-    ? steadyDiscovered(discovered, {
-        listed: discovery.listed,
-        computers: discoveredComputers(discovery),
-      })
-    : [];
-  if (JSON.stringify(steady) !== JSON.stringify(discovered)) setDiscovered(steady);
-  const computers = bringAgentComputers({
-    saved: savedComputers(environments),
-    discovered: steady,
-    listed: withComputerList && listedOnce,
-  });
   const removeComputer = useRemoveComputer();
-  const primaryIds = new Set(
-    environments
-      .filter((entry) => entry.entry.target._tag === "PrimaryConnectionTarget")
-      .map((entry) => entry.environmentId),
-  );
 
   const [busy, setBusy] = useState<EnvironmentId | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // What went wrong, and the computer to try again on when trying again could help.
+  const [error, setError] = useState<{
+    readonly message: string;
+    readonly retry: BringTarget | null;
+  } | null>(null);
   // An agent came: once the dialog has closed, the board shows it.
   const [brought, setBrought] = useState(false);
   // A computer this browser is still connecting to: its agent comes once it is ready.
-  const [pending, setPending] = useState<{
-    readonly environmentId: EnvironmentId;
-    readonly project: EnvironmentProject | null;
-  } | null>(null);
+  const [pending, setPending] = useState<BringTarget | null>(null);
+  // Counts closes, so work that finishes after one does not write into the next opening.
+  const opening = useRef(0);
 
-  const bring = async (environmentId: EnvironmentId, project: EnvironmentProject | null) => {
-    setBusy(environmentId);
-    setError(null);
-    const failed = await onBring(environmentId, project);
-    setBusy(null);
-    setError(failed);
-    if (failed !== null) return;
-    rememberBringProject(environmentId, project);
-    setBrought(true);
-    onOpenChange(false);
-  };
-  const bringWhenReady = useEffectEvent(
-    (target: {
-      readonly environmentId: EnvironmentId;
-      readonly project: EnvironmentProject | null;
-    }) => {
+  const changeOpen = (next: boolean) => {
+    if (!next) {
+      opening.current += 1;
+      setBusy(null);
       setPending(null);
-      void bring(target.environmentId, target.project);
-    },
-  );
-  const pendingReady =
-    pending !== null &&
+      setError(null);
+    }
+    onOpenChange(next);
+  };
+
+  const bring = async (target: BringTarget) => {
+    const mine = opening.current;
+    setBusy(target.environmentId);
+    setError(null);
+    const failed = await onBring(target.environmentId, target.project);
+    if (failed === null) rememberBringProject(target.environmentId, target.project);
+    if (mine !== opening.current) {
+      // Closed meanwhile: an agent that still came is shown on the board all the same.
+      if (failed === null) onBrought();
+      return;
+    }
+    setBusy(null);
+    if (failed !== null) {
+      setError({ message: failed, retry: target });
+      return;
+    }
+    setBrought(true);
+    changeOpen(false);
+  };
+
+  /** Connected here, and it has said how each of its agents is. */
+  const readyToBring = (environmentId: EnvironmentId) =>
     computers.some(
-      (computer) => computer.environmentId === pending.environmentId && computer.status === "ready",
-    );
+      (computer) => computer.environmentId === environmentId && computer.status === "ready",
+    ) && agentsChecked(providersByEnvironment.get(environmentId) ?? []);
+
+  const bringWhenReady = useEffectEvent((target: BringTarget) => {
+    setPending(null);
+    void bring(target);
+  });
+  const pendingReady = pending !== null && readyToBring(pending.environmentId);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- brings the agent once the computer this browser just connected to reports ready
   useEffect(() => {
     // oxlint-disable-next-line react/set-state-in-effect -- readiness comes from the connection supervisor; bringing clears the wait
     if (pending !== null && pendingReady) bringWhenReady(pending);
   }, [pending, pendingReady]);
 
+  const giveUpWaiting = useEffectEvent((target: BringTarget) => {
+    setPending(null);
+    const connected = computers.some(
+      (computer) => computer.environmentId === target.environmentId && computer.status === "ready",
+    );
+    // Connected, but its agents never finished checking: bringing says what it found.
+    if (connected) return void bring(target);
+    setError({
+      message: `${target.name} did not connect in time. Check that it is awake and Tinkjam Sync is running on it.`,
+      retry: target,
+    });
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a timer: the wait for a computer to connect ends by itself, so it never holds the list forever
+  useEffect(() => {
+    if (pending === null) return;
+    const timer = setTimeout(() => giveUpWaiting(pending), BRING_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [pending]);
+
   const choose = async (computer: BringAgentComputer, project: EnvironmentProject | null) => {
-    if (computer.status === "ready") return void bring(computer.environmentId, project);
+    const target = { environmentId: computer.environmentId, name: computer.name, project };
+    if (readyToBring(computer.environmentId)) return void bring(target);
+    const mine = opening.current;
     setError(null);
-    setPending({ environmentId: computer.environmentId, project });
+    setPending(target);
     if (computer.saved) return;
     const result = await registerEnvironment(
       new RelayConnectionRegistration({
@@ -174,28 +180,27 @@ export function BringAgentDialog({
         }),
       }),
     );
-    if (result._tag === "Failure") {
+    if (result._tag === "Failure" && mine === opening.current) {
       setPending(null);
-      setError(`Could not reach ${computer.name}. Check that Tinkjam Sync is running on it.`);
+      setError({
+        message: `Could not reach ${computer.name}. Check that Tinkjam Sync is running on it.`,
+        retry: target,
+      });
     }
   };
-
-  const refreshWhileWaiting = useEffectEvent(() => {
-    if (document.visibilityState === "visible" && !discovery.refreshing) void refreshDiscovery();
-  });
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- polls the account's computer list while the dialog is open, so a computer that just connected appears
-  useEffect(() => {
-    if (!open || !withAccount || !signedIn) return;
-    refreshWhileWaiting();
-    const timer = setInterval(refreshWhileWaiting, DISCOVERY_REFRESH_MS);
-    return () => clearInterval(timer);
-  }, [open, withAccount, signedIn]);
+  const tryAgain = (target: BringTarget) => {
+    const computer = computers.find((entry) => entry.environmentId === target.environmentId);
+    if (computer === undefined) return setError(null);
+    if (computer.status !== "ready") void list.retry(computer);
+    void choose(computer, target.project);
+  };
 
   const setup = <ConnectComputerRoutes withAccount={withAccount} signedIn={signedIn} />;
+  const waitingForFirst = withAccount && signedIn && !list.failed;
   return (
     <Dialog
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={changeOpen}
       onOpenChangeComplete={(isOpen) => {
         if (isOpen || !brought) return;
         setBrought(false);
@@ -217,37 +222,67 @@ export function BringAgentDialog({
               <section className="flex flex-col gap-2" data-bring-agent-computers>
                 <h3 className="text-sm font-medium">Your computers</h3>
                 <ul className="flex flex-col gap-2">
-                  {computers.map((computer) => (
-                    <ComputerRow
-                      key={computer.environmentId}
-                      computer={computer}
-                      working={
-                        busy === computer.environmentId ||
-                        pending?.environmentId === computer.environmentId
-                      }
-                      disabled={busy !== null || pending !== null}
-                      onBring={(project) => void choose(computer, project)}
-                      onRemove={
-                        primaryIds.has(computer.environmentId)
-                          ? null
-                          : () => {
-                              setError(null);
-                              return removeComputer(computer);
-                            }
-                      }
-                    />
-                  ))}
+                  {computers.map((computer) => {
+                    const waiting = pending?.environmentId === computer.environmentId;
+                    const bringing = busy === computer.environmentId;
+                    return (
+                      <ComputerRow
+                        key={computer.environmentId}
+                        computer={computer}
+                        working={
+                          bringing
+                            ? "Bringing your agent…"
+                            : !waiting
+                              ? null
+                              : computer.status === "ready"
+                                ? "Checking its agents…"
+                                : "Connecting…"
+                        }
+                        thisComputer={list.primaryIds.has(computer.environmentId)}
+                        disabled={busy !== null || pending !== null}
+                        onRetry={() => list.retry(computer)}
+                        onRemove={
+                          list.primaryIds.has(computer.environmentId)
+                            ? null
+                            : () => {
+                                setError(null);
+                                return removeComputer.remove(computer);
+                              }
+                        }
+                        removeQuestion={removeComputer.question(computer.name)}
+                      >
+                        <BringControls
+                          computer={computer}
+                          working={waiting || bringing}
+                          disabled={busy !== null || pending !== null}
+                          onBring={(project) => void choose(computer, project)}
+                          onCancel={waiting ? () => setPending(null) : null}
+                        />
+                      </ComputerRow>
+                    );
+                  })}
                 </ul>
               </section>
+            ) : list.loading ? (
+              <ComputersLoading />
             ) : null}
+            {list.failed ? <ComputersNotLoaded onRetry={list.refresh} /> : null}
             {error === null ? null : (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
+              <div role="alert" className="flex flex-col items-start gap-2" data-bring-agent-error>
+                <p className="text-sm whitespace-pre-line text-destructive">{error.message}</p>
+                {error.retry === null ? null : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={busy !== null || pending !== null}
+                    onClick={() => error.retry !== null && tryAgain(error.retry)}
+                  >
+                    Try again
+                  </Button>
+                )}
+              </div>
             )}
-            {computers.length === 0 ? (
-              setup
-            ) : (
+            {computers.length > 0 ? (
               <Collapsible>
                 <CollapsibleTrigger render={<Button size="sm" variant="ghost" />}>
                   Connect another computer
@@ -256,6 +291,11 @@ export function BringAgentDialog({
                   <div className="pt-3">{setup}</div>
                 </CollapsiblePanel>
               </Collapsible>
+            ) : list.loading ? null : (
+              <>
+                {setup}
+                {waitingForFirst ? <WaitingForComputer /> : null}
+              </>
             )}
           </div>
         </DialogPanel>
@@ -267,37 +307,32 @@ export function BringAgentDialog({
   );
 }
 
+/** Under the steps: this page is looking, so nobody reloads it after pressing Connect. */
+export function WaitingForComputer() {
+  return (
+    <p role="status" className="text-xs text-muted-foreground" data-waiting-for-computer>
+      Waiting for your computer… It shows up here by itself once you press Connect.
+    </p>
+  );
+}
+
 const NO_PROJECT = "none";
 
-/**
- * One of the person's computers: whether it is up, the project its agent works in, Bring, and
- * Remove.
- */
-function ComputerRow({
+/** On a computer's row: the project its agent works in, Bring my agent, and Cancel while it waits. */
+function BringControls({
   computer,
   working,
   disabled,
   onBring,
-  onRemove,
+  onCancel,
 }: {
   readonly computer: BringAgentComputer;
   readonly working: boolean;
   readonly disabled: boolean;
   readonly onBring: (project: EnvironmentProject | null) => void;
-  /** Resolves to what went wrong, or null. Null for this computer's own, which cannot go. */
-  readonly onRemove: (() => Promise<string | null>) | null;
+  /** Stops waiting for this computer; null when it is not being waited on. */
+  readonly onCancel: (() => void) | null;
 }) {
-  const [removal, setRemoval] = useState<{
-    readonly phase: "confirming" | "removing";
-    readonly error: string | null;
-  } | null>(null);
-  const remove = async () => {
-    if (onRemove === null) return;
-    setRemoval({ phase: "removing", error: null });
-    const failed = await onRemove();
-    // On success the row goes away with the computer.
-    if (failed !== null) setRemoval({ phase: "confirming", error: failed });
-  };
   const projects = useProjects().filter(
     (project) =>
       project.environmentId === computer.environmentId &&
@@ -318,20 +353,7 @@ function ComputerRow({
   ];
   const canBring = computer.status === "ready" || computer.status === "online";
   return (
-    <li
-      className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-border px-3 py-2.5"
-      data-bring-agent-computer={computer.status}
-    >
-      <span
-        aria-hidden
-        className={cn("size-2 shrink-0 rounded-full", COMPUTER_STATUS_DOT[computer.status])}
-      />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium">{computer.name}</span>
-        <span className="block truncate text-xs text-muted-foreground">
-          {working && computer.status !== "ready" ? "Connecting..." : computerStatusLine(computer)}
-        </span>
-      </span>
+    <>
       {projects.length > 0 && canBring ? (
         <div className="w-40 shrink-0">
           <Select
@@ -354,62 +376,32 @@ function ComputerRow({
           </Select>
         </div>
       ) : null}
-      <Button
-        size="sm"
-        disabled={!canBring || disabled}
-        onClick={() => onBring(projects.find((project) => project.id === projectId) ?? null)}
-        data-bring-agent
-      >
-        {working ? "Bringing..." : "Bring my agent"}
-      </Button>
-      {onRemove === null ? null : (
+      {onCancel === null ? (
         <Button
           size="sm"
-          variant="ghost-muted"
-          disabled={working || removal !== null}
-          onClick={() => setRemoval({ phase: "confirming", error: null })}
-          aria-label={`Remove ${computer.name}`}
-          data-remove-computer
+          disabled={!canBring || disabled}
+          onClick={() => onBring(projects.find((project) => project.id === projectId) ?? null)}
+          data-bring-agent
         >
-          Remove
+          {working ? "Bringing…" : "Bring my agent"}
+        </Button>
+      ) : (
+        <Button size="sm" variant="outline" onClick={onCancel} data-bring-agent-cancel>
+          Cancel
         </Button>
       )}
-      {removal === null ? null : (
-        <div className="flex basis-full flex-col gap-2 border-t border-border pt-2" role="group">
-          <p className="text-sm">{removeComputerQuestion(computer.name)}</p>
-          {removal.error === null ? null : (
-            <p role="alert" className="text-sm text-destructive">
-              {removal.error}
-            </p>
-          )}
-          <div className="flex justify-end gap-2">
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={removal.phase === "removing"}
-              onClick={() => setRemoval(null)}
-            >
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              variant="destructive"
-              disabled={removal.phase === "removing"}
-              onClick={() => void remove()}
-            >
-              {removal.phase === "removing" ? "Removing..." : "Remove"}
-            </Button>
-          </div>
-        </div>
-      )}
-    </li>
+    </>
   );
 }
 
 type Os = "mac" | "windows" | "linux";
-const detectOs = (): Os => {
-  const agent = typeof navigator === "undefined" ? "" : navigator.userAgent;
-  if (/mac/i.test(agent)) return "mac";
+/** The computer being set up, or `null` on a phone or tablet, which is never it. */
+const detectOs = (): Os | null => {
+  if (typeof navigator === "undefined") return "linux";
+  const agent = navigator.userAgent;
+  // An iPad says it is a Mac; only its touch points tell them apart.
+  if (/iphone|ipad|ipod|android/i.test(agent)) return null;
+  if (/mac/i.test(agent)) return navigator.maxTouchPoints > 1 ? null : "mac";
   return /win/i.test(agent) ? "windows" : "linux";
 };
 
@@ -421,7 +413,7 @@ export function ConnectComputerRoutes({
   readonly withAccount: boolean;
   readonly signedIn: boolean;
 }) {
-  const [os, setOs] = useState<Os>(detectOs);
+  const [os, setOs] = useState<Os | null>(detectOs);
   return (
     <div className="flex flex-col gap-3" data-bring-agent-steps>
       <section className="flex flex-col gap-3 rounded-xl border border-border p-4">
@@ -429,7 +421,7 @@ export function ConnectComputerRoutes({
           <h3 className="text-sm font-semibold">Get Tinkjam Sync for your computer</h3>
           <ToggleGroup
             aria-label="Your computer"
-            value={[os]}
+            value={os === null ? [] : [os]}
             onValueChange={(next) => {
               const value = next[0];
               if (value === "mac" || value === "windows" || value === "linux") setOs(value);
@@ -440,7 +432,18 @@ export function ConnectComputerRoutes({
             <Toggle value="linux">Linux</Toggle>
           </ToggleGroup>
         </div>
-        {os === "linux" ? (
+        {os === null ? (
+          <div className="flex flex-col gap-1 text-sm" data-sync-other-device>
+            <p>
+              Do this on the computer where your agent runs, not on this phone or tablet. Open this
+              page there:
+            </p>
+            <CopyLine text={TINKJAM_SYNC_URL} />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Or pick that computer above to read the steps here.
+            </p>
+          </div>
+        ) : os === "linux" ? (
           <ol className="flex flex-col gap-2.5 text-sm">
             <Step number={1}>
               Open a terminal, paste this and press Enter. It needs Node.js 22.16 or newer:
@@ -450,6 +453,11 @@ export function ConnectComputerRoutes({
               Open the link it prints and press Connect. It then runs in the background and starts
               when you log in.
             </Step>
+            {withAccount && !signedIn ? (
+              <Step number={3}>
+                <SignInHere />
+              </Step>
+            ) : null}
           </ol>
         ) : (
           <ol className="flex flex-col gap-2.5 text-sm">
@@ -459,8 +467,9 @@ export function ConnectComputerRoutes({
                 this line and press Return:
                 <CopyLine text={TINKJAM_SYNC_MAC_COMMAND} mono />
                 <span className="mt-1 block text-xs text-muted-foreground">
-                  It asks for no password and changes no settings. It puts Tinkjam Sync in your
-                  Applications folder and opens it. You can close Terminal afterwards.
+                  You only do this once. It asks for no password and changes no settings. It puts
+                  Tinkjam Sync in your Applications folder and opens it. You can close Terminal
+                  afterwards.
                 </span>
               </Step>
             ) : (
@@ -483,9 +492,9 @@ export function ConnectComputerRoutes({
               </Step>
             )}
             <Step number={2}>
-              Your browser opens by itself. Sign in and press Connect. That is all: Tinkjam Sync
-              sits in your {os === "mac" ? "menu bar" : "system tray"}, starts with your computer
-              and keeps itself up to date.
+              Your browser opens by itself. Sign in if it asks, then press Connect. That is all:
+              Tinkjam Sync sits in your {os === "mac" ? "menu bar" : "system tray"}, starts with
+              your computer and keeps itself up to date.
             </Step>
             {withAccount && !signedIn ? (
               <Step number={3}>
@@ -494,7 +503,7 @@ export function ConnectComputerRoutes({
             ) : null}
           </ol>
         )}
-        {os === "linux" ? null : (
+        {os === null || os === "linux" ? null : (
           <Collapsible>
             <CollapsibleTrigger render={<Button size="xs" variant="ghost" />}>
               Or have your coding agent install it

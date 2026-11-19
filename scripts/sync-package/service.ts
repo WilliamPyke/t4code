@@ -69,6 +69,18 @@ export function installedMacApp(
     .find(exists);
 }
 
+/**
+ * Tinkjam Sync for Windows, if this PC has it: like the Mac app, it runs Sync itself, keeps the
+ * package under the home and is its own startup app, so the launcher leaves the default home to it.
+ */
+export function installedWindowsApp(
+  localAppData: string,
+  exists: (path: string) => boolean = NodeFS.existsSync,
+): string | undefined {
+  const app = NodePath.win32.join(localAppData, "Programs", "Tinkjam Sync", "TinkjamSync.exe");
+  return exists(app) ? app : undefined;
+}
+
 export function resolveBaseDir(flag: string | undefined, envHome: string | undefined): string {
   const chosen = flag?.trim() || envHome?.trim() || defaultBaseDir();
   const expanded =

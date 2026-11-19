@@ -188,7 +188,7 @@ describe("managed endpoint provisioning errors", () => {
       });
       const error = yield* decodeLinkUnavailableError(body);
       expect(relayProtectedErrorMessage(error)).toBe(
-        "Relay cannot provision the managed endpoint (managed_endpoint_provisioning_failed). Failed stage: ensure-tunnel.",
+        "Tinkjam could not set up this computer's connection (managed_endpoint_provisioning_failed, at ensure-tunnel). Try again in a minute.",
       );
     }).pipe(Effect.scoped);
   });
@@ -546,6 +546,8 @@ function layerRelayUnlinkTest(input?: {
         findActiveManagedForEnvironment: () => Effect.die("unused findActiveManagedForEnvironment"),
         setHoldWebhooksWhileOffline: () => Effect.die("unused setHoldWebhooksWhileOffline"),
         revokeForUser: input?.revokeForUser ?? (() => Effect.succeed(false)),
+        wasRemovedByUser: () => Effect.die("unused wasRemovedByUser"),
+        listOtherUsersForEnvironmentKey: () => Effect.die("unused listOtherUsersForEnvironmentKey"),
       }),
     ),
     Layer.succeed(
@@ -1249,6 +1251,31 @@ describe("relay environment unlink", () => {
       ),
     );
   });
+
+  it.effect("reports the computer removed when only its tunnel cleanup fails", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* unlinkEnvironmentRecord({ userId: "user-1", environmentId: "environment-1" }),
+      ).toBe(true);
+    }).pipe(
+      Effect.provide(
+        layerRelayUnlinkTest({
+          getForUser: () => Effect.succeed(linkedEnvironmentRecord),
+          revokeForUser: () => Effect.succeed(true),
+          revokeCredential: () => Effect.succeed(true),
+          deprovision: () =>
+            Effect.fail(
+              new ManagedEndpointProvider.ManagedEndpointDeprovisioningFailed({
+                userId: "user-1",
+                environmentId: "environment-1",
+                stage: "delete-tunnel",
+                cause: "cloudflare unavailable",
+              }),
+            ),
+        }),
+      ),
+    ),
+  );
 
   it.effect("retries deprovisioning after the link is already revoked", () => {
     const calls: Array<string> = [];

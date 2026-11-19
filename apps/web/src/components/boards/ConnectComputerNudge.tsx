@@ -33,8 +33,9 @@ export function ConnectComputerNudge() {
       <BotIcon />
       <AlertTitle>Bring your AI agents onto your boards</AlertTitle>
       <AlertDescription>
-        Get Tinkjam Sync for your computer: download it, open it, press Connect. It then lives in
-        your menu bar and your boards can use Claude Code or Codex on it.
+        Get Tinkjam Sync for your computer and press Connect. On Windows you download it and open
+        it; on a Mac you paste one line into Terminal, once. Your boards can then use Claude Code or
+        Codex on it.
       </AlertDescription>
       <AlertAction>
         <Button size="sm" onClick={openConnectComputer}>

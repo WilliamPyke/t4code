@@ -1,6 +1,7 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -12,7 +13,7 @@ import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse, HttpServer, type HttpClientRequest } from "effect/http";
 import * as NetAddress from "effect/net/NetAddress";
 
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, type ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
 import * as EnvironmentKeys from "./environmentKeys.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -32,6 +33,8 @@ import { RelayManagedEndpointRecoveryRegistrationRequest } from "@t3tools/contra
 import {
   CLOUD_ENDPOINT_CONFIRMED_ORIGIN,
   CLOUD_ENDPOINT_RUNTIME_CONFIG,
+  CLOUD_LINK_FAILURE,
+  CLOUD_LINK_FRESH_APPROVAL,
   CLOUD_LINK_REVOKED,
   CLOUD_LINKED_USER_ID,
   decodeRuntimeConfig,
@@ -159,6 +162,14 @@ describe("releaseManagedTunnelOnShutdown", () => {
       );
     });
 
+  const testDescriptor: ExecutionEnvironmentDescriptor = {
+    environmentId: EnvironmentId.make("env_123"),
+    label: "Test computer",
+    platform: { os: "darwin", arch: "arm64" },
+    serverVersion: "0.0.0-test",
+    capabilities: { repositoryIdentity: true },
+  };
+
   const provideReleaseHarness =
     (harness: ReleaseHarness) =>
     <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -186,7 +197,7 @@ describe("releaseManagedTunnelOnShutdown", () => {
           ServerEnvironment.ServerEnvironment,
           ServerEnvironment.ServerEnvironment.of({
             getEnvironmentId: Effect.succeed(EnvironmentId.make("env_123")),
-            getDescriptor: Effect.die("unused"),
+            getDescriptor: Effect.succeed(testDescriptor),
           }),
         ),
         Effect.provideService(
@@ -274,6 +285,58 @@ describe("releaseManagedTunnelOnShutdown", () => {
       expect(applyConfigCalls).toEqual([]);
     }).pipe(provideReleaseHarness({ store, applyConfigCalls, requests }));
   });
+
+  it.effect(
+    "asks for approval again when its account removed it, and says so once approved",
+    () => {
+      const { store, values } = makeMemorySecretStore(managedLinkSecrets);
+      const applyConfigCalls: Array<unknown> = [];
+      const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+      const sentFreshApproval = (request: HttpClientRequest.HttpClientRequest) =>
+        request.body._tag === "Uint8Array" &&
+        new TextDecoder().decode(request.body.body).includes('"freshApproval":true');
+
+      return Effect.gen(function* () {
+        const link = yield* CloudLink.CloudLink;
+
+        const refused = yield* Effect.flip(
+          link.reconcileDesiredLinkIfStillDesired("http://127.0.0.1:3773"),
+        );
+        expect(refused).toMatchObject({ _tag: "RelayRequestError", rejection: "forbidden" });
+        expect(CloudLink.shouldRetryCloudLink(refused)).toBe(false);
+        expect(sentFreshApproval(requests[1]!)).toBe(false);
+        expect(values.has(CLOUD_LINK_REVOKED)).toBe(true);
+        expect(values.has(CLOUD_LINK_FAILURE)).toBe(true);
+
+        yield* store.set(CLOUD_LINK_FRESH_APPROVAL, new TextEncoder().encode("true"));
+        yield* Effect.flip(link.reconcileDesiredLinkIfStillDesired("http://127.0.0.1:3773"));
+        expect(sentFreshApproval(requests[3]!)).toBe(true);
+      }).pipe(
+        provideReleaseHarness({
+          store,
+          applyConfigCalls,
+          requests,
+          respondEffect: Effect.sync(() =>
+            requests.length % 2 === 1
+              ? Response.json({ challenge: "challenge", expiresAt: "2026-10-19T00:05:00.000Z" })
+              : Response.json(
+                  {
+                    _tag: "RelayEnvironmentLinkRemovedError",
+                    code: "environment_link_removed",
+                    traceId: "trace-removed",
+                  },
+                  { status: 403 },
+                ),
+          ),
+        }),
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({ env: { T3CODE_RELAY_URL: "https://relay.example.test" } }),
+          ),
+        ),
+      );
+    },
+  );
 
   it.effect("stops the connector, releases the relay tunnel, and drops the dead token", () => {
     const { store, values } = makeMemorySecretStore(managedLinkSecrets);

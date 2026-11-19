@@ -17,7 +17,7 @@ bundle_id="org.trellium.tinkjam-sync-app"
 say() { printf 'Tinkjam Sync: %s\n' "$*"; }
 fail() { printf 'Tinkjam Sync: %s\n' "$*" >&2; exit 1; }
 
-[ "$(uname -s)" = "Darwin" ] || fail "this installer is for macOS. On Linux or Windows, use: npx -y https://trellium.org/sync.tgz --install"
+[ "$(uname -s)" = "Darwin" ] || fail "this installer is for macOS. On Windows, download and open https://trellium.org/downloads/TinkjamSyncSetup.exe. On Linux, use: npx -y https://trellium.org/sync.tgz --install"
 arch="$(uname -m)"
 case "$arch" in
   arm64 | x86_64) ;;

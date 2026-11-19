@@ -1,4 +1,4 @@
-import { useAuth, useClerk } from "@clerk/react";
+import { useAuth, useClerk, useUser } from "@clerk/react";
 import { readConnectAuthorizeRequest } from "@t3tools/shared/connectAuth";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 
@@ -11,12 +11,12 @@ import { isElectron } from "../../env";
 import { StandalonePage, StandalonePageHeader } from "../ui/standalone-page";
 import { resolveClerkSignInProps } from "../clerk/authRedirect";
 import { Button } from "../ui/button";
+import { Skeleton } from "../ui/skeleton";
 
-const invalidLinkMessage = {
-  context: "Connect a computer",
-  title: "This link is incomplete",
-  description: "Run the Tinkjam Sync command on your computer again and open the link it prints.",
-} as const;
+const START_AGAIN = "Open Tinkjam Sync on your computer and choose Connect to start again.";
+
+// Sign-in normally loads in a second or two; past this the page says so instead of staying empty.
+const SIGN_IN_SLOW_MS = 10_000;
 
 /**
  * Where Tinkjam Sync (or `t3 connect`) sends the browser: the signed-in person approves this
@@ -28,13 +28,16 @@ export function ConnectCliAuthorizeSurface() {
   const [continueAfterSignIn] = useState(() => connectCliContinueRequested(window.location.href));
   const clerk = useClerk();
   const { isLoaded, isSignedIn } = useAuth();
+  const { user } = useUser();
   const continued = useRef(false);
   const [connecting, setConnecting] = useState(false);
+  const [cannotStart, setCannotStart] = useState(false);
+  const [slow, setSlow] = useState(false);
 
   const connect = () => {
     if (!request) return;
     const authorizeUrl = buildConnectCliClerkAuthorizeUrl(request);
-    if (!authorizeUrl) return;
+    if (!authorizeUrl) return setCannotStart(true);
     setConnecting(true);
     // On a development sign-in instance, Clerk's own pages are on another site that cannot see
     // this page's sign-in, and would ask for it again; this carries it there. Nothing elsewhere.
@@ -49,10 +52,21 @@ export function ConnectCliAuthorizeSurface() {
     continueOnLoad();
   }, [continueAfterSignIn, isLoaded, isSignedIn]);
 
-  if (!request) {
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a timer: says sign-in is slow to load instead of leaving the page without a button
+  useEffect(() => {
+    if (isLoaded) return;
+    const timer = setTimeout(() => setSlow(true), SIGN_IN_SLOW_MS);
+    return () => clearTimeout(timer);
+  }, [isLoaded]);
+
+  if (!request || cannotStart) {
     return (
       <StandalonePage>
-        <StandalonePageHeader {...invalidLinkMessage} />
+        <StandalonePageHeader
+          context="Connect a computer"
+          title={request ? "Tinkjam could not start the approval" : "This link is incomplete"}
+          description={START_AGAIN}
+        />
       </StandalonePage>
     );
   }
@@ -75,29 +89,62 @@ export function ConnectCliAuthorizeSurface() {
     );
   }
 
+  const account = user?.primaryEmailAddress?.emailAddress ?? user?.fullName ?? null;
   return (
     <StandalonePage>
       <StandalonePageHeader
         context="Connect a computer"
         title={`Connect ${computer} to your Tinkjam account`}
-        description={`So your boards can use the agents on ${computer}, such as Claude Code or Codex. They run there, on your own sign-in, and only when you send them something.${isSignedIn ? "" : " Sign in to approve it."}`}
+        description={`So your boards can use the agents on ${computer}, such as Claude Code or Codex. They run there, on your own sign-in, and only when you send them something.${isLoaded && !isSignedIn ? " Sign in to approve it." : ""}`}
       />
-      {isLoaded ? (
-        <div className="mt-6 flex flex-wrap items-center gap-3">
-          {isSignedIn ? (
-            <Button type="button" onClick={connect} data-connect-computer>
-              Connect
+      {!isLoaded ? (
+        slow ? (
+          <div className="mt-6 flex flex-wrap items-center gap-3" role="alert">
+            <p className="text-sm text-muted-foreground">
+              Sign-in is taking a while to load. Check your internet connection.
+            </p>
+            <Button type="button" variant="outline" onClick={() => window.location.reload()}>
+              Reload
             </Button>
-          ) : (
-            <Button type="button" onClick={openSignIn}>
-              Sign in to approve
-            </Button>
-          )}
-          <p className="text-xs text-muted-foreground">
-            Only approve a computer you just ran Tinkjam Sync on.
-          </p>
-        </div>
-      ) : null}
+          </div>
+        ) : (
+          <div className="mt-6" role="status" aria-label="Loading sign-in">
+            <Skeleton className="h-8 w-28" />
+          </div>
+        )
+      ) : (
+        <>
+          {isSignedIn && account !== null ? (
+            <p className="mt-6 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+              <span>
+                Signed in as <span className="font-medium">{account}</span>
+              </span>
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost-muted"
+                onClick={() => void clerk.signOut({ redirectUrl: window.location.href })}
+              >
+                Use a different account
+              </Button>
+            </p>
+          ) : null}
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            {isSignedIn ? (
+              <Button type="button" onClick={connect} data-connect-computer>
+                Connect
+              </Button>
+            ) : (
+              <Button type="button" onClick={openSignIn}>
+                Sign in to approve
+              </Button>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Only approve a computer you just opened Tinkjam Sync on.
+            </p>
+          </div>
+        </>
+      )}
     </StandalonePage>
   );
 }

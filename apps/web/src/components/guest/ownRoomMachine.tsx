@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useProjects, useThreadShell } from "~/state/entities";
+import { useEnvironments } from "~/state/environments";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 
@@ -34,20 +35,32 @@ export const announceRoomMachineJoined = (shareId: string) =>
 
 /**
  * Which of the guest's own machines joined this room, if one did. `undefined` while they are
- * asked, `null` when none did, so a box's prompt goes to the owner.
+ * asked, `null` when none did or the one that did is not connected now, so a box's prompt goes
+ * to the owner.
  */
 export function useOwnRoomMachine(share: { readonly host: string; readonly shareId: string }): {
   readonly machine: OwnRoomMachine | null | undefined;
+  /** One joined while this page was open, and is not connected now. */
+  readonly away: boolean;
+  /** The machine left the room: nothing is here until one joins again. */
+  readonly forget: () => void;
   /** Records the thread a box's prompt just ran in. */
   readonly setBoxThread: (environmentId: EnvironmentId, boxId: string, threadId: ThreadId) => void;
 } {
+  const connected = new Set(
+    useEnvironments()
+      .environments.filter((environment) => environment.connection.phase === "connected")
+      .map((environment) => environment.environmentId),
+  );
   // The guest's own machines: the ones with projects, which a shared thread's page has none of.
+  // Only connected ones can answer, and one that connects later is asked then.
   const environmentIds = [...new Set(useProjects().map((project) => project.environmentId))]
-    .filter((environmentId) => !isGuestEnvironment(environmentId))
+    .filter((environmentId) => !isGuestEnvironment(environmentId) && connected.has(environmentId))
     .toSorted();
   const environmentKey = environmentIds.join("\n");
   const findSharedRoom = useAtomCommand(serverEnvironment.findSharedRoom, { reportFailure: false });
   const [machine, setMachine] = useState<OwnRoomMachine | null | undefined>(undefined);
+  const [wasHere, setWasHere] = useState(false);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- asks the guest's own servers which of them joined this room
   useEffect(() => {
     let current = true;
@@ -61,6 +74,7 @@ export function useOwnRoomMachine(share: { readonly host: string; readonly share
         if (!current) return;
         if (result._tag === "Success" && result.value.threadId !== null) {
           found = true;
+          setWasHere(true);
           setMachine({
             environmentId: environmentId as EnvironmentId,
             threadId: result.value.threadId,
@@ -87,8 +101,14 @@ export function useOwnRoomMachine(share: { readonly host: string; readonly share
       stopListening();
     };
   }, [environmentKey, findSharedRoom, share.host, share.shareId]);
+  const here = machine != null && !connected.has(machine.environmentId) ? null : machine;
   return {
-    machine,
+    machine: here,
+    away: wasHere && here === null,
+    forget: () => {
+      setWasHere(false);
+      setMachine(null);
+    },
     setBoxThread: (environmentId, boxId, threadId) =>
       setMachine((known) => ({
         environmentId,

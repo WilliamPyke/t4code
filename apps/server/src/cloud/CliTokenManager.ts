@@ -15,6 +15,7 @@ import * as Base64Url from "effect/encoding/Base64Url";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Terminal from "effect/Terminal";
@@ -37,6 +38,7 @@ import {
 } from "./publicConfig.ts";
 import {
   renderLoopbackAuthorizationCompleteHtml,
+  renderLoopbackAuthorizationFailedHtml,
   renderLoopbackAuthorizationStartHtml,
 } from "./cliAuthHtml.ts";
 
@@ -491,8 +493,9 @@ const serveLoopbackCallback = Effect.fn("cloud.cli_token.serve_loopback_callback
         const url = new URL(request.originalUrl, metadata.redirectUri);
         const code = url.searchParams.get("code");
         if (url.searchParams.get("state") !== state || !code) {
-          return HttpServerResponse.text("This sign-in link is no longer valid. Start again.", {
+          return HttpServerResponse.text(renderLoopbackAuthorizationFailedHtml(), {
             status: 400,
+            contentType: "text/html; charset=utf-8",
           });
         }
         yield* Deferred.succeed(callback, code);
@@ -618,7 +621,15 @@ export const approveComputerLogin = Effect.fn("cloud.cli_token.approve_computer_
     redirect_uri: metadata.redirectUri,
     client_id: metadata.clientId,
     code_verifier: verifier,
-  }).pipe(Effect.ensuring(secrets.remove(PENDING_APPROVAL_SECRET).pipe(Effect.ignore)));
+  }).pipe(
+    // The person has already pressed Connect; a dropped connection must not cost the approval.
+    Effect.retry({
+      times: 3,
+      schedule: Schedule.spaced("2 seconds"),
+      while: (error) => isTransportError(error) || error._tag === "TimeoutError",
+    }),
+    Effect.ensuring(secrets.remove(PENDING_APPROVAL_SECRET).pipe(Effect.ignore)),
+  );
 }, Effect.scoped);
 
 /** @public */

@@ -3,11 +3,13 @@ import { EnvironmentId, ProviderDriverKind } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  agentsChecked,
   bringAgentComputers,
   computersAwaitingReconnect,
   computersBackOnline,
   noAgentMessage,
   steadyDiscovered,
+  uncheckedDiscovered,
 } from "./bringAgent.logic";
 
 const id = (value: string) => EnvironmentId.make(value);
@@ -37,6 +39,11 @@ describe("steadyDiscovered", () => {
     expect(
       steadyDiscovered(shown, { listed: true, computers: [computer("desk", "offline")] }),
     ).toEqual([computer("desk", "offline")]);
+    // Unanswered for too long: the computers stay, but nothing says they are up.
+    expect(uncheckedDiscovered(shown)).toEqual([
+      computer("desk", "error"),
+      computer("gone", "error"),
+    ]);
   });
 });
 
@@ -44,7 +51,7 @@ describe("bringAgentComputers", () => {
   const discovered = (
     environmentId: string,
     name: string,
-    availability: "checking" | "online" | "offline",
+    availability: "checking" | "online" | "offline" | "error",
     unsupported = false,
   ) => ({ environmentId: id(environmentId), name, availability, unsupported, linkedAt: LINKED_AT });
 
@@ -97,6 +104,8 @@ describe("bringAgentComputers", () => {
         saved("ghost", "Ghost", "reconnecting", false),
         // Paired directly, so the account never lists it.
         saved("lan", "Lan", "connected", true, false),
+        // Stopped here, and the account could not say whether it is up.
+        saved("unsure", "Unsure", "error", false),
       ],
       discovered: [
         // Saved here already: the account only says whether it is up.
@@ -108,6 +117,8 @@ describe("bringAgentComputers", () => {
         discovered("new", "New", "online"),
         discovered("away", "Away", "offline"),
         discovered("stale", "Stale", "online", true),
+        discovered("unsure", "Unsure", "error"),
+        discovered("unknown", "Unknown", "error"),
       ],
       listed: true,
     });
@@ -122,6 +133,8 @@ describe("bringAgentComputers", () => {
       ["asleep", "offline", true],
       ["away", "offline", false],
       ["old", "offline", true],
+      ["unknown", "unchecked", false],
+      ["unsure", "unchecked", true],
       ["stale", "unsupported", false],
       ["ghost", "gone", true],
     ]);
@@ -195,7 +208,7 @@ describe("noAgentMessage", () => {
         provider(codex, { installed: false, status: "error", auth: "unknown" }),
       ],
       message:
-        "Tinkjam Sync found no signed-in agent on James's Laptop. Claude Code: not signed in (open a terminal on it, run `claude` and sign in). Codex: not installed.",
+        "Tinkjam Sync found no signed-in agent on James's Laptop.\nClaude Code: not signed in. Open Claude Code on that computer and sign in.\nCodex: not installed.",
     },
     {
       name: "other installed agents are named, missing or turned-off ones are not",
@@ -208,11 +221,13 @@ describe("noAgentMessage", () => {
         provider(ProviderDriverKind.make("kiro"), { enabled: false, installed: false }),
       ],
       message:
-        "Tinkjam Sync found no signed-in agent on James's Laptop. Claude Code: turned off in Tinkjam settings. Codex: not signed in (open a terminal on it and run `codex login`). Cursor: installed, but it did not start.",
+        "Tinkjam Sync found no signed-in agent on James's Laptop.\nClaude Code: turned off in Tinkjam settings.\nCodex: not signed in. Open the ChatGPT or Codex app on that computer and sign in.\nCursor: installed, but it did not start.",
     },
   ])("says what it found when $name", ({ settingsLoaded, providers, message }) => {
     expect(noAgentMessage({ computerName: "James's Laptop", settingsLoaded, providers })).toBe(
       message,
     );
+    // An agent comes by itself only once none of them is still being checked.
+    expect(agentsChecked(providers)).toBe(!message.includes("still checking"));
   });
 });

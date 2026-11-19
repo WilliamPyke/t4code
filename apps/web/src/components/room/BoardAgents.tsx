@@ -82,6 +82,8 @@ export interface BoardAgentEntry {
   readonly fallback?: "working" | "approval" | undefined;
   /** No machine of its person's can run it now. */
   readonly offline?: boolean | undefined;
+  /** Offline and the viewer's own: their computer dropped (`away`), or they never brought it. */
+  readonly offlineOwn?: "away" | "absent" | undefined;
 }
 
 // What of a run the panel shows: never its streaming text, so a token renders nothing here.
@@ -218,9 +220,11 @@ const STATUS_TONES: Readonly<Record<BoardAgentStatus["kind"], BoardChipTone>> = 
 function StatusChip({
   status,
   run,
+  offlineOwn,
 }: {
   readonly status: BoardAgentStatus;
   readonly run: BoardAgentRun | undefined;
+  readonly offlineOwn?: "away" | "absent" | undefined;
 }) {
   const chip = (
     <BoardChip
@@ -240,7 +244,11 @@ function StatusChip({
       <TooltipTrigger render={<span />}>{chip}</TooltipTrigger>
       <TooltipPopup side="top">
         {status.kind === "offline"
-          ? "Whoever this agent belongs to is not on the board now, so it cannot run."
+          ? offlineOwn === "away"
+            ? "Your computer is not connected. Wake it, or open Tinkjam Sync on it. Your agent comes back by itself."
+            : offlineOwn === "absent"
+              ? "Your agent is not on this board. Press Bring my agent."
+              : "Whoever this agent belongs to is not on the board now, so it cannot run."
           : "It ran on another machine and no reply came back, so this board cannot tell how it ended."}
       </TooltipPopup>
     </Tooltip>
@@ -387,6 +395,7 @@ export function BoardAgents({
   recent,
   cloud = false,
   bringAgent,
+  takeAgentAway,
 }: {
   readonly entries: ReadonlyArray<BoardAgentEntry>;
   readonly viewer: string | null;
@@ -407,8 +416,11 @@ export function BoardAgents({
   readonly cloud?: boolean;
   /** On a cloud board this person has brought no agent to yet: how they bring one. */
   readonly bringAgent?: (() => void) | undefined;
+  /** This person's agent is on this cloud board: takes it off again. */
+  readonly takeAgentAway?: (() => Promise<void>) | undefined;
 }) {
   const store = use(RoomLiveContext);
+  const [takingAway, setTakingAway] = useState(false);
   const runOf = useAgentRuns(entries);
   const [ended] = useState(createEndedRuns);
   useSyncExternalStore(ended.subscribe, ended.version);
@@ -573,7 +585,7 @@ export function BoardAgents({
                       <span className="min-w-0 flex-1 truncate text-xs font-medium">
                         {entry.name}
                       </span>
-                      <StatusChip status={status} run={run} />
+                      <StatusChip status={status} run={run} offlineOwn={entry.offlineOwn} />
                     </span>
                     <span className="truncate ps-4 text-2xs text-muted-foreground">
                       {[entry.whose, run?.model ?? entry.model]
@@ -618,6 +630,26 @@ export function BoardAgents({
               </li>
             ))}
           </ol>
+          {takeAgentAway === undefined ? null : (
+            <div className="flex items-center gap-2 px-1.5 pb-1">
+              <p className="min-w-0 flex-1 text-2xs text-muted-foreground">
+                Your agent is on this board. Only you can send it work.
+              </p>
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={takingAway}
+                onClick={async () => {
+                  setTakingAway(true);
+                  await takeAgentAway();
+                  setTakingAway(false);
+                }}
+                data-take-agent-away
+              >
+                {takingAway ? "Taking it off…" : "Take my agent off"}
+              </Button>
+            </div>
+          )}
           {hasThreadBoxes ? null : bringAgent !== undefined ? (
             <div className="flex items-center gap-2 px-1.5 pb-1">
               <p className="min-w-0 flex-1 text-2xs text-muted-foreground">
@@ -631,7 +663,7 @@ export function BoardAgents({
                   bringAgent();
                 }}
               >
-                Bring your agent
+                Bring my agent
               </Button>
             </div>
           ) : (

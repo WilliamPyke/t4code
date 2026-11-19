@@ -23,6 +23,7 @@ import type { ComposerBannerStackItem } from "./ComposerBannerStack";
 import { ENVIRONMENT_RECONNECT_WARNING_GRACE_MS } from "../ChatView.logic";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ServerUpdateAction, serverUpdateStageLabel } from "../ServerUpdateAction";
 import { useAutoBalanceUpdateBanner } from "./useAutoBalanceUpdateBanner";
 import { ComposerServerUpdateIcon } from "./ComposerServerUpdateStatus";
@@ -94,7 +95,7 @@ export function useSystemComposerBanners(input: SystemComposerBannersInput) {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not reconnect environment",
+          title: "Could not reconnect",
           description: error instanceof Error ? error.message : "Failed to reconnect.",
         }),
       );
@@ -122,7 +123,7 @@ export function useSystemComposerBanners(input: SystemComposerBannersInput) {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not disconnect server",
+            title: "Could not disconnect",
             description: error instanceof Error ? error.message : "Failed to disconnect.",
           }),
         );
@@ -159,19 +160,27 @@ export function useSystemComposerBanners(input: SystemComposerBannersInput) {
     const unavailableConnection = activeEnvironmentUnavailableState?.connection ?? null;
     const disconnectAction =
       canDisconnectActiveEnvironment && activeEnvironmentUnavailableState ? (
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={disconnectingEnvironment}
-          title="Hide this server's threads. Switch it on again in Environments."
-          onClick={() =>
-            void handleDisconnectActiveEnvironmentStable(
-              activeEnvironmentUnavailableState.environmentId,
-            )
-          }
-        >
-          Disconnect server
-        </Button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={disconnectingEnvironment}
+                onClick={() =>
+                  void handleDisconnectActiveEnvironmentStable(
+                    activeEnvironmentUnavailableState.environmentId,
+                  )
+                }
+              />
+            }
+          >
+            Disconnect
+          </TooltipTrigger>
+          <TooltipPopup side="top">
+            Hides this computer's chats. Switch it back on in Settings, under Environments.
+          </TooltipPopup>
+        </Tooltip>
       ) : undefined;
     const environmentReconnecting =
       unavailableConnection !== null &&

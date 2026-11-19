@@ -39,6 +39,22 @@ const facts = (overrides: Partial<ReachabilityFacts>): ReachabilityFacts => ({
 });
 
 describe("classifyReachability", () => {
+  it("gives the reason linking stopped instead of a tunnel that will never come", () => {
+    const linkFailure = { reason: "This computer was removed.", fix: "Approve it again." };
+    expect(
+      classifyReachability(
+        facts({ managedTunnelConfigured: false, connector: null, linkFailure }),
+        checkedAt,
+      ),
+    ).toMatchObject({ status: "unreachable", cause: "not_linked", ...linkFailure });
+    expect(
+      classifyReachability(
+        facts({ endpoint: { kind: "status", status: 200 }, linkFailure }),
+        checkedAt,
+      ),
+    ).toMatchObject({ status: "reachable" });
+  });
+
   it.each([
     [{ kind: "status", status: 502 }, "origin_unreachable"],
     [{ kind: "status", status: 530 }, "no_connector"],
@@ -141,7 +157,10 @@ const reachabilityLayer = (
           restartConnector,
         }),
         Layer.mock(ServerSecretStore.ServerSecretStore)({
-          get: () => Effect.succeedSome(new Uint8Array()),
+          get: (name) =>
+            name === "cloud-endpoint-runtime-config"
+              ? Effect.succeedSome(new Uint8Array())
+              : Effect.succeedNone,
         }),
         Layer.succeed(
           TunnelEndpointProbe.TunnelEndpoint,

@@ -60,9 +60,14 @@ final class SetupWindow: NSWindowController {
 
     required init?(coder: NSCoder) { fatalError("unused") }
 
-    func present() {
+    /// `activate: false` puts the window on screen without taking the keyboard from another app.
+    func present(activate: Bool) {
         guard let window else { return }
         if !window.isVisible { window.center() }
+        guard activate else {
+            window.orderFrontRegardless()
+            return
+        }
         showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)

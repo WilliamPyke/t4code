@@ -13,8 +13,10 @@ enum SyncLine: Equatable {
 
     static func classify(_ raw: String) -> SyncLine {
         let line = raw.trimmingCharacters(in: .whitespaces)
+        // Only Sync's own page on this Mac is ever opened, whatever a line of output says.
         if line.hasPrefix("TINKJAM_SYNC_APPROVE_URL "),
-           let url = URL(string: String(line.dropFirst("TINKJAM_SYNC_APPROVE_URL ".count))) {
+           let url = URL(string: String(line.dropFirst("TINKJAM_SYNC_APPROVE_URL ".count))),
+           url.scheme == "http", url.host == "127.0.0.1", url.port != nil {
             return .approvalURL(url)
         }
         // Packages without `--app` print the bare link on its own indented line.
@@ -30,12 +32,14 @@ enum SyncLine: Equatable {
     }
 }
 
-/// `<home>/userdata/sync-status.json`, which Sync rewrites while it waits to be reachable.
+/// `<home>/userdata/sync-status.json`, which Sync rewrites while it waits to be reachable and,
+/// in newer packages, every 30 seconds after that. `checkedAt` is the ISO time of that check.
 struct SyncStatus: Decodable {
     let pid: Int32?
     let status: String
     let reason: String?
     let cause: String?
+    let checkedAt: String?
 
     static func read(_ paths: Paths) -> SyncStatus? {
         guard let data = try? Data(contentsOf: paths.status) else { return nil }

@@ -132,7 +132,8 @@ export type EnvironmentConnectorError =
   | EnvironmentLinks.EnvironmentLinkLookupPersistenceError
   | ManagedEndpointAllocations.ManagedEndpointAllocationPersistenceError;
 
-const ENVIRONMENT_MINT_REQUEST_TIMEOUT_MS = 10_000;
+// Below the relay's 9 s request deadline, so a hung tunnel answers "offline", not a 504.
+const ENVIRONMENT_MINT_REQUEST_TIMEOUT_MS = 7_000;
 const ENVIRONMENT_HEALTH_CLOCK_SKEW_MILLIS = 60 * 1_000;
 
 export class EnvironmentConnector extends Context.Service<

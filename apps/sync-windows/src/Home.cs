@@ -9,7 +9,7 @@ namespace TinkjamSync
 {
     public sealed class AppArgs
     {
-        public bool Install, Uninstall, Silent, Autostart, DumpState, SelfTest, PrintVersion, Quit;
+        public bool Install, Uninstall, Silent, Autostart, AfterUpdate, DumpState, SelfTest, PrintVersion, Quit;
         public string BaseDir, InstallDir;
 
         public static AppArgs Parse(string[] argv)
@@ -25,6 +25,7 @@ namespace TinkjamSync
                     case "--uninstall": args.Uninstall = true; break;
                     case "--silent": case "--s": case "--quiet": args.Silent = true; break;
                     case "--autostart": args.Autostart = true; break;
+                    case "--after-update": args.AfterUpdate = true; break;
                     case "--dump-state": args.DumpState = true; break;
                     case "--self-test": args.SelfTest = true; break;
                     case "--version": args.PrintVersion = true; break;
@@ -94,6 +95,7 @@ namespace TinkjamSync
         public string StatusPath => Path.Combine(BaseDir, "userdata", "sync-status.json");
         public string RuntimeDir => Path.Combine(BaseDir, "runtime");
         public string StagingDir => Path.Combine(RuntimeDir, "sync-staging");
+        public string UpdateDir => Path.Combine(RuntimeDir, "update");
         public string AppDir => Path.Combine(BaseDir, "app");
         public string ServerEntry => Path.Combine(AppDir, "node_modules", "tinkjam-sync", "dist", "bin.mjs");
         public static string LauncherIn(string appDir) => Path.Combine(appDir, "node_modules", "tinkjam-sync", "bin", "tinkjam-sync.mjs");
@@ -112,6 +114,10 @@ namespace TinkjamSync
     public sealed class Settings
     {
         public bool StartWithWindows = true;
+        /// <summary>The person chose Disconnect: nothing connects again until they choose Connect.</summary>
+        public bool Disconnected;
+        /// <summary>The app version this copy already tried to update to by itself.</summary>
+        public string UpdateAttempted;
         public string SyncVersion;
         readonly string path;
 
@@ -124,7 +130,9 @@ namespace TinkjamSync
             {
                 var value = Json.Parse(File.ReadAllText(home.SettingsPath));
                 if (value != null && value.TryGetValue("startWithWindows", out var start) && start is bool b) settings.StartWithWindows = b;
+                if (value != null && value.TryGetValue("disconnected", out var off) && off is bool d) settings.Disconnected = d;
                 settings.SyncVersion = Json.Text(value, "syncVersion");
+                settings.UpdateAttempted = Json.Text(value, "updateAttempted");
             }
             catch (Exception) { }
             return settings;
@@ -136,8 +144,31 @@ namespace TinkjamSync
             File.WriteAllText(path, Json.Write(new Dictionary<string, object>
             {
                 ["startWithWindows"] = StartWithWindows,
+                ["disconnected"] = Disconnected,
+                ["updateAttempted"] = UpdateAttempted,
                 ["syncVersion"] = SyncVersion,
             }));
+        }
+    }
+
+    public static class EnvPath
+    {
+        const string MachineKey = @"SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
+
+        /// <summary>
+        /// PATH as a program started now would get it. This app's own copy dates from log-in, so an
+        /// agent installed since then is only on the registry's.
+        /// </summary>
+        public static string Current()
+        {
+            string machine = null, user = null;
+            try
+            {
+                using (var key = Registry.LocalMachine.OpenSubKey(MachineKey)) machine = key?.GetValue("Path") as string;
+                using (var key = Registry.CurrentUser.OpenSubKey("Environment")) user = key?.GetValue("Path") as string;
+            }
+            catch (Exception) { }
+            return PathList.Merge(machine, user, Environment.GetEnvironmentVariable("PATH"));
         }
     }
 
@@ -218,6 +249,13 @@ namespace TinkjamSync
         {
             if (!EventWaitHandle.TryOpenExisting(home.EventName(kind), out var handle)) return false;
             using (handle) handle.Set();
+            return true;
+        }
+
+        public static bool Running(Home home)
+        {
+            if (!Mutex.TryOpenExisting(home.MutexName, out var mutex)) return false;
+            mutex.Dispose();
             return true;
         }
 

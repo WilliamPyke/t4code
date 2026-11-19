@@ -41,7 +41,7 @@ Do these in order and stop at the first that works. Do not invent other workarou
 
 ## 4. Tell the person
 
-In two or three plain sentences: Tinkjam Sync is installed and shows in their menu bar or system tray; on any board at https://app.trellium.org they can press **Bring your agent** and pick this computer; to stop it they choose Quit from its menu, and to remove this computer from their account they choose Disconnect there.
+In two or three plain sentences: Tinkjam Sync is installed and shows in their menu bar or system tray; on any board at https://app.trellium.org they can press **Bring my agent** and pick this computer; to stop it they choose Quit from its menu, and to remove this computer from their account they choose Disconnect there.
 
 ## Updating and fixing
 

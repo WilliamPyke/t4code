@@ -26,7 +26,8 @@ describe("mapManagedRelayError", () => {
     );
     expect(mapped).toMatchObject({
       reason: "timeout",
-      detail: "Relay timed out while contacting the environment endpoint.",
+      detail:
+        "This computer did not answer in time. Check that it is on, online, and running Tinkjam.",
       traceId: "trace-server-timeout",
     });
   });
@@ -50,7 +51,7 @@ describe("mapManagedRelayError", () => {
     expect(mapConnectRefusal("managed_endpoint_allocation_not_ready")).toMatchObject({
       _tag: "ConnectionTransientError",
       reason: "endpoint-unavailable",
-      detail: "The environment's Tinkjam Connect tunnel is still being set up.",
+      detail: "This computer's connection is still being set up.",
       traceId: "trace-connect-refused",
     });
     expect(mapConnectRefusal("endpoint_provider_not_managed")).toMatchObject({
@@ -81,7 +82,7 @@ describe("mapManagedRelayError", () => {
     expect(mapped).toMatchObject({
       _tag: "ConnectionBlockedError",
       reason: "authentication",
-      detail: `Relay rejected the DPoP proof. ${DPOP_UNKNOWN_HINT}`,
+      detail: `Tinkjam could not confirm this device's request. ${DPOP_UNKNOWN_HINT}`,
       traceId: "trace-1",
     });
   });

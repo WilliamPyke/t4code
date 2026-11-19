@@ -14,6 +14,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
@@ -21,7 +22,13 @@ import { ChildProcessSpawner } from "effect/process";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
-import { CLOUD_ENDPOINT_RUNTIME_CONFIG } from "./config.ts";
+import {
+  CLOUD_ENDPOINT_RUNTIME_CONFIG,
+  CLOUD_LINK_FAILURE,
+  CLOUD_LINK_REVOKED,
+  StoredLinkFailure,
+} from "./config.ts";
+import { LINK_REMOVED_FAILURE } from "./relayResponse.ts";
 import * as ManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
 import * as TunnelEndpointProbe from "./tunnelEndpointProbe.ts";
 
@@ -58,7 +65,11 @@ export interface ReachabilityFacts {
   readonly endpoint: EndpointProbe | null;
   readonly edgeReachable: boolean | null;
   readonly exitNode: TailscaleExitNode | null;
+  /** Why linking stopped, when retrying cannot fix it. */
+  readonly linkFailure?: { readonly reason: string; readonly fix: string } | null;
 }
+
+const decodeLinkFailure = Schema.decodeUnknownOption(StoredLinkFailure);
 
 type Unreachable = Extract<EnvironmentConnectReachability, { status: "unreachable" }>;
 
@@ -81,7 +92,12 @@ export function classifyReachability(
     hint: string | null = null,
   ): Unreachable => ({ status: "unreachable", checkedAt, cause, reason, hint, fix });
   const restart = "Restart T3 Code. If it stays, run `t3 connect` again.";
+  const status = endpoint?.kind === "status" ? endpoint.status : null;
 
+  // A tunnel that still answers outranks an older failure; otherwise the failure is the cause.
+  if (facts.linkFailure && status !== 200) {
+    return fail("not_linked", facts.linkFailure.reason, facts.linkFailure.fix);
+  }
   if (!facts.managedTunnelConfigured) {
     // A running server reads the link `t3 connect` stores only at startup.
     return fail(
@@ -97,7 +113,6 @@ export function classifyReachability(
       "Restart T3 Code. If it stays down, check the server log for relay client errors.",
     );
   }
-  const status = endpoint?.kind === "status" ? endpoint.status : null;
   if (status === 200) {
     return {
       status: "reachable",
@@ -278,12 +293,24 @@ const make = Effect.gen(function* () {
       connector?.hostname && connector.readyConnections !== 0
         ? yield* probeEndpoint(connector.hostname)
         : null;
+    const [revoked, storedFailure] = yield* Effect.all([
+      secrets.get(CLOUD_LINK_REVOKED),
+      secrets.get(CLOUD_LINK_FAILURE),
+    ]).pipe(Effect.orElseSucceed(() => [Option.none(), Option.none()] as const));
+    const linkFailure = Option.isSome(revoked)
+      ? LINK_REMOVED_FAILURE
+      : Option.getOrNull(
+          Option.flatMap(storedFailure, (bytes) =>
+            decodeLinkFailure(new TextDecoder().decode(bytes)),
+          ),
+        );
     const facts: ReachabilityFacts = {
       managedTunnelConfigured,
       connector,
       endpoint,
       edgeReachable: null,
       exitNode: null,
+      linkFailure,
     };
     if (connector === null || (endpoint?.kind === "status" && endpoint.status === 200)) {
       return facts;

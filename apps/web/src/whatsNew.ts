@@ -15,7 +15,7 @@ export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
     date: "2026-11-17",
     title: "Simple and Advanced",
     items: [
-      "Tinkjam starts Simple: boards, your tasks, sharing and settings, with nothing you need a terminal for.",
+      "Tinkjam starts Simple: boards, your tasks, sharing and settings, in plain words.",
       "Switch to Advanced from the menu with your name, or from the command menu, to see threads, projects, pull requests and usage. Switch back the same way.",
     ],
   },
@@ -54,7 +54,7 @@ export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
     title: "Workspaces and Tinkjam Sync",
     items: [
       "Make a workspace for your team, invite people with a link, and every board in it is shared with every member.",
-      "Tinkjam Sync connects your computer in one step, so the agents on it, such as Claude Code or Codex, can work on your boards. Choose Connect a computer in the sidebar or in Settings.",
+      "Tinkjam Sync connects your computer, so the agents on it, such as Claude Code or Codex, can work on your boards. Choose Connect a computer in the sidebar or in Settings.",
       "Bring my agent lists your computers and adds your agent's box to the board.",
     ],
   },

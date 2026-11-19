@@ -613,6 +613,7 @@ const linkEnvironmentForConnect = Effect.fn("cloud.cli.link_environment")(functi
   if (yield* CliState.dropRevokedCloudLink) {
     yield* Console.log("Replacing the link T3 Connect revoked.");
   }
+  yield* CliState.markFreshApproval;
   if (publishOnly) {
     const secrets = yield* ServerSecretStore.ServerSecretStore;
     yield* secrets.set(PUBLISH_AGENT_ACTIVITY_SECRET, stringToBytes("true"));

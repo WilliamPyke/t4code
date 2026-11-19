@@ -38,7 +38,7 @@ const faqs = [
   },
   {
     q: "Do I need a terminal?",
-    a: "No. To bring an agent, you download the Tinkjam Sync app, open it and press Connect; everything else happens in the browser. Teammates who just join boards need nothing at all.",
+    a: "Teammates who just join boards never do. To bring your own agent you install the Tinkjam Sync app once. On Windows you download it and open it. On a Mac you paste one line into the Terminal app, once; we show you exactly how. After that everything happens in the browser.",
   },
   {
     q: "Where do my boards live?",
@@ -226,8 +226,8 @@ const faqs = [
           <span class="step__num" aria-hidden="true">3</span>
           <h3>Bring your agents</h3>
           <p>
-            Open the Tinkjam Sync app and click Connect. Your Claude or Codex agent shows
-            up as a box everyone can follow.
+            Install the Tinkjam Sync app on your computer and press Connect. Your Claude or Codex
+            agent shows up as a box everyone can follow.
           </p>
         </li>
       </ol>
@@ -452,15 +452,21 @@ const faqs = [
           <ol class="agent-steps">
             <li>
               <b>Get Tinkjam Sync</b>
-              <span>A small app for your Mac or PC. One line on a Mac, one download on Windows.</span>
+              <span>
+                A small app for your Mac or PC. On Windows, download it and open it. On a Mac, paste
+                one line into Terminal, once.
+              </span>
             </li>
             <li>
               <b>Press Connect</b>
-              <span>Your browser opens by itself. Sign in and approve this computer.</span>
+              <span>Your browser opens by itself. Sign in if it asks, then approve this computer.</span>
             </li>
             <li>
               <b>Bring your agent onto a board</b>
-              <span>Pick the agent and the board. It shows up as a box your team can follow.</span>
+              <span>
+                Open a board, press Bring my agent and pick your computer. Your agent shows up as a
+                box your team can follow.
+              </span>
             </li>
           </ol>
         </div>
@@ -471,17 +477,25 @@ const faqs = [
               <i></i><i></i><i></i>
               <span>Tinkjam Sync</span>
             </div>
-            <p class="cmd__note">On a Mac, open Terminal, paste this line and press Return:</p>
+            <p class="cmd__note">
+              On a Mac, open the Terminal app (press Command and Space, type Terminal, press
+              Return), paste this line and press Return. You only do this once:
+            </p>
             <div class="cmd__body">
               <code class="cmd__say"><span class="cmd__prompt" aria-hidden="true">$</span> {MAC_COMMAND}</code>
               <button class="cmd__copy" type="button" data-copy={MAC_COMMAND}>Copy</button>
             </div>
+            <p class="cmd__note">On Windows, download it and open the file:</p>
             <div class="cmd__body cmd__body--get">
               <a class="btn btn--primary" href={WINDOWS_DOWNLOAD} download>Download for Windows</a>
             </div>
             <p class="cmd__note">
-              It lives in your menu bar or system tray, starts with your computer and updates
-              itself. Rather have your coding agent install it? Paste this to it:
+              If Windows says it protected your PC, choose More info, then Run anyway.
+            </p>
+            <p class="cmd__note">
+              Tinkjam Sync then sits in the menu bar on a Mac, or the system tray on Windows, starts
+              with your computer and updates itself. Rather have your coding agent install it? Paste
+              this to it:
             </p>
             <div class="cmd__body">
               <code class="cmd__say"><span class="cmd__prompt" aria-hidden="true">&gt;</span> {AGENT_PROMPT}</code>
@@ -493,7 +507,7 @@ const faqs = [
           <div class="connect" aria-hidden="true">
             <span class="tape"></span>
             <p class="connect__title">Connect Maya's MacBook to Tinkjam?</p>
-            <p class="connect__text">Only approve a computer you just ran Tinkjam Sync on.</p>
+            <p class="connect__text">Only approve a computer you just opened Tinkjam Sync on.</p>
             <span class="mini-btn mini-btn--send">Connect</span>
           </div>
 

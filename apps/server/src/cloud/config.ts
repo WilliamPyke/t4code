@@ -18,6 +18,14 @@ export const RELAY_ENVIRONMENT_CREDENTIAL_SECRET = "cloud-relay-environment-cred
 export const PUBLISH_AGENT_ACTIVITY_SECRET = "cloud-publish-agent-activity";
 export const HOLD_WEBHOOKS_WHILE_OFFLINE_SECRET = "cloud-hold-webhooks-while-offline";
 export const CLOUD_LINK_REVOKED = "cloud-link-revoked";
+/** Set by a browser approval on this computer; sent with the next link, which clears it. */
+export const CLOUD_LINK_FRESH_APPROVAL = "cloud-link-fresh-approval";
+/** The last reason linking failed that retrying cannot fix, as JSON `{ reason, fix }`. */
+export const CLOUD_LINK_FAILURE = "cloud-link-failure";
+
+export const StoredLinkFailure = Schema.fromJsonString(
+  Schema.Struct({ reason: Schema.String, fix: Schema.String }),
+);
 
 export const encodeEndpointRuntimeConfigJson = Schema.encodeEffect(
   Schema.fromJsonString(RelayManagedEndpointRuntimeConfig),

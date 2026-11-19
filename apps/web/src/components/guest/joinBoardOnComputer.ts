@@ -17,7 +17,7 @@ import { useEnvironmentProviders, useEnvironments } from "~/state/environments";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 
-import { noAgentMessage } from "./bringAgent.logic";
+import { noAgentMessage, ownAgentFailureMessage } from "./bringAgent.logic";
 
 /**
  * Joins a cloud board from one of the person's own computers, as the join page does, without
@@ -71,7 +71,9 @@ export function useJoinBoardOnComputer() {
     });
     if (result._tag === "Success") return null;
     if (isAtomCommandInterrupted(result)) return "Stopped before your agent joined.";
-    const cause = squashAtomCommandFailure(result);
-    return cause instanceof Error && cause.message ? cause.message : "Could not bring your agent.";
+    return ownAgentFailureMessage(
+      squashAtomCommandFailure(result),
+      `${computer?.label ?? "Your computer"} could not bring your agent. Check that Tinkjam Sync is running on it, then try again.`,
+    );
   };
 }
