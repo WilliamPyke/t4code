@@ -238,7 +238,8 @@ export function RoomEmbedBody({
   return (
     <div ref={bodyRef} className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 pb-2">
-        <div className="flex min-w-0 flex-1 items-center gap-1.5 text-2xs text-muted-foreground">
+        {/* Its own width, up to a whole row: the buttons wrap under it rather than squeeze it. */}
+        <div className="flex min-w-0 max-w-full shrink-0 items-center gap-1.5 text-2xs text-muted-foreground">
           {stays ? <span className="line-clamp-2">{REFUSED}</span> : addedBy}
         </div>
         {actions}
