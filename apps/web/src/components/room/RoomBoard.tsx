@@ -7343,10 +7343,12 @@ function LineLegend() {
             <span aria-hidden className={cn(swatch, "border-muted-foreground/70")} />
             Any other line: only shows a link
           </span>
-          <span className="mt-1 border-t border-board-hairline pt-1.5">
+          <span className="mt-1 border-t border-board-hairline pt-1.5 pointer-coarse:hidden">
             {boardVoteShortcut()} votes for the selected cards, or takes your votes back
           </span>
-          <span>{boardAskShortcut()} asks an agent about the selected cards</span>
+          <span className="pointer-coarse:hidden">
+            {boardAskShortcut()} asks an agent about the selected cards
+          </span>
         </div>
       </PopoverPopup>
     </Popover>
