@@ -13,6 +13,15 @@ export interface WhatsNewEntry {
 export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
   {
     date: "2026-11-19",
+    title: "Agents that tidy up, and notes that say when they are done",
+    items: [
+      "Ask your agent to arrange the board: put notes in a grid inside a section, place one card beside another, tidy or rename a section. What it moves carries its name, and one Undo takes it all back.",
+      "A note connected to an agent says where it stands: To send, With the agent, then Done by agent once the agent's reply is in. Not fixed, send again puts it back in the next prompt.",
+      "An agent's prompt counts its notes, and Remove done notes clears the finished ones.",
+    ],
+  },
+  {
+    date: "2026-11-19",
     title: "Artifacts you can compare, mark up and browse",
     items: [
       "Connect an artifact to an empty artifact card and the second card shows the same page live, at its own size: one wide, one phone-narrow. Keep this version turns it into its own copy, so you can keep an old version beside the new one.",

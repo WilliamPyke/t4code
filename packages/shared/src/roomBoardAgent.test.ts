@@ -167,6 +167,61 @@ describe("roomBoardAgentArrange", () => {
       }),
   );
 
+  it.effect("grows a section over no card it did not cover: reshapes its grid, else refuses", () =>
+    Effect.gen(function* () {
+      const cards = ["c1", "c2", "c3", "c4", "c5", "c6"];
+      const notes = (...extra: ReadonlyArray<RoomBoardNote>): ReadonlyArray<RoomBoardNote> => [
+        { id: "s", text: "Ideas", x: 10_000, y: 0, section: true },
+        ...cards.map((id, index) => ({ id, text: id, x: 20_000 + index * 300, y: 0 })),
+        ...extra,
+      ];
+      const grid = (columns?: number): ReadonlyArray<RoomBoardAgentArrangeOp> => [
+        { do: "layout", cards, as: "grid", in: "Ideas", ...(columns ? { columns } : {}) },
+      ];
+      const box: RoomBoardNote = { id: "box:me", text: "Mine", x: 10_000, y: 500, kind: "thread" };
+      const right: RoomBoardNote = { id: "r", text: "R", x: 10_650, y: 0 };
+
+      // Room below: two columns, growing down. A card already over its edge does not count.
+      const free = yield* arrange(grid(), notes({ id: "o", text: "O", x: 10_500, y: 380 }));
+      expect(free.result.refused).toEqual([]);
+      expect(at(free.board, "s")).toEqual([10_000, 0, 640, 584]);
+
+      // The agent's box below: three columns, growing sideways instead.
+      const wider = yield* arrange(grid(), notes(box));
+      expect(wider.result.refused).toEqual([]);
+      expect([at(wider.board, "s"), at(wider.board, "c3")]).toEqual([
+        [10_000, 0, 688, 420],
+        [10_464, 72, undefined, undefined],
+      ]);
+
+      // A card to the right of three asked-for columns: two, growing down instead.
+      const taller = yield* arrange(grid(3), notes(right));
+      expect(taller.result.refused).toEqual([]);
+      expect(at(taller.board, "s")).toEqual([10_000, 0, 640, 584]);
+
+      // Boxed in: refused, and nothing moves.
+      const boxed = yield* arrange(grid(), notes(box, right));
+      expect(boxed.result.refused).toEqual([
+        {
+          op: 0,
+          reason:
+            'Section "Ideas" would grow over other cards. Move it somewhere with more room first, or put fewer cards in it.',
+        },
+      ]);
+      expect(boxed.result.moved).toEqual([]);
+      // Tidying a section, narrowed again, with its six cards laid out wide.
+      const tidied = yield* arrange(
+        [{ do: "tidy", section: "Ideas" }],
+        [...wider.board.notes, right].map((note) =>
+          note.id === "s" ? { ...note, size: { w: 640, h: 420 } } : note,
+        ),
+      );
+      expect(tidied.result.refused.map((refusal) => refusal.reason)).toEqual([
+        boxed.result.refused[0]?.reason,
+      ]);
+    }),
+  );
+
   it.effect("places a card beside another, past whatever is in the way on that side", () =>
     Effect.gen(function* () {
       const blocker: RoomBoardNote = { id: "d", text: "D", x: 330, y: 100 };

@@ -938,18 +938,36 @@ const layoutPlan = Effect.fnUntraced(function* <E, R>(
     found === undefined
       ? []
       : roomSectionCards(board, found).filter((card) => !listed.has(card.id));
-  const grid = boardGrid(items, columnsOf(boardSectionColumns(items, area.w)));
   // Under the cards the section keeps, so nothing lands on them.
   const top =
     others.length === 0
       ? BOARD_SECTION_TITLE_HEIGHT + BOARD_SECTION_PADDING
       : Math.max(...others.map((card) => card.y + roomBoardNoteSize(card).h)) + GAP - area.y;
-  const size = {
-    w: Math.ceil(Math.max(area.w, grid.width + BOARD_SECTION_PADDING * 2)),
-    h: Math.ceil(Math.max(area.h, top + grid.height + BOARD_SECTION_PADDING)),
+  const sizeOf = (columns: number) => {
+    const shape = boardGrid(items, columns);
+    return {
+      w: Math.ceil(Math.max(area.w, shape.width + BOARD_SECTION_PADDING * 2)),
+      h: Math.ceil(Math.max(area.h, top + shape.height + BOARD_SECTION_PADDING)),
+    };
   };
+  const wanted = columnsOf(boardSectionColumns(items, area.w));
+  const columns =
+    found === undefined
+      ? Result.succeed(wanted)
+      : columnsThatFit(
+          target,
+          found,
+          new Set([...listed, ...others.map((card) => card.id)]),
+          wanted,
+          items.length,
+          op.as === "grid",
+          sizeOf,
+        );
+  if (Result.isFailure(columns)) return Result.fail(columns.failure);
+  const grid = boardGrid(items, columns.success);
+  const size = sizeOf(columns.success);
   if (size.w > ROOM_BOARD_MAX_SECTION_SIZE || size.h > ROOM_BOARD_MAX_SECTION_SIZE) {
-    return Result.fail("A section cannot grow to fit these. Use more columns or another section.");
+    return Result.fail(TOO_BIG_FOR_SECTION);
   }
   let section = found;
   if (section === undefined) {
@@ -989,6 +1007,61 @@ const layoutPlan = Effect.fnUntraced(function* <E, R>(
   }
   return Result.succeed(placements);
 });
+
+const intersects = (a: Rect, b: Rect) =>
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+/** Whether a section at `to` would cover a card it does not cover now, other than those in `keep`. */
+function growthCovers(
+  target: RoomBoardAgentTarget,
+  section: RoomBoardNote,
+  to: Rect,
+  keep: ReadonlySet<string>,
+): boolean {
+  const board = target.board;
+  const from = noteRect(section);
+  return [
+    ...obstacles({ ...target, board: { ...board, notes: [] } }, true),
+    ...board.notes
+      .filter((note) => isCard(note) && note.id !== section.id && !keep.has(note.id))
+      .map(noteRect),
+  ].some((rect) => intersects(to, rect) && !intersects(from, rect));
+}
+
+const TOO_BIG_FOR_SECTION =
+  "A section cannot grow to fit these. Use more columns or another section.";
+const growsOverCards = (section: RoomBoardNote) =>
+  `Section "${section.text}" would grow over other cards. Move it somewhere with more room first, or put fewer cards in it.`;
+
+/**
+ * The columns for a grid in a section that grows it over no other card: `wanted`, else with
+ * `reshape` the nearest count that fits, so it grows down instead of sideways or the other way.
+ */
+function columnsThatFit(
+  target: RoomBoardAgentTarget,
+  section: RoomBoardNote,
+  keep: ReadonlySet<string>,
+  wanted: number,
+  count: number,
+  reshape: boolean,
+  sizeOf: (columns: number) => RoomBoardSize,
+): Result.Result<number, string> {
+  const tries = reshape
+    ? Array.from({ length: count }, (_, index) => index + 1).sort(
+        (a, b) => Math.abs(a - wanted) - Math.abs(b - wanted) || a - b,
+      )
+    : [wanted];
+  let tooBig = true;
+  for (const columns of tries) {
+    const size = sizeOf(columns);
+    if (size.w > ROOM_BOARD_MAX_SECTION_SIZE || size.h > ROOM_BOARD_MAX_SECTION_SIZE) continue;
+    tooBig = false;
+    if (!growthCovers(target, section, { x: section.x, y: section.y, ...size }, keep)) {
+      return Result.succeed(columns);
+    }
+  }
+  return Result.fail(tooBig ? TOO_BIG_FOR_SECTION : growsOverCards(section));
+}
 
 const PLACE_NUDGES = 50;
 
@@ -1087,17 +1160,41 @@ function sectionPlan(
   const board = target.board;
   const section = findSection(board, op.section);
   if (section === undefined) return Result.fail(`No section "${op.section}" is on the board.`);
-  const items = roomSectionCards(board, section).map(layoutItem);
+  const cards = roomSectionCards(board, section);
+  const items = cards.map(layoutItem);
   if (items.length === 0) return Result.fail(`Section "${section.text}" has no cards in it.`);
   const area = noteRect(section);
+  const keep = new Set(cards.map((card) => card.id));
   if (op.do === "fit") {
     const frame = boardFrameAround(items.map(({ rect }) => rect));
     if (frame === null) return Result.fail(`Section "${section.text}" has no cards in it.`);
     const size = sizeWithin(section, { w: Math.ceil(frame.width), h: Math.ceil(frame.height) });
+    if (growthCovers(target, section, { x: frame.x, y: frame.y, ...size }, keep)) {
+      return Result.fail(growsOverCards(section));
+    }
     return Result.succeed(new Map([[section.id, { x: frame.x, y: frame.y, size }]]));
   }
   const ordered = boardReadingOrder(items);
-  const grid = boardGrid(ordered, boardSectionColumns(ordered, area.w));
+  const sizeOf = (columns: number) => {
+    const shape = boardGrid(ordered, columns);
+    return sizeWithin(section, {
+      w: Math.ceil(Math.max(area.w, shape.width + BOARD_SECTION_PADDING * 2)),
+      h: Math.ceil(
+        Math.max(area.h, shape.height + BOARD_SECTION_PADDING * 2 + BOARD_SECTION_TITLE_HEIGHT),
+      ),
+    });
+  };
+  const columns = columnsThatFit(
+    target,
+    section,
+    keep,
+    boardSectionColumns(ordered, area.w),
+    ordered.length,
+    true,
+    sizeOf,
+  );
+  if (Result.isFailure(columns)) return Result.fail(columns.failure);
+  const grid = boardGrid(ordered, columns.success);
   const placements = placeAll(
     board,
     grid.at({
@@ -1105,12 +1202,7 @@ function sectionPlan(
       y: area.y + BOARD_SECTION_TITLE_HEIGHT + BOARD_SECTION_PADDING,
     }),
   );
-  const size = sizeWithin(section, {
-    w: Math.ceil(Math.max(area.w, grid.width + BOARD_SECTION_PADDING * 2)),
-    h: Math.ceil(
-      Math.max(area.h, grid.height + BOARD_SECTION_PADDING * 2 + BOARD_SECTION_TITLE_HEIGHT),
-    ),
-  });
+  const size = sizeOf(columns.success);
   if (size.w !== area.w || size.h !== area.h) {
     placements.set(section.id, { x: section.x, y: section.y, size });
   }
