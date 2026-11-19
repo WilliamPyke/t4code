@@ -17,6 +17,7 @@ import {
   boardBounds,
   boardItemRects,
   boardNoteRect,
+  boardMaxSide,
   clampBoardSize,
   placeBoardItem,
 } from "./roomBoard.logic";
@@ -340,7 +341,7 @@ function boardPlanTaskSpot(
         w: slotRight > frame.x + frame.width ? slotRight + SECTION_INSET.x - frame.x : frame.width,
         h: slotBottom > frame.y + frame.height ? slotBottom + TASK_GAP - frame.y : frame.height,
       };
-      const fits = clampBoardSize(size);
+      const fits = clampBoardSize(size, boardMaxSide(section));
       if (fits.w === size.w && fits.h === size.h) {
         return size.w === frame.width && size.h === frame.height
           ? at

@@ -21,27 +21,28 @@ import { NoteColorPicker, sectionColorClassName, sectionLabelClassName } from ".
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
 
-// A band along each edge, thicker as the board zooms out, from which a line is drawn.
+// A band along each edge that the section is moved by, thicker as the board zooms out. The top
+// one reaches little into the title bar, and the sides start under it, clear of its buttons.
 const FRAME_EDGES = [
-  "inset-x-0 -top-[calc(5px*var(--board-line-scale,1))] h-[calc(10px*var(--board-line-scale,1))]",
-  "inset-x-0 -bottom-[calc(5px*var(--board-line-scale,1))] h-[calc(10px*var(--board-line-scale,1))]",
-  "inset-y-0 -left-[calc(5px*var(--board-line-scale,1))] w-[calc(10px*var(--board-line-scale,1))]",
-  "inset-y-0 -right-[calc(5px*var(--board-line-scale,1))] w-[calc(10px*var(--board-line-scale,1))]",
+  "inset-x-0 -top-[calc(8px*var(--board-line-scale,1))] h-[calc(12px*var(--board-line-scale,1))]",
+  "inset-x-0 -bottom-[calc(8px*var(--board-line-scale,1))] h-[calc(16px*var(--board-line-scale,1))]",
+  "top-9 bottom-0 -left-[calc(8px*var(--board-line-scale,1))] w-[calc(16px*var(--board-line-scale,1))]",
+  "top-9 bottom-0 -right-[calc(8px*var(--board-line-scale,1))] w-[calc(16px*var(--board-line-scale,1))]",
 ];
 
 /**
- * A section: a titled frame drawn behind the cards. Dragging its title bar moves it with what sits
- * over it, which the board decides; it holds nothing of its own. Dragging its edge draws a line
- * from it, which carries every card in it.
+ * A section: a titled frame drawn behind the cards. Dragging its title, its title bar or its edge
+ * moves it with what sits over it, which the board decides; it holds nothing of its own. Its
+ * inside is the board's until it is selected: then dragging there moves it too.
  */
 export function BoardSection({
   note,
   canRename,
   canDelete,
+  canMove,
   onMove,
   onDrop,
   handles,
-  link,
   onText,
   onBlur,
   onRevert,
@@ -51,15 +52,13 @@ export function BoardSection({
   readonly note: RoomBoardNote;
   readonly canRename: boolean;
   readonly canDelete: boolean;
-  /** The title bar dragged by this far, in screen pixels, and let go. */
+  /** Whether this person may move it; for whoever may not, a press on it pans the board. */
+  readonly canMove: boolean;
+  /** Dragged by this far, in screen pixels, and let go. */
   readonly onMove: (dx: number, dy: number) => void;
   readonly onDrop: () => void;
   /** Its resize and line grips. */
   readonly handles: ReactNode;
-  /** Starts a line from it on a press on its edge. Absent for whoever cannot edit. */
-  readonly link?:
-    | { readonly onStart: (from: string, event: PointerEvent<HTMLElement>) => void }
-    | undefined;
   readonly onText: (text: string) => void;
   readonly onBlur: () => void;
   /** Escape: the title goes back to what is stored. */
@@ -75,10 +74,19 @@ export function BoardSection({
   // Once this person types here, their own draft shows until they leave it.
   const [drafting, setDrafting] = useState(false);
   const text = (drafting ? null : boardLiveText(note.text, liveDrag)) ?? note.text;
+  // A click on the title types in it; a drag from it moves the section.
+  const grab = canMove
+    ? dragHandlers(onMove, onDrop, (_event, on) => {
+        if (!canRename || !(on instanceof HTMLInputElement)) return;
+        on.focus({ preventScroll: true });
+        on.setSelectionRange(on.value.length, on.value.length);
+      })
+    : undefined;
+  const marked = selected ? "" : undefined;
   return (
     <div
       className={cn(
-        // Only its title bar and grips take the pointer: pressing inside pans or selects the board.
+        // Its title, edges and grips take the pointer; pressing inside pans or selects the board.
         "group/item pointer-events-none absolute flex flex-col rounded-lg border",
         sectionColorClassName(note.color),
         selected &&
@@ -96,40 +104,16 @@ export function BoardSection({
       }}
       data-board-item={ref}
       data-board-section=""
+      data-board-selected={marked}
     >
       <div
-        className="pointer-events-auto relative flex h-9 shrink-0 cursor-grab items-center justify-end gap-1 ps-2 pe-1 active:cursor-grabbing"
-        {...dragHandlers(onMove, onDrop)}
+        className={cn(
+          "pointer-events-auto relative flex h-9 shrink-0 items-center justify-end gap-1 ps-2 pe-1",
+          grab !== undefined && "cursor-move",
+        )}
+        data-board-selected={marked}
+        {...grab}
       >
-        <input
-          aria-label="Section title"
-          value={text}
-          readOnly={!canRename}
-          maxLength={ROOM_BOARD_NOTE_MAX_LENGTH}
-          placeholder={canRename ? "Name this section" : "Untitled section"}
-          className={cn(
-            // Above the frame's corner, as wide as its title, so it never covers or clips a card.
-            "absolute bottom-full -left-1 mb-0.5 field-sizing-content h-6 min-w-0 max-w-full truncate rounded-sm bg-transparent px-1 text-sm font-semibold outline-none placeholder:text-placeholder focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-            sectionLabelClassName(note.color),
-            !canRename && "cursor-default",
-          )}
-          onPointerDown={stopPointer}
-          onChange={(event) => {
-            setDrafting(true);
-            onText(event.target.value);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              event.stopPropagation();
-              onRevert();
-            }
-            if (event.key === "Enter" || event.key === "Escape") leaveText(event.currentTarget);
-          }}
-          onBlur={() => {
-            setDrafting(false);
-            onBlur();
-          }}
-        />
         <div className={cn("flex items-center gap-1", !selected && BOARD_HOVER_CHROME_CLASS)}>
           {onPickColor === undefined ? null : (
             <NoteColorPicker color={note.color ?? "grey"} onPick={onPickColor} />
@@ -147,21 +131,63 @@ export function BoardSection({
           ) : null}
         </div>
       </div>
-      {link === undefined
+      {grab !== undefined && selected ? (
+        <div
+          aria-hidden
+          data-board-section-body
+          data-board-selected=""
+          className="pointer-events-auto absolute inset-x-0 top-9 bottom-0 cursor-move touch-none"
+          {...grab}
+          // With Shift, Ctrl or Cmd held the inside is the board's: a marquee starts there.
+          onPointerDown={(event) => {
+            if (!event.shiftKey && !event.ctrlKey && !event.metaKey) grab.onPointerDown(event);
+          }}
+        />
+      ) : null}
+      {grab === undefined
         ? null
         : FRAME_EDGES.map((edge) => (
             <div
               key={edge}
               aria-hidden
-              data-board-grip
               data-board-frame-edge
-              className={cn(
-                "pointer-events-auto absolute cursor-crosshair touch-none pointer-coarse:hidden",
-                edge,
-              )}
-              onPointerDown={(event) => link.onStart(ref, event)}
+              data-board-selected={marked}
+              className={cn("pointer-events-auto absolute cursor-move touch-none", edge)}
+              {...grab}
             />
           ))}
+      <input
+        aria-label="Section title"
+        // Resting, it is the section's to grab; focused, it is typed in.
+        data-board-rest="title"
+        data-board-selected={marked}
+        value={text}
+        readOnly={!canRename}
+        maxLength={ROOM_BOARD_NOTE_MAX_LENGTH}
+        placeholder={canRename ? "Name this section" : "Untitled section"}
+        className={cn(
+          // Above the frame's corner, as wide as its title, so it never covers or clips a card.
+          "pointer-events-auto absolute bottom-full -left-1 mb-0.5 field-sizing-content h-6 min-w-0 max-w-full truncate rounded-sm bg-transparent px-1 text-sm font-semibold outline-none placeholder:text-placeholder focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+          sectionLabelClassName(note.color),
+          grab !== undefined ? "cursor-move focus:cursor-text" : "cursor-default",
+        )}
+        {...grab}
+        onChange={(event) => {
+          setDrafting(true);
+          onText(event.target.value);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.stopPropagation();
+            onRevert();
+          }
+          if (event.key === "Enter" || event.key === "Escape") leaveText(event.currentTarget);
+        }}
+        onBlur={() => {
+          setDrafting(false);
+          onBlur();
+        }}
+      />
       <div className="pointer-events-auto contents">{handles}</div>
     </div>
   );

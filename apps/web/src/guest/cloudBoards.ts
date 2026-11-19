@@ -28,7 +28,8 @@ import { isElectron } from "../env";
 import { configuredHostedAppUrl } from "../hostedPairing";
 import { toastManager } from "../components/ui/toast";
 import {
-  boardAccountAuth,
+  SIGN_IN_UNCONFIRMED,
+  boardJoinAuth,
   readBoardAccountProfile,
   refreshAccountBoards,
   saveBoardAccountName,
@@ -62,8 +63,8 @@ const decodeLinkResult = Schema.decodeUnknownOption(CloudBoardLinkResult);
 export const knownBoardName = (): string | null => boardName().known;
 
 /**
- * The name a name field starts with: the known one, else, for an account with none, what it
- * typed here signed out before it signed in, else this browser's one friendly name.
+ * The name a name field starts with: the known one; else, for an account with none, what it
+ * typed here signed out before it signed in, or nothing; signed out, this browser's friendly name.
  */
 export const suggestedBoardName = (): string => boardName().suggested;
 
@@ -100,7 +101,8 @@ export async function createCloudBoard(input: {
   if (origin === null || host === null) return "Could not reach the board service.";
   try {
     // Signed in, the board is the account's from the start, on every device it signs in on.
-    const account = await boardAccountAuth();
+    const account = await boardJoinAuth();
+    if (account === "unconfirmed") return SIGN_IN_UNCONFIRMED;
     const response = await fetch(`${origin}${CLOUD_BOARD_ROUTE}`, {
       method: "POST",
       headers: {
@@ -108,7 +110,7 @@ export async function createCloudBoard(input: {
         ...(account === null ? {} : { authorization: account.authorization }),
       },
       body: JSON.stringify({
-        name: input.name,
+        name: account?.name ?? input.name,
         ...(input.title === undefined ? {} : { title: input.title }),
       }),
       credentials: "omit",
@@ -159,14 +161,19 @@ export async function copyCloudBoard(
   const host = cloudBoardsHost();
   if (origin === null || host === null) return "Could not reach the board service.";
   try {
-    const account = await boardAccountAuth();
+    const account = await boardJoinAuth();
+    if (account === "unconfirmed") return SIGN_IN_UNCONFIRMED;
     const response = await fetch(`${origin}${CLOUD_BOARD_COPY_ROUTE}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...(account === null ? {} : { authorization: account.authorization }),
       },
-      body: JSON.stringify({ name: suggestedBoardName(), source: source.token }),
+      // An account with no name yet is offered none to keep, so its copy needs a stand-in.
+      body: JSON.stringify({
+        name: account?.name ?? (suggestedBoardName() || "Teammate"),
+        source: source.token,
+      }),
       credentials: "omit",
     });
     if (response.status === 429) return "You made many boards in the last hour. Try again later.";

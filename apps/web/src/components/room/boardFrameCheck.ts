@@ -35,6 +35,12 @@ function frameVerdict(origin: string, url: string): Promise<RoomEmbedFrameVerdic
   return verdict;
 }
 
+/** The same answer for a click to wait on: "unknown" where there is no board host. */
+export function boardFrameVerdict(url: string): Promise<RoomEmbedFrameVerdict> {
+  const origin = cloudBoardsOrigin();
+  return origin === null ? Promise.resolve("unknown") : frameVerdict(origin, url);
+}
+
 /**
  * Whether the site at `url` lets other pages frame it, as the cloud board host read from its
  * headers: null while it is asked, and "unknown" at once for no address or no board host, where

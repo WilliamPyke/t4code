@@ -96,14 +96,17 @@ export function isRoomEmbedPersonFrameUrl(
 export type RoomEmbedFrameVerdict = "ok" | "refused" | "unknown";
 
 const ancestorAllows = (source: string, page: URL | null) => {
-  if (source === "*" || source === "https:") return true;
+  // A source of `http` also takes the same thing over https.
+  if (source === "*" || source === "https:" || source === "http:") return true;
   if (page === null) return false;
-  const match = /^(?:(https?):\/\/)?(\*\.)?([^/:*]+)(?::(\d+|\*))?(?:\/.*)?$/.exec(source);
+  const match = /^(?:(https?):\/\/)?(?:(\*)|(\*\.)?([^/:*]+))(?::(\d+|\*))?(?:\/.*)?$/.exec(source);
   if (match === null) return false;
-  const [, scheme, wild, host, port] = match;
+  const [, scheme, any, wild, host, port] = match;
   if (scheme !== undefined && `${scheme}:` !== page.protocol && scheme !== "http") return false;
-  if (port !== undefined && port !== "*" && port !== page.port) return false;
+  const pagePort = page.port === "" ? (page.protocol === "https:" ? "443" : "80") : page.port;
+  if (port !== undefined && port !== "*" && port !== pagePort) return false;
   if (port === undefined && page.port !== "") return false;
+  if (any !== undefined) return true;
   const pageHost = hostOf(page.hostname);
   return wild === undefined ? pageHost === host : pageHost.endsWith(`.${host}`);
 };
@@ -117,12 +120,14 @@ export function roomEmbedFrameVerdict(
   pageOrigin: string | null,
 ): Exclude<RoomEmbedFrameVerdict, "unknown"> {
   const page = pageOrigin !== null && URL.canParse(pageOrigin) ? new URL(pageOrigin) : null;
-  const ancestors = (headers.contentSecurityPolicy ?? "")
-    .split(",")
-    .flatMap((policy) => policy.split(";"))
-    .map((directive) => directive.trim().toLowerCase().split(/\s+/))
-    .filter(([name]) => name === "frame-ancestors")
-    .map(([, ...sources]) => sources);
+  // Each policy's first `frame-ancestors` counts; a browser ignores a repeat in the same policy.
+  const ancestors = (headers.contentSecurityPolicy ?? "").split(",").flatMap((policy) => {
+    const first = policy
+      .split(";")
+      .map((directive) => directive.trim().toLowerCase().split(/\s+/))
+      .find(([name]) => name === "frame-ancestors");
+    return first === undefined ? [] : [first.slice(1)];
+  });
   if (ancestors.length > 0) {
     return ancestors.every((sources) => sources.some((source) => ancestorAllows(source, page)))
       ? "ok"

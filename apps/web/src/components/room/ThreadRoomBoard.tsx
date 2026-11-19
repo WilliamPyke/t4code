@@ -86,6 +86,7 @@ import {
   appendNoteToDraft,
   type BoardPoint,
   type BoardPrompt,
+  boardChangeOutgrowsOlderHosts,
   boardMessages,
 } from "./roomBoard.logic";
 import { roomBoardViewKey } from "./roomBoardNavigation";
@@ -106,7 +107,8 @@ function useOwnerRoom(threadRef: ScopedThreadRef | null) {
     serverEnvironment.changeGuestBoard.permissionAtom(threadRef?.environmentId ?? null),
   );
   const changeBoard = useAtomCommand(serverEnvironment.changeGuestBoard, "change the board");
-  // A server from before artifact views and copies refuses them, and the card stays as it was.
+  // A server from before artifact views and copies, or the larger card sizes, refuses them, and
+  // the card stays as it was; the board says so for a size.
   const changeBoardQuietly = useAtomCommand(serverEnvironment.changeGuestBoard, {
     reportFailure: false,
     reportDefect: false,
@@ -114,7 +116,9 @@ function useOwnerRoom(threadRef: ScopedThreadRef | null) {
   const onChange =
     threadRef !== null && canChange
       ? (change: RoomBoardChange) =>
-          (change.type === "artifact.copy" || change.type === "artifact.view"
+          (change.type === "artifact.copy" ||
+            change.type === "artifact.view" ||
+            boardChangeOutgrowsOlderHosts(change)
             ? changeBoardQuietly
             : changeBoard)({
             environmentId: threadRef.environmentId,

@@ -38,7 +38,7 @@ import { cn } from "~/lib/utils";
 
 import { Button } from "../ui/button";
 import { boardCanFramePage } from "./boardEmbed.logic";
-import { boardOwnHosts, useBoardFrameCheck } from "./boardFrameCheck";
+import { boardFrameVerdict, boardOwnHosts, useBoardFrameCheck } from "./boardFrameCheck";
 import type { BoardSize } from "./roomBoard.logic";
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
@@ -95,6 +95,7 @@ const FRAME_ALLOW = "fullscreen; clipboard-write; picture-in-picture; encrypted-
 // A page someone chose to show is any site: its forms work, and it never navigates the board.
 const PAGE_SANDBOX = `${FRAME_SANDBOX} allow-forms`;
 const PAGE_ALLOW = "fullscreen";
+const REFUSED = "This site does not allow being shown inside other pages.";
 
 /** The board surface's size, which the part of the board in view is worked out from. */
 export function useBoardSurfaceSize(surfaceRef: RefObject<HTMLElement | null>) {
@@ -150,8 +151,28 @@ export function RoomEmbedBody({
   const frame = sourceFrame ?? page;
   // Null while the board host is asked: the page waits, so a site that refuses never flashes.
   const check = useBoardFrameCheck(page);
-  const refused = page !== null && check === "refused";
+  // The check reads the site as a signed-out visitor from a data centre, and is kept for an hour:
+  // the viewer's own browser can get another answer, so they may try the page all the same.
+  const [tried, setTried] = useState<string | null>(null);
+  const refused = page !== null && check === "refused" && tried !== url;
   const loads = live && (page === null || (check !== null && !refused));
+  // A click on "Show page here" asks first, so a card whose site refuses stays a link card.
+  const [asking, setAsking] = useState(false);
+  const [blocked, setBlocked] = useState<string | null>(null);
+  const stays = !framed && blocked === url;
+  const frameIt = useStableCallback((next: boolean) => onFrame?.(next));
+  const showPage = () => {
+    setAsking(true);
+    void boardFrameVerdict(url).then((verdict) => {
+      setAsking(false);
+      if (verdict === "refused") setBlocked(url);
+      else frameIt(true);
+    });
+  };
+  const tryAnyway = () => {
+    setTried(url);
+    if (!framed) frameIt(true);
+  };
   const bodyRef = useRef<HTMLDivElement>(null);
   const release = useStableCallback(onRelease);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a press outside the page or Escape, anywhere in the window, gives the board back
@@ -184,10 +205,11 @@ export function RoomEmbedBody({
             size="micro"
             variant="outline"
             onPointerDown={stopPointer}
-            onClick={() => onFrame(!framed)}
+            disabled={asking}
+            onClick={() => (framed ? onFrame(false) : stays ? tryAnyway() : showPage())}
           >
             {framed ? <EyeOffIcon /> : <AppWindowIcon />}
-            {framed ? "Hide page" : "Show page here"}
+            {framed ? "Hide page" : asking ? "Checking" : stays ? "Try anyway" : "Show page here"}
           </Button>
         )}
         <Button
@@ -201,10 +223,28 @@ export function RoomEmbedBody({
           Open
         </Button>
       </div>
+      {stays ? (
+        <p className="shrink-0 px-3 pb-2 text-2xs text-muted-foreground">{REFUSED}</p>
+      ) : null}
       {frame === null ? null : refused ? (
-        <p className="flex min-h-40 flex-1 items-center justify-center border-t border-board-hairline bg-muted/40 p-4 text-center text-xs text-muted-foreground">
-          This site does not allow being shown inside other pages.
-        </p>
+        <div className="flex min-h-40 flex-1 flex-col items-center justify-center gap-2 border-t border-board-hairline bg-muted/40 p-4 text-center text-xs text-muted-foreground">
+          <p>{REFUSED}</p>
+          <div className="flex flex-wrap justify-center gap-2">
+            {onFrame === undefined ? null : (
+              <Button
+                size="micro"
+                variant="outline"
+                onPointerDown={stopPointer}
+                onClick={() => onFrame(false)}
+              >
+                Back to a link card
+              </Button>
+            )}
+            <Button size="micro" variant="outline" onPointerDown={stopPointer} onClick={tryAnyway}>
+              Try anyway
+            </Button>
+          </div>
+        </div>
       ) : (
         <div className="relative min-h-40 flex-1 overflow-hidden border-t border-board-hairline bg-muted/40">
           {loads ? (

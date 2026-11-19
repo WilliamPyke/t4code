@@ -1,5 +1,7 @@
 import {
   CLOUD_BOARD_ACCOUNT_MAX_BOARDS,
+  roomBoardAgentCard,
+  roomBoardGuestCard,
   type CloudBoardAccountBoard,
   type GuestId,
 } from "@t3tools/contracts";
@@ -40,10 +42,85 @@ export const accountBoardOf = (
   ...(input.credential === undefined ? {} : { credential: input.credential }),
 });
 
+// What people wrote, which is never an id however it reads.
+const WRITTEN = new Set(["text", "body", "quote", "title", "name", "url", "prompt", "reply"]);
+
+/**
+ * `value` with every id in `ids` replaced, as a value or as a key, and itself when it names none.
+ * A key that would land on one already there is dropped, as is a list entry that becomes a copy
+ * of another (a reaction or mention both seats had).
+ */
+function renamed<T>(value: T, ids: ReadonlyMap<string, string>): T {
+  if (typeof value === "string") return (ids.get(value) ?? value) as T;
+  if (Array.isArray(value)) {
+    const items: ReadonlyArray<unknown> = value;
+    const next = items.map((item) => renamed(item, ids));
+    if (next.every((item, index) => item === items[index])) return value;
+    const kept = new Set(
+      next.flatMap((item, index) => (item === items[index] ? [JSON.stringify(item)] : [])),
+    );
+    return next.filter((item, index) => {
+      if (item === items[index]) return true;
+      const shown = JSON.stringify(item);
+      if (kept.has(shown)) return false;
+      kept.add(shown);
+      return true;
+    }) as T;
+  }
+  if (value === null || typeof value !== "object") return value;
+  const entries = Object.entries(value);
+  const next = entries.flatMap(([key, item]): ReadonlyArray<readonly [string, unknown]> => {
+    const to = ids.get(key);
+    if (to !== undefined) return to in value ? [] : [[to, renamed(item, ids)]];
+    return [[key, WRITTEN.has(key) && typeof item === "string" ? item : renamed(item, ids)]];
+  });
+  const same =
+    next.length === entries.length &&
+    next.every(([key, item], index) => key === entries[index]![0] && item === entries[index]![1]);
+  return same ? value : (Object.fromEntries(next) as T);
+}
+
+/**
+ * The board once `from`, a second seat of the person who is `into`, is folded into it: what they
+ * added, were given and brought (cards, replies, turns, their machines) is `into`'s, their
+ * sessions open `into`, and `from` is gone. A board `from` made is `into`'s to manage.
+ */
+function mergeSeat(room: CloudRoom, from: CloudGuest, into: CloudGuest): CloudRoom {
+  const ids = new Map<string, string>([
+    [from.id, into.id],
+    [roomBoardGuestCard(from.id), roomBoardGuestCard(into.id)],
+    [roomBoardAgentCard(from.id), roomBoardAgentCard(into.id)],
+  ]);
+  const sessions = [
+    ...(into.accountSessions ?? []),
+    ...(from.accountSessions ?? []),
+    from.sessionHash,
+  ].filter((hash) => hash !== "");
+  const machineSessions = [...(into.machineSessions ?? []), ...(from.machineSessions ?? [])];
+  const merged: CloudGuest = {
+    ...into,
+    accountSessions: sessions.slice(-SESSIONS_PER_ACCOUNT),
+    ...(machineSessions.length === 0
+      ? {}
+      : { machineSessions: machineSessions.slice(-SESSIONS_PER_ACCOUNT) }),
+  };
+  return {
+    ...room,
+    guests: room.guests.flatMap((guest) =>
+      guest.id === from.id ? [] : guest.id === into.id ? [merged] : [guest],
+    ),
+    ...(room.maker === from.id ? { maker: into.id } : {}),
+    ...(room.board === undefined ? {} : { board: renamed(room.board, ids) }),
+    ...(room.turns === undefined ? {} : { turns: renamed(room.turns, ids) }),
+    ...(room.machines === undefined ? {} : { machines: renamed(room.machines, ids) }),
+  };
+}
+
 /**
  * Ties `account` to the person `sessionHash` opens the board as. Doing it again changes nothing.
- * A seat another account holds stays theirs, and an account already on the board as someone else
- * keeps that seat. `credential` is kept only when it is this board's invite.
+ * A seat another account holds stays theirs. An account already on the board stays that person:
+ * the seat is folded into theirs (`merged`), so one account is never two people on a board.
+ * `credential` is kept only when it is this board's invite.
  */
 export function linkAccount(
   room: CloudRoom | null,
@@ -54,7 +131,11 @@ export function linkAccount(
     readonly now: string;
   },
 ): Result.Result<
-  { readonly room: CloudRoom; readonly board: CloudBoardAccountBoard },
+  {
+    readonly room: CloudRoom;
+    readonly board: CloudBoardAccountBoard;
+    readonly merged?: { readonly from: GuestId; readonly into: GuestId };
+  },
   RoomFailure
 > {
   const guest = guestBySession(room, input.sessionHash);
@@ -62,8 +143,24 @@ export function linkAccount(
   if (guest.accountId !== undefined && guest.accountId !== input.account) {
     return Result.fail(roomFailure("taken"));
   }
+  const credential =
+    input.credential !== undefined && input.credential.hash === room.inviteHash
+      ? input.credential.value
+      : undefined;
   const already = accountGuestOf(room, input.account);
-  if (already !== undefined && already.id !== guest.id) return Result.fail(roomFailure("taken"));
+  if (already !== undefined && already.id !== guest.id) {
+    // Taken out of the workspace, the account has no way in: a spare seat is not one either.
+    if (already.locked === true || guest.locked === true) return Result.fail(roomFailure("taken"));
+    const next = { ...mergeSeat(room, guest, already), updatedAt: input.now };
+    return Result.succeed({
+      room: next,
+      board: accountBoardOf(next, accountGuestOf(next, input.account) ?? already, {
+        credential,
+        addedAt: input.now,
+      }),
+      merged: { from: guest.id, into: already.id },
+    });
+  }
   const next =
     guest.accountId === input.account
       ? room
@@ -73,10 +170,6 @@ export function linkAccount(
             candidate.id === guest.id ? { ...candidate, accountId: input.account } : candidate,
           ),
         };
-  const credential =
-    input.credential !== undefined && input.credential.hash === room.inviteHash
-      ? input.credential.value
-      : undefined;
   return Result.succeed({
     room: next,
     board: accountBoardOf(next, guest, { credential, addedAt: input.now }),

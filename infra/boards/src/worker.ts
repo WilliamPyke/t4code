@@ -567,12 +567,15 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 interface OpenStream {
-  /** Someone looking on from the view link gets an id of their own that names nobody. */
-  readonly guestId: GuestId;
+  /**
+   * Someone looking on from the view link gets an id of their own that names nobody. It changes
+   * only when the person's seat is folded into their account's (see `mergeSeat`).
+   */
+  guestId: GuestId;
   /** The view link the page was opened with; null for someone on the board. */
   readonly viewHash: string | null;
-  /** Whether the person manages the board, as it was when the page opened. */
-  readonly manages: boolean;
+  /** Whether the person manages the board, as it was when the page opened or became theirs. */
+  manages: boolean;
   readonly writer: WritableStreamDefaultWriter<Uint8Array>;
   /** Whether the reader took the last ping. One that did not by the next is gone. */
   pingTaken: boolean;
@@ -1097,16 +1100,41 @@ export class BoardRoom extends DurableObject<Env> {
       hashSecret(token),
       credential === undefined ? undefined : hashSecret(credential),
     ]);
-    const linked = linkAccount(this.room, {
-      account,
-      sessionHash,
-      ...(credential === undefined || credentialHash === undefined
-        ? {}
-        : { credential: { value: credential, hash: credentialHash } }),
-      now: nowIso(),
-    });
+    const link = () =>
+      linkAccount(this.room, {
+        account,
+        sessionHash,
+        ...(credential === undefined || credentialHash === undefined
+          ? {}
+          : { credential: { value: credential, hash: credentialHash } }),
+        now: nowIso(),
+      });
+    const first = link();
+    if (Result.isFailure(first)) return null;
+    const person = accountGuestOf(first.success.room, account);
+    const manages =
+      first.success.merged !== undefined && person !== undefined
+        ? await this.manages(first.success.room, person)
+        : false;
+    // Read again: the wait may have let another change to the board in.
+    const linked = first.success.merged === undefined ? first : link();
     if (Result.isFailure(linked)) return null;
+    const { merged } = linked.success;
+    if (merged !== undefined) {
+      // Their open pages are the account's person from here on, before the board is shown again.
+      for (const stream of this.streams) {
+        if (stream.guestId !== merged.from) continue;
+        stream.guestId = merged.into;
+        stream.manages = manages;
+      }
+      this.live = withoutPerson(this.live, merged.from);
+      this.setAgents(agentsWithoutPerson(this.agents, merged.from), Date.now());
+    }
     await this.save(linked.success.room);
+    if (merged !== undefined) {
+      this.broadcast(this.presence());
+      this.sendCursors(Date.now());
+    }
     return this.withPreview(linked.success.board);
   }
 

@@ -54,6 +54,14 @@ describe("frameCheck", () => {
     expect((await checked(start, {})).verdict).toBe("unknown");
     const denied = new Response("", { status: 403, headers: { "x-frame-options": "DENY" } });
     expect((await checked(start, { [start]: denied })).verdict).toBe("unknown");
+    // A bot wall's own page, which a browser may never get.
+    for (const wall of [
+      { status: 202, headers: { "x-frame-options": "DENY" } },
+      { headers: { "x-frame-options": "DENY", "cf-mitigated": "challenge" } },
+      { headers: { "x-frame-options": "DENY", "x-amzn-waf-action": "challenge" } },
+    ]) {
+      expect((await checked(start, { [start]: new Response("", wall) })).verdict).toBe("unknown");
+    }
     const loop = await checked(start, {
       [start]: redirect("https://example.com/a"),
       "https://example.com/a": redirect("https://example.com/b"),

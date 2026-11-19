@@ -303,9 +303,14 @@ export type RoomTaskPriority = typeof RoomTaskPriority.Type;
 const RoomTaskOrder = Schema.Finite.check(Schema.isBetween({ minimum: -1e12, maximum: 1e12 }));
 
 export const ROOM_BOARD_MIN_CARD_SIZE = 120;
-export const ROOM_BOARD_MAX_CARD_SIZE = 1_600;
+/** The longest side a card can be given; a section, which frames many cards, goes further. */
+export const ROOM_BOARD_MAX_CARD_SIZE = 8_000;
+export const ROOM_BOARD_MAX_SECTION_SIZE = 20_000;
+/** What hosts from before the larger sizes take: they refuse a longer side. */
+export const ROOM_BOARD_LEGACY_MAX_CARD_SIZE = 1_600;
+// One bound for every kind, the largest: whoever resizes keeps a card within its own kind's.
 const RoomBoardLength = Schema.Int.check(
-  Schema.isBetween({ minimum: ROOM_BOARD_MIN_CARD_SIZE, maximum: ROOM_BOARD_MAX_CARD_SIZE }),
+  Schema.isBetween({ minimum: ROOM_BOARD_MIN_CARD_SIZE, maximum: ROOM_BOARD_MAX_SECTION_SIZE }),
 );
 /** How big someone made a card, in board pixels. */
 export const RoomBoardSize = Schema.Struct({ w: RoomBoardLength, h: RoomBoardLength });

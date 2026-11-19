@@ -184,6 +184,7 @@ import {
   boardGuestWaiting,
   boardCardBox,
   boardChangeOf,
+  boardChangeOutgrowsOlderHosts,
   boardChangeQueue,
   boardChangeQueueKey,
   boardCommentAgentAuthor,
@@ -191,6 +192,7 @@ import {
   boardConnector,
   type BoardSide,
   boardLineScale,
+  boardMaxSide,
   boardPointedSpot,
   boardCursorAt,
   clientRectToBoard,
@@ -210,6 +212,7 @@ import {
   boardItemsInRect,
   boardItemsCentredIn,
   boardSectionAround,
+  boardSectionCardsToDelete,
   boardSectionFrameAt,
   boardSectionHolding,
   BOARD_SECTION_SIZE,
@@ -1132,6 +1135,11 @@ export function RoomBoard({
   const [history, setHistory] = useState(NO_HISTORY);
   // Cards whose deleting Undo could not take back, waiting for a yes.
   const [confirmingDelete, setConfirmingDelete] = useState<ReadonlyArray<string> | null>(null);
+  // A section being deleted with cards over it: what goes anyway, and the cards that could.
+  const [deletingSection, setDeletingSection] = useState<{
+    readonly noteIds: ReadonlyArray<string>;
+    readonly cardIds: ReadonlyArray<string>;
+  } | null>(null);
   // The viewer's own boxes a draft could go to, while they pick one.
   const [pickingBox, setPickingBox] = useState<{
     readonly ids: ReadonlyArray<string>;
@@ -1781,8 +1789,19 @@ export function RoomBoard({
     const change = boardChangeOf(target, value, before);
     const guideStep = boardGuideStepOfChange(change, before === null);
     void queueChange(queue, () => onChange(change)).then((taken) => {
-      if (!taken) setEdits((current) => dropBoardEdit(current, target, value));
-      else if (guideStep !== null) markBoardGuideStep(guideStep);
+      if (taken) {
+        if (guideStep !== null) markBoardGuideStep(guideStep);
+        return;
+      }
+      setEdits((current) => dropBoardEdit(current, target, value));
+      if (boardChangeOutgrowsOlderHosts(change)) {
+        toastManager.add({
+          type: "info",
+          title: "Could not make it that big",
+          description:
+            "If this board is kept by an older version of Tinkjam, update it to go past 1,600 pixels.",
+        });
+      }
     });
   };
   // A drag, nudge or resize (`frame`) renders the board once as it starts; after that each step
@@ -1988,8 +2007,10 @@ export function RoomBoard({
   // A selection dragged together lands together: one change for each card in it.
   const dropItem = (target: BoardTarget) =>
     release(() => {
-      const group = inGroup(target) ? selectedItems : carried.current.get(boardEditKey(target));
-      carried.current.delete(boardEditKey(target));
+      const group = inGroup(target)
+        ? withSectionCards(selectedItems)
+        : carried.current.get(boardEditKey(target));
+      carried.current.clear();
       if (group === undefined) return letGo(target);
       for (const item of group) letGo(item.target);
     });
@@ -2051,7 +2072,19 @@ export function RoomBoard({
   };
   const isSectionRef = (ref: string) =>
     shown.notes.some((note) => note.section === true && noteRef(note.id) === ref);
-  const groupOf = (target: BoardTarget) => (inGroup(target) ? selectedItems : sectionGroup(target));
+  // A selection moved together takes what sits over each section in it, once.
+  const withSectionCards = (items: ReadonlyArray<BoardSelected>): ReadonlyArray<BoardSelected> => {
+    const all = new Map(items.map((item) => [boardEditKey(item.target), item]));
+    for (const { target } of items) {
+      for (const item of sectionGroup(target) ?? []) {
+        const key = boardEditKey(item.target);
+        if (!all.has(key)) all.set(key, item);
+      }
+    }
+    return [...all.values()];
+  };
+  const groupOf = (target: BoardTarget) =>
+    inGroup(target) ? withSectionCards(selectedItems) : sectionGroup(target);
   // What a gesture snaps to: the cards in sight, less what it moves and what others drag now.
   const snapTargetsFor = (moving: ReadonlySet<string>, box: BoardRect | null) => {
     const surface = surfaceRef.current;
@@ -2129,13 +2162,14 @@ export function RoomBoard({
     nudgeTimer.current = null;
     const targets = [...nudged.current.values()];
     nudged.current.clear();
+    carried.current.clear();
     release(() => {
       for (const target of targets) letGo(target);
     });
   });
   const nudge = (dx: number, dy: number) => {
     if (!canEdit || selectedItems.length === 0) return;
-    const now = selectedItems.map((item) => {
+    const now = withSectionCards(selectedItems).map((item) => {
       const last = held.current.get(boardEditKey(item.target));
       return last !== undefined && "x" in last ? { ...item, value: last } : item;
     });
@@ -2169,6 +2203,7 @@ export function RoomBoard({
     from: BoardRect,
     dx: number,
     dy: number,
+    max?: number,
   ) => {
     const x = dx / view.zoom;
     const y = dy / view.zoom;
@@ -2192,8 +2227,8 @@ export function RoomBoard({
       rect = snapped.rect;
     } else snapStore.set(NO_SNAP_DRAWN);
     return corner === "right"
-      ? { x: from.x, size: clampBoardSize({ w: rect.width, h: rect.height }) }
-      : resizeBoardFromLeft(from, rect.x - from.x, rect.height - from.height);
+      ? { x: from.x, size: clampBoardSize({ w: rect.width, h: rect.height }, max) }
+      : resizeBoardFromLeft(from, rect.x - from.x, rect.height - from.height, max);
   };
   const resizeCard = (id: string, corner: BoardCorner, from: BoardRect, dx: number, dy: number) => {
     if (!canEdit) return;
@@ -2219,7 +2254,7 @@ export function RoomBoard({
     if (!canEdit) return;
     const now = noteNow(note);
     const ref = noteRef(note.id);
-    const next = resized(ref, ref, corner, from, dx, dy);
+    const next = resized(ref, ref, corner, from, dx, dy, boardMaxSide(note));
     hold(
       { kind: "note", id: note.id },
       corner === "right" ? { ...now, size: next.size } : { ...now, x: next.x, size: next.size },
@@ -3626,7 +3661,9 @@ export function RoomBoard({
       .elementsFromPoint(x, y)
       .find(
         (each): each is HTMLElement =>
-          each instanceof HTMLElement && each.closest("[data-board-item]") !== null,
+          each instanceof HTMLElement &&
+          !each.hasAttribute("data-board-section-body") &&
+          each.closest("[data-board-item]") !== null,
       );
     const at = hit === undefined ? pointerOnBoard({ clientX: x, clientY: y }) : null;
     const frame =
@@ -3977,10 +4014,24 @@ export function RoomBoard({
       },
     });
   };
-  const deleteNotes = (noteIds: ReadonlyArray<string>) => {
-    if (noteIds.length === 0) return;
+  const deleteNow = (noteIds: ReadonlyArray<string>) => {
     if (boardDeletion(shown, withCommentsOn(noteIds)).undoable) removeNotes(noteIds);
     else setConfirmingDelete(noteIds);
+  };
+  // A section with cards over it asks whether they go with it; they stay unless chosen.
+  const deleteNotes = (noteIds: ReadonlyArray<string>) => {
+    if (noteIds.length === 0) return;
+    const items = [
+      ...(surfaceRef.current?.querySelectorAll<HTMLElement>(
+        "[data-board-item]:not([data-board-pin]):not([data-board-section])",
+      ) ?? []),
+    ].map((item) => ({ ref: item.dataset.boardItem ?? "", rect: drawnRect(item) }));
+    const over = drawnSections().flatMap(({ note, rect }) =>
+      noteIds.includes(note.id) ? boardItemsCentredIn(items, rect, noteRef(note.id)) : [],
+    );
+    const cardIds = boardSectionCardsToDelete(shown, noteIds, over, viewer);
+    if (cardIds.length === 0) deleteNow(noteIds);
+    else setDeletingSection({ noteIds, cardIds });
   };
   // A box's chat stays where it is unless its owner, asked, deletes it too.
   const deletingBoxes = shown.notes.filter(
@@ -5567,7 +5618,8 @@ export function RoomBoard({
               event.metaKey ||
               (event.ctrlKey && !isMacPlatform(navigator.platform))
             ) {
-              if (ref === null) return;
+              // The inside of a selected section is the board's then, as while it is not selected.
+              if (ref === null || target.hasAttribute("data-board-section-body")) return;
               event.stopPropagation();
               return toggleSelected(ref);
             }
@@ -5797,6 +5849,7 @@ export function RoomBoard({
               !isInside(event) ||
               boardPressKind(target) !== "gesture" ||
               (target instanceof Element &&
+                !target.hasAttribute("data-board-section-body") &&
                 target.closest("[data-board-item], [data-board-overlay], [data-board-grip]") !==
                   null)
             ) {
@@ -5889,9 +5942,9 @@ export function RoomBoard({
                     note={note}
                     canRename={own}
                     canDelete={own}
+                    canMove={canEdit}
                     onMove={(dx, dy) => dragBy(target, note, dx, dy)}
                     onDrop={() => dropItem(target)}
-                    link={link}
                     handles={
                       <ItemHandles
                         from={noteRef(note.id)}
@@ -6537,6 +6590,61 @@ export function RoomBoard({
                   }}
                 >
                   Delete
+                </Button>
+              </AlertDialogFooter>
+            </AlertDialogPopup>
+          </AlertDialog>
+          <AlertDialog
+            open={deletingSection !== null}
+            onOpenChange={(open) => {
+              if (!open) setDeletingSection(null);
+            }}
+          >
+            <AlertDialogPopup>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  {deletingSection?.noteIds.length === 1
+                    ? "Delete this section?"
+                    : "Delete the selection?"}
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  {deletingSection?.cardIds.length === 1
+                    ? "1 card sits on a section you are deleting. Keep it on the board, or delete it too."
+                    : `${deletingSection?.cardIds.length ?? 0} cards sit on a section you are deleting. Keep them on the board, or delete them too.`}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogClose render={<Button variant="outline" size="sm" />}>
+                  Cancel
+                </AlertDialogClose>
+                <Button
+                  variant="destructive-outline"
+                  size="sm"
+                  onClick={() => {
+                    if (deletingSection === null) return;
+                    setDeletingSection(null);
+                    deleteNow([...deletingSection.noteIds, ...deletingSection.cardIds]);
+                  }}
+                >
+                  {deletingSection?.noteIds.length === 1
+                    ? `Delete section and ${deletingSection.cardIds.length} ${deletingSection.cardIds.length === 1 ? "card" : "cards"}`
+                    : deletingSection?.cardIds.length === 1
+                      ? "Also delete that card"
+                      : `Also delete those ${deletingSection?.cardIds.length ?? 0} cards`}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    if (deletingSection === null) return;
+                    setDeletingSection(null);
+                    deleteNow(deletingSection.noteIds);
+                  }}
+                >
+                  {deletingSection?.noteIds.length === 1
+                    ? "Delete section only"
+                    : deletingSection?.cardIds.length === 1
+                      ? "Keep that card"
+                      : "Keep those cards"}
                 </Button>
               </AlertDialogFooter>
             </AlertDialogPopup>

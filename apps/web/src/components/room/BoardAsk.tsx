@@ -178,12 +178,13 @@ export function BoardAskPopover({
               </Button>
             ))}
           </div>
-          <div className="flex min-w-0 items-center gap-1.5">
-            <div className="min-w-0 flex-1">
+          {/* Wraps for someone with several computers, whose name stands beside the model. */}
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
+            <div className="min-w-24 flex-1">
               <BoardAskTargetSelect targets={targets} value={target} onChange={setTarget} />
             </div>
             {/* The model the prompt runs on; a new box's pick is kept under the id it will take. */}
-            <div className="flex max-w-36 min-w-0 shrink-0 items-center">
+            <div className="flex max-w-60 min-w-0 shrink-0 items-center">
               {renderModel?.(target === BOARD_ASK_NEW_BOX ? newBoxId : target)}
             </div>
             <Button

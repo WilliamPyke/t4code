@@ -119,11 +119,14 @@ Delete (or Backspace) removes the selected cards you may delete after you confir
 someone else's stay, and the board says how many it left. Escape or **Clear** ends the selection.
 Only you see what you selected.
 
-A **Section** is a titled frame drawn behind the cards, to group them. Drag it by its title bar and
-the cards sitting mostly inside it move with it; drag a card out and it is no longer in it. Resize
-it from its bottom corners and colour it like a note. A section never goes to an agent and takes no
-lines. Only whoever added it, or the owner, can rename or delete it, and deleting it leaves its
-cards where they are. Enter or clicking away saves a section's, thread box's or artifact's title;
+A **Section** is a titled frame drawn behind the cards, to group them. Drag it by its title or
+anywhere along its edge and the cards sitting mostly inside it move with it, as they do when the
+arrow keys move it; drag a card out and it is no longer in it. Dragging inside a section pans the
+board, unless the section is selected: then it moves the section. Click its title to rename it.
+Resize it from its bottom corners, up to 20,000 pixels a side (other cards go up to 8,000), and
+colour it like a note. A section never goes to an agent and takes no
+lines. Only whoever added it, or the owner, can rename or delete it. Deleting a section with cards
+on it asks whether to keep them where they are or delete them too. Enter or clicking away saves a section's, thread box's or artifact's title;
 Escape puts back the one it had.
 
 Ctrl+Z (Cmd+Z on a Mac) undoes your own last change on the board, and Ctrl+Shift+Z or Ctrl+Y
@@ -309,8 +312,8 @@ reads each card as the words of whoever wrote it, so a guest's note is backgroun
 owner's instruction. A guest's cards are written into their message's text, so the owner reads
 all of it before sending.
 
-A line from a section works as a line from every card in it: draw it from the section's edge or
-title to a thread box (or the artifact a box rewrites) and each card inside goes as above. A card
+A line from a section works as a line from every card in it: draw it from one of the dots on
+the section's sides to a thread box (or the artifact a box rewrites) and each card inside goes as above. A card
 counts while its middle is inside the section, so dragging one in or out changes what goes. The
 box's message shows them as one chip, such as "Research (5 cards)".
 

@@ -1,4 +1,8 @@
-import type { RoomBoard, RoomBoardNote } from "@t3tools/contracts";
+import {
+  ROOM_BOARD_MAX_SECTION_SIZE,
+  type RoomBoard,
+  type RoomBoardNote,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -203,17 +207,17 @@ describe("boardPlanTaskPlace", () => {
   });
 
   it("goes under a section that can grow no more, lined up with its tasks", () => {
-    const full = { w: 1600, h: 1600 };
+    const full = { w: 240, h: ROOM_BOARD_MAX_SECTION_SIZE };
     const board: RoomBoard = {
       positions: {},
       notes: [
         { id: "s", text: "Tasks", x: 0, y: 0, section: true, size: full },
-        ...Array.from({ length: 49 }, (_, index) =>
-          task(`t${index}`, { x: 24 + (index % 7) * 216, y: 56 + Math.floor(index / 7) * 208 }),
+        ...Array.from({ length: 96 }, (_, index) =>
+          task(`t${index}`, { x: 24, y: 56 + index * 208 }),
         ),
       ],
     };
-    expect(boardPlanTaskPlace(board, [])).toEqual({ x: 24, y: 1624 });
+    expect(boardPlanTaskPlace(board, [])).toEqual({ x: 24, y: ROOM_BOARD_MAX_SECTION_SIZE + 24 });
   });
 
   it("goes beside the middle of the board's notes on a board with no task, over none", () => {

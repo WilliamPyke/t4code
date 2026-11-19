@@ -8,24 +8,19 @@ interface LocalShare {
 }
 
 /**
- * The cloud boards this browser made or joined while signed out that the account does not list
- * yet, at most one claim's worth. Each is tried once a page load: the host refuses a seat that is
- * another account's, and that stays so.
+ * The cloud boards this browser made or joined while signed out, at most one claim's worth: the
+ * host makes each seat the account's, folding it into the seat the account already has there.
+ * Each is tried once a page load: the host refuses a seat that is another account's.
  */
 export function boardsToClaim<TShare extends LocalShare>(input: {
   readonly shares: ReadonlyArray<TShare>;
-  readonly listed: ReadonlyArray<{ readonly shareId: string }>;
   readonly tried: ReadonlySet<string>;
   readonly isCloud: (share: TShare) => boolean;
 }): ReadonlyArray<TShare> {
-  const listed = new Set<string>(input.listed.map((board) => board.shareId));
   return input.shares
     .filter(
       (share) =>
-        input.isCloud(share) &&
-        share.accountId === undefined &&
-        !listed.has(share.shareId) &&
-        !input.tried.has(share.shareId),
+        input.isCloud(share) && share.accountId === undefined && !input.tried.has(share.shareId),
     )
     .slice(0, CLOUD_BOARD_ACCOUNT_CLAIM_MAX);
 }
@@ -93,7 +88,8 @@ export const accountNameSeed = (identity: BrowserIdentity, userId: string): stri
 /**
  * The one name a person goes by here, and what a name field starts with while they have none.
  * `account` is who is signed in (null: nobody): then only the account's own name is known, never
- * one this browser kept. `suggestion` is this browser's friendly name, the same every time.
+ * one this browser kept. `suggestion` is this browser's friendly name, only for someone signed
+ * out: an account is never offered a made-up name, so it starts empty.
  */
 export function resolveBoardName(input: {
   readonly account: { readonly name: string | null; readonly seed: string | null } | null;
@@ -101,7 +97,9 @@ export function resolveBoardName(input: {
   readonly suggestion: string;
 }): { readonly known: string | null; readonly suggested: string } {
   const known = input.account === null ? fitName(input.signedOutName) : fitName(input.account.name);
-  return { known, suggested: known ?? fitName(input.account?.seed) ?? input.suggestion };
+  if (known !== null) return { known, suggested: known };
+  if (input.account === null) return { known, suggested: input.suggestion };
+  return { known, suggested: fitName(input.account.seed) ?? "" };
 }
 
 /**

@@ -13,7 +13,7 @@ import { Atom } from "effect/reactivity";
 
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { isElectron } from "../env";
-import { appAtomRegistry } from "../rpc/atomRegistry";
+import { appAtomRegistry, subscribeAtomChanges } from "../rpc/atomRegistry";
 import { boardsToClaim, sharesOfOtherAccounts } from "./boardAccount.logic";
 import { keepBoardGuideFor } from "../components/room/boardGuideState";
 import { toastManager } from "../components/ui/toast";
@@ -135,7 +135,7 @@ export const isAccountBoard = (shareId: string) =>
  * The signed-in account and a fresh session token for a request to the cloud board host, or null
  * when nobody is signed in. Only ever sent to that host.
  */
-export async function boardAccountAuth(): Promise<{
+async function boardAccountAuth(): Promise<{
   readonly userId: string;
   readonly authorization: string;
 } | null> {
@@ -144,6 +144,45 @@ export async function boardAccountAuth(): Promise<{
   const token = await account.readToken().catch(() => null);
   return token === null ? null : { userId: account.userId, authorization: `Bearer ${token}` };
 }
+
+// How long making or joining a board waits to learn who is signed in. Past it (sign-in blocked
+// or unreachable), the board is made or joined signed out, as on a browser without accounts.
+const ACCOUNT_LOAD_WAIT_MS = 8_000;
+
+const accountLoaded = (): Promise<void> =>
+  !boardAccountsEnabled() || appAtomRegistry.get(boardAccountLoadedAtom)
+    ? Promise.resolve()
+    : new Promise((resolve) => {
+        const done = () => {
+          clearTimeout(timer);
+          stop();
+          resolve();
+        };
+        const timer = setTimeout(done, ACCOUNT_LOAD_WAIT_MS);
+        const stop = subscribeAtomChanges(boardAccountLoadedAtom, done);
+      });
+
+/**
+ * Who makes or joins a cloud board now, once sign-in has said: the account, its token and its
+ * name; null when nobody is signed in; "unconfirmed" when someone is but their session gave no
+ * token, so they are never seated as a stranger beside their own account.
+ */
+export async function boardJoinAuth(): Promise<
+  | { readonly userId: string; readonly authorization: string; readonly name: string | null }
+  | "unconfirmed"
+  | null
+> {
+  await accountLoaded();
+  if (readBoardAccount() === null) return null;
+  const auth = (await boardAccountAuth()) ?? (await boardAccountAuth());
+  const account = readBoardAccount();
+  // Signed out meanwhile is as unsure as no token: the caller says so, and nothing is joined.
+  if (auth === null || account?.userId !== auth.userId) return "unconfirmed";
+  return { ...auth, name: account.name };
+}
+
+/** What a person is told when `boardJoinAuth` could not confirm them. */
+export const SIGN_IN_UNCONFIRMED = "Could not confirm your sign-in. Try again in a moment.";
 
 /** A request to the cloud board host signed as the account, or null signed out or unreachable. */
 export async function accountRequest(
@@ -182,12 +221,15 @@ export async function refreshAccountBoards(): Promise<void> {
   appAtomRegistry.set(accountListSettledAtom, true);
 }
 
-/** Adds the cloud boards this browser made or joined while signed out to the account. */
+/**
+ * Adds the cloud boards this browser made or joined while signed out to the account. On a board
+ * the account is on already, the host folds this browser's seat into the account's, so the open
+ * page becomes that person at once and nobody is on a board twice.
+ */
 async function claimLocalBoards(): Promise<void> {
   while (readBoardAccount() !== null) {
     const claim = boardsToClaim({
       shares: readGuestShares(),
-      listed: appAtomRegistry.get(accountBoardsAtom) ?? [],
       tried: triedClaims,
       // A board only looked at from its view link is nobody's seat to claim.
       isCloud: (share) => isCloudShare(share) && share.viewOnly !== true,

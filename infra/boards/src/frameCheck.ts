@@ -6,6 +6,14 @@ import {
 
 const MAX_REDIRECTS = 3;
 const TIMEOUT_MS = 4_000;
+// Sites answer a request with no browser-like headers with 403 or 406, which says nothing.
+const ASK_HEADERS = {
+  accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "accept-language": "en-US,en;q=0.9",
+  "user-agent": "Mozilla/5.0 (compatible; TinkjamFrameCheck/1.0)",
+};
+/** Headers a bot wall puts on its own page, whose framing rules are not the site's. */
+const CHALLENGE_HEADERS = ["cf-mitigated", "x-amzn-waf-action"];
 
 /**
  * Whether the page at `address` lets `pageOrigin` frame it, from its answer's headers alone: the
@@ -28,7 +36,7 @@ export async function frameCheck(input: {
         method: "GET",
         redirect: "manual",
         signal,
-        headers: { accept: "text/html" },
+        headers: ASK_HEADERS,
       });
       void response.body?.cancel();
       const location = response.headers.get("location");
@@ -37,8 +45,9 @@ export async function frameCheck(input: {
         address = new URL(location, address).href;
         continue;
       }
-      // An error page's headers say nothing sure about the page a browser would get.
-      if (!response.ok) return "unknown";
+      // An error or challenge page's headers say nothing sure about the page a browser would get.
+      if (response.status !== 200) return "unknown";
+      if (CHALLENGE_HEADERS.some((name) => response.headers.has(name))) return "unknown";
       return roomEmbedFrameVerdict(
         {
           frameOptions: response.headers.get("x-frame-options"),

@@ -185,6 +185,7 @@ import { useJoinBoardOnComputer } from "./joinBoardOnComputer";
 import {
   announceRoomMachineJoined,
   type OwnRoomMachine,
+  OwnBoxComputerPicker,
   OwnBoxModelPicker,
   useOwnRoomMachine,
 } from "./ownRoomMachine";
@@ -484,7 +485,16 @@ function GuestThreadSession({
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const navigate = useNavigate();
   // The guest's own machine in this room, whose agent runs their thread boxes.
-  const { machine, away, forget, setBoxThread } = useOwnRoomMachine(share);
+  const { machine, machines, computers, boxOn, choose, startOver, away, forget, setBoxThread } =
+    useOwnRoomMachine(share);
+  // The thread behind one of this person's boxes, on whichever of their computers has it.
+  const boxThread = (boxId: string) => {
+    const own = boxOn(boxId).machine;
+    const threadId = own?.boxes[boxId];
+    return own == null || threadId === undefined
+      ? undefined
+      : scopeThreadRef(own.environmentId, threadId);
+  };
   const joinBoardOnComputer = useJoinBoardOnComputer();
   // Their agent joined from this page; this page learns which machine it is a moment later.
   const agentJoined = useRef(false);
@@ -507,6 +517,8 @@ function GuestThreadSession({
     });
     if (failed === null) {
       agentJoined.current = true;
+      // The computer just brought is the one they mean to use here.
+      choose(environmentId);
       announceRoomMachineJoined(share.shareId);
     }
     return failed;
@@ -528,7 +540,7 @@ function GuestThreadSession({
       return;
     }
     agentJoined.current = false;
-    forget();
+    forget(own.environmentId);
     toastManager.add({
       type: "info",
       title: "Your agent is off this board",
@@ -548,18 +560,19 @@ function GuestThreadSession({
   const interruptOwnBox = useAtomCommand(threadEnvironment.interruptTurn, "stop your agent");
   // Only a box this guest's own machine runs can be stopped from here.
   const stopBox = (boxId: string) => {
-    const threadId = machine?.boxes[boxId];
-    if (machine == null || threadId === undefined) return undefined;
+    const ref = boxThread(boxId);
+    if (ref === undefined) return undefined;
     return () =>
-      void interruptOwnBox({ environmentId: machine.environmentId, input: { threadId } });
+      void interruptOwnBox({
+        environmentId: ref.environmentId,
+        input: { threadId: ref.threadId },
+      });
   };
   const { deleteThread } = useThreadActions();
   // A box's chat is on this person's own machine: theirs to delete with the box.
   const boxChatDeleter = (boxId: string) => {
-    const threadId = machine?.boxes[boxId];
-    if (machine == null || threadId === undefined) return undefined;
-    const ref = scopeThreadRef(machine.environmentId, threadId);
-    return () => void deleteThread(ref);
+    const ref = boxThread(boxId);
+    return ref === undefined ? undefined : () => void deleteThread(ref);
   };
   // Where the box goes once the guest picks which of their threads it is.
   const [addingAt, setAddingAt] = useState<BoardPoint | null>(null);
@@ -579,13 +592,13 @@ function GuestThreadSession({
 
   // This guest's unnamed boxes whose thread on their machine has a title now, as the board names them.
   const boxTitles = (view?.board?.notes ?? []).flatMap((note) => {
-    const threadId = machine?.boxes[note.id];
-    if (machine == null || threadId === undefined || note.text.trim() !== "") return [];
+    const ref = boxThread(note.id);
+    if (ref === undefined || note.text.trim() !== "") return [];
     if (note.kind !== "thread" || note.guestId === undefined || note.guestId !== view?.guestId) {
       return [];
     }
     const title = ownShells
-      .find((shell) => shell.environmentId === machine.environmentId && shell.id === threadId)
+      .find((shell) => shell.environmentId === ref.environmentId && shell.id === ref.threadId)
       ?.title.trim();
     return title === undefined || title === "" ? [] : [{ note, text: boardThreadBoxTitle(title) }];
   });
@@ -655,11 +668,12 @@ function GuestThreadSession({
   // This guest's own box's changes are on their machine; anyone else's the owner's server reads.
   const readCodePatch: ReadRoomCodePatch = async ({ note, changes, path, scope }) => {
     if (changes.guestId === undefined) return readRoomCodePatch(endpoint, note.id, path, scope);
-    if (machine == null) {
+    const own = boxOn(changes.boxId).machine;
+    if (own === null) {
       return { error: "Open this on your machine, where your thread box's changes are." };
     }
     const result = await readOwnBoxPatch({
-      environmentId: machine.environmentId,
+      environmentId: own.environmentId,
       input: {
         host: share.host,
         shareId: GuestShareId.make(share.shareId),
@@ -734,11 +748,12 @@ function GuestThreadSession({
   };
   // How a run of one of this guest's boxes ended, from their own machine's record.
   const ownBoxRunEnd = (boxId: string) => {
-    const threadId = machine?.boxes[boxId];
-    if (machine == null || ownBoxNote(boxId) === undefined) return undefined;
+    const own = boxOn(boxId).machine;
+    const threadId = own?.boxes[boxId];
+    if (own === null || ownBoxNote(boxId) === undefined) return undefined;
     if (threadId === undefined) return null;
     const found = ownShells.find(
-      (candidate) => candidate.environmentId === machine.environmentId && candidate.id === threadId,
+      (candidate) => candidate.environmentId === own.environmentId && candidate.id === threadId,
     );
     return found === undefined
       ? undefined
@@ -788,7 +803,7 @@ function GuestThreadSession({
     }
     if (result._tag === "Failure" && isAtomCommandInterrupted(result)) return false;
     // The computer answered that it is not on this board: the way to bring it comes back.
-    if (result._tag === "Success") forget();
+    if (result._tag === "Success") forget(own.environmentId);
     toastManager.add({
       type: "error",
       title: "Could not run it on your agent",
@@ -857,7 +872,17 @@ function GuestThreadSession({
   // joined this room. Otherwise it is a request that waits for the owner like any message, with
   // the cards written into it, so the owner reads exactly what would reach their agent.
   const promptBox = async (boxId: string, prompt: BoardPrompt) => {
-    if (machine != null) {
+    const on = boxOn(boxId);
+    // Its chat is on a computer that is not connected: never quietly run it on another one.
+    if (on.machine === null && on.stranded !== null && machines.length > 0) {
+      toastManager.add({
+        type: "error",
+        title: `${on.stranded} is not connected`,
+        description: `This agent's chat is on ${on.stranded}. Wake it, or add a new agent to use another computer.`,
+      });
+      return false;
+    }
+    if (on.machine !== null) {
       if (prompt.text.trim() === "" || prompt.text.length > GUEST_MESSAGE_MAX_LENGTH) {
         toastManager.add({
           type: "error",
@@ -867,7 +892,7 @@ function GuestThreadSession({
         });
         return false;
       }
-      return promptBoxHere(machine, boxId, prompt);
+      return promptBoxHere(on.machine, boxId, prompt);
     }
     // A cloud board has no owner to send a request to: only their own agent can run it.
     if (cloud) {
@@ -1065,27 +1090,47 @@ function GuestThreadSession({
                 cloud ? undefined : (noteId) => refreshRoomPullRequest(endpoint, noteId)
               }
               onAddThread={!agents || machine == null ? undefined : setAddingAt}
-              renderBoxModel={(boxId) =>
-                viewOnly ? null : machine == null ? (
-                  <span className="truncate text-2xs text-muted-foreground">
-                    {machine === null
-                      ? !cloud
-                        ? "Goes to the owner"
-                        : away
-                          ? "Your computer is not connected"
-                          : "Your agent is not here"
-                      : ""}
-                  </span>
-                ) : (
-                  <OwnBoxModelPicker
-                    machine={machine}
-                    boxId={boxId}
-                    pick={ownBoxSelection(machine, boxId)}
-                    chosen={ownBoxNote(boxId)?.boxModel}
-                    onPick={(selection, name) => pickOwnBoxModel(boxId, selection, name)}
+              renderBoxModel={(boxId) => {
+                if (viewOnly) return null;
+                const on = boxOn(boxId);
+                // Names the computer for someone with several; nothing for someone with one.
+                const computer = (
+                  <OwnBoxComputerPicker
+                    computers={computers}
+                    on={on}
+                    onChoose={choose}
+                    onBring={roomCloud?.agents === true ? () => setBringingAgent(true) : undefined}
+                    onStartOver={machines.length > 0 ? () => startOver(boxId) : undefined}
                   />
-                )
-              }
+                );
+                if (on.machine === null) {
+                  return on.stranded !== null && machines.length > 0 ? (
+                    computer
+                  ) : (
+                    <span className="truncate text-2xs text-muted-foreground">
+                      {machine === null
+                        ? !cloud
+                          ? "Goes to the owner"
+                          : away
+                            ? "Your computer is not connected"
+                            : "Your agent is not here"
+                        : ""}
+                    </span>
+                  );
+                }
+                return (
+                  <div className="flex min-w-0 items-center gap-0.5">
+                    {computer}
+                    <OwnBoxModelPicker
+                      machine={on.machine}
+                      boxId={boxId}
+                      pick={ownBoxSelection(on.machine, boxId)}
+                      chosen={ownBoxNote(boxId)?.boxModel}
+                      onPick={(selection, name) => pickOwnBoxModel(boxId, selection, name)}
+                    />
+                  </div>
+                );
+              }}
               boxRunEnd={ownBoxRunEnd}
               roomModel={view.model.name}
               guestBoxPlaceholder={
@@ -1095,14 +1140,11 @@ function GuestThreadSession({
                     ? "Ask the owner's agent"
                     : "Ask your agent"
               }
-              conversationBoxIds={Object.keys(machine?.boxes ?? {})}
+              conversationBoxIds={machines.flatMap((own) => Object.keys(own.boxes))}
               onOpenConversation={(boxId) => {
-                const threadId = machine?.boxes[boxId];
-                if (machine != null && threadId !== undefined) {
-                  void navigate({
-                    to: "/$environmentId/$threadId",
-                    params: { environmentId: machine.environmentId, threadId },
-                  });
+                const ref = boxThread(boxId);
+                if (ref !== undefined) {
+                  void navigate({ to: "/$environmentId/$threadId", params: ref });
                 }
               }}
               ownerWritingArtifactId={ownerWritingArtifactId(
@@ -1112,10 +1154,8 @@ function GuestThreadSession({
               )}
               needsApproval={(pendingRequests?.approvals.length ?? 0) > 0}
               renderBoxApproval={(boxId) => {
-                const threadId = machine?.boxes[boxId];
-                return machine == null || threadId === undefined ? null : (
-                  <BoxApproval threadRef={scopeThreadRef(machine.environmentId, threadId)} />
-                );
+                const ref = boxThread(boxId);
+                return ref === undefined ? null : <BoxApproval threadRef={ref} />;
               }}
               onUseNote={
                 cloud

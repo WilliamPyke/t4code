@@ -80,13 +80,70 @@ describe("accounts on a cloud board", () => {
     expect(JSON.stringify(viewFor(linked.room, linked.room.guests[1]!))).not.toContain("user_ada");
   });
 
-  it("refuses a session that opens nothing, another account's seat, and a second seat", () => {
+  it("refuses a session that opens nothing and another account's seat", () => {
     const room = Result.getOrThrow(link(boardWithTwo(), "user_ada", "maker-session")).room;
     expect(Result.isFailure(link(room, "user_ada", "guessed-session"))).toBe(true);
     const taken = link(room, "user_eve", "maker-session");
     expect(Result.isFailure(taken) && taken.failure.reason).toBe("taken");
-    const second = link(room, "user_ada", "two-session");
-    expect(Result.isFailure(second) && second.failure.reason).toBe("taken");
+    // Nor does an account fold another account's seat into its own.
+    const both = Result.getOrThrow(link(room, "user_grace", "two-session")).room;
+    const stolen = link(both, "user_ada", "two-session");
+    expect(Result.isFailure(stolen) && stolen.failure.reason).toBe("taken");
+    expect(both.guests).toHaveLength(2);
+  });
+
+  it("folds a seat joined signed out into the account's own, so one account is one person", () => {
+    const two = GuestId.make("guest-two");
+    const note = (id: string, guestId: GuestId, text: string) => ({
+      id,
+      text,
+      x: 0,
+      y: 0,
+      guestId,
+      reactions: [
+        { emoji: "👀" as const, guestId: maker },
+        { emoji: "👀" as const, guestId: two },
+      ],
+    });
+    const room: CloudRoom = {
+      ...Result.getOrThrow(link(boardWithTwo(), "user_ada", "maker-session")).room,
+      board: {
+        positions: { [`guest:${two}`]: { x: 5, y: 5 }, [`guest:${maker}`]: { x: 1, y: 1 } },
+        // A card whose text is the id itself is still only text.
+        notes: [note("note-a", two, two), note("note-b", maker, "Hers already")],
+      },
+      turns: [],
+      machines: [{ guestId: two, hash: "machine-hash", kind: "room" }],
+    };
+    // The same person, signed out in a second browser, now signs in there.
+    const folded = Result.getOrThrow(link(room, "user_ada", "two-session"));
+    expect(folded.merged).toEqual({ from: two, into: maker });
+    expect(folded.board).toMatchObject({ guestId: maker, maker: true });
+    expect(folded.room.guests.map((guest) => guest.id)).toEqual([maker]);
+    expect(viewFor(folded.room, folded.room.guests[0]!).guests).toHaveLength(1);
+    // That browser's session, and their machine, are the account's person from here on.
+    expect(guestBySession(folded.room, "two-session")?.id).toBe(maker);
+    expect(machineGuestOf(folded.room, "machine-hash", "room", Date.parse(NOW))?.id).toBe(maker);
+    // What they added stays theirs, once.
+    expect(folded.room.board?.notes.map((kept) => [kept.guestId, kept.text])).toEqual([
+      [maker, two],
+      [maker, "Hers already"],
+    ]);
+    expect(folded.room.board?.notes[0]?.reactions).toEqual([{ emoji: "👀", guestId: maker }]);
+    expect(folded.room.board?.positions).toEqual({ [`guest:${maker}`]: { x: 1, y: 1 } });
+    expect(JSON.stringify({ ...folded.room.board, notes: [] })).not.toContain(two);
+    // Claiming again from either browser changes nothing more.
+    const again = Result.getOrThrow(link(folded.room, "user_ada", "two-session"));
+    expect(again.room).toBe(folded.room);
+    expect(again.merged).toBeUndefined();
+  });
+
+  it("keeps a board its maker made signed out theirs once they sign in as someone on it", () => {
+    const room = Result.getOrThrow(link(boardWithTwo(), "user_grace", "two-session")).room;
+    const folded = Result.getOrThrow(link(room, "user_grace", "maker-session"));
+    expect(folded.room.maker).toBe("guest-two");
+    expect(folded.board).toMatchObject({ guestId: "guest-two", maker: true });
+    expect(folded.room.guests.map((guest) => guest.name)).toEqual(["Grace"]);
   });
 
   it("keeps the invite only when it is the board's", () => {

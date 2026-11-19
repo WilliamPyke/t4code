@@ -2,7 +2,7 @@ import { GUEST_ROUTE_PREFIX, GuestRedeemResult } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { boardAccountAuth, refreshAccountBoards } from "./boardAccount";
+import { SIGN_IN_UNCONFIRMED, boardJoinAuth, refreshAccountBoards } from "./boardAccount";
 import { isCloudBoardsHost } from "./cloudBoardsHost";
 import { guestShareOrigin, type JoinedGuestShare } from "./guestShares";
 
@@ -23,7 +23,8 @@ export async function redeemInvite(input: {
   const cloud = isCloudBoardsHost(input.host);
   try {
     // Only the cloud board host sees the account: someone else's machine never gets its token.
-    const account = cloud ? await boardAccountAuth() : null;
+    const account = cloud ? await boardJoinAuth() : null;
+    if (account === "unconfirmed") return SIGN_IN_UNCONFIRMED;
     const response = await fetch(`${origin}${GUEST_ROUTE_PREFIX}/redeem`, {
       method: "POST",
       headers: {
@@ -32,7 +33,8 @@ export async function redeemInvite(input: {
       },
       body: JSON.stringify({
         credential: input.credential,
-        name: input.name,
+        // An account joins under its own name, whatever a field offered before it was known.
+        name: account?.name ?? input.name,
         returnToken: true,
         ...(input.memberAssertion === undefined ? {} : { memberAssertion: input.memberAssertion }),
       }),

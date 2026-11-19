@@ -5,6 +5,7 @@ import {
   ROOM_BOARD_MAX_COORDINATE,
   ROOM_BOARD_MAX_EDGES,
   ROOM_BOARD_MAX_REPLIES,
+  ROOM_BOARD_MAX_SECTION_SIZE,
   ROOM_BOARD_MIN_CARD_SIZE,
   ROOM_BOARD_NOTE_MAX_LENGTH,
   ROOM_BOARD_QUOTE_MAX_LENGTH,
@@ -69,6 +70,7 @@ import {
   boardGuestWaiting,
   boardCardBox,
   boardChangeOf,
+  boardChangeOutgrowsOlderHosts,
   boardChangeQueue,
   boardChangeQueueKey,
   boardCommentLineTo,
@@ -134,6 +136,7 @@ import {
   boardReplyQuote,
   boardRestoreLabel,
   boardSelectionItems,
+  boardSectionCardsToDelete,
   boardSelectionRemoval,
   boardThreadBoxes,
   boardUrlIn,
@@ -849,16 +852,31 @@ describe("resolveBoard", () => {
       y: 50,
       size: { w: ROOM_BOARD_MIN_CARD_SIZE, h: ROOM_BOARD_MIN_CARD_SIZE },
     });
-    expect(resizeBoardFromLeft(card, -5_000, 0).x).toBe(400 - ROOM_BOARD_MAX_CARD_SIZE);
+    expect(resizeBoardFromLeft(card, -50_000, 0).x).toBe(400 - ROOM_BOARD_MAX_CARD_SIZE);
+    expect(resizeBoardFromLeft(card, -50_000, 0, ROOM_BOARD_MAX_SECTION_SIZE).x).toBe(
+      400 - ROOM_BOARD_MAX_SECTION_SIZE,
+    );
 
-    const note = { id: "n", text: "Ship", x: 0.4, y: 0, size: { w: 250.2, h: 3_000 } };
+    const note = { id: "n", text: "Ship", x: 0.4, y: 0, size: { w: 250.2, h: 30_000 } };
     const settled = settleBoardValue(note);
     expect(settled.size).toEqual({ w: 250, h: ROOM_BOARD_MAX_CARD_SIZE });
-    expect(boardChangeOf({ kind: "note", id: "n" }, settled)).toMatchObject({
+    const put = boardChangeOf({ kind: "note", id: "n" }, settled);
+    expect(put).toMatchObject({
       type: "note.put",
       x: 0,
       size: { w: 250, h: ROOM_BOARD_MAX_CARD_SIZE },
     });
+    // A section goes further than a card; a host from before either refuses both.
+    expect(settleBoardValue({ ...note, section: true as const }).size?.h).toBe(
+      ROOM_BOARD_MAX_SECTION_SIZE,
+    );
+    expect(boardChangeOutgrowsOlderHosts(put)).toBe(true);
+    expect(
+      boardChangeOutgrowsOlderHosts(
+        boardChangeOf({ kind: "note", id: "n" }, { ...note, size: { w: 1_600, h: 900 } }),
+      ),
+    ).toBe(false);
+    expect(boardChangeOutgrowsOlderHosts(boardChangeOf(size, { w: 1_601, h: 300 }))).toBe(true);
   });
 
   it("keeps what the owner's server wrote into a note while this person edits it", () => {
@@ -2874,9 +2892,9 @@ describe("selecting several cards", () => {
       ]),
     ).toEqual({ x: 68, y: 28, size: { w: 464, h: 254 } });
     expect(boardSectionAround([])).toBeNull();
-    // A frame never grows past the largest card.
-    expect(boardSectionAround([{ x: 0, y: 0, width: 3_000, height: 100 }])?.size.w).toBe(
-      ROOM_BOARD_MAX_CARD_SIZE,
+    // A frame never grows past the largest section.
+    expect(boardSectionAround([{ x: 0, y: 0, width: 30_000, height: 100 }])?.size.w).toBe(
+      ROOM_BOARD_MAX_SECTION_SIZE,
     );
   });
 
@@ -3079,6 +3097,10 @@ describe("selecting several cards", () => {
       left: 0,
     });
     expect(boardSelectionRemoval(board, refs, "sam")).toEqual({ noteIds: ["sams"], left: 1 });
+    // The cards over a section being deleted that could go with it: not what goes anyway, the
+    // room's own cards, or someone else's.
+    expect(boardSectionCardsToDelete(board, ["mine"], refs, null)).toEqual(["sams"]);
+    expect(boardSectionCardsToDelete(board, ["sams"], refs, "sam")).toEqual([]);
   });
 });
 

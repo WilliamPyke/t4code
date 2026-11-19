@@ -1,5 +1,5 @@
 import {
-  ROOM_BOARD_MAX_CARD_SIZE,
+  ROOM_BOARD_MAX_SECTION_SIZE,
   ROOM_BOARD_NOTE_MAX_LENGTH,
   ROOM_BOARD_ROOM_BOX,
   ROOM_BOARD_THREAD_CARD,
@@ -360,7 +360,7 @@ const spotInSection = Effect.fnUntraced(function* <E, R>(
     obstacles(target, false),
   );
   const bottom = spot === undefined ? Infinity : spot.y + spot.h + GAP - area.y;
-  if (spot === undefined || bottom > ROOM_BOARD_MAX_CARD_SIZE) {
+  if (spot === undefined || bottom > ROOM_BOARD_MAX_SECTION_SIZE) {
     return Result.fail(`Section "${section.text}" is full. Put the rest in a new section.`);
   }
   if (bottom > area.h) {

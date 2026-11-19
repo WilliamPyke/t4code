@@ -161,6 +161,75 @@ describe("RoomBoard sections", () => {
     });
   });
 
+  it("moves by its edge and, once selected, by its inside, which pans the board until then", async () => {
+    await using _viewport = await boardSizedViewport();
+    const board = renderBoard([
+      { id: "frame", text: "Plan", x: 0, y: 0, section: true, size: { w: 500, h: 400 } },
+    ]);
+    const { onChange } = board;
+    await using screen = await board.screen;
+    const section = screen.container.querySelector('[data-board-item="note:frame"]');
+    if (section === null) throw new Error("The board did not draw the section");
+    const drag = async (from: { x: number; y: number }) => {
+      await commands.mouse([
+        { type: "down", ...from },
+        { type: "move", x: from.x + 40, y: from.y + 30 },
+        { type: "up", x: from.x + 40, y: from.y + 30 },
+      ]);
+    };
+    const moves = () => onChange.mock.calls.filter(([change]) => change.type === "note.put").length;
+    const inside = () => {
+      const rect = section.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height * 0.75 };
+    };
+    // Not selected: the inside is the board's, so the section follows the pan and nothing is sent.
+    const before = section.getBoundingClientRect().left;
+    await drag(inside());
+    await vi.waitFor(() =>
+      expect(section.getBoundingClientRect().left).toBeCloseTo(before + 40, 0),
+    );
+    expect(moves()).toBe(0);
+
+    const rect = section.getBoundingClientRect();
+    // Off its middle, where the dot a line is drawn from shows.
+    await drag({ x: rect.left + 1, y: rect.top + rect.height / 4 });
+    await vi.waitFor(() => expect(moves()).toBe(1));
+    // The drag selected it: now its inside moves it too.
+    await drag(inside());
+    await vi.waitFor(() => expect(moves()).toBe(2));
+  });
+
+  it("asks whether a deleted section's cards go with it, and keeps them unless told", async () => {
+    const board = renderBoard([
+      { id: "frame", text: "Plan", x: 0, y: 0, section: true, size: { w: 500, h: 400 } },
+      { id: "inside", text: "In", x: 60, y: 100 },
+      { id: "empty", text: "Later", x: 0, y: 600, section: true, size: { w: 300, h: 200 } },
+    ]);
+    const { onChange } = board;
+    await using screen = await board.screen;
+    const removed = () =>
+      onChange.mock.calls.flatMap(([change]) =>
+        change.type === "note.remove" ? [change.noteId] : [],
+      );
+    const remove = (id: string) => {
+      const button = screen.container.querySelector<HTMLElement>(
+        `[data-board-item="note:${id}"] button[aria-label="Delete section"]`,
+      );
+      if (button === null) throw new Error(`Section ${id} has no delete button`);
+      button.click();
+    };
+    // An empty section goes with no question.
+    remove("empty");
+    await vi.waitFor(() => expect(removed()).toEqual(["empty"]));
+
+    remove("frame");
+    await expect
+      .element(page.getByRole("button", { name: "Delete section and 1 card" }))
+      .toBeVisible();
+    await userEvent.click(page.getByRole("button", { name: "Delete section only" }));
+    await vi.waitFor(() => expect(removed()).toEqual(["empty", "frame"]));
+  });
+
   it("puts a title back on Escape, sending nothing, and saves it on Enter", async () => {
     const board = renderBoard([
       { id: "frame", text: "Plan", x: 0, y: 500, section: true, size: { w: 500, h: 300 } },

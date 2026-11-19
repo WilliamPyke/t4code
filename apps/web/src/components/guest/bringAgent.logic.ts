@@ -196,6 +196,47 @@ export function computersBackOnline(
   return computersAwaitingReconnect(saved).filter((environmentId) => online.has(environmentId));
 }
 
+/**
+ * Which of the person's own computers one of their boxes runs on. A box whose chat is on a
+ * computer stays there (`fixed`); while that computer is not connected the box is `stranded` and
+ * runs nowhere. A box with no chat yet runs on the board's pick, else the first computer here.
+ */
+export function boxComputer<Machine extends BoxComputerMachine>(input: {
+  /** The person's computers on this board that are connected now. */
+  readonly here: ReadonlyArray<Machine>;
+  readonly boxId: string;
+  /** The computer the person last chose on this board. */
+  readonly picked: string | null;
+  /** The computer this box last ran on, as this browser remembers it. */
+  readonly remembered: string | null;
+  /** The person's computers this browser still has that are not connected now. */
+  readonly disconnected: ReadonlySet<string>;
+}): {
+  readonly machine: Machine | null;
+  readonly fixed: boolean;
+  readonly stranded: string | null;
+} {
+  const first = (candidates: ReadonlyArray<Machine>, ...wanted: ReadonlyArray<string | null>) =>
+    wanted
+      .map((id) => candidates.find((machine) => machine.environmentId === id))
+      .find((machine) => machine !== undefined) ??
+    candidates[0] ??
+    null;
+  const homes = input.here.filter((machine) => input.boxId in machine.boxes);
+  if (homes.length > 0) {
+    return { machine: first(homes, input.remembered, input.picked), fixed: true, stranded: null };
+  }
+  if (input.remembered !== null && input.disconnected.has(input.remembered)) {
+    return { machine: null, fixed: true, stranded: input.remembered };
+  }
+  return { machine: first(input.here, input.picked), fixed: false, stranded: null };
+}
+
+interface BoxComputerMachine {
+  readonly environmentId: string;
+  readonly boxes: Readonly<Record<string, unknown>>;
+}
+
 const AGENT_NAMES: Partial<Record<string, string>> = { claudeAgent: "Claude Code", codex: "Codex" };
 const SIGN_IN_HINTS: Partial<Record<string, string>> = {
   claudeAgent: "Open Claude Code on that computer and sign in.",

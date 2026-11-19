@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   agentsChecked,
+  boxComputer,
   bringAgentComputers,
   computersAwaitingReconnect,
   computersBackOnline,
@@ -44,6 +45,51 @@ describe("steadyDiscovered", () => {
       computer("desk", "error"),
       computer("gone", "error"),
     ]);
+  });
+});
+
+describe("boxComputer", () => {
+  const desk = { environmentId: "desk", boxes: { old: "thread-1" } };
+  const laptop = { environmentId: "laptop", boxes: {} };
+  const none = new Set<string>();
+
+  it("runs a box with no chat on the board's pick, else on a computer that is connected", () => {
+    const fresh = { here: [desk, laptop], boxId: "new", remembered: null, disconnected: none };
+    expect(boxComputer({ ...fresh, picked: "laptop" })).toEqual({
+      machine: laptop,
+      fixed: false,
+      stranded: null,
+    });
+    // The pick is not connected now: the first one that is, never the pick.
+    expect(boxComputer({ ...fresh, here: [desk], picked: "laptop" }).machine).toBe(desk);
+    expect(boxComputer({ ...fresh, here: [], picked: "laptop" }).machine).toBeNull();
+  });
+
+  it("keeps a box on the computer its chat is on, whatever the board's pick", () => {
+    expect(
+      boxComputer({
+        here: [desk, laptop],
+        boxId: "old",
+        picked: "laptop",
+        remembered: null,
+        disconnected: none,
+      }),
+    ).toEqual({ machine: desk, fixed: true, stranded: null });
+  });
+
+  it("runs a box nowhere while the computer its chat is on is not connected", () => {
+    const away = { here: [laptop], boxId: "old", picked: "laptop", remembered: "desk" };
+    expect(boxComputer({ ...away, disconnected: new Set(["desk"]) })).toEqual({
+      machine: null,
+      fixed: true,
+      stranded: "desk",
+    });
+    // Removed from this browser, or off the board: the box starts over on the pick.
+    expect(boxComputer({ ...away, disconnected: none })).toEqual({
+      machine: laptop,
+      fixed: false,
+      stranded: null,
+    });
   });
 });
 

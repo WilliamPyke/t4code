@@ -1,9 +1,11 @@
 import {
   GuestId,
   ROOM_BOARD_DRAG_MAX_ITEMS,
+  ROOM_BOARD_LEGACY_MAX_CARD_SIZE,
   ROOM_BOARD_MAX_CARD_SIZE,
   ROOM_BOARD_MAX_COORDINATE,
   ROOM_BOARD_MAX_EDGES,
+  ROOM_BOARD_MAX_SECTION_SIZE,
   ROOM_BOARD_MIN_CARD_SIZE,
   ROOM_BOARD_QUOTE_MAX_LENGTH,
   ROOM_BOARD_REACTIONS,
@@ -817,14 +819,29 @@ export function boardEmbedOf(url: string) {
   return embed;
 }
 
-const boardLength = (value: number) =>
-  Math.round(Math.min(ROOM_BOARD_MAX_CARD_SIZE, Math.max(ROOM_BOARD_MIN_CARD_SIZE, value)));
+/** The longest side a card of this kind can be given: a section frames many, so it goes further. */
+export const boardMaxSide = (item: { readonly section?: boolean | undefined }): number =>
+  item.section === true ? ROOM_BOARD_MAX_SECTION_SIZE : ROOM_BOARD_MAX_CARD_SIZE;
 
-/** A size dragged to, at the whole pixels and within the bounds the room takes. */
-export const clampBoardSize = (size: RoomBoardSize): RoomBoardSize => ({
-  w: boardLength(size.w),
-  h: boardLength(size.h),
-});
+/** A size dragged to, at the whole pixels and within the bounds the room takes for its kind. */
+export const clampBoardSize = (
+  size: RoomBoardSize,
+  max = ROOM_BOARD_MAX_CARD_SIZE,
+): RoomBoardSize => {
+  const side = (value: number) =>
+    Math.round(Math.min(max, Math.max(ROOM_BOARD_MIN_CARD_SIZE, value)));
+  return { w: side(size.w), h: side(size.h) };
+};
+
+/**
+ * Whether a change gives a card a side longer than hosts took before the larger sizes. Such a
+ * host refuses it, and the card goes back to the size it had.
+ */
+export const boardChangeOutgrowsOlderHosts = (change: RoomBoardChange): boolean => {
+  const size =
+    change.type === "card.resize" ? change : change.type === "note.put" ? change.size : undefined;
+  return size !== undefined && Math.max(size.w, size.h) > ROOM_BOARD_LEGACY_MAX_CARD_SIZE;
+};
 
 /**
  * A card resized by its bottom-left corner, `dx`/`dy` board pixels from where it was taken: the
@@ -834,8 +851,9 @@ export function resizeBoardFromLeft(
   from: BoardRect,
   dx: number,
   dy: number,
+  max = ROOM_BOARD_MAX_CARD_SIZE,
 ): { readonly x: number; readonly y: number; readonly size: RoomBoardSize } {
-  const size = clampBoardSize({ w: from.width - dx, h: from.height + dy });
+  const size = clampBoardSize({ w: from.width - dx, h: from.height + dy }, max);
   return { x: from.x + from.width - size.w, y: from.y, size };
 }
 
@@ -1447,7 +1465,9 @@ export const settleBoardValue = <Value extends BoardValue>(value: Value): Value 
   if ("w" in value) return { ...value, ...clampBoardSize(value) };
   if (!("x" in value)) return value;
   const at = { ...value, x: coordinate(value.x), y: coordinate(value.y) };
-  return "size" in at && at.size !== undefined ? { ...at, size: clampBoardSize(at.size) } : at;
+  return "size" in at && at.size !== undefined
+    ? { ...at, size: clampBoardSize(at.size, boardMaxSide(at)) }
+    : at;
 };
 
 /**
@@ -2949,7 +2969,7 @@ export const boardSectionHolding = <Section extends { readonly rect: BoardRect }
 
 /**
  * The section whose frame `point` is on, within `band` of its edge either side, where a line can
- * start or end at the section; inside that, the board and its cards keep the pointer. The smallest
+ * end at the section; inside that, the board and its cards keep the pointer. The smallest
  * such section, or null.
  */
 export function boardSectionFrameAt<Section extends { readonly rect: BoardRect }>(
@@ -2980,10 +3000,13 @@ export function boardSectionAround(
   return {
     x,
     y,
-    size: clampBoardSize({
-      w: bounds.width + SECTION_PADDING * 2,
-      h: bounds.height + SECTION_PADDING * 2 + SECTION_TITLE_HEIGHT,
-    }),
+    size: clampBoardSize(
+      {
+        w: bounds.width + SECTION_PADDING * 2,
+        h: bounds.height + SECTION_PADDING * 2 + SECTION_TITLE_HEIGHT,
+      },
+      ROOM_BOARD_MAX_SECTION_SIZE,
+    ),
   };
 }
 
@@ -3116,12 +3139,15 @@ export function boardTidySection<T extends { readonly ref: string; readonly rect
       x: section.x + SECTION_PADDING,
       y: section.y + SECTION_TITLE_HEIGHT + SECTION_PADDING,
     }),
-    size: clampBoardSize({
-      w: Math.ceil(Math.max(section.width, grid.width + SECTION_PADDING * 2)),
-      h: Math.ceil(
-        Math.max(section.height, grid.height + SECTION_PADDING * 2 + SECTION_TITLE_HEIGHT),
-      ),
-    }),
+    size: clampBoardSize(
+      {
+        w: Math.ceil(Math.max(section.width, grid.width + SECTION_PADDING * 2)),
+        h: Math.ceil(
+          Math.max(section.height, grid.height + SECTION_PADDING * 2 + SECTION_TITLE_HEIGHT),
+        ),
+      },
+      ROOM_BOARD_MAX_SECTION_SIZE,
+    ),
   };
 }
 
@@ -3332,6 +3358,18 @@ export function boardSelectionRemoval(
   const noteIds = notes.filter((note) => isRoomCardOwnedBy(note, viewer)).map((note) => note.id);
   return { noteIds, left: notes.length - noteIds.length };
 }
+
+/**
+ * The cards a section's deleting could take with it: those over the sections going (`over`, by
+ * ref), but what goes anyway and what is not this viewer's to delete.
+ */
+export const boardSectionCardsToDelete = (
+  board: RoomBoard,
+  noteIds: ReadonlyArray<string>,
+  over: Iterable<string>,
+  viewer: string | null,
+): ReadonlyArray<string> =>
+  boardSelectionRemoval(board, new Set(over), viewer).noteIds.filter((id) => !noteIds.includes(id));
 
 /**
  * Whether undo can put a deleted card back as it was. A thread box, code window or pull request

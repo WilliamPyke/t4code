@@ -22,29 +22,27 @@ const share = (shareId: string, extra: { host?: string; accountId?: string } = {
 const isCloud = (candidate: { readonly host: string }) => candidate.host === "boards.example.org";
 
 describe("boards a browser adds to the account", () => {
-  it("offers its own cloud boards the account does not list, each once", () => {
+  it("offers its own cloud boards joined signed out, each once", () => {
     const shares = [
       share("made-here"),
-      share("listed"),
+      // Joined signed out on a board the account is on already: offered, so the two become one.
+      share("account-is-on-it"),
       share("on-a-machine", { host: "tunnel.example.org" }),
       share("opened-by-account", { accountId: "user_ada" }),
       share("refused-before"),
     ];
     expect(
-      boardsToClaim({
-        shares,
-        listed: [{ shareId: "listed" }],
-        tried: new Set(["refused-before"]),
-        isCloud,
-      }).map((candidate) => candidate.shareId),
-    ).toEqual(["made-here"]);
+      boardsToClaim({ shares, tried: new Set(["refused-before"]), isCloud }).map(
+        (candidate) => candidate.shareId,
+      ),
+    ).toEqual(["made-here", "account-is-on-it"]);
   });
 
   it("offers at most one claim's worth at a time", () => {
     const shares = Array.from({ length: CLOUD_BOARD_ACCOUNT_CLAIM_MAX + 3 }, (_, index) =>
       share(`share-${index}`),
     );
-    expect(boardsToClaim({ shares, listed: [], tried: new Set(), isCloud })).toHaveLength(
+    expect(boardsToClaim({ shares, tried: new Set(), isCloud })).toHaveLength(
       CLOUD_BOARD_ACCOUNT_CLAIM_MAX,
     );
   });
@@ -124,9 +122,9 @@ describe("the name a person joins a board under", () => {
       { known: null, suggested: "Bo" },
     ],
     [
-      "signed in with only an email on a browser someone else used: the suggestion, not their name",
+      "signed in with only an email on a browser someone else used: empty, never a made-up name",
       { account: { name: null, seed: null }, signedOutName: "QA One" },
-      { known: null, suggested: "Calm Otter" },
+      { known: null, suggested: "" },
     ],
   ] as const)("%s", (_case, input, resolved) => {
     expect(resolveBoardName({ ...input, suggestion: "Calm Otter" })).toEqual(resolved);
