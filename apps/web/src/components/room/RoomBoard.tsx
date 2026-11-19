@@ -3925,10 +3925,35 @@ export function RoomBoard({
   };
   // A menu hands its trigger the focus back as it closes, after the field mounted, so a
   // frame on the field takes it; preventScroll keeps the page where the bar left it.
+  const linkFieldRef = useRef<HTMLInputElement | null>(null);
   const linkField = useStableCallback((element: HTMLInputElement | null) => {
+    linkFieldRef.current = element;
     if (element === null) return;
     window.requestAnimationFrame(() => element.focus({ preventScroll: true }));
   });
+  // While the link bar is open, keys typed with focus on the board or the page are the bar's:
+  // a letter goes into its field, never to a board shortcut, and Escape closes it.
+  const linkBarKey = useStableCallback((event: KeyboardEvent) => {
+    const field = linkFieldRef.current;
+    const focus = document.activeElement;
+    if (field === null || (focus !== surfaceRef.current && focus !== document.body)) return;
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      setLinkDraft(null);
+      return;
+    }
+    if (event.key.length !== 1 || event.ctrlKey || event.metaKey || event.altKey) return;
+    // Focus moved during keydown takes the typed character, as the key is not prevented.
+    event.stopPropagation();
+    field.focus({ preventScroll: true });
+  });
+  const linkBarOpen = linkDraft !== null;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keys pressed while focus rests on the page reach only the window, before the board's own key handlers
+  useEffect(() => {
+    if (!linkBarOpen) return;
+    window.addEventListener("keydown", linkBarKey, true);
+    return () => window.removeEventListener("keydown", linkBarKey, true);
+  }, [linkBarOpen, linkBarKey]);
   const startLinkDraft = () => {
     setDraftKind("link");
     setLinkDraft("");
@@ -5959,7 +5984,19 @@ export function RoomBoard({
               return;
             }
             // Keys act on the board during and after a gesture: Escape, Delete, the arrows.
+            const linkBar = linkFieldRef.current;
+            const leftLinkBar = linkBar !== null && document.activeElement !== linkBar;
             event.currentTarget.focus({ preventScroll: true });
+            // With the link bar open, a press on the empty board keeps a typed link in its field;
+            // with none typed, the first press only leaves the field and a second closes the bar.
+            if (
+              linkBar !== null &&
+              target instanceof Element &&
+              target.closest("[data-board-item]") === null
+            ) {
+              if (linkBar.value.trim() !== "") linkBar.focus({ preventScroll: true });
+              else if (leftLinkBar) setLinkDraft(null);
+            }
             // A press past a card's edge that a grip's band covers is the line's; claiming it
             // here keeps the grip from starting a resize, and the click selects the line.
             if (linePressOnGrip(target, event.clientX, event.clientY) !== null) {

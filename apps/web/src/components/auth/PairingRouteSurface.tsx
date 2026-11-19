@@ -9,7 +9,7 @@ import {
   stripPairingTokenFromUrl,
   submitServerAuthCredential,
 } from "../../environments/primary";
-import { describeHostedPairingRequest, readHostedPairingRequest } from "../../hostedPairing";
+import { describeHostedPairingRequest, hostedPairingRequestOn } from "../../hostedPairing";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { StandalonePage, StandalonePageHeader } from "../ui/standalone-page";
@@ -140,7 +140,7 @@ export function HostedPairingRouteSurface() {
   const connectPairingEnvironment = useAtomCommand(connectPairing, {
     reportFailure: false,
   });
-  const [request] = useState(readHostedPairingRequest);
+  const [request] = useState(() => hostedPairingRequestOn("/pair"));
   const target = request ? describeHostedPairingRequest(request) : null;
   const [status, setStatus] = useState<"confirm" | "pairing" | "paired" | "error">("confirm");
   const [message, setMessage] = useState("");

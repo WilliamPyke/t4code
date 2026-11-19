@@ -1277,6 +1277,39 @@ describe("RoomBoard lines", () => {
     });
   });
 
+  it("types a link into the open link bar after a click on the board, never into shortcuts", async () => {
+    const board = renderBoard([]);
+    const { onChange } = board;
+    await using screen = await board.screen;
+    await userEvent.click(screen.getByRole("button", { name: "Link" }));
+    const field = screen.getByRole("textbox", { name: "Link" });
+    await expect.element(field).toHaveFocus();
+    const surface = screen.getByRole("application", { name: "Room board" });
+    await userEvent.click(surface, { position: { x: 300, y: 300 } });
+    await expect.element(field).toBeVisible();
+    await userEvent.keyboard("https://example.com{Enter}");
+    await vi.waitFor(() =>
+      expect(onChange.mock.calls.map(([change]) => change)).toEqual([
+        expect.objectContaining({ type: "note.put", kind: "link", url: "https://example.com" }),
+      ]),
+    );
+    expect(screen.container.textContent).not.toContain("Hand tool");
+  });
+
+  it("closes the link bar with a second click on the empty board", async () => {
+    const board = renderBoard([]);
+    await using screen = await board.screen;
+    await userEvent.click(screen.getByRole("button", { name: "Link" }));
+    const field = screen.getByRole("textbox", { name: "Link" });
+    await expect.element(field).toHaveFocus();
+    const surface = screen.getByRole("application", { name: "Room board" });
+    await userEvent.click(surface, { position: { x: 300, y: 300 } });
+    await expect.element(field).toBeVisible();
+    await userEvent.click(surface, { position: { x: 300, y: 300 } });
+    await expect.element(field).not.toBeInTheDocument();
+    await expect.element(screen.getByRole("button", { name: "Note" })).toBeVisible();
+  });
+
   it("selects a line 6px off the line, where a card's grip band covers it", async () => {
     const board = render(
       <RoomBoard
@@ -1323,6 +1356,41 @@ describe("RoomBoard lines", () => {
       },
     });
     await expect.element(screen.getByRole("button", { name: "Delete line" })).toBeVisible();
+  });
+});
+
+describe("RoomBoard link cards", () => {
+  it("zooms in to a shown page's card when its cover is clicked from far out", async () => {
+    await using _viewport = await boardSizedViewport();
+    rememberRoomBoardView("embed-test:far", { x: 0, y: 0, zoom: 0.3 });
+    const board = renderBoard(
+      [
+        {
+          id: "page",
+          text: "",
+          x: 900,
+          y: 600,
+          kind: "link",
+          url: "https://example.com/",
+          framed: true,
+        },
+      ],
+      "embed-test:far",
+    );
+    await using screen = await board.screen;
+    const cover = screen.getByText("Zoom in to show example.com");
+    await expect.element(cover).toBeVisible();
+    await userEvent.click(cover);
+    await expect.element(screen.getByText("40%")).toBeVisible();
+    const card = screen.container.querySelector('[data-board-item="note:page"]');
+    const surface = screen.getByRole("application", { name: "Room board" }).element();
+    if (card === null) throw new Error("The board did not draw the link card");
+    const drawn = card.getBoundingClientRect();
+    const area = surface.getBoundingClientRect();
+    expect(drawn.left).toBeGreaterThanOrEqual(area.left);
+    expect(drawn.right).toBeLessThanOrEqual(area.right);
+    expect(drawn.top).toBeGreaterThanOrEqual(area.top);
+    expect(drawn.bottom).toBeLessThanOrEqual(area.bottom);
   });
 });
 

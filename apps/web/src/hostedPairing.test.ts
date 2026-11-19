@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   buildHostedPairingUrl,
-  hasHostedPairingRequest,
+  hostedPairingRequestOn,
   readHostedPairingRequest,
 } from "./hostedPairing";
 
@@ -19,7 +19,17 @@ describe("hostedPairing", () => {
       token: "ABCD1234",
       label: "",
     });
-    expect(hasHostedPairingRequest(url)).toBe(true);
+  });
+
+  it("keeps a visit's request at /pair after its token leaves the address bar", () => {
+    const linked = new URL("https://app.trellium.org/pair?host=box.example.com&label=PC#token=t1");
+    const request = { host: "box.example.com", token: "t1", label: "PC" };
+    expect(hostedPairingRequestOn("/pair", linked)).toEqual(request);
+    // The page strips the token, and the router runs the root guard again on that change.
+    const stripped = new URL("https://app.trellium.org/pair?host=box.example.com&label=PC");
+    expect(hostedPairingRequestOn("/pair", stripped)).toEqual(request);
+    expect(hostedPairingRequestOn("/", stripped)).toBeNull();
+    expect(hostedPairingRequestOn("/pair", stripped)).toBeNull();
   });
 
   it("prefers hash tokens so generated hosted links do not put credentials in search params", () => {

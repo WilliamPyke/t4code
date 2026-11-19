@@ -92,8 +92,23 @@ export function describeHostedPairingRequest(
   };
 }
 
-export function hasHostedPairingRequest(url: URL = new URL(window.location.href)): boolean {
-  return readHostedPairingRequest(url) !== null;
+let heldRequest: HostedPairingRequest | null = null;
+
+/**
+ * The pairing request this visit to /pair arrived with. The page takes the token out of the
+ * address bar, and the router runs its guards again on that change: holding the request keeps
+ * the page from losing it and falling back to the home page. Leaving /pair forgets it.
+ */
+export function hostedPairingRequestOn(
+  pathname: string,
+  url: URL = new URL(window.location.href),
+): HostedPairingRequest | null {
+  if (pathname !== "/pair") {
+    heldRequest = null;
+    return null;
+  }
+  heldRequest = readHostedPairingRequest(url) ?? heldRequest;
+  return heldRequest;
 }
 
 export function buildHostedPairingUrl(input: {
