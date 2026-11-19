@@ -27,6 +27,7 @@ import { Atom, AtomRegistry } from "effect/reactivity";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { sharedThreadLocationOf } from "./boardAddress";
+import { linkRefusalNotice, type RefusalNotice } from "./linkRefusal.logic";
 import {
   acceptedGuestLinkHost,
   cloudBoardsHost,
@@ -105,11 +106,29 @@ function writeGuestShares(next: ReadonlyArray<JoinedGuestShare>) {
   } catch {}
 }
 
+/**
+ * What the host said when it ended each share, for the notice the share's page then shows. Joined
+ * again, or forgotten for any other reason, a share's notice goes with it.
+ */
+export const endedShareNoticesAtom = Atom.make<ReadonlyMap<string, RefusalNotice>>(
+  new Map<string, RefusalNotice>(),
+).pipe(Atom.keepAlive, Atom.withLabel("ended-share-notices"));
+
+function writeEndedNotice(shareId: string, detail: string | undefined) {
+  const notices = appAtomRegistry.get(endedShareNoticesAtom);
+  if (detail === undefined && !notices.has(shareId)) return;
+  const next = new Map(notices);
+  if (detail === undefined) next.delete(shareId);
+  else next.set(shareId, linkRefusalNotice(detail));
+  appAtomRegistry.set(endedShareNoticesAtom, next);
+}
+
 export function rememberGuestShare(share: JoinedGuestShare) {
   writeGuestShares([
     ...readGuestShares().filter((existing) => existing.shareId !== share.shareId),
     share,
   ]);
+  writeEndedNotice(share.shareId, undefined);
 }
 
 /** Boards being opened again under a new session, which show as opening meanwhile. */
@@ -220,7 +239,11 @@ function noteBoardPreview(shareId: string, view: GuestShareView) {
   writePreviews({ ...Object.fromEntries(kept), [shareId]: preview });
 }
 
-export function forgetGuestShare(shareId: string) {
+/**
+ * Forgets a joined share: left, removed, deleted, or the host's `endedDetail` said why its link
+ * no longer opens, which the share's page then shows instead of "not valid".
+ */
+export function forgetGuestShare(shareId: string, endedDetail?: string) {
   const shares = readGuestShares();
   if (shares.some((share) => share.shareId === shareId)) {
     writeGuestShares(shares.filter((share) => share.shareId !== shareId));
@@ -238,6 +261,7 @@ export function forgetGuestShare(shareId: string) {
       listed.filter((board) => board.shareId !== shareId),
     );
   }
+  writeEndedNotice(shareId, endedDetail);
 }
 
 /** What a share's stream last said about its room. Empty until the thread is open. */
@@ -388,8 +412,8 @@ export const layerGuestShareAccess = Layer.succeed(
         }
       });
     }),
-    ended: Effect.fn("GuestShareAccess.ended")(function (shareId: string) {
-      return Effect.sync(() => forgetGuestShare(shareId));
+    ended: Effect.fn("GuestShareAccess.ended")(function (shareId: string, detail?: string) {
+      return Effect.sync(() => forgetGuestShare(shareId, detail));
     }),
   }),
 );

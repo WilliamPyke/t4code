@@ -71,6 +71,7 @@ import {
 import { flushSync } from "react-dom";
 
 import {
+  endedShareNoticesAtom,
   guestRoomAtom,
   guestRoomBoxesAtom,
   guestRoomCursorsAtom,
@@ -412,6 +413,10 @@ export function GuestThreadRoute({ threadRef }: { readonly threadRef: ScopedThre
     cloud: share === null && cloudBoardsHost() !== null,
   });
   const signedOut = useBoardAccount().status === "signed-out" && boardAccountsEnabled();
+  const endedNotice =
+    useAtomValue(endedShareNoticesAtom).get(
+      guestShareIdOfEnvironment(threadRef.environmentId) ?? "",
+    ) ?? null;
   // A cloud board opened at its long address (a bookmark, an old link) moves to its own.
   const atLongAddress = useParams({
     strict: false,
@@ -427,6 +432,8 @@ export function GuestThreadRoute({ threadRef }: { readonly threadRef: ScopedThre
       ) : null}
       {share === null && step === "opening" ? (
         <TinkjamLoading cover={isLandingOnBoard()} label="Opening the board" />
+      ) : share === null && endedNotice !== null ? (
+        <GuestNotice title={endedNotice.title} detail={endedNotice.detail} />
       ) : share === null && signedOut && cloudBoardsHost() !== null ? (
         <SignedOutBoardNotice />
       ) : share === null || share.threadId !== threadRef.threadId ? (

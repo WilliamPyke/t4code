@@ -1,10 +1,17 @@
+import { ThreadId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
 
 import { render } from "../../../test/render";
-import { forgetGuestShare, readGuestShares } from "../../guest/guestShares";
+import {
+  endedShareNoticesAtom,
+  forgetGuestShare,
+  readGuestShares,
+  rememberGuestShare,
+} from "../../guest/guestShares";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { GuestPage } from "./GuestPage";
 
 function visit(path: string): Disposable {
@@ -83,6 +90,33 @@ describe("GuestPage", () => {
     await using screen = await render(<GuestPage />);
     await expect.element(screen.getByText(INVALID)).toBeVisible();
     expect(readGuestShares()).toEqual([]);
+  });
+
+  it("says why the host refused a stored session's check, and forgets that share", async () => {
+    rememberGuestShare({
+      host: "sam.trellium.org",
+      shareId: "share-3",
+      threadId: ThreadId.make("thread-1"),
+      token: "guest-token",
+      title: "Board",
+      joinedAt: new Date(0).toISOString(),
+    });
+    using _joined = { [Symbol.dispose]: () => forgetGuestShare("share-3") };
+    using _page = visit("/guest?host=sam.trellium.org#share-3.signature");
+    using _fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() =>
+        Promise.resolve(
+          Response.json({ reason: "invalid", detail: "sharing_off" }, { status: 403 }),
+        ),
+      );
+    await using screen = await render(<GuestPage />);
+    await vi.waitFor(() => expect(readGuestShares()).toEqual([]));
+    await expect.element(screen.getByText("Link sharing is off for this board")).toBeVisible();
+    expect(appAtomRegistry.get(endedShareNoticesAtom).get("share-3")).toEqual({
+      title: "Link sharing is off for this board",
+      detail: "Ask whoever shared it to turn it on or add you.",
+    });
   });
 
   it("says why the board host refused an invite, instead of that it ended", async () => {

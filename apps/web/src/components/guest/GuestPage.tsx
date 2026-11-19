@@ -16,6 +16,7 @@ import * as Schema from "effect/Schema";
 import { useEffect, useEffectEvent, useState, type FormEvent } from "react";
 
 import {
+  endedShareNoticesAtom,
   forgetGuestShare,
   guestLinkHost,
   guestShareEndpointOf,
@@ -146,6 +147,7 @@ export function GuestPage() {
   const [joined, setJoined] = useState<JoinedGuestShare | null>(null);
   const step = guestEntryStep(shares, entry);
   const checking = joined === null && step.step === "check" ? step.share : null;
+  const endedNotice = useAtomValue(endedShareNoticesAtom).get(entry.shareId ?? "") ?? null;
   // A plain address with no invite, on a browser with no session: the account may open it.
   const accountStep = useAccountBoardOpen({
     shareId: entry.shareId,
@@ -168,11 +170,15 @@ export function GuestPage() {
     if (checking === null) return;
     let stopped = false;
     void guestShareRequest(guestShareEndpointOf(checking), GUEST_SESSION_ROUTE).then(
-      (response) => {
+      async (response) => {
         if (stopped) return;
         // Only a refusal joins again; anything else opens the board, which says what is wrong.
-        if (SESSION_REFUSED.has(response.status)) forgetGuestShare(checking.shareId);
-        else setJoined(checking);
+        if (SESSION_REFUSED.has(response.status)) {
+          const body: unknown = await response.json().catch(() => null);
+          if (!stopped) {
+            forgetGuestShare(checking.shareId, Option.getOrNull(decodeRefusalBody(body))?.detail);
+          }
+        } else setJoined(checking);
       },
       () => {
         if (!stopped) setJoined(checking);
@@ -202,7 +208,11 @@ export function GuestPage() {
       ) : checking !== null || (step.step === "invalid" && accountStep === "opening") ? (
         <TinkjamLoading cover label="Opening the board" />
       ) : step.step === "invalid" || host === null || credential === null ? (
-        INVALID
+        endedNotice === null ? (
+          INVALID
+        ) : (
+          <GuestNotice {...endedNotice} />
+        )
       ) : isCloudBoardViewCredential(credential) ? (
         <ViewStep credential={credential} host={host} onJoined={onJoined} />
       ) : (
