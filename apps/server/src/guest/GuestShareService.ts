@@ -707,11 +707,13 @@ const make = Effect.gen(function* () {
     }
     // A member who left the team, or was removed from it, goes as if the owner removed them.
     const guest = share.guests?.find((joined) => joined.id === claims.value.guestId);
-    if (
-      share.team !== undefined &&
-      guest?.member !== undefined &&
-      !(yield* teamShares.isMember(share.team.id, guest.member.userId))
-    ) {
+    const membership =
+      share.team !== undefined && guest?.member !== undefined
+        ? yield* teamShares.membership(share.team.id, guest.member.userId)
+        : "member";
+    // Not knowing is no reason to take their messages and cards away; they are only kept out.
+    if (membership === "unconfirmed") return yield* inactive;
+    if (guest !== undefined && membership === "not_member") {
       yield* orchestrator
         .dispatch({
           type: "thread.guest.remove",
@@ -894,6 +896,12 @@ const make = Effect.gen(function* () {
     if (share.removedMembers?.includes(userId) === true) {
       return yield* new GuestShareAccessError({ reason: "removed" });
     }
+    // The assertion may predate their removal from the team.
+    const membership = yield* teamShares.membership(team.id, userId);
+    if (membership === "not_member") {
+      return yield* new GuestShareAccessError({ reason: "team_member_required" });
+    }
+    if (membership === "unconfirmed") return yield* inactive;
     const joinedAs = (current: ThreadGuestShare) =>
       current.guests?.find((guest) => guest.member?.userId === userId)?.id;
     let guestId = joinedAs(share);

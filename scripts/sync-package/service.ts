@@ -343,6 +343,28 @@ const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuf
 
 const remove = (path: string) => NodeFS.rmSync(path, { recursive: true, force: true });
 
+/**
+ * The same two npm runs as Tinkjam Sync for Windows and Mac: exactly the shrinkwrap, with no
+ * install scripts, then the scripts of the two native packages that need theirs.
+ */
+export function pinnedInstallArgs(npmCli: string, packageDir: string) {
+  return [
+    [npmCli, "ci", "--prefix", packageDir, "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"],
+    [npmCli, "rebuild", "koffi", "node-pty", "--prefix", packageDir, "--loglevel=error"],
+  ];
+}
+
+/** npm's CLI for this Node: the one npx ran under, else the one installed beside Node. */
+export function npmCliFor(execPath: string, platform: NodeJS.Platform, npmExecPath?: string) {
+  const beside =
+    platform === "win32"
+      ? NodePath.join(NodePath.dirname(execPath), "node_modules", "npm", "bin", "npm-cli.js")
+      : NodePath.join(NodePath.dirname(execPath), "..", "lib", "node_modules", "npm", "bin", "npm-cli.js");
+  return [npmExecPath, beside].find(
+    (candidate) => candidate?.endsWith("npm-cli.js") === true && NodeFS.existsSync(candidate),
+  );
+}
+
 const writeFile = (path: string, contents: string) => {
   NodeFS.mkdirSync(NodePath.dirname(path), { recursive: true });
   NodeFS.writeFileSync(path, contents);
@@ -619,20 +641,36 @@ export function syncService(baseDir: string, platform: NodeJS.Platform) {
       }),
 
     /**
-     * Copies this package and the packages npm installed beside it, so the background copy
-     * needs neither npx's cache nor this terminal. Older copies and half-finished ones go first.
+     * Copies this package for the background copy, which then needs neither npx's cache nor this
+     * terminal. With `npmCli` it installs exactly the package's npm-shrinkwrap.json, as the apps
+     * do (npx ignores it); otherwise it copies what npx installed beside it. Older copies go first.
      */
-    copyPackage: (packageDir: string) => {
+    copyPackage: (packageDir: string, npmCli?: string) => {
       const staging = `${paths.app}.new`;
       remove(staging);
-      const installedBeside = NodePath.basename(NodePath.dirname(packageDir)) === "node_modules";
-      NodeFS.cpSync(
-        installedBeside ? NodePath.dirname(packageDir) : packageDir,
-        installedBeside
-          ? NodePath.join(staging, "node_modules")
-          : NodePath.join(staging, "node_modules", "tinkjam-sync"),
-        { recursive: true, dereference: true },
-      );
+      const pinnedCli = NodeFS.existsSync(NodePath.join(packageDir, "npm-shrinkwrap.json"))
+        ? npmCli
+        : undefined;
+      const pinned = pinnedCli !== undefined;
+      const installedBeside =
+        !pinned && NodePath.basename(NodePath.dirname(packageDir)) === "node_modules";
+      const target = installedBeside
+        ? NodePath.join(staging, "node_modules")
+        : NodePath.join(staging, "node_modules", "tinkjam-sync");
+      NodeFS.cpSync(installedBeside ? NodePath.dirname(packageDir) : packageDir, target, {
+        recursive: true,
+        dereference: true,
+        filter: (source) => !pinned || NodePath.relative(packageDir, source) !== "node_modules",
+      });
+      if (pinnedCli !== undefined) {
+        for (const args of pinnedInstallArgs(pinnedCli, target)) {
+          const result = NodeChildProcess.spawnSync(process.execPath, args, { stdio: "inherit" });
+          if (result.status !== 0) {
+            remove(staging);
+            throw new Error(`npm ${args[1]} ended with ${result.status ?? result.signal}`);
+          }
+        }
+      }
       remove(paths.app);
       NodeFS.renameSync(staging, paths.app);
     },

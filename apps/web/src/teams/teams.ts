@@ -189,16 +189,29 @@ export const removeTeamMember = (teamId: string, userId: string) =>
     { teamId },
   );
 
-/** The team's invite as a link people open in the hosted app. */
-export const createTeamInvite = (teamId: string) =>
+export const allowTeamMemberBack = (teamId: string, userId: string) =>
   run(
-    teamsRequest(RelayTeamInviteResponse, `${teamPath(teamId)}/invites`, { method: "POST" }).pipe(
+    teamsRequest(RelayOkResponse, `${teamPath(teamId)}/removed/${encodeURIComponent(userId)}`, {
+      method: "DELETE",
+    }),
+    { teamId },
+  );
+
+/** The team's invite as a link people open in the hosted app. */
+const inviteLink = (path: string) =>
+  run(
+    teamsRequest(RelayTeamInviteResponse, path, { method: "POST" }).pipe(
       Effect.map((invite) => ({
         ...invite,
         url: new URL(`/t/${invite.name}`, configuredHostedAppUrl()).toString(),
       })),
     ),
   );
+
+export const createTeamInvite = (teamId: string) => inviteLink(`${teamPath(teamId)}/invites`);
+
+/** Owner only: every earlier invite link stops working. */
+export const resetTeamInvite = (teamId: string) => inviteLink(`${teamPath(teamId)}/invites/reset`);
 
 export const acceptTeamInvite = (name: string) =>
   run(

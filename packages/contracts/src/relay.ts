@@ -1366,10 +1366,20 @@ export const RelayTeamThread = Schema.Struct({
 });
 export type RelayTeamThread = typeof RelayTeamThread.Type;
 
+/** Someone the owner removed. An invite does not let them back in until the owner allows it. */
+export const RelayTeamRemovedMember = Schema.Struct({
+  userId: TrimmedNonEmptyString,
+  name: Schema.String,
+  removedAt: Schema.String,
+});
+export type RelayTeamRemovedMember = typeof RelayTeamRemovedMember.Type;
+
 export const RelayTeam = Schema.Struct({
   ...RelayTeamSummary.fields,
   members: Schema.Array(RelayTeamMember),
   threads: Schema.Array(RelayTeamThread),
+  /** For the owner only. Absent from an older relay. */
+  removed: Schema.optionalKey(Schema.Array(RelayTeamRemovedMember)),
 });
 export type RelayTeam = typeof RelayTeam.Type;
 
@@ -1463,6 +1473,7 @@ export const RelayTeamRequestErrorReason = Schema.Literals([
   "board_full",
   "board_rejected",
   "board_busy",
+  "removed",
 ]);
 export type RelayTeamRequestErrorReason = typeof RelayTeamRequestErrorReason.Type;
 
@@ -1478,6 +1489,7 @@ const RELAY_TEAM_REQUEST_MESSAGES: Record<RelayTeamRequestErrorReason, string> =
   board_full: "This board has as many notes as it holds. Remove one first.",
   board_rejected: "The board did not take this change.",
   board_busy: "Many changes reached the board at once. Try again.",
+  removed: "You were removed from this team. Ask its owner to invite you again.",
 };
 
 export class RelayTeamRequestError extends Schema.TaggedError<RelayTeamRequestError>()(
@@ -1548,6 +1560,18 @@ const RelayTeamsGroup = HttpApiGroup.make("teams")
       success: RelayTeamInviteResponse,
       error: RelayTeamErrors,
     }).annotate(OpenApi.Summary, "Make a three-word invite to a team"),
+    HttpApiEndpoint.post("resetTeamInvite", "/v1/teams/:teamId/invites/reset", {
+      headers: RelayBearerRequestHeaders,
+      params: RelayTeamParams,
+      success: RelayTeamInviteResponse,
+      error: RelayTeamErrors,
+    }).annotate(OpenApi.Summary, "Turn off the team's invites and make a new one (owner)"),
+    HttpApiEndpoint.delete("allowTeamMemberBack", "/v1/teams/:teamId/removed/:userId", {
+      headers: RelayBearerRequestHeaders,
+      params: Schema.Struct({ teamId: RelayTeamId, userId: TrimmedNonEmptyString }),
+      success: RelayOkResponse,
+      error: RelayTeamErrors,
+    }).annotate(OpenApi.Summary, "Let a removed person join again with an invite (owner)"),
     HttpApiEndpoint.post("acceptTeamInvite", "/v1/team-invites/:name/accept", {
       headers: RelayBearerRequestHeaders,
       params: Schema.Struct({ name: Schema.String }),

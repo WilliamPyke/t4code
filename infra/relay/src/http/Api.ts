@@ -633,6 +633,26 @@ export const layerTeamsApi = HttpApiBuilder.group(
         }, Effect.catchTags(teamErrorCases)),
       )
       .handle(
+        "resetTeamInvite",
+        Effect.fn("relay.api.teams.resetInvite")(function* ({ params }) {
+          const { userId } = yield* RelayClientPrincipal;
+          yield* limited(userId);
+          return yield* teams.resetInvite({ userId, teamId: params.teamId });
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "allowTeamMemberBack",
+        Effect.fn("relay.api.teams.allowBack")(function* ({ params }) {
+          const { userId } = yield* RelayClientPrincipal;
+          yield* teams.allowBack({
+            userId,
+            teamId: params.teamId,
+            memberUserId: params.userId,
+          });
+          return { ok: true };
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
         "acceptTeamInvite",
         Effect.fn("relay.api.teams.acceptInvite")(function* ({ params }) {
           const { userId } = yield* RelayClientPrincipal;

@@ -60,8 +60,11 @@ class Relay extends Context.Service<
     readonly requests: Queue.Queue<string>;
     readonly events: Queue.Queue<OrchestrationV2DomainEvent>;
     readonly sharingEnabled: Queue.Queue<boolean>;
-    /** Who the relay says is in the team; null when it fails. */
-    readonly teamMembers: Ref.Ref<ReadonlyArray<string> | null>;
+    /**
+     * Who the relay says is in the team; null when it cannot be reached, and "gone" when it says
+     * this machine lists nothing on the team.
+     */
+    readonly teamMembers: Ref.Ref<ReadonlyArray<string> | null | "gone">;
   }
 >()("t3/guest/GuestTeamShares.test/Relay") {}
 
@@ -72,7 +75,7 @@ const layerRelay = Layer.effect(
       requests: yield* Queue.unbounded<string>(),
       events: yield* Queue.unbounded<OrchestrationV2DomainEvent>(),
       sharingEnabled: yield* Queue.unbounded<boolean>(),
-      teamMembers: yield* Ref.make<ReadonlyArray<string> | null>(["user-ann"]),
+      teamMembers: yield* Ref.make<ReadonlyArray<string> | null | "gone">(["user-ann"]),
     };
   }),
 );
@@ -88,7 +91,14 @@ const layerFetch = Layer.effect(
       Queue.offerUnsafe(relay.requests, `${request.method} ${pathname} ${body}`.trim());
       if (!pathname.endsWith("/member-ids")) return Response.json({ ok: true });
       const userIds = Ref.getUnsafe(relay.teamMembers);
-      return userIds === null ? new Response("down", { status: 502 }) : Response.json({ userIds });
+      if (userIds === null) return new Response("down", { status: 502 });
+      if (userIds === "gone") {
+        return Response.json(
+          { _tag: "RelayTeamRequestError", code: "team_request_failed", reason: "not_found" },
+          { status: 409 },
+        );
+      }
+      return Response.json({ userIds });
     };
   }),
 );
@@ -281,31 +291,41 @@ it.effect("hides this machine's team threads while guest links are off, and show
 );
 
 it.effect(
-  "asks the relay who is in a team at most once a minute, and trusts it when it fails",
+  "asks the relay who is in a team at most once a minute, and trusts its last answer only briefly",
   () =>
     Effect.gen(function* () {
       const teamShares = yield* GuestTeamShares.GuestTeamShares;
       const relay = yield* Relay;
+      const membership = (userId: string) => teamShares.membership("team-core", userId);
       const asked = `GET /v1/environments/${environmentId}/teams/team-core/member-ids`;
-      assert.isTrue(yield* teamShares.isMember("team-core", "user-ann"));
-      assert.isFalse(yield* teamShares.isMember("team-core", "user-ben"));
+      assert.equal(yield* membership("user-ann"), "member");
+      assert.equal(yield* membership("user-ben"), "not_member");
       assert.deepEqual(yield* Queue.takeAll(relay.requests), [asked]);
 
       // Ann leaves: her machine's owner hears it once the last answer is a minute old.
       yield* Ref.set(relay.teamMembers, []);
-      assert.isTrue(yield* teamShares.isMember("team-core", "user-ann"));
+      assert.equal(yield* membership("user-ann"), "member");
       yield* TestClock.adjust("1 minute");
-      assert.isFalse(yield* teamShares.isMember("team-core", "user-ann"));
+      assert.equal(yield* membership("user-ann"), "not_member");
 
       // Back in the team, a fresh assertion from her is heard at once.
       yield* Ref.set(relay.teamMembers, ["user-ann"]);
       assert.isTrue(Option.isSome(yield* teamShares.verifyMember(yield* assertion())));
-      assert.isTrue(yield* teamShares.isMember("team-core", "user-ann"));
+      assert.equal(yield* membership("user-ann"), "member");
 
-      // A relay that cannot answer ends no one's session.
+      // A relay that cannot answer: its last answer stands for a few minutes, then nobody is
+      // confirmed, and nobody unknown to it is let in meanwhile.
       yield* Ref.set(relay.teamMembers, null);
       yield* TestClock.adjust("1 minute");
-      assert.isTrue(yield* teamShares.isMember("team-core", "user-ben"));
-      assert.deepEqual(yield* Queue.takeAll(relay.requests), [asked, asked, asked]);
+      assert.equal(yield* membership("user-ann"), "member");
+      assert.equal(yield* membership("user-ben"), "not_member");
+      yield* TestClock.adjust("5 minutes");
+      assert.equal(yield* membership("user-ann"), "unconfirmed");
+
+      // The team was deleted, or whoever listed the thread left it: nobody is in it here.
+      yield* Ref.set(relay.teamMembers, "gone");
+      yield* TestClock.adjust("1 minute");
+      assert.equal(yield* membership("user-ann"), "not_member");
+      assert.deepEqual(yield* Queue.takeAll(relay.requests), [asked, asked, asked, asked, asked]);
     }).pipe(Effect.provide(layerTest)),
 );

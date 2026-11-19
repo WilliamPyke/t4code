@@ -45,6 +45,7 @@ import {
   relayTeamBoards,
   relayTeamInvites,
   relayTeamMembers,
+  relayTeamRemovedMembers,
   relayTeams,
   relayTeamThreads,
 } from "../persistence/schema.ts";
@@ -139,13 +140,25 @@ export class Teams extends Context.Service<
       readonly userId: string;
       readonly teamId: string;
     }) => Effect.Effect<void, TeamError>;
+    /** Owner only. An invite does not let the member back in until the owner allows it. */
     readonly removeMember: (input: {
+      readonly userId: string;
+      readonly teamId: string;
+      readonly memberUserId: string;
+    }) => Effect.Effect<void, TeamError>;
+    /** Owner only. Lets someone the owner removed join again with an invite. */
+    readonly allowBack: (input: {
       readonly userId: string;
       readonly teamId: string;
       readonly memberUserId: string;
     }) => Effect.Effect<void, TeamError>;
     /** Hands out the team's current invite while it has a day left, else makes one. */
     readonly createInvite: (input: {
+      readonly userId: string;
+      readonly teamId: string;
+    }) => Effect.Effect<RelayTeamInviteResponse, TeamError>;
+    /** Owner only. Every invite to the team stops working, and a new one replaces them. */
+    readonly resetInvite: (input: {
       readonly userId: string;
       readonly teamId: string;
     }) => Effect.Effect<RelayTeamInviteResponse, TeamError>;
@@ -349,10 +362,22 @@ const make = Effect.gen(function* () {
         ),
       )
       .orderBy(desc(relayTeamThreads.updatedAt));
+    const owner = team.ownerUserId === input.userId;
+    const removed = owner
+      ? yield* db
+          .select({
+            userId: relayTeamRemovedMembers.userId,
+            name: relayTeamRemovedMembers.name,
+            removedAt: relayTeamRemovedMembers.removedAt,
+          })
+          .from(relayTeamRemovedMembers)
+          .where(eq(relayTeamRemovedMembers.teamId, team.id))
+          .orderBy(desc(relayTeamRemovedMembers.removedAt))
+      : null;
     return {
       id: team.id,
       name: team.name,
-      role: team.ownerUserId === input.userId ? ("owner" as const) : ("member" as const),
+      role: owner ? ("owner" as const) : ("member" as const),
       memberCount: members.length,
       members: members.map((member) => ({
         ...member,
@@ -363,6 +388,7 @@ const make = Effect.gen(function* () {
         environmentId: EnvironmentId.make(thread.environmentId),
         threadId: ThreadId.make(thread.threadId),
       })),
+      ...(removed === null ? {} : { removed }),
     };
   }, persistence("read"));
 
@@ -381,11 +407,11 @@ const make = Effect.gen(function* () {
       db
         .delete(relayTeamMembers)
         .where(and(eq(relayTeamMembers.teamId, teamId), eq(relayTeamMembers.userId, userId)))
-        .returning({ userId: relayTeamMembers.userId }),
+        .returning({ name: relayTeamMembers.name }),
       db
         .delete(relayTeamThreads)
         .where(and(eq(relayTeamThreads.teamId, teamId), eq(relayTeamThreads.ownerUserId, userId))),
-    ]).pipe(Effect.map(([removed]) => removed.length > 0));
+    ]).pipe(Effect.map(([[removed]]) => removed ?? null));
 
   const leave: Teams["Service"]["leave"] = Effect.fn("relay.teams.leave")(function* (input) {
     const team = yield* requireMember(input.teamId, input.userId);
@@ -397,10 +423,66 @@ const make = Effect.gen(function* () {
     function* (input) {
       const team = yield* requireOwner(input.teamId, input.userId);
       if (input.memberUserId === input.userId) return yield* refuse("owner_cannot_leave");
-      if (!(yield* dropMember(team.id, input.memberUserId))) return yield* refuse("not_found");
+      const removed = yield* dropMember(team.id, input.memberUserId);
+      if (removed === null) return yield* refuse("not_found");
+      // Someone who left may come back with an invite; someone removed waits for the owner.
+      const row = {
+        name: removed.name,
+        removedByUserId: input.userId,
+        removedAt: yield* nowIso,
+      };
+      yield* db
+        .insert(relayTeamRemovedMembers)
+        .values({ teamId: team.id, userId: input.memberUserId, ...row })
+        .onConflictDoUpdate({
+          target: [relayTeamRemovedMembers.teamId, relayTeamRemovedMembers.userId],
+          set: row,
+        });
     },
     persistence("remove a member of"),
   );
+
+  const allowBack: Teams["Service"]["allowBack"] = Effect.fn("relay.teams.allow_back")(function* (
+    input,
+  ) {
+    const team = yield* requireOwner(input.teamId, input.userId);
+    yield* db
+      .delete(relayTeamRemovedMembers)
+      .where(
+        and(
+          eq(relayTeamRemovedMembers.teamId, team.id),
+          eq(relayTeamRemovedMembers.userId, input.memberUserId),
+        ),
+      );
+  }, persistence("allow a member back to"));
+
+  const newInvite = Effect.fnUntraced(function* (
+    teamId: string,
+    userId: string,
+    now: DateTime.Utc,
+  ) {
+    const expiresAt = DateTime.formatIso(
+      DateTime.add(now, { milliseconds: RELAY_TEAM_INVITE_TTL_MS }),
+    );
+    for (let attempt = 0; attempt < NAME_ATTEMPTS; attempt++) {
+      const [inserted] = yield* db
+        .insert(relayTeamInvites)
+        .values({
+          name: yield* wordName(random, 3),
+          teamId,
+          createdByUserId: userId,
+          expiresAt,
+          createdAt: DateTime.formatIso(now),
+        })
+        .onConflictDoNothing()
+        .returning({ name: relayTeamInvites.name });
+      if (inserted) return { name: inserted.name, expiresAt };
+    }
+    return yield* new TeamPersistenceError({
+      operation: "invite to",
+      cause: "no free invite name",
+    });
+  });
 
   const createInvite: Teams["Service"]["createInvite"] = Effect.fn("relay.teams.create_invite")(
     function* (input) {
@@ -421,27 +503,16 @@ const make = Effect.gen(function* () {
         .orderBy(desc(relayTeamInvites.expiresAt))
         .limit(1);
       if (current) return current;
-      const expiresAt = DateTime.formatIso(
-        DateTime.add(now, { milliseconds: RELAY_TEAM_INVITE_TTL_MS }),
-      );
-      for (let attempt = 0; attempt < NAME_ATTEMPTS; attempt++) {
-        const [inserted] = yield* db
-          .insert(relayTeamInvites)
-          .values({
-            name: yield* wordName(random, 3),
-            teamId: team.id,
-            createdByUserId: input.userId,
-            expiresAt,
-            createdAt: DateTime.formatIso(now),
-          })
-          .onConflictDoNothing()
-          .returning({ name: relayTeamInvites.name });
-        if (inserted) return { name: inserted.name, expiresAt };
-      }
-      return yield* new TeamPersistenceError({
-        operation: "invite to",
-        cause: "no free invite name",
-      });
+      return yield* newInvite(team.id, input.userId, now);
+    },
+    persistence("invite to"),
+  );
+
+  const resetInvite: Teams["Service"]["resetInvite"] = Effect.fn("relay.teams.reset_invite")(
+    function* (input) {
+      const team = yield* requireOwner(input.teamId, input.userId);
+      yield* db.delete(relayTeamInvites).where(eq(relayTeamInvites.teamId, team.id));
+      return yield* newInvite(team.id, input.userId, yield* DateTime.now);
     },
     persistence("invite to"),
   );
@@ -460,6 +531,17 @@ const make = Effect.gen(function* () {
         yield* refreshProfile(input.userId, input.profile);
         return invite.teamId;
       }
+      const [removed] = yield* db
+        .select({ userId: relayTeamRemovedMembers.userId })
+        .from(relayTeamRemovedMembers)
+        .where(
+          and(
+            eq(relayTeamRemovedMembers.teamId, invite.teamId),
+            eq(relayTeamRemovedMembers.userId, input.userId),
+          ),
+        )
+        .limit(1);
+      if (removed) return yield* refuse("removed");
       if ((yield* countMembersOf(invite.teamId)) >= RELAY_TEAM_MAX_MEMBERS) {
         return yield* refuse("team_full");
       }
@@ -492,6 +574,7 @@ const make = Effect.gen(function* () {
           eq(relayTeamThreads.teamId, input.teamId),
           eq(relayTeamThreads.environmentId, input.environmentId),
           gt(relayTeamThreads.expiresAt, yield* nowIso),
+          eq(relayTeamThreads.hidden, false),
         ),
       )
       .limit(1);
@@ -631,6 +714,8 @@ const make = Effect.gen(function* () {
           eq(relayTeamThreads.environmentId, input.environmentId),
           inArray(relayTeamThreads.ownerUserId, [...input.linkedUserIds]),
           gt(relayTeamThreads.expiresAt, yield* nowIso),
+          // Not `hidden`: the machine refuses every member while hidden, and a "nobody" heard as
+          // guest links come back on would remove its members from their shares.
         ),
       )
       .limit(1);
@@ -811,7 +896,9 @@ const make = Effect.gen(function* () {
     remove,
     leave,
     removeMember,
+    allowBack,
     createInvite,
+    resetInvite,
     acceptInvite,
     memberForAssertion,
     registerThread,

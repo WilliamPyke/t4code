@@ -1,5 +1,8 @@
+import * as NodeCrypto from "node:crypto";
+
 import { describe, expect, it } from "vite-plus/test";
 
+import { publicKeyEncodings, signManifest } from "../sign-release.ts";
 import { isNewerSync, readSyncRelease, syncUpdateNotice, syncVersion } from "./updateCheck.ts";
 
 const release = { version: "0.1.8+202611171530", url: "https://trellium.org/sync.tgz" };
@@ -32,18 +35,24 @@ describe("Tinkjam Sync's update check", () => {
     );
   });
 
-  it("reads only a well-formed sync.json, and nothing when it fails", async () => {
+  it("reads only a well-formed sync.json the release key signed, and nothing when it fails", async () => {
+    const { privateKey, publicKey } = NodeCrypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
+    const encodings = publicKeyEncodings(publicKey);
+    const keys = { [encodings.keyId]: encodings.spki };
     const answer = (status: number, body: unknown) => async () =>
       new Response(JSON.stringify(body), { status });
     const url = "https://trellium.org/sync.json";
-    expect(await readSyncRelease(url, 1000, answer(200, release))).toEqual(release);
-    expect(await readSyncRelease(url, 1000, answer(404, release))).toBeNull();
+    const signed = signManifest("sync", { ...release, sha256: "ab".repeat(32) }, privateKey);
+    expect(await readSyncRelease(url, 1000, answer(200, signed), keys)).toEqual(release);
+    expect(await readSyncRelease(url, 1000, answer(200, release), keys)).toBeNull();
+    expect(await readSyncRelease(url, 1000, answer(200, signed))).toBeNull();
+    expect(await readSyncRelease(url, 1000, answer(404, signed), keys)).toBeNull();
     expect(
-      await readSyncRelease(url, 1000, answer(200, { version: "1", url: "http://x" })),
+      await readSyncRelease(url, 1000, answer(200, { version: "1", url: "http://x" }), keys),
     ).toBeNull();
     const failing = async (): Promise<Response> => {
       throw new Error("offline");
     };
-    expect(await readSyncRelease(url, 1000, failing)).toBeNull();
+    expect(await readSyncRelease(url, 1000, failing, keys)).toBeNull();
   });
 });

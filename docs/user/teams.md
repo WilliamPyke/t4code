@@ -13,10 +13,13 @@ On the team's page, choose **Invite people** and send the link, such as
 `https://app.example.org/t/tulip-otter-harbor`. Anyone who opens it while signed in to Tinkjam Connect
 can choose **Join team**; someone signed out is asked to sign in first. An invite works for 7
 days, and choosing **Invite people** again shows the same one until it is close to expiring.
-Anyone who has the link can join, so send it only to the people you want.
+Anyone who has the link can join, so send it only to the people you want. The owner can choose
+**Make a new link**, which stops the old one for everyone.
 
 The team's owner can rename it, remove a member, or delete the team. Members can leave. Removing
-or leaving takes the threads that person shared off the team.
+or leaving takes the threads that person shared off the team. Someone who left can join again
+with an invite; someone the owner removed cannot, until the owner chooses **Allow back** under
+**Removed** on the team's page.
 
 ## Share a thread with a team
 

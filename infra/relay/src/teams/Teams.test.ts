@@ -30,6 +30,7 @@ const MIGRATIONS = [
   "20261112120000_teams",
   "20261112180000_team_boards",
   "20261112200000_team_board_names",
+  "20261119200000_team_removed_members",
 ];
 
 // Just enough of @effect/sql-pg's client for drizzle to run its queries on PGlite.
@@ -160,6 +161,48 @@ describe("Teams", () => {
         invite.name,
       );
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "keeps a removed member out of every invite until the owner allows them back, but not one who left",
+    () =>
+      Effect.gen(function* () {
+        const { teams, team, invite } = yield* withTeam;
+        const join = (userId: string, name: string) =>
+          teams.acceptInvite({ userId, name, profile: profile(userId) });
+        yield* join("cat", invite.name);
+        yield* teams.leave({ userId: "cat", teamId: team.id });
+        yield* join("cat", invite.name);
+
+        yield* teams.removeMember({ userId: "ann", teamId: team.id, memberUserId: "ben" });
+        expect(yield* Effect.flip(join("ben", invite.name))).toMatchObject(refusal("removed"));
+        const read = yield* teams.get({ userId: "ann", teamId: team.id });
+        expect(read.removed).toEqual([
+          { userId: "ben", name: "Ben", removedAt: "1970-01-01T00:00:00.000Z" },
+        ]);
+        expect((yield* teams.get({ userId: "cat", teamId: team.id })).removed).toBeUndefined();
+
+        // Only the owner turns invites off; the old name stops working and a new one replaces it.
+        expect(
+          yield* Effect.flip(teams.resetInvite({ userId: "cat", teamId: team.id })),
+        ).toMatchObject(refusal("not_owner"));
+        const fresh = yield* teams.resetInvite({ userId: "ann", teamId: team.id });
+        expect(fresh.name).not.toBe(invite.name);
+        expect(yield* Effect.flip(join("dan", invite.name))).toMatchObject(
+          refusal("invite_invalid"),
+        );
+        expect(yield* Effect.flip(join("ben", fresh.name))).toMatchObject(refusal("removed"));
+        expect(yield* teams.createInvite({ userId: "cat", teamId: team.id })).toEqual(fresh);
+
+        expect(
+          yield* Effect.flip(
+            teams.allowBack({ userId: "cat", teamId: team.id, memberUserId: "ben" }),
+          ),
+        ).toMatchObject(refusal("not_owner"));
+        yield* teams.allowBack({ userId: "ann", teamId: team.id, memberUserId: "ben" });
+        expect(yield* join("ben", fresh.name)).toBe(team.id);
+        expect((yield* teams.get({ userId: "ann", teamId: team.id })).removed).toEqual([]);
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("hides a team from non-members and keeps owner actions to the owner", () =>
@@ -448,6 +491,20 @@ describe("Teams", () => {
             refusal("not_found"),
           );
         }
+        // With guest links off the machine still learns who is in, but nobody is let in to it.
+        yield* teams.setThreadsListed({ environmentId: "env-ben", listed: false });
+        expect((yield* memberIds("env-ben", ["ben"])).toSorted()).toEqual(["ann", "ben"]);
+        expect(
+          yield* Effect.flip(
+            teams.memberForAssertion({
+              userId: "ann",
+              teamId: team.id,
+              environmentId: "env-ben",
+              profile: null,
+            }),
+          ),
+        ).toMatchObject(refusal("not_shared"));
+        yield* teams.setThreadsListed({ environmentId: "env-ben", listed: true });
         yield* TestClock.adjust("2 hours");
         expect(yield* Effect.flip(memberIds("env-ben", ["ben"]))).toMatchObject(
           refusal("not_found"),

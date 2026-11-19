@@ -41,13 +41,14 @@ export class GuestLinkRateLimiter extends Context.Service<
 >()("t3code-relay/guestLinks/GuestLinks/GuestLinkRateLimiter") {}
 
 /** A guess the limiter could not count is refused: unlike telemetry, a name is a bearer invite. */
-export const refuseWhenUncounted = <E>(check: Effect.Effect<boolean, E>): Effect.Effect<boolean> =>
+export const refuseWhenUncounted = <E>(
+  check: Effect.Effect<boolean, E>,
+  failedClosedAttribute = "relay.guest_links.rate_limiter_failed_closed",
+): Effect.Effect<boolean> =>
   check.pipe(
     Effect.catch((error) =>
-      Effect.logWarning("Guest link rate limiter unavailable; refusing", { error }).pipe(
-        Effect.andThen(
-          Effect.annotateCurrentSpan({ "relay.guest_links.rate_limiter_failed_closed": true }),
-        ),
+      Effect.logWarning("Rate limiter unavailable; refusing", { error }).pipe(
+        Effect.andThen(Effect.annotateCurrentSpan({ [failedClosedAttribute]: true })),
         Effect.as(false),
       ),
     ),

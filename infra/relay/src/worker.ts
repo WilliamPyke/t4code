@@ -414,13 +414,14 @@ export const layer = Api.make(
           ),
         );
     const allowOrRefuse =
-      (limiter: typeof hookRateLimit) =>
+      (limiter: typeof hookRateLimit, failedClosedAttribute?: string) =>
       (key: string): Effect.Effect<boolean> =>
         GuestLinks.refuseWhenUncounted(
           limiter.limit({ key }).pipe(
             Effect.map((result) => result.success),
             Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
           ),
+          failedClosedAttribute,
         );
     const layerHookRateLimiter = Layer.succeed(HookForwarder.HookRateLimiter, {
       allowHook: allowWith(hookRateLimit),
@@ -486,8 +487,9 @@ export const layer = Api.make(
               allow: allowOrRefuse(guestLinkRateLimit),
               allowGlobal: allowOrRefuse(guestLinkGlobalRateLimit)("all"),
             }),
+            // Counts invite-name guesses, so like a guest link's it refuses when it cannot count.
             Layer.succeed(Teams.TeamRateLimiter, {
-              allow: allowWith(teamRateLimit, "relay.teams.rate_limiter_failed_open"),
+              allow: allowOrRefuse(teamRateLimit, "relay.teams.rate_limiter_failed_closed"),
             }),
             Layer.succeed(Teams.TeamBoardRateLimiter, {
               allow: allowWith(teamBoardRateLimit, "relay.team_boards.rate_limiter_failed_open"),

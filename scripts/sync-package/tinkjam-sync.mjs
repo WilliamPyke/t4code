@@ -10,6 +10,7 @@ import {
   installedMacApp,
   installedWindowsApp,
   logTail,
+  npmCliFor,
   parseSyncArgs,
   resolveBaseDir,
   syncService,
@@ -242,7 +243,14 @@ if (parsed.action === "install") {
   await takeDown();
   try {
     service.removeFiles();
-    service.copyPackage(packageDir);
+    // oxlint-disable-next-line t3code/no-global-process-runtime -- The plain-Node launcher has no Effect runtime to inject it.
+    const npmCli = npmCliFor(process.execPath, process.platform, process.env.npm_execpath);
+    if (npmCli === undefined) {
+      console.log(
+        "npm was not found beside this Node.js, so the background copy keeps the packages npx installed.",
+      );
+    }
+    service.copyPackage(packageDir, npmCli);
   } catch (error) {
     console.error(`Tinkjam Sync could not be set up to run in the background: ${error.message}`);
     process.exit(1);

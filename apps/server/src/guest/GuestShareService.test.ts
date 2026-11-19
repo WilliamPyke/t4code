@@ -125,8 +125,14 @@ const layerLinkNames = Layer.mock(GuestLinkNames.GuestLinkNames)({
 const teamListings = Ref.makeUnsafe<ReadonlyMap<string, string>>(new Map());
 // The accounts the relay says have left their team.
 const formerMembers = Ref.makeUnsafe<ReadonlySet<string>>(new Set());
+// Whether the relay has been out of reach for longer than its last answer stands.
+const relayUnconfirmed = Ref.makeUnsafe(false);
 const layerTeamShares = Layer.mock(GuestTeamShares.GuestTeamShares)({
-  isMember: (_teamId, userId) => Effect.map(Ref.get(formerMembers), (gone) => !gone.has(userId)),
+  membership: (_teamId, userId) =>
+    Effect.gen(function* () {
+      if (yield* Ref.get(relayUnconfirmed)) return "unconfirmed" as const;
+      return (yield* Ref.get(formerMembers)).has(userId) ? "not_member" : "member";
+    }),
   register: (input) =>
     Ref.update(teamListings, (listed) => new Map(listed).set(input.threadId, input.teamId)).pipe(
       Effect.as(input.teamId === "team-core" ? "Core" : null),
@@ -3053,6 +3059,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       yield* Ref.set(formerMembers, new Set());
+      yield* Ref.set(relayUnconfirmed, false);
       const { orchestrator, guestShares } = yield* shareThread;
       const { url } = yield* guestShares.create({ threadId, teamId: "team-core" });
       const credential = url.slice(url.indexOf("#") + 1);
@@ -3068,6 +3075,16 @@ it.effect(
       const ann = yield* join("u-ann", "Ann");
       const bo = yield* join("u-bo", "Bo");
 
+      // A relay that cannot confirm anyone keeps them out, but takes nothing of theirs away.
+      yield* Ref.set(relayUnconfirmed, true);
+      assert.equal((yield* Effect.flip(guestShares.check(ann.token))).reason, "inactive");
+      assert.equal((yield* Effect.flip(join("u-cy", "Cy"))).reason, "inactive");
+      assert.deepEqual(
+        (yield* share).guests?.map((guest) => guest.name),
+        ["Ann", "Bo"],
+      );
+      yield* Ref.set(relayUnconfirmed, false);
+
       yield* Ref.set(formerMembers, new Set(["u-ann"]));
       assert.equal((yield* Effect.flip(guestShares.check(ann.token))).reason, "inactive");
       const after = yield* share;
@@ -3078,6 +3095,8 @@ it.effect(
       // Only the team keeps them out now, so rejoining needs no word from the owner.
       assert.isUndefined(after.removedMembers);
       assert.isTrue(Exit.isSuccess(yield* Effect.exit(guestShares.check(bo.token))));
+      // An assertion signed before they left the team does not let them back in.
+      assert.equal((yield* Effect.flip(join("u-ann", "Ann"))).reason, "team_member_required");
 
       yield* Ref.set(formerMembers, new Set());
       const back = yield* join("u-ann", "Ann");

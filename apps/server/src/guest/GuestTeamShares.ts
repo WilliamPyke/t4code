@@ -9,6 +9,7 @@ import {
   verifyRelayJwt,
 } from "@t3tools/shared/relayJwt";
 import * as Cache from "effect/Cache";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Signature from "effect/crypto/Signature";
 import * as Effect from "effect/Effect";
@@ -33,6 +34,8 @@ const RELAY_TIMEOUT = "5 seconds";
 // How long the relay's answer to who is in a team stands before it is asked again.
 const MEMBERSHIP_TTL = "1 minute";
 const MEMBERSHIP_TEAMS = 64;
+// How long the relay's last answer stands while it cannot be reached.
+const MEMBERSHIP_GRACE_MS = 5 * 60_000;
 
 /**
  * Threads shared to a team: listed on the relay this server is linked to, so members find them,
@@ -52,10 +55,13 @@ export class GuestTeamShares extends Context.Service<
       token: string,
     ) => Effect.Effect<Option.Option<RelayTeamMemberAssertionPayload>>;
     /**
-     * Whether the account is in the team now, as the relay said within the last minute. True when
-     * the relay cannot say.
+     * Whether the account is in the team now, as the relay said within the last minute. While the
+     * relay cannot be reached its last answer stands for a few minutes, then nobody is confirmed.
      */
-    readonly isMember: (teamId: string, userId: string) => Effect.Effect<boolean>;
+    readonly membership: (
+      teamId: string,
+      userId: string,
+    ) => Effect.Effect<"member" | "not_member" | "unconfirmed">;
   }
 >()("t3/guest/GuestTeamShares") {}
 
@@ -114,27 +120,45 @@ const make = Effect.gen(function* () {
     ),
   );
 
+  const askRelay = Effect.fn("GuestTeamShares.askRelay")(
+    function* (teamId: string) {
+      const client = yield* relayClient;
+      if (client === null) return null;
+      const { userIds } = yield* client.getTeamMemberIds({
+        params: { environmentId: yield* environment.getEnvironmentId, teamId },
+      });
+      return new Set(userIds);
+    },
+    Effect.timeout(RELAY_TIMEOUT),
+    // A definite answer: this machine lists nothing there now, as when the team was deleted or
+    // the account that listed the thread left it, so nobody is a member of it here.
+    Effect.catchTags({ RelayTeamRequestError: () => Effect.succeed(new Set<string>()) }),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("Could not check who is in a team", { cause }).pipe(Effect.as(null)),
+    ),
+  );
+  const lastAnswers = new Map<string, { readonly ids: Set<string>; readonly at: number }>();
   const memberIds = yield* Cache.make({
     capacity: MEMBERSHIP_TEAMS,
     timeToLive: MEMBERSHIP_TTL,
-    lookup: Effect.fn("GuestTeamShares.memberIds")(
-      function* (teamId: string) {
-        const client = yield* relayClient;
-        if (client === null) return null;
-        const { userIds } = yield* client.getTeamMemberIds({
-          params: { environmentId: yield* environment.getEnvironmentId, teamId },
-        });
-        return new Set(userIds);
-      },
-      Effect.timeout(RELAY_TIMEOUT),
-      // Fails open: an owner's machine on a flaky link must not end a whole team's sessions.
-      Effect.catchCause((cause) =>
-        Effect.logWarning("Could not check who is in a team", { cause }).pipe(Effect.as(null)),
-      ),
-    ),
+    lookup: Effect.fn("GuestTeamShares.memberIds")(function* (teamId: string) {
+      const now = yield* Clock.currentTimeMillis;
+      const answer = yield* askRelay(teamId);
+      if (answer !== null) {
+        lastAnswers.set(teamId, { ids: answer, at: now });
+        return answer;
+      }
+      // A flaky link ends no session at once, but a relay gone for minutes confirms nobody.
+      const last = lastAnswers.get(teamId);
+      return last !== undefined && now - last.at < MEMBERSHIP_GRACE_MS ? last.ids : null;
+    }),
   });
-  const isMember: GuestTeamShares["Service"]["isMember"] = (teamId, userId) =>
-    Cache.get(memberIds, teamId).pipe(Effect.map((ids) => ids === null || ids.has(userId)));
+  const membership: GuestTeamShares["Service"]["membership"] = (teamId, userId) =>
+    Cache.get(memberIds, teamId).pipe(
+      Effect.map((ids) =>
+        ids === null ? "unconfirmed" : ids.has(userId) ? "member" : "not_member",
+      ),
+    );
 
   const verifyMember: GuestTeamShares["Service"]["verifyMember"] = Effect.fn(
     "GuestTeamShares.verifyMember",
@@ -155,8 +179,12 @@ const make = Effect.gen(function* () {
         audience: `t3-env:${environmentId}`,
       }).pipe(Effect.provideService(Signature.Signature, signature), Effect.option);
       const member = Option.filter(payload, (claims) => claims.sub === claims.userId);
-      // A fresh assertion means they are in the team now, whatever was last heard.
-      if (Option.isSome(member)) yield* Cache.invalidate(memberIds, member.value.teamId);
+      // A fresh assertion means they are in the team now: the relay is asked again, and its last
+      // answer counts them in case it cannot be reached.
+      if (Option.isSome(member)) {
+        lastAnswers.get(member.value.teamId)?.ids.add(member.value.userId);
+        yield* Cache.invalidate(memberIds, member.value.teamId);
+      }
       return member;
     },
     Effect.orElseSucceed(() => Option.none()),
@@ -225,7 +253,7 @@ const make = Effect.gen(function* () {
     }),
   );
 
-  return GuestTeamShares.of({ register, unregister, verifyMember, isMember });
+  return GuestTeamShares.of({ register, unregister, verifyMember, membership });
 });
 
 export const layer = Layer.effect(GuestTeamShares, make);

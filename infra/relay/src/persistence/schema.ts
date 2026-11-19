@@ -277,6 +277,21 @@ export const relayTeamInvites = pgTable(
   ],
 );
 
+/** Someone the owner removed, whom an invite does not let back in until the owner allows it. */
+export const relayTeamRemovedMembers = pgTable(
+  "relay_team_removed_members",
+  {
+    teamId: varchar("team_id", { length: 64 })
+      .notNull()
+      .references(() => relayTeams.id, { onDelete: "cascade" }),
+    userId: varchar("user_id", { length: 191 }).notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    removedByUserId: varchar("removed_by_user_id", { length: 191 }).notNull(),
+    removedAt: varchar("removed_at", { length: 64 }).notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.teamId, table.userId] })],
+);
+
 /** A thread shared to a team. The credential joins it only with a member assertion. */
 export const relayTeamThreads = pgTable(
   "relay_team_threads",
