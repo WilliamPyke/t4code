@@ -197,7 +197,7 @@ export function RoomEmbedBody({
     <div ref={bodyRef} className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 pb-2">
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-2xs text-muted-foreground">
-          {addedBy}
+          {stays ? <span className="line-clamp-2">{REFUSED}</span> : addedBy}
         </div>
         {actions}
         {onFrame === undefined || !canFramePage ? null : (
@@ -223,9 +223,6 @@ export function RoomEmbedBody({
           Open
         </Button>
       </div>
-      {stays ? (
-        <p className="shrink-0 px-3 pb-2 text-2xs text-muted-foreground">{REFUSED}</p>
-      ) : null}
       {frame === null ? null : refused ? (
         <div className="flex min-h-40 flex-1 flex-col items-center justify-center gap-2 border-t border-board-hairline bg-muted/40 p-4 text-center text-xs text-muted-foreground">
           <p>{REFUSED}</p>
