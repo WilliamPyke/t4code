@@ -28,6 +28,12 @@ import {
 import { boardAccountsEnabled, useBoardAccount } from "~/guest/boardAccount";
 import { openViewLink, rememberBoardName, suggestedBoardName } from "~/guest/cloudBoards";
 import { isCloudBoardsHost } from "~/guest/cloudBoardsHost";
+import {
+  ENDED_NOTICE,
+  decodeRefusalBody,
+  linkRefusalNotice,
+  type RefusalNotice,
+} from "~/guest/linkRefusal.logic";
 import { redeemInvite } from "~/guest/redeemInvite";
 import { AccountCorner } from "../boards/BoardsAccount";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
@@ -126,12 +132,7 @@ function takeGuestEntry(): GuestEntry {
   return captured.entry;
 }
 
-const INVALID = (
-  <GuestNotice
-    title="This board has ended, or the link is not valid"
-    detail="Ask whoever shared it with you for a new link."
-  />
-);
+const INVALID = <GuestNotice {...ENDED_NOTICE} />;
 
 /**
  * Where a guest link lands. It asks for the guest's name, joins the share on the owner's host,
@@ -299,8 +300,8 @@ function NameForm({
   const naming = useBoardAccount().status === "signed-in";
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(initialError);
-  // What the host says of the invite: that it ended, or what it opens; null until it answers.
-  const [told, setTold] = useState<GuestInvitePreview | "ended" | null>(null);
+  // What the host says of the invite: why it refused it, or what it opens; null until it answers.
+  const [told, setTold] = useState<GuestInvitePreview | RefusalNotice | null>(null);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- asks the host whether the invite still opens anything, and what, before asking for a name
   useEffect(() => {
     let stopped = false;
@@ -313,7 +314,10 @@ function NameForm({
       .then(
         // Only a plain refusal counts: an older host has no such route.
         async (response) => {
-          if (SESSION_REFUSED.has(response.status)) return "ended" as const;
+          if (SESSION_REFUSED.has(response.status)) {
+            const body: unknown = await response.json().catch(() => null);
+            return linkRefusalNotice(Option.getOrNull(decodeRefusalBody(body))?.detail);
+          }
           // Only the cloud board host says what the invite opens; no other answer is read.
           const body: unknown =
             cloud && response.ok ? await response.json().catch(() => null) : null;
@@ -328,7 +332,10 @@ function NameForm({
       stopped = true;
     };
   }, [cloud, credential, host]);
-  if (told === "ended") return INVALID;
+  // A refusal is a notice of its own; only an invite that opens something shows the form.
+  if (told !== null && "detail" in told) {
+    return <GuestNotice title={told.title} detail={told.detail} />;
+  }
   // The cloud host answers at once; waiting for it shows the card whole, with nothing changing.
   if (cloud && told === null) return <TinkjamLoading cover label="Opening the invite" />;
   const invite = told ?? {};

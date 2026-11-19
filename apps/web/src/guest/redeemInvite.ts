@@ -5,8 +5,8 @@ import * as Schema from "effect/Schema";
 import { SIGN_IN_UNCONFIRMED, boardJoinAuth, refreshAccountBoards } from "./boardAccount";
 import { isCloudBoardsHost } from "./cloudBoardsHost";
 import { guestShareOrigin, type JoinedGuestShare } from "./guestShares";
+import { decodeRefusalBody, linkRefusalMessage } from "./linkRefusal.logic";
 
-const decodeErrorBody = Schema.decodeUnknownOption(Schema.Struct({ message: Schema.String }));
 const decodeRedeemResult = Schema.decodeUnknownOption(GuestRedeemResult);
 
 /**
@@ -43,9 +43,9 @@ export async function redeemInvite(input: {
     });
     const json: unknown = await response.json().catch(() => null);
     if (!response.ok) {
-      return Option.match(decodeErrorBody(json), {
+      return Option.match(decodeRefusalBody(json), {
         onNone: () => "Something went wrong. Try again.",
-        onSome: ({ message }) => message,
+        onSome: linkRefusalMessage,
       });
     }
     const result = Option.getOrNull(decodeRedeemResult(json));

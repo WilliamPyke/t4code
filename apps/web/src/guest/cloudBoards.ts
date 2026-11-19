@@ -51,6 +51,12 @@ import {
   isCloudShare,
   rememberGuestShare,
 } from "./guestShares";
+import {
+  decodeRefusalBody,
+  linkRefusalMessage,
+  linkRefusalNotice,
+  refusalSentence,
+} from "./linkRefusal.logic";
 import { placeNewBoard } from "./workspaces";
 
 const decodeCreated = Schema.decodeUnknownOption(CloudBoardCreateResult);
@@ -363,13 +369,16 @@ export async function openViewLink(input: {
       body: JSON.stringify({ credential: input.credential }),
       credentials: "omit",
     });
-    const opened = response.ok
-      ? Option.getOrNull(decodeRedeemed(await response.json().catch(() => null)))
-      : null;
+    const json: unknown = await response.json().catch(() => null);
+    const opened = response.ok ? Option.getOrNull(decodeRedeemed(json)) : null;
     if (opened === null || opened.threadId === undefined) {
-      return response.status === 403 || response.status === 410 || response.ok
-        ? "This link no longer opens the board. Ask whoever shared it for a new one."
-        : "Could not reach the board service.";
+      if (!(response.status === 403 || response.status === 410 || response.ok)) {
+        return "Could not reach the board service.";
+      }
+      const refused = Option.getOrNull(decodeRefusalBody(json));
+      return refused === null
+        ? refusalSentence(linkRefusalNotice("replaced"))
+        : linkRefusalMessage(refused);
     }
     return {
       host: input.host,

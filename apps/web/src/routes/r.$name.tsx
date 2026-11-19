@@ -6,25 +6,26 @@ import * as Schema from "effect/Schema";
 
 import { resolveCloudPublicConfig } from "../cloud/publicConfig";
 import { GuestNotice } from "../components/guest/GuestThreadView";
+import { linkRefusalNotice, refusalDetailOf } from "../guest/linkRefusal.logic";
 import { guestLinkHost, guestShareOrigin } from "../guest/guestShares";
 import { GUEST_PAGE_PATH } from "../guestPage";
 
 const decodeResolved = Schema.decodeUnknownOption(RelayGuestLinkResolveResponse);
 
-type Outcome = "opening" | "ended" | "busy" | "unreachable";
+type Outcome = { readonly title: string; readonly detail?: string };
 
 /** Asks the relay what a readable guest link stands for, and goes there when it knows. */
 async function openGuestLink(name: string): Promise<Outcome> {
   const { relayUrl } = resolveCloudPublicConfig();
-  if (relayUrl === null) return "unreachable";
+  if (relayUrl === null) return NOTICES.unreachable;
   const response = await fetch(new URL(`/v1/guest-links/${encodeURIComponent(name)}`, relayUrl), {
     credentials: "omit",
   }).catch(() => null);
-  if (response?.status === 429) return "busy";
-  if (!response?.ok) return "unreachable";
+  if (response?.status === 429) return NOTICES.busy;
+  if (!response?.ok) return NOTICES.unreachable;
   const link = Option.getOrNull(decodeResolved(await response.json().catch(() => null)))?.link;
   const host = link ? guestLinkHost(link.host) : null;
-  if (!link || host === null) return "ended";
+  if (!link || host === null) return NOTICES.ended;
   // The relay keeps a name until it expires; only the owner's server knows the link was ended.
   const check = await fetch(`${guestShareOrigin(host)}${GUEST_ROUTE_PREFIX}/invite`, {
     method: "POST",
@@ -33,13 +34,17 @@ async function openGuestLink(name: string): Promise<Outcome> {
     credentials: "omit",
   }).catch(() => null);
   // Only a plain refusal counts: an older server has no such route, and an offline one says so later.
-  if (check?.status === 401 || check?.status === 403 || check?.status === 410) return "ended";
+  if (check?.status === 401 || check?.status === 403 || check?.status === 410) {
+    const detail = refusalDetailOf(await check.json().catch(() => null));
+    // A detail only the board host sends names what refused, else the neutral one stands.
+    return detail === undefined ? NOTICES.ended : linkRefusalNotice(detail);
+  }
   const target = new URL(GUEST_PAGE_PATH, window.location.origin);
   target.searchParams.set("host", host);
   target.hash = link.credential;
   // A new document, as if the full link had been opened: the guest page reads the fragment once.
   window.location.replace(target);
-  return "opening";
+  return NOTICES.opening;
 }
 
 const NOTICES = {
@@ -53,7 +58,7 @@ const NOTICES = {
 } as const;
 
 function ShortGuestLinkPage() {
-  return <GuestNotice {...NOTICES[Route.useLoaderData()]} />;
+  return <GuestNotice {...Route.useLoaderData()} />;
 }
 
 export const Route = createFileRoute("/r/$name")({

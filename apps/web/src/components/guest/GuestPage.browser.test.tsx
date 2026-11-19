@@ -85,6 +85,29 @@ describe("GuestPage", () => {
     expect(readGuestShares()).toEqual([]);
   });
 
+  it("says why the board host refused an invite, instead of that it ended", async () => {
+    using _page = visit("/guest?host=sam.trellium.org#share-3.signature");
+    using _fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json(
+        {
+          reason: "invalid",
+          message:
+            "This board's link now only lets people look at it. Ask whoever shared it for the view link.",
+          detail: "view_only",
+        },
+        { status: 403 },
+      ),
+    );
+    await using screen = await render(<GuestPage />);
+    await expect
+      .element(screen.getByText("This board's link now only lets people look at it"))
+      .toBeVisible();
+    await expect
+      .element(screen.getByText("Ask whoever shared it for the view link."))
+      .toBeVisible();
+    expect(readGuestShares()).toEqual([]);
+  });
+
   it("tells a guest when the owner's server cannot hand this page a token", async () => {
     using _page = visit("/guest?host=old.trellium.org#share-2.signature");
     using _fetch = vi
