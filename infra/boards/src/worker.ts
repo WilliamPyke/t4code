@@ -445,8 +445,12 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === CLOUD_BOARD_ROUTE && request.method === "POST") {
     const account = await optionalAccountOf(request, env);
     if (account !== null && typeof account !== "string") return failureResponse(account);
-    const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
-    const limit = env.CREATE_LIMITS.get(env.CREATE_LIMITS.idFromName(ip));
+    // A signed-in person has their own count: people behind one address do not share a limit.
+    const maker =
+      account === null
+        ? (request.headers.get("cf-connecting-ip") ?? "unknown")
+        : `account:${account}`;
+    const limit = env.CREATE_LIMITS.get(env.CREATE_LIMITS.idFromName(maker));
     if (!(await limit.take(Date.now()))) return failureResponse(roomFailure("too_fast"));
     const shareId = crypto.randomUUID();
     const target = new URL(CLOUD_BOARD_ROUTE, url);

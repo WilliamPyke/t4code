@@ -116,6 +116,9 @@ export async function createCloudBoard(input: {
       credentials: "omit",
     });
     if (response.status === 401) return "Sign in again to make a board.";
+    if (response.status === 429) {
+      return "A lot of boards were made from here in the last hour. Try again in a little while, or sign in.";
+    }
     const created = response.ok
       ? Option.getOrNull(decodeCreated(await response.json().catch(() => null)))
       : null;
