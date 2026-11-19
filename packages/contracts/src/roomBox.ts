@@ -19,6 +19,11 @@ export const RoomBoxPromptInput = Schema.Struct({
   cards: Schema.optional(Schema.Array(RoomBoardContextCard)),
   /** The artifact card the reply fills. One not on the board is left out. */
   artifactId: Schema.optional(RoomBoardNote.fields.id),
+  /**
+   * When the version of that artifact the sender saw was written, or null for an empty one. The
+   * server refuses the prompt once it shows another. Absent from an older client.
+   */
+  artifactUpdatedAt: Schema.optional(Schema.NullOr(Schema.String.check(Schema.isMaxLength(64)))),
   /** The comment thread the reply is posted in. One not on the board is left out. */
   commentId: Schema.optional(RoomBoardNote.fields.id),
   /** Absent: the box thread's own model, or the room thread's for a box prompted first. */
@@ -70,6 +75,7 @@ const ROOM_BOX_ERROR_MESSAGES = {
     "This thread cannot go on the board. It may be archived or deleted, shared, or in a room already.",
   already_on_board: "This thread is already on the board.",
   board_full: "This board has as many thread boxes as it holds. Remove one first.",
+  artifact_changed: "Someone changed the artifact the reply rewrites. Look at it again, then send.",
 } as const;
 
 export class RoomBoxError extends Schema.TaggedError<RoomBoxError>()("RoomBoxError", {
@@ -82,6 +88,7 @@ export class RoomBoxError extends Schema.TaggedError<RoomBoxError>()("RoomBoxErr
     "thread_unavailable",
     "already_on_board",
     "board_full",
+    "artifact_changed",
   ]),
 }) {
   override get message(): string {

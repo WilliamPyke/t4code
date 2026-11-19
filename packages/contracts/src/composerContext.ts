@@ -262,6 +262,13 @@ export const RoomBoardContextCard = Schema.Struct({
   author: Schema.optional(Schema.Literals(["owner", "owner_agent", "guest", "guest_agent"])),
   /** The author's name: a guest's, or the name the owner shows guests when they set one. */
   name: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(GUEST_NAME_MAX_LENGTH))),
+  /** Someone other than its author who changed its text last. */
+  editedBy: Schema.optional(
+    Schema.Struct({
+      author: Schema.Literals(["owner", "guest"]),
+      name: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(GUEST_NAME_MAX_LENGTH))),
+    }),
+  ),
   text: BoundedString(ROOM_ARTIFACT_MAX_LENGTH),
   /**
    * The card as arrows name it (`note:<id>`). With it, the owner's server names the card and its
@@ -296,6 +303,9 @@ export const RoomArtifactContextRecord = Schema.Struct({
   title: BoundedString(ROOM_BOARD_NOTE_MAX_LENGTH),
   /** What the artifact shows now, so the agent can revise it. */
   current: Schema.optional(BoundedString(ROOM_ARTIFACT_MAX_LENGTH)),
+  /** Who wrote `current`, as a card names its author. Absent when not known. */
+  author: RoomBoardContextCard.fields.author,
+  name: RoomBoardContextCard.fields.name,
   /** The room thread whose share holds the card. Absent from an older client. */
   threadId: Schema.optional(ThreadId),
   /** The thread box the message was sent from. Absent from an older client. */

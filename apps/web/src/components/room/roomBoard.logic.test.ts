@@ -2146,6 +2146,38 @@ describe("boardPromptContext", () => {
     ]);
   });
 
+  it("says who else changed or connected a card, and flags a pinned card rewritten since it went", () => {
+    const sentAt = "2026-11-13T10:00:00.000Z";
+    const later = "2026-11-13T11:00:00.000Z";
+    const board: RoomBoard = {
+      positions: {},
+      notes: [
+        note("box", { kind: "thread" }),
+        // The owner's note Sam rewrote before it ever went.
+        note("mine", { editedAt: later, editedBy: sam }),
+        // Pinned, and rewritten by Sam since it last went.
+        note("pinned", { editedAt: later, editedBy: sam }),
+        // Pinned, and changed only by the owner since.
+        note("own", { editedAt: later, editedBy: null }),
+        note("handed", { guestId: sam }),
+      ],
+      edges: [
+        { id: "mine>box", from: "note:mine", to: "note:box" },
+        { id: "pinned>box", from: "note:pinned", to: "note:box", sentAt, pinned: true },
+        { id: "own>box", from: "note:own", to: "note:box", sentAt, pinned: true },
+        { id: "handed>box", from: "note:handed", to: "note:box", guestId: sam },
+      ],
+    };
+    const cards = boardPromptContext(board, people, [], "box").cards;
+    const of = (id: string) => cards.find((card) => card.ref === `note:${id}`);
+    expect(of("mine")).toMatchObject({ label: "Note from You", editedBy: "Sam", status: "new" });
+    expect(of("mine")?.changedBy).toBeUndefined();
+    expect(of("pinned")).toMatchObject({ status: "pinned", changedBy: "Sam" });
+    expect(of("own")?.changedBy).toBeUndefined();
+    expect(of("handed")).toMatchObject({ label: "Note from Sam", addedBy: "Sam" });
+    expect(of("mine")?.addedBy).toBeUndefined();
+  });
+
   it("says where a note stands with its agent, lets a done one go again, and clears done ones", () => {
     const sentAt = "2026-11-13T10:00:00.000Z";
     const doneAt = "2026-11-13T10:05:00.000Z";
@@ -2228,7 +2260,8 @@ describe("boardPromptContext", () => {
       applyRoomBoardChange(
         marked,
         { hasCard: () => false, hasPerson: () => true },
-        sam,
+        // The box is the owner's: only they have its lines carry a card again.
+        null,
         changes[0]!,
         later,
       ),
@@ -3905,7 +3938,8 @@ describe("undoing a delete, through the room's own rules", () => {
     expect(back.notes.find((note) => note.id === "o")).toBeDefined();
     expect(back.notes.find((note) => note.id === "c")).toEqual(comment);
     expect(back.notes.find((note) => note.id === "p")).toEqual(onOther);
-    expect(back.edges).toEqual([pin]);
+    // Drawn again by whoever undid.
+    expect(back.edges).toEqual([{ ...pin, guestId: ana }]);
     expect(back.removed).toBeUndefined();
     // And redo deletes them all again.
     expect(boardHistoryChanges(back, entry, "redo")).not.toBeNull();

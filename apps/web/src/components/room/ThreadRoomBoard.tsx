@@ -20,6 +20,7 @@ import {
   roomCodeStateOf,
   unsharedRoomId,
 } from "@t3tools/contracts";
+import { roomArtifactSource } from "@t3tools/shared/roomBoard";
 import { useNavigate } from "@tanstack/react-router";
 import { MessagesSquareIcon, XIcon } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
@@ -368,6 +369,9 @@ export function ThreadRoomBoard({
       selection === undefined
         ? { modelSelection: undefined, text: prompt.text }
         : boardTurnSelection({ selection, providers, text: prompt.text });
+    // The version the owner saw: the server refuses the prompt once the artifact shows another.
+    const artifact =
+      prompt.artifactId === null ? undefined : roomArtifactSource(room.board, prompt.artifactId);
     sendingRef.current = true;
     const result = await promptRoomBox({
       environmentId: threadRef.environmentId,
@@ -377,6 +381,9 @@ export function ThreadRoomBoard({
         text: turn.text,
         cards: boardContextCards(room.board, share?.guests ?? NO_GUESTS, prompt.cards, ownerName),
         ...(prompt.artifactId === null ? {} : { artifactId: prompt.artifactId }),
+        ...(artifact === undefined
+          ? {}
+          : { artifactUpdatedAt: artifact.artifact?.updatedAt ?? null }),
         ...(prompt.commentId === undefined ? {} : { commentId: prompt.commentId }),
         ...(turn.modelSelection === undefined ? {} : { modelSelection: turn.modelSelection }),
       },

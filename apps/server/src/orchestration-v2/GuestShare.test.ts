@@ -1404,6 +1404,8 @@ it.effect("keeps one board for the room, changed a card or a note at a time", ()
           y: 9,
           guestId: sam,
           editedAt: DateTime.formatIso(yield* DateTime.now),
+          // Who edited it last, apart from who wrote it.
+          editedBy: alex,
           changed: { at: DateTime.formatIso(yield* DateTime.now), guestId: alex },
         },
         {
@@ -1580,6 +1582,7 @@ it.effect("keeps tasks, links, comments and arrows on the board, checked by the 
         done: true,
         assignee: { guestId: alex },
         editedAt: stamped,
+        editedBy: null,
         changed: { at: stamped },
       },
       {

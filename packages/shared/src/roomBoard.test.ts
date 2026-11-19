@@ -43,6 +43,7 @@ import {
   roomBoardWithCardsSent,
   roomBoardCardChangedAt,
   roomBoardCardIdentity,
+  roomCardEditor,
   roomBoardStartNote,
   roomBoxCodeWindows,
   roomBoxExcerpt,
@@ -1013,7 +1014,7 @@ describe("applyRoomBoardChange", () => {
     }
   });
 
-  it("times an edit of a card's text or status, and lets anyone pin a line, which no line starts with", () => {
+  it("times an edit of a card's text or status and who made it, and pins a line, which no line starts with", () => {
     const board: RoomBoard = {
       positions: {},
       notes: [
@@ -1025,6 +1026,10 @@ describe("applyRoomBoardChange", () => {
     expect(applied(board, put("n", { text: "Hi", x: 5, y: 5 })).notes[0]?.editedAt).toBeUndefined();
     const edited = applied(board, put("n", { text: "Hello" }));
     expect(edited.notes[0]?.editedAt).toBe(at);
+    // The owner's note stays theirs, and says Sam changed what it says.
+    expect(edited.notes[0]?.guestId).toBeUndefined();
+    expect(roomCardEditor(edited.notes[0]!)).toBe(sam);
+    expect(edited.notes[0]?.editedBy).toBe(sam);
     // A move after it keeps when it was edited.
     const later = "2026-11-13T11:00:00.000Z";
     const moved = applyRoomBoardChange(
@@ -1060,9 +1065,43 @@ describe("applyRoomBoardChange", () => {
       from: "note:t",
       to: "card:thread",
     });
-    expect(drawn.edges?.at(-1)).toEqual({ id: "f", from: "note:t", to: "card:thread" });
+    expect(drawn.edges?.at(-1)).toEqual({
+      id: "f",
+      from: "note:t",
+      to: "card:thread",
+      guestId: sam,
+    });
 
-    const pinned = applied(board, { type: "edge.pin", edgeId: "e", pinned: true });
+    // Only the owner pins a line into their box, or has it carry its card again; anyone unpins.
+    for (const change of [
+      { type: "edge.pin", edgeId: "e", pinned: true },
+      { type: "edge.resend", edgeId: "e" },
+    ] as const) {
+      expect(Result.isFailure(apply(board, change))).toBe(true);
+    }
+    // Sam pins a line into his own box, but not one whose card goes on to the owner's too.
+    const samsBox: RoomBoard = {
+      positions: {},
+      notes: [
+        { id: "n", text: "Hi", x: 0, y: 0 },
+        { id: "m", text: "Hey", x: 0, y: 0 },
+        { id: "b", text: "Sam's", x: 0, y: 0, kind: "thread", guestId: sam },
+      ],
+      edges: [
+        { id: "own", from: "note:n", to: "note:b" },
+        { id: "on", from: "note:m", to: "note:n" },
+        { id: "room", from: "note:n", to: "card:thread" },
+      ],
+    };
+    expect(
+      Result.isSuccess(apply(samsBox, { type: "edge.pin", edgeId: "own", pinned: true })),
+    ).toBe(true);
+    expect(Result.isFailure(apply(samsBox, { type: "edge.pin", edgeId: "on", pinned: true }))).toBe(
+      true,
+    );
+    const pinned = Result.getOrThrow(
+      applyRoomBoardChange(board, scope, null, { type: "edge.pin", edgeId: "e", pinned: true }, at),
+    );
     expect(pinned.edges?.[0]).toEqual({
       id: "e",
       from: "note:n",
@@ -1097,7 +1136,7 @@ describe("applyRoomBoardChange", () => {
         to: "card:thread",
         shape: "elbow",
       }).edges?.at(-1),
-    ).toEqual({ id: "g", from: "note:t", to: "card:thread", shape: "elbow" });
+    ).toEqual({ id: "g", from: "note:t", to: "card:thread", guestId: sam, shape: "elbow" });
   });
 
   it("plans a task: its status agrees with done, and its due day and order stay until changed", () => {
@@ -1123,6 +1162,7 @@ describe("applyRoomBoardChange", () => {
       status: "doing",
       order: 2,
       editedAt: at,
+      editedBy: sam,
       changed: { at, guestId: sam },
     });
     // An older client's edit says nothing of the status or order, which stay.
@@ -1509,7 +1549,8 @@ describe("roomBoardWithCardsSent", () => {
       applyRoomBoardChange(
         from,
         { hasCard: () => true, hasPerson: () => true },
-        GuestId.make("guest:sam"),
+        // The boxes are the owner's, whose lines into them only the owner sends again.
+        null,
         { type: "edge.resend", edgeId, ...(card === undefined ? {} : { card }) },
         at,
       ),
@@ -1780,6 +1821,18 @@ describe("roomBoardCardIdentity", () => {
       author: "guest_agent",
       name: "Sam",
     });
+    // The owner's note Sam rewrote stays the owner's, and says Sam changed it last.
+    const at = "2026-11-12T00:00:00Z";
+    expect(roomBoardCardIdentity(note({ editedAt: at, editedBy: sam }), names)).toEqual({
+      label: "Note from the owner",
+      author: "owner",
+      editedBy: { author: "guest", name: "Sam" },
+    });
+    // From before `editedBy` was kept: who changed it then; nobody else for its author's own edit.
+    const before = note({ editedAt: at, changed: { at, guestId: sam } });
+    expect(roomBoardCardIdentity(before, names).editedBy).toEqual({ author: "guest", name: "Sam" });
+    const own = note({ guestId: sam, editedAt: at, editedBy: sam });
+    expect(roomBoardCardIdentity(own, names).editedBy).toBeUndefined();
   });
 });
 

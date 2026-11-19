@@ -737,6 +737,8 @@ export const RoomBoardNote = Schema.Struct({
   createdAt: Schema.optional(IsoDateTime),
   /** When its text or a task's status last changed, as the server took it. */
   editedAt: Schema.optional(IsoDateTime),
+  /** Who made that edit: a guest, or null for the owner. Absent on cards from before it was kept. */
+  editedBy: Schema.optional(Schema.NullOr(GuestId)),
   /**
    * Who added it or last changed what it says (text, status, assignee, colour), and when, as the
    * server took it. No guest is the owner. Absent on cards from before it was kept.
@@ -767,6 +769,8 @@ export const RoomBoardEdge = Schema.Struct({
   id: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
   from: RoomBoardItemRef,
   to: RoomBoardItemRef,
+  /** The guest who drew it. Absent: the owner, an agent, or a line from before it was kept. */
+  guestId: Schema.optional(GuestId),
   /**
    * When a prompt last carried the card this line starts at, along this line, as the server that
    * took the prompt stamped it. No board change sets it. Absent: never sent.

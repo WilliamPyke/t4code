@@ -29,6 +29,25 @@ const NO_ARTIFACTS: ReadonlyArray<BoardPromptArtifact> = [];
 const artifactName = (artifact: Pick<BoardPromptArtifact, "title">) =>
   artifact.title.trim() === "" ? "Untitled artifact" : artifact.title.trim();
 
+const cardChangeMark = (card: BoardPromptCard): string | null => {
+  const by = card.changedBy ?? card.editedBy;
+  if (by !== undefined) return ` · changed by ${by}`;
+  return card.status === "updated" ? " · updated" : null;
+};
+
+/** What a chip's tooltip says of where its card came from and who changed it. */
+const cardProvenance = (card: BoardPromptCard): ReadonlyArray<string> => [
+  ...(card.changedBy !== undefined
+    ? [`${card.changedBy} changed it since it last went with a prompt.`]
+    : card.status === "updated"
+      ? ["Changed since it was last sent."]
+      : []),
+  ...(card.editedBy === undefined || card.editedBy === card.changedBy
+    ? []
+    : [`Last changed by ${card.editedBy}.`]),
+  ...(card.addedBy === undefined ? [] : [`${card.addedBy} connected it to this box.`]),
+];
+
 const without = (set: ReadonlySet<string>, ref: string) => {
   const next = new Set(set);
   next.delete(ref);
@@ -161,6 +180,7 @@ export function BoardPromptBox({
   const sectionChip = ({ section, first, cards: group }: BoardPromptSectionChip) => {
     const title = section.title === "" ? "Untitled section" : section.title;
     const pinned = group.every((card) => card.status === "pinned");
+    const changed = group.find((card) => card.changedBy !== undefined);
     const label = `${title} (${group.length} cards)`;
     // Pinning the chip pins the section's line, so every card in it goes with every prompt.
     const line: BoardPromptCard = {
@@ -186,6 +206,11 @@ export function BoardPromptBox({
               {title}
               <span className="font-normal text-muted-foreground"> ({group.length} cards)</span>
             </span>
+            {changed === undefined ? null : (
+              <span className="shrink-0 text-warning-foreground">
+                · changed by {changed.changedBy}
+              </span>
+            )}
           </TooltipTrigger>
           <TooltipPopup side="top">
             <p className="mb-1 text-muted-foreground">Every card in this section goes.</p>
@@ -194,7 +219,8 @@ export function BoardPromptBox({
                 <li key={card.ref} className="truncate">
                   {card.label}
                   {card.excerpt === "" ? null : `: ${card.excerpt}`}
-                  {card.status === "updated" ? " · updated" : null}
+                  {cardChangeMark(card)}
+                  {card.addedBy === undefined ? null : ` · added by ${card.addedBy}`}
                 </li>
               ))}
             </ul>
@@ -262,16 +288,29 @@ export function BoardPromptBox({
                           </span>
                         )}
                       </span>
-                      {card.status === "updated" ? (
+                      {card.changedBy !== undefined ? (
+                        <span className="shrink-0 text-warning-foreground">
+                          · changed by {card.changedBy}
+                        </span>
+                      ) : card.editedBy !== undefined ? (
+                        <span className="shrink-0 text-muted-foreground">
+                          · changed by {card.editedBy}
+                        </span>
+                      ) : card.status === "updated" ? (
                         <span className="shrink-0 text-muted-foreground">· updated</span>
                       ) : null}
+                      {card.addedBy === undefined ? null : (
+                        <span className="shrink-0 text-muted-foreground">
+                          · added by {card.addedBy}
+                        </span>
+                      )}
                     </TooltipTrigger>
                     <TooltipPopup side="top">
-                      {card.status === "updated" ? (
-                        <p className="mb-1 text-muted-foreground">
-                          Changed since it was last sent.
+                      {cardProvenance(card).map((line) => (
+                        <p key={line} className="mb-1 text-muted-foreground">
+                          {line}
                         </p>
-                      ) : null}
+                      ))}
                       <p className="max-w-64 whitespace-pre-line [overflow-wrap:anywhere]">
                         {card.text.length > PREVIEW_LENGTH
                           ? `${card.text.slice(0, PREVIEW_LENGTH).trimEnd()}…`

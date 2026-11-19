@@ -913,6 +913,7 @@ export function guestMessageForAgent(
             noteId: artifact.id,
             title: artifact.text,
             current: artifact.artifact?.body,
+            writer: roomBoardCardIdentity(artifact, roomPersonName(share, "")),
             threadId: roomThreadId,
             boxId,
           }),

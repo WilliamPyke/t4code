@@ -12,6 +12,7 @@ import {
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
+  providerAllowsDirectGuestSend,
   ROOM_BOARD_MAX_NOTES,
   ROOM_BOARD_MAX_THREADS,
   ROOM_BOARD_ROOM_BOX,
@@ -23,6 +24,7 @@ import {
   type RoomBoxPromptInput,
   type RoomBoxPromptResult,
   type RoomBoardContextCard,
+  type RoomBoardNote,
   ROOM_BOX_PROMPT_MAX_LENGTH,
   type RoomBoxTurn,
   type RunId,
@@ -247,6 +249,14 @@ export class RoomBoxes extends Context.Service<
       input: GuestMessageSend,
       creationSource: OrchestrationV2CreationSource,
     ) => Effect.Effect<void, RoomBoxError>;
+    /**
+     * The model a guest's message would run on when sent with no model picked: their own box's
+     * thread's, else the room thread's.
+     */
+    readonly guestMessageModel: (
+      room: OrchestrationV2AppThread,
+      message: Pick<ThreadGuestMessage, "boxId" | "guestId">,
+    ) => Effect.Effect<ModelSelection>;
     /** The owner's Send or Dismiss on a guest's waiting message. */
     readonly resolveGuestMessage: (
       input: GuestMessageResolveInput,
@@ -443,9 +453,22 @@ const make = Effect.gen(function* () {
       if (card.ref === undefined) return [card];
       const note = roomBoardNoteOfRef(share.board, card.ref);
       if (note === undefined) return [];
-      const { label: _label, author: _author, name: _name, ...rest } = card;
+      const { label: _label, author: _author, name: _name, editedBy: _editedBy, ...rest } = card;
       return [{ ...rest, ...roomBoardCardIdentity(note, roomPersonName(share, ownerName)) }];
     });
+  });
+
+  /** Who wrote what an artifact shows now, named from this board. */
+  const artifactWriter = Effect.fn("RoomBoxes.artifactWriter")(function* (
+    share: ThreadRoom,
+    artifact: RoomBoardNote,
+  ) {
+    const ownerName = yield* serverSettings.getSettings.pipe(
+      Effect.map((settings) => settings.guestOwnerName),
+      Effect.orElseSucceed(() => ""),
+    );
+    const { author, name } = roomBoardCardIdentity(artifact, roomPersonName(share, ownerName));
+    return { author, ...(name === undefined ? {} : { name }) };
   });
 
   const prompt = Effect.fn("RoomBoxes.prompt")(function* (input: RoomBoxPromptInput) {
@@ -459,6 +482,14 @@ const make = Effect.gen(function* () {
     const commandId = yield* commandIdOf("prompt");
     const batch = yield* uuid;
     const artifact = roomArtifactSource(share.board, input.artifactId);
+    // The agent revises the version the sender saw, never one someone wrote since.
+    if (
+      artifact !== undefined &&
+      input.artifactUpdatedAt !== undefined &&
+      (artifact.artifact?.updatedAt ?? null) !== input.artifactUpdatedAt
+    ) {
+      return yield* fail("artifact_changed");
+    }
     const comment = share.board?.notes.find(
       (note) => note.id === input.commentId && note.kind === "comment",
     );
@@ -474,6 +505,7 @@ const make = Effect.gen(function* () {
               noteId: artifact.id,
               title: artifact.text,
               current: artifact.artifact?.body,
+              writer: yield* artifactWriter(share, artifact),
               threadId: room.id,
               boxId: input.boxId,
             }),
@@ -635,6 +667,38 @@ const make = Effect.gen(function* () {
       }),
     ).pipe(Effect.mapError(() => fail("failed")));
 
+  /** The guest's own box a message of theirs goes to, or undefined for the room thread. */
+  const guestBoxOf = (
+    share: ThreadRoom,
+    message: Pick<ThreadGuestMessage, "boxId" | "guestId">,
+  ) => {
+    // A box removed since goes to the room thread, as a guest's message always did.
+    const box =
+      message.boxId === undefined || message.boxId === ROOM_BOARD_ROOM_BOX
+        ? undefined
+        : roomBoxOn(share, message.boxId);
+    return box === undefined || box.guestId !== message.guestId ? undefined : box;
+  };
+
+  const guestMessageModel = Effect.fn("RoomBoxes.guestMessageModel")(function* (
+    room: OrchestrationV2AppThread,
+    message: Pick<ThreadGuestMessage, "boxId" | "guestId">,
+  ) {
+    const share = threadRoomOf(room);
+    const box = guestBoxOf(share, message);
+    const mapped = box === undefined ? undefined : share.boardThreads?.[box.id];
+    if (mapped === undefined) return room.modelSelection;
+    // As `deliver` decides: the box's thread while usable, else a new one on the room's model.
+    return yield* orchestrator.getThreadRecords(mapped, []).pipe(
+      Effect.map(({ thread }) =>
+        thread.deletedAt === null && thread.archivedAt === null
+          ? thread.modelSelection
+          : room.modelSelection,
+      ),
+      Effect.orElseSucceed(() => room.modelSelection),
+    );
+  });
+
   const sendGuestMessage = Effect.fn("RoomBoxes.sendGuestMessage")(function* (
     input: GuestMessageSend,
     creationSource: OrchestrationV2CreationSource,
@@ -647,15 +711,22 @@ const make = Effect.gen(function* () {
     if (message === undefined || message.status !== "pending") {
       return yield* fail("not_pending");
     }
-    const attachments = message.attachments ?? [];
-    // A box removed since goes to the room thread, as a guest's message always did.
-    const box =
-      message.boxId === undefined || message.boxId === ROOM_BOARD_ROOM_BOX
-        ? undefined
-        : roomBoxOn(share, message.boxId);
-    if (box === undefined || box.guestId !== message.guestId) {
-      return yield* sendInRoom(room.id, input, attachments, creationSource);
+    // Nobody pressed Send: it goes only on a provider whose terms allow that.
+    if (creationSource === "server") {
+      const selection = input.modelSelection ?? (yield* guestMessageModel(room, message));
+      const providers = yield* providerRegistry.getProviders;
+      if (
+        message.direct !== true ||
+        !providerAllowsDirectGuestSend(
+          providers.find((provider) => provider.instanceId === selection.instanceId),
+        )
+      ) {
+        return yield* fail("failed");
+      }
     }
+    const attachments = message.attachments ?? [];
+    const box = guestBoxOf(share, message);
+    if (box === undefined) return yield* sendInRoom(room.id, input, attachments, creationSource);
     const built = guestMessageForAgent(share, room.id, message.id, message, box.id);
     const commandId = yield* commandIdOf("guest-box");
     const messageId = MessageId.make(commandId);
@@ -1000,6 +1071,7 @@ const make = Effect.gen(function* () {
     addThread,
     boxOfThread,
     sendGuestMessage,
+    guestMessageModel,
     resolveGuestMessage,
     progress,
   });

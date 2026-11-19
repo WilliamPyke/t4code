@@ -125,8 +125,7 @@ export function NoteColorPicker({
         </TooltipTrigger>
         <TooltipPopup side="top">{label}</TooltipPopup>
       </Tooltip>
-      {/* Its trigger sits in the board's scaled world: keep the menu inside the window. */}
-      <MenuPopup align="end" collisionBoundary="viewport">
+      <MenuPopup align="end">
         <NoteColorChoices color={color} onPick={onPick} section={section} />
       </MenuPopup>
     </Menu>

@@ -48,6 +48,7 @@ import {
   roomBoardCardChangedAt,
   roomBoardNoteOfRef,
   roomBoxIdOfRef,
+  roomCardEditor,
   roomLinkLabel,
   roomLinkPromptText,
   roomMarkPromptText,
@@ -1861,6 +1862,12 @@ export interface BoardPromptCard {
   readonly text: string;
   /** The start of what the card itself says, for its chip. */
   readonly excerpt: string;
+  /** Someone other than its author who last changed its text, as this viewer reads them. */
+  readonly editedBy?: string | undefined;
+  /** Someone other than this viewer who changed it since it last went along its lines. */
+  readonly changedBy?: string | undefined;
+  /** Whoever drew a line that carries it, when not this viewer. */
+  readonly addedBy?: string | undefined;
   /** Whether it goes with the next prompt on its own; see `BoardPromptCardStatus`. */
   readonly status?: BoardPromptCardStatus | undefined;
   /** When it was last sent, while `sent`. */
@@ -2342,10 +2349,23 @@ export function boardPromptCard(
   if (body.trim() === "") return null;
   const said =
     (note.kind === "link" ? body : text === "" ? (note.url ?? "") : text).split("\n")[0] ?? "";
+  const written = note.kind === "artifact" ? note.artifact : undefined;
+  const editor = written === undefined ? roomCardEditor(note) : undefined;
+  const editedBy =
+    written !== undefined
+      ? (written.guestId ?? null) === people.viewer
+        ? undefined
+        : written.byHand === true
+          ? boardPersonName(people, written.guestId)
+          : boardAgentName(people, written.guestId)
+      : editor === undefined || editor === (note.guestId ?? null)
+        ? undefined
+        : boardPersonName(people, editor ?? undefined);
   return {
     ref: roomBoardNoteRef(note.id),
     label: labelBy(boardPersonName(people, note.guestId)),
     sharedLabel: labelBy(sharedPersonName(people, note.guestId)),
+    ...(editedBy === undefined ? {} : { editedBy }),
     text: body,
     // An artifact's and a code window's label already names it.
     excerpt:
@@ -2540,9 +2560,13 @@ export function boardPromptContext(
     if (card === null) continue;
     const text = boardLinkTextWithSnapshot(board, note, card.text, carried);
     const section = through[0] === undefined ? undefined : notes.get(through[0].from);
+    const changedBy = boardChangedBy(note, marks, people);
+    const drawer = [...own, ...through].find((edge) => (edge.guestId ?? null) !== people.viewer);
     cards.push({
       ...card,
       text,
+      ...(changedBy === undefined ? {} : { changedBy }),
+      ...(drawer === undefined ? {} : { addedBy: boardPersonName(people, drawer.guestId) }),
       status,
       ...(status === "sent" ? boardSentMarks(marks) : {}),
       edgeIds: [...own, ...through].map((edge) => edge.id),
@@ -2621,6 +2645,35 @@ function boardPromptCardStatus(
 
 /** A line's marks as one box's prompts read them. */
 type BoardLineMarks = Pick<RoomBoardEdge, "sentAt" | "doneAt" | "pinned">;
+
+/**
+ * Who other than the viewer changed a card since it last went along every line carrying it, so a
+ * pinned card someone else rewrote never goes unremarked. Undefined for a card never sent.
+ */
+function boardChangedBy(
+  note: RoomBoardNote,
+  lines: ReadonlyArray<BoardLineMarks>,
+  people: BoardPeople,
+): string | undefined {
+  const sent = lines.flatMap((line) => line.sentAt ?? []);
+  if (sent.length === 0 || sent.length < lines.length) return undefined;
+  const oldest = Math.min(...sent.map((at) => Date.parse(at)));
+  const written = note.kind === "artifact" ? note.artifact : undefined;
+  if (written !== undefined) {
+    if ((written.guestId ?? null) === people.viewer) return undefined;
+    if (Date.parse(written.updatedAt) <= oldest) return undefined;
+    return written.byHand === true
+      ? boardPersonName(people, written.guestId)
+      : boardAgentName(people, written.guestId);
+  }
+  const editor = roomCardEditor(note);
+  if (editor === undefined || editor === people.viewer || note.editedAt === undefined) {
+    return undefined;
+  }
+  return Date.parse(note.editedAt) > oldest
+    ? boardPersonName(people, editor ?? undefined)
+    : undefined;
+}
 
 const latest = (times: ReadonlyArray<string>): string | undefined =>
   times.reduce<string | undefined>(

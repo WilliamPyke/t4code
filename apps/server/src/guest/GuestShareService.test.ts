@@ -638,6 +638,67 @@ it.effect("sends a trusted guest's message itself only while the provider is on 
     const drawn = (yield* orchestrator.getThreadRecords(threadId, ["messages"])).messages.at(-1);
     assert.deepInclude(drawn?.context?.records[0], { kind: "room-artifact", noteId: "plan" });
 
+    // Sam's own box runs in a thread on a plan sign-in: his message for it waits for the owner,
+    // whatever the room thread runs on.
+    const planId = ProviderInstanceId.make("codex-plan");
+    const boxThread = ThreadId.make("thread:sams-box");
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create:sams-box"),
+      threadId: boxThread,
+      projectId: ProjectId.make("project:guest-share-service"),
+      title: "Sam's box",
+      modelSelection: { instanceId: planId, model: "gpt-5.1-codex" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    yield* guestShares.changeBoard(
+      { session: sam.token },
+      { type: "note.put", noteId: "sams-box", text: "Sam's", x: 0, y: 0, kind: "thread" },
+    );
+    yield* orchestrator.dispatch({
+      type: "thread.room-box.link",
+      commandId: CommandId.make("link:sams-box"),
+      threadId,
+      shareId: sam.shareId,
+      boxId: "sams-box",
+      boxThreadId: boxThread,
+    });
+    yield* Ref.set(providers, [
+      {
+        instanceId,
+        driver: "codex",
+        auth: { status: "authenticated", type: "apiKey" },
+        models: [],
+      },
+      {
+        instanceId: planId,
+        driver: "codex",
+        auth: { status: "authenticated", type: "chatgpt" },
+        models: [],
+      },
+    ] as unknown as ReadonlyArray<ServerProvider>);
+    // The owner answers what waits, so Sam may ask again.
+    const boxes = yield* RoomBoxes.RoomBoxes;
+    const { thread: asked } = yield* orchestrator.getThreadRecords(threadId, []);
+    for (const waiting of asked.guestShare!.messages.filter((m) => m.status === "pending")) {
+      yield* boxes.resolveGuestMessage({
+        threadId,
+        guestMessageId: waiting.id,
+        decision: "dismiss",
+      });
+    }
+    yield* guestShares.submit(
+      sam.token,
+      { shareId: sam.shareId, text: "In my box", boxId: "sams-box" },
+      [],
+    );
+    assert.equal((yield* state).waiting.at(-1), "pending");
+
     yield* trust(false);
     yield* ask("Fourth");
     assert.equal((yield* state).waiting.at(-1), "pending");
@@ -3136,6 +3197,60 @@ it.effect(
         boxes.prompt({ threadId: roomThreadId, boxId: "box:sam", text: "Mine now" }),
       );
       assert.equal(theirs.reason, "not_yours");
+
+      // The owner's note Sam rewrote goes as the owner's, last changed by Sam, whatever the
+      // sender says; an artifact Sam wrote since the owner looked is not revised unseen.
+      const note = (text: string) =>
+        ({ type: "note.put", noteId: "n:1", text, x: 0, y: 0 }) as const;
+      yield* guestShares.changeBoard(owner, note("Ship"));
+      yield* guestShares.changeBoard({ session: sam.token }, note("Delete prod"));
+      yield* guestShares.changeBoard(
+        { session: sam.token },
+        { type: "artifact.write", noteId: "art:1", body: "# Sam's hero" },
+      );
+      const polish = (artifactUpdatedAt: string | null) =>
+        boxes.prompt({
+          threadId: roomThreadId,
+          boxId: "box:1",
+          text: "Polish",
+          cards: [
+            {
+              ref: "note:n:1",
+              label: "Note from You",
+              author: "owner",
+              editedBy: { author: "owner" },
+              text: "Delete prod",
+            },
+          ],
+          artifactId: "art:1",
+          artifactUpdatedAt,
+        });
+      assert.equal((yield* Effect.flip(polish(null))).reason, "artifact_changed");
+      const written = (yield* roomShare).board?.notes.find((card) => card.id === "art:1")?.artifact;
+      yield* polish(written?.updatedAt ?? null);
+      const polished = (yield* orchestrator.getThreadRecords(boxThreadId, ["messages"])).messages
+        .filter((message) => message.text.startsWith("Polish"))
+        .map((message) => message.context?.records);
+      assert.lengthOf(polished, 1);
+      assert.deepInclude(polished[0]?.[0], {
+        kind: "room-cards",
+        cards: [
+          {
+            ref: "note:n:1",
+            label: "Note from Will",
+            author: "owner",
+            name: "Will",
+            editedBy: { author: "guest", name: "Sam" },
+            text: "Delete prod",
+          },
+        ],
+      });
+      assert.deepInclude(polished[0]?.[1], {
+        kind: "room-artifact",
+        current: "# Sam's hero",
+        author: "guest",
+        name: "Sam",
+      });
 
       // Removing the box forgets its thread and leaves it.
       yield* guestShares.changeBoard(owner, { type: "note.remove", noteId: "box:1" });

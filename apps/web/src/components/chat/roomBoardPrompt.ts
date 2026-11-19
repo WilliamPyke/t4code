@@ -14,7 +14,7 @@ import {
 } from "@t3tools/contracts";
 import { formatRoomBoardCards } from "@t3tools/shared/composerContextReferences";
 import { createModelSelection } from "@t3tools/shared/model";
-import { roomArtifactRequestOf } from "@t3tools/shared/roomBoard";
+import { roomArtifactRequestOf, roomCardEditor } from "@t3tools/shared/roomBoard";
 
 import { formatOutgoingPrompt } from "../ChatView.logic";
 import { getComposerPromptInjectionState, getComposerProviderState } from "./composerProviderState";
@@ -55,10 +55,22 @@ export function boardContextCards(
           : note.guestId === undefined
             ? { author: "owner" as const, ...named(undefined) }
             : { author: "guest" as const, ...named(note.guestId) };
+    const editor =
+      note === undefined || (note.kind === "artifact" && note.artifact !== undefined)
+        ? undefined
+        : roomCardEditor(note);
     return {
       ref: card.ref,
       label: card.sharedLabel.slice(0, COMPOSER_CONTEXT_LABEL_MAX_CHARS),
       ...author,
+      ...(editor === undefined || editor === (note?.guestId ?? null)
+        ? {}
+        : {
+            editedBy: {
+              author: editor === null ? ("owner" as const) : ("guest" as const),
+              ...named(editor ?? undefined),
+            },
+          }),
       text: card.text,
     };
   });

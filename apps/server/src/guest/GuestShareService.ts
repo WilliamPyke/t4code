@@ -1149,10 +1149,19 @@ const make = Effect.gen(function* () {
       return yield* new GuestShareAccessError({ reason: "empty" });
     }
     const attachments = yield* storeUploads(thread.id, uploads);
-    // Checked on every message: the owner can stop trusting a guest, or sign in another way.
+    // Checked on every message, against the model it would run on: the owner can stop trusting
+    // a guest, sign in another way, or switch the guest's box to another model.
+    const runsOn = yield* roomBoxes.guestMessageModel(thread, {
+      ...(request.boxId === undefined ? {} : { boxId: request.boxId }),
+      ...(guestId === undefined ? {} : { guestId }),
+    });
     const direct =
       share.guests?.find((guest) => guest.id === guestId)?.trusted === true &&
-      providerAllowsDirect(thread, yield* providerRegistry.getProviders);
+      providerAllowsDirectGuestSend(
+        (yield* providerRegistry.getProviders).find(
+          (provider) => provider.instanceId === runsOn.instanceId,
+        ),
+      );
     const guestMessageId = GuestMessageId.make(yield* random.uuidV4());
     // Labelled here from the board, so the box shows the cards the same way to everyone.
     const cards =

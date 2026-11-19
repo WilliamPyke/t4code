@@ -41,6 +41,8 @@ import {
   roomBoardNoteOfRef,
   roomBoardNoteSize,
   roomBoxIdOfRef,
+  roomBoxesReachedFrom as boxesReachedFrom,
+  roomBoxPerson as personOfBox,
   roomSectionCards,
   roomTaskStatus,
   roomWindowBoxId,
@@ -277,53 +279,6 @@ function assigneeNamed(
       ? `Nobody called "${name}" is on this board. Its people: ${target.people.map((person) => person.name).join(", ")}. Leave the task unassigned, or ask your user who it is for.`
       : `More than one person on this board is called "${name}". Leave the task unassigned and say so.`,
   );
-}
-
-const personOfBox = (board: RoomBoard, boxId: string): GuestId | null =>
-  boxId === ROOM_BOARD_ROOM_BOX
-    ? null
-    : (board.notes.find((note) => note.id === boxId)?.guestId ?? null);
-
-/**
- * Every thread box a card at `ref` would go to with a prompt: the box itself, a box whose artifact
- * it is, and those its lines lead to, or the lines of a section it is in, as a prompt from a box
- * finds its cards.
- */
-function boxesReachedFrom(board: RoomBoard, ref: string): ReadonlySet<string> {
-  const edges = board.edges ?? [];
-  const sections = sectionsOf(board);
-  const boxes = new Set<string>();
-  const seen = new Set([ref]);
-  let frontier = [ref];
-  while (frontier.length > 0) {
-    const next: Array<string> = [];
-    for (const at of frontier) {
-      const box = roomBoxIdOfRef(board, at);
-      if (box !== undefined) {
-        boxes.add(box);
-        continue;
-      }
-      const note = roomBoardNoteOfRef(board, at);
-      for (const section of sections) {
-        const holder = roomBoardNoteRef(section.id);
-        if (note === undefined || seen.has(holder)) continue;
-        if (!roomSectionCards(board, section).includes(note)) continue;
-        seen.add(holder);
-        next.push(holder);
-      }
-      const artifact = note?.kind === "artifact";
-      for (const edge of edges) {
-        const rewriter = artifact && edge.to === at ? roomBoxIdOfRef(board, edge.from) : undefined;
-        if (rewriter !== undefined) boxes.add(rewriter);
-        if (edge.from === at && !seen.has(edge.to)) {
-          seen.add(edge.to);
-          next.push(edge.to);
-        }
-      }
-    }
-    frontier = next;
-  }
-  return boxes;
 }
 
 /**

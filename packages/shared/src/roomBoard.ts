@@ -315,7 +315,7 @@ function putNote(
     (change.text !== existing.text || status !== roomTaskStatus(existing));
   const next: RoomBoardNote = {
     ...rest,
-    ...(edited ? { editedAt: at } : {}),
+    ...(edited ? { editedAt: at, editedBy: author } : {}),
     text: change.text,
     x: change.x,
     y: change.y,
@@ -573,7 +573,11 @@ function noteInState(
     ...taskPlanOf(state),
     ...(state.size === undefined ? {} : { size: state.size }),
     ...(edited
-      ? { editedAt: at, changed: { at, ...(author === null ? {} : { guestId: author }) } }
+      ? {
+          editedAt: at,
+          editedBy: author,
+          changed: { at, ...(author === null ? {} : { guestId: author }) },
+        }
       : {}),
   };
 }
@@ -662,12 +666,16 @@ export function roomBoardAfterAgentTurn(
     ) {
       continue;
     }
-    next = { ...next, edges: [...edges, drawn] };
+    // A guest's agent draws for them.
+    const line = turn.guestId === undefined ? drawn : { ...drawn, guestId: turn.guestId };
+    next = { ...next, edges: [...edges, line] };
   }
   return { board: next, left };
 }
 
 const ROOM_COMMENT_REACTIONS_FULL = "This comment has as many reactions as it holds.";
+const ROOM_LINE_NOT_YOURS =
+  "This line takes its card to someone else's agent. Only they can pin it or send it again.";
 
 /**
  * A card's or comment's reactions once `author`'s `emoji` is taken back, when they had it, or
@@ -858,6 +866,7 @@ export function applyRoomBoardChange(
             id: change.edgeId,
             from: change.from,
             to: change.to,
+            ...(author === null ? {} : { guestId: author }),
             ...(change.shape === undefined ? {} : { shape: change.shape }),
           },
         ],
@@ -879,11 +888,14 @@ export function applyRoomBoardChange(
       return board.edges?.some((edge) => edge.id === change.edgeId) === true
         ? Result.succeed(roomBoardWithEdges(board, (edge) => edge.id !== change.edgeId))
         : Result.succeed(board);
-    // Anyone who may draw or remove a line may pin it.
+    // Anyone may unpin a line; pinning one into an agent's box is that box's person's.
     case "edge.pin": {
       const edge = board.edges?.find((candidate) => candidate.id === change.edgeId);
       if (edge === undefined) return Result.fail("This arrow is not on the board.");
       if ((edge.pinned === true) === change.pinned) return Result.succeed(board);
+      if (change.pinned && reachesSomeoneElsesBox(board, edge, author)) {
+        return Result.fail(ROOM_LINE_NOT_YOURS);
+      }
       const { pinned: _pinned, ...rest } = edge;
       const next = change.pinned ? { ...rest, pinned: true as const } : rest;
       return Result.succeed({
@@ -891,10 +903,12 @@ export function applyRoomBoardChange(
         edges: board.edges?.map((candidate) => (candidate === edge ? next : candidate)),
       });
     }
-    // Anyone who may draw or remove a line may have it carry its card again.
     case "edge.resend": {
       const edge = board.edges?.find((candidate) => candidate.id === change.edgeId);
       if (edge === undefined) return Result.fail("This arrow is not on the board.");
+      if (reachesSomeoneElsesBox(board, edge, author)) {
+        return Result.fail(ROOM_LINE_NOT_YOURS);
+      }
       const next = roomEdgeToSendAgain(
         edge,
         change.card === undefined ? { kind: "all" } : { kind: "cards", cards: [change.card] },
@@ -1591,6 +1605,61 @@ export function roomBoxIdOfRef(board: RoomBoard, ref: string): string | undefine
   return note?.kind === "thread" ? note.id : undefined;
 }
 
+/** Whose agent a thread box is: a guest's, or null for the owner's. */
+export const roomBoxPerson = (board: RoomBoard, boxId: string): GuestId | null =>
+  boxId === ROOM_BOARD_ROOM_BOX
+    ? null
+    : (board.notes.find((note) => note.id === boxId)?.guestId ?? null);
+
+/**
+ * Every thread box a card at `ref` would go to with a prompt: the box itself, a box whose artifact
+ * it is, and those its lines lead to, or the lines of a section it is in, as a prompt from a box
+ * finds its cards.
+ */
+export function roomBoxesReachedFrom(board: RoomBoard, ref: string): ReadonlySet<string> {
+  const edges = board.edges ?? [];
+  const sections = board.notes.filter((note) => note.section === true);
+  const boxes = new Set<string>();
+  const seen = new Set([ref]);
+  let frontier = [ref];
+  while (frontier.length > 0) {
+    const next: Array<string> = [];
+    for (const at of frontier) {
+      const box = roomBoxIdOfRef(board, at);
+      if (box !== undefined) {
+        boxes.add(box);
+        continue;
+      }
+      const note = roomBoardNoteOfRef(board, at);
+      for (const section of sections) {
+        const holder = roomBoardNoteRef(section.id);
+        if (note === undefined || seen.has(holder)) continue;
+        if (!roomSectionCards(board, section).includes(note)) continue;
+        seen.add(holder);
+        next.push(holder);
+      }
+      const artifact = note?.kind === "artifact";
+      for (const edge of edges) {
+        const rewriter = artifact && edge.to === at ? roomBoxIdOfRef(board, edge.from) : undefined;
+        if (rewriter !== undefined) boxes.add(rewriter);
+        if (edge.from === at && !seen.has(edge.to)) {
+          seen.add(edge.to);
+          next.push(edge.to);
+        }
+      }
+    }
+    frontier = next;
+  }
+  return boxes;
+}
+
+/**
+ * Whether a line carries its card to an agent not `person`'s (null for the owner). Only a box's
+ * own person pins a line into it or has it carry a card again.
+ */
+const reachesSomeoneElsesBox = (board: RoomBoard, edge: RoomBoardEdge, person: GuestId | null) =>
+  [...roomBoxesReachedFrom(board, edge.to)].some((boxId) => roomBoxPerson(board, boxId) !== person);
+
 /**
  * The thread box whose changes a code window shows: the first one with a line into it, which the
  * board keeps the only one. Undefined once no box has a line to it.
@@ -1701,6 +1770,18 @@ export function roomMarkPromptText(note: Pick<RoomBoardNote, "text" | "mark">): 
 }
 
 /**
+ * Who last edited a card's text or a task's status: a guest, null for the owner, undefined when
+ * nobody did or it is not known. A card from before `editedBy` was kept reads its `changed`.
+ */
+export function roomCardEditor(
+  note: Pick<RoomBoardNote, "editedAt" | "editedBy" | "changed">,
+): GuestId | null | undefined {
+  if (note.editedAt === undefined) return undefined;
+  if (note.editedBy !== undefined) return note.editedBy;
+  return note.changed?.at === note.editedAt ? (note.changed.guestId ?? null) : undefined;
+}
+
+/**
  * A card's label and who wrote it, from the board, so it reads the same to everyone: "Note from
  * Sam", "Task from the owner", 'Artifact "Plan"'. `nameOf` names a guest, or with no id the
  * owner; an artifact's content is its last writer's agent's.
@@ -1708,7 +1789,7 @@ export function roomMarkPromptText(note: Pick<RoomBoardNote, "text" | "mark">): 
 export function roomBoardCardIdentity(
   note: RoomBoardNote,
   nameOf: (guestId: GuestId | undefined) => string | undefined,
-): Pick<RoomBoardContextCard, "label" | "author" | "name"> {
+): Pick<RoomBoardContextCard, "label" | "author" | "name" | "editedBy"> {
   const by = nameOf(note.guestId) ?? (note.guestId === undefined ? "the owner" : "a guest");
   const title = note.text.trim().replace(/\s+/g, " ");
   const label =
@@ -1738,8 +1819,18 @@ export function roomBoardCardIdentity(
   const writer = note.kind === "artifact" && note.artifact !== undefined ? note.artifact : note;
   const agent = writer !== note && note.artifact?.byHand !== true;
   const writerName = nameOf(writer.guestId);
+  const editor = writer === note ? roomCardEditor(note) : undefined;
+  const editorName = editor === undefined ? undefined : nameOf(editor ?? undefined);
   return {
     label: label.slice(0, 200),
+    ...(editor === undefined || editor === (note.guestId ?? null)
+      ? {}
+      : {
+          editedBy: {
+            author: editor === null ? ("owner" as const) : ("guest" as const),
+            ...(editorName === undefined ? {} : { name: editorName }),
+          },
+        }),
     author:
       writer.guestId === undefined
         ? agent
