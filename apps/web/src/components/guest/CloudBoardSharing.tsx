@@ -559,7 +559,7 @@ function BoardLinkRow({
         ) : null}
       </div>
       <p className="text-xs text-muted-foreground">
-        {link === null ? "This board has no such link yet." : words.hint}
+        {link === null ? `No ${words.title.toLowerCase()} yet.` : words.hint}
       </p>
       {link === null ? (
         manage ? (
