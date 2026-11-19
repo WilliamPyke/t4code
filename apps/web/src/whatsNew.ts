@@ -12,6 +12,44 @@ export interface WhatsNewEntry {
 /** Newest first. Shortcuts are written for Windows and Linux with the Mac key in brackets. */
 export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
   {
+    date: "2026-11-19",
+    title: "Artifacts you can compare, mark up and browse",
+    items: [
+      "Connect an artifact to an empty artifact card and the second card shows the same page live, at its own size: one wide, one phone-narrow. Keep this version turns it into its own copy, so you can keep an old version beside the new one.",
+      "Mark up, on an artifact showing a page: click a part of the page, say what should change, and it becomes a numbered note your agent reads with the exact spot, the next time you send it a prompt.",
+      "Click an artifact before it scrolls, so the wheel pans the board until you mean to use the page. Press Esc to give the board back.",
+      "Pages have a Refresh button, and a box with several artifacts says which one its next reply goes into.",
+    ],
+  },
+  {
+    date: "2026-11-19",
+    title: "Lines, sections and sizes",
+    items: [
+      "Lines between cards take one clean turn, and each line can be switched to Elbow: straight segments that go around other cards. Select a line to choose.",
+      "Sections move by their title or their edges and take their cards along. Deleting one asks whether to keep the cards on it. They have a larger heading and a Background colour.",
+      "Resize any card from any edge, not only the corners. Sections and other cards can be made far larger than before.",
+    ],
+  },
+  {
+    date: "2026-11-19",
+    title: "Links, the sidebar and text size",
+    items: [
+      "Show page here, on a link card, shows any site's page in the card. Some sites do not allow this, and the card says so. Each person chooses to load it.",
+      "Hover a board in the sidebar and open its arrow to see its artifacts, agents and sections. Click one to go straight to it.",
+      "Text size, in Settings under Appearance: Small, Medium or Large.",
+      "With more than one computer connected, an agent's prompt says which computer it runs on, and you can pick another for a new agent.",
+    ],
+  },
+  {
+    date: "2026-11-19",
+    title: "A simpler start",
+    items: [
+      "Starting a board is one screen and one click, with no account. Tinkjam asks your name once.",
+      "Signing in happens over the page you are on, and a new board has a short Getting started guide.",
+      "An invite names the board and who made it before you join. Board addresses are short, and a board fits a phone.",
+    ],
+  },
+  {
     date: "2026-11-17",
     title: "Simple and Advanced",
     items: [
