@@ -723,6 +723,9 @@ describe("resolveBoard", () => {
     expect(resolveBoard(stored, coloured).notes).toEqual([green]);
     expect(boardChangeOf(target, green)).toMatchObject({ type: "note.put", color: "green" });
     expect(boardChangeOf(target, green)).not.toHaveProperty("framed");
+    // Where a note points in a page is sent with it, as the page said it.
+    const mark = { selector: "a.cta", tag: "a" };
+    expect(boardChangeOf(target, { ...written, mark })).toMatchObject({ mark });
     // A link card's page shows until the room's copy has it too, at a size a page is usable at,
     // and hiding it or undoing either says so, which only a link card's change does.
     const link = { id: "n", text: "", x: 0, y: 0, kind: "link" as const, url: "https://a.dev" };
@@ -1582,6 +1585,27 @@ describe("boardPromptContext", () => {
       "note:a>note:b",
     ]);
     expect(context.artifact).toBeNull();
+  });
+
+  it("carries a marked note as where it points in the page's source, then what it says", () => {
+    const mark = { selector: "section.hero > a.cta", tag: "a", text: "Get a quote" };
+    const marked = note("m", { text: 'On the "Get a quote" link:\nMake it bigger', mark });
+    const context = boardPromptContext(
+      board(
+        [note("box", { kind: "thread" }), note("art", { kind: "artifact" }), marked],
+        [arrow("note:box", "note:art"), arrow("note:m", "note:art")],
+      ),
+      people,
+      [],
+      "box",
+    );
+    expect(context.cards.map(({ label, text, excerpt }) => ({ label, text, excerpt }))).toEqual([
+      {
+        label: "Note from You",
+        text: 'On the element matching `section.hero > a.cta` (a link reading "Get a quote"): Make it bigger',
+        excerpt: 'On the "Get a quote" link:',
+      },
+    ]);
   });
 
   it("stops at the most cards one message carries, and leaves out cards with nothing written", () => {

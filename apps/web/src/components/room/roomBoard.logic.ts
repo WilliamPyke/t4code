@@ -50,6 +50,7 @@ import {
   roomBoxIdOfRef,
   roomLinkLabel,
   roomLinkPromptText,
+  roomMarkPromptText,
   roomPullRequestLabel,
   roomSectionCards,
   roomTaskStatus,
@@ -1511,6 +1512,7 @@ export function boardChangeOf(
     ...(value.url === undefined ? {} : { url: value.url }),
     ...(value.pinnedTo === undefined ? {} : { pinnedTo: value.pinnedTo }),
     ...(value.quote === undefined ? {} : { quote: value.quote }),
+    ...(value.mark === undefined ? {} : { mark: value.mark }),
     ...(value.size === undefined ? {} : { size: value.size }),
     ...(value.color === undefined ? {} : { color: value.color }),
     // Said either way, so hiding a page and undoing either clear it; only link cards say it.
@@ -2303,7 +2305,7 @@ export function boardPromptCard(
                 ? commentThreadText(note, people)
                 : comment && text !== "" && quote !== undefined
                   ? `On the reply: "${quote}"\n${text}`
-                  : text;
+                  : roomMarkPromptText(note);
   if (body.trim() === "") return null;
   const said =
     (note.kind === "link" ? body : text === "" ? (note.url ?? "") : text).split("\n")[0] ?? "";

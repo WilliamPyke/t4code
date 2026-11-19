@@ -317,6 +317,25 @@ export const RoomBoardSize = Schema.Struct({ w: RoomBoardLength, h: RoomBoardLen
 export type RoomBoardSize = typeof RoomBoardSize.Type;
 
 export const ROOM_BOARD_QUOTE_MAX_LENGTH = 280;
+
+export const ROOM_BOARD_MARK_SELECTOR_MAX_LENGTH = 300;
+export const ROOM_BOARD_MARK_TEXT_MAX_LENGTH = 200;
+const RoomBoardMarkText = Schema.String.check(Schema.isMaxLength(ROOM_BOARD_MARK_TEXT_MAX_LENGTH));
+
+/**
+ * Where in an artifact's page a note points, as its author's client read it from the page: text
+ * from an agent-written page, never evaluated. `selector` finds the element in the page's source.
+ */
+export const RoomBoardMark = Schema.Struct({
+  selector: TrimmedNonEmptyString.check(Schema.isMaxLength(ROOM_BOARD_MARK_SELECTOR_MAX_LENGTH)),
+  /** The element's tag name, lower case. */
+  tag: Schema.optional(Schema.String.check(Schema.isMaxLength(32))),
+  /** The start of the element's own text. */
+  text: Schema.optional(RoomBoardMarkText),
+  /** The text the person had selected in it. */
+  quote: Schema.optional(RoomBoardMarkText),
+});
+export type RoomBoardMark = typeof RoomBoardMark.Type;
 export const ROOM_ARTIFACT_MAX_LENGTH = 16_000;
 export const ROOM_BOARD_MAX_ARTIFACTS = 6;
 /** Thread boxes one board holds, the room thread's own card not counted. */
@@ -687,6 +706,8 @@ export const RoomBoardNote = Schema.Struct({
   run: Schema.optional(RoomTaskRun),
   /** The start of the reply a comment is pinned to, as its author's client read it. */
   quote: Schema.optional(Schema.String.check(Schema.isMaxLength(ROOM_BOARD_QUOTE_MAX_LENGTH))),
+  /** A plain note that points at part of an artifact's page. Set when it is added, never after. */
+  mark: Schema.optional(RoomBoardMark),
   /** Absent until someone resizes the card. */
   size: Schema.optional(RoomBoardSize),
   /** A plain note's or a section's colour, once someone picked one. */
@@ -1020,7 +1041,7 @@ export const RoomBoardChange = Schema.Union([
     ...RoomBoardSize.fields,
   }),
   /**
-   * Adds the note, or replaces the one with this id; `kind`, `url`, `pinnedTo`, `quote` and
+   * Adds the note, or replaces the one with this id; `kind`, `url`, `pinnedTo`, `quote`, `mark` and
    * `section` stay as added. Absent `size`, `done`, `status`, `due`, `order`, `priority`, `assignee`
    * and `color` stay as they were, so an older client's edit keeps them; a null `assignee`, `due` or
    * `priority` clears it. `status` sets `done` too, and the two must agree when both are sent.
@@ -1034,6 +1055,7 @@ export const RoomBoardChange = Schema.Union([
     url: RoomBoardNote.fields.url,
     pinnedTo: RoomBoardNote.fields.pinnedTo,
     quote: RoomBoardNote.fields.quote,
+    mark: RoomBoardNote.fields.mark,
     size: RoomBoardNote.fields.size,
     done: RoomBoardNote.fields.done,
     status: Schema.optional(RoomTaskStatus),

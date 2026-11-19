@@ -112,6 +112,64 @@ export function useBoardSurfaceSize(surfaceRef: RefObject<HTMLElement | null>) {
 }
 
 /**
+ * While a card's page is in use (`active`), a press outside the element this returns the ref of,
+ * or Escape, anywhere in the window, gives the board back.
+ */
+export function useBoardPageRelease(active: boolean, onRelease: () => void) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const release = useStableCallback(onRelease);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a press outside the page or Escape, anywhere in the window, gives the board back
+  useEffect(() => {
+    if (!active) return;
+    const pressed = (event: globalThis.PointerEvent) => {
+      if (!(event.target instanceof Node) || bodyRef.current?.contains(event.target) !== true) {
+        release();
+      }
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") release();
+    };
+    document.addEventListener("pointerdown", pressed, true);
+    document.addEventListener("keydown", key, true);
+    return () => {
+      document.removeEventListener("pointerdown", pressed, true);
+      document.removeEventListener("keydown", key, true);
+    };
+  }, [active, release]);
+  return bodyRef;
+}
+
+/**
+ * What lies over a card's page or scrolling content until the viewer clicks it. A press here is
+ * the card's: it drags the card, the wheel over it moves the board, and a click without a drag
+ * opens what is under it for use, which the card hears through `data-board-embed-cover`.
+ */
+export function BoardPageCover({
+  label,
+  quiet,
+}: {
+  readonly label: string;
+  /** Whether the label shows only under the pointer. */
+  readonly quiet: boolean;
+}) {
+  return (
+    <div
+      data-board-embed-cover
+      className="group/embed absolute inset-0 flex cursor-pointer items-end justify-center p-2"
+    >
+      <span
+        className={cn(
+          "rounded-md border border-board-hairline bg-card px-2 py-1 text-2xs text-muted-foreground shadow-board",
+          quiet && "opacity-0 group-hover/embed:opacity-100",
+        )}
+      >
+        {label}
+      </span>
+    </div>
+  );
+}
+
+/**
  * A link card's body: who added it and Open, and for a source that allows it, the live page.
  * The page stays inert under a cover, so the board pans and drags over it, until a click on the
  * cover lets the viewer use it; a click anywhere else or Escape gives the board back. Any other
@@ -173,26 +231,7 @@ export function RoomEmbedBody({
     setTried(url);
     if (!framed) frameIt(true);
   };
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const release = useStableCallback(onRelease);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a press outside the page or Escape, anywhere in the window, gives the board back
-  useEffect(() => {
-    if (!active) return;
-    const pressed = (event: globalThis.PointerEvent) => {
-      if (!(event.target instanceof Node) || bodyRef.current?.contains(event.target) !== true) {
-        release();
-      }
-    };
-    const key = (event: KeyboardEvent) => {
-      if (event.key === "Escape") release();
-    };
-    document.addEventListener("pointerdown", pressed, true);
-    document.addEventListener("keydown", key, true);
-    return () => {
-      document.removeEventListener("pointerdown", pressed, true);
-      document.removeEventListener("keydown", key, true);
-    };
-  }, [active, release]);
+  const bodyRef = useBoardPageRelease(active, onRelease);
   return (
     <div ref={bodyRef} className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 pb-2">
@@ -260,21 +299,10 @@ export function RoomEmbedBody({
             />
           ) : null}
           {active ? null : (
-            // A press here is the card's: it drags the card, and a click without a drag opens
-            // the page for use, which the card hears through `data-board-embed-cover`.
-            <div
-              data-board-embed-cover
-              className="group/embed absolute inset-0 flex cursor-pointer items-end justify-center p-2"
-            >
-              <span
-                className={cn(
-                  "rounded-md border border-board-hairline bg-card px-2 py-1 text-2xs text-muted-foreground shadow-board",
-                  loads && "opacity-0 group-hover/embed:opacity-100",
-                )}
-              >
-                {loads ? "Click to interact" : `Click to show ${embed.name}`}
-              </span>
-            </div>
+            <BoardPageCover
+              label={loads ? "Click to interact" : `Click to show ${embed.name}`}
+              quiet={loads}
+            />
           )}
         </div>
       )}

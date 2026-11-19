@@ -15,6 +15,7 @@ import {
   type RoomBoardAgentTurn,
   type RoomBoardAssignee,
   type RoomBoardChange,
+  type RoomBoardMark,
   type RoomBoardMention,
   type RoomBoardNote,
   type RoomBoardNoteColor,
@@ -95,6 +96,7 @@ import {
   roomBoxCodeWindows,
   roomBoxIdOfRef,
   roomBoxExcerpt,
+  roomMarkWhere,
   roomMentionsIn,
   roomTaskStatus,
   roomWindowBoxId,
@@ -282,7 +284,8 @@ import {
   rememberedRoomBoardView,
   roomBoardFitAwaits,
 } from "./roomBoardNavigation";
-import { RoomArtifactLive } from "./RoomBoardArtifact";
+import { type ArtifactMarking, RoomArtifactLive } from "./RoomBoardArtifact";
+import { type BoardMarkPin, boardMarks } from "./boardMark.logic";
 import { useBoardDrawnHeights } from "./roomBoardHeights";
 import { BoardGuide } from "./BoardGuide";
 import { boardGuideStepOfChange } from "./boardGuide.logic";
@@ -905,6 +908,7 @@ const NO_BOXES: ReadonlySet<string> = new Set();
 const NO_SELECTION: ReadonlySet<string> = new Set();
 const NO_AGENT_TURNS: ReadonlyArray<RoomBoardAgentTurn> = [];
 const NO_REACTIONS: ReadonlyArray<RoomBoardReaction> = [];
+const NO_MARK_PINS: ReadonlyArray<BoardMarkPin> = [];
 const NO_HISTORY: {
   readonly undo: ReadonlyArray<BoardHistoryItem>;
   readonly redo: ReadonlyArray<BoardHistoryItem>;
@@ -1164,6 +1168,7 @@ export function RoomBoard({
   if (settledEdits !== edits) setEdits(settledEdits);
   const shown = resolveBoard(board, settledEdits);
   const edges = shown.edges ?? [];
+  const marks = boardMarks(shown);
   // The card a note held over would be handed to, and what that does.
   const [dropTarget, setDropTarget] = useState<{
     readonly on: string;
@@ -2622,7 +2627,7 @@ export function RoomBoard({
     return boardAddSpot(size, takenRects(), within, section);
   };
   const newNote = (
-    fields: Partial<Pick<RoomBoardNote, "kind" | "url" | "text">>,
+    fields: Partial<Pick<RoomBoardNote, "kind" | "url" | "text" | "mark">>,
     at: BoardPoint,
   ) => {
     const id = randomUUID();
@@ -2633,6 +2638,7 @@ export function RoomBoard({
       ...(viewer === null ? {} : { guestId: viewer }),
       ...(fields.kind === undefined ? {} : { kind: fields.kind }),
       ...(fields.url === undefined ? {} : { url: fields.url }),
+      ...(fields.mark === undefined ? {} : { mark: fields.mark }),
       ...(fields.kind !== undefined || noteColor === null ? {} : { color: noteColor }),
     });
     send({ kind: "note", id }, value);
@@ -3114,6 +3120,36 @@ export function RoomBoard({
       boardEditKey({ kind: "note", id }),
     );
     return id;
+  };
+  // A mark on an artifact's page: a note beside the card it was made on, with a line into the
+  // artifact that card shows, so it goes with the next prompt of whoever rewrites it, as any card
+  // with a line into an artifact does. A board edit: it sends nothing and starts nothing.
+  const markArtifact = (
+    on: RoomBoardNote,
+    artifact: RoomBoardNote,
+    mark: RoomBoardMark,
+    words: string,
+  ) => {
+    const element = drawnItem(noteRef(on.id));
+    if (!canEdit || element === null) return;
+    if (full || edges.length >= ROOM_BOARD_MAX_EDGES) {
+      toastManager.add({
+        type: "info",
+        title: "This board is full",
+        description: "Remove a card or a line first, then mark the page again.",
+      });
+      return;
+    }
+    const id = newNote(
+      { text: `${roomMarkWhere(mark)}\n${words}`.slice(0, ROOM_BOARD_NOTE_MAX_LENGTH), mark },
+      besideBoardItem(drawnRect(element), boardNewNoteSize(undefined), takenRects()),
+    );
+    const line = randomUUID();
+    send(
+      { kind: "edge", id: line },
+      { id: line, from: noteRef(id), to: noteRef(artifact.id) },
+      boardEditKey({ kind: "note", id }),
+    );
   };
   // The page a box's agent last wrote, in a new artifact beside the box: the box is asked to write
   // it there, as its replies fill any artifact it has a line to.
@@ -6268,6 +6304,22 @@ export function RoomBoard({
                             onUse: () => openEmbed(note.id),
                             onRelease: () => setEmbedInUse(null),
                           }
+                        : note.kind === "artifact"
+                          ? {
+                              live: true,
+                              active: embedInUse === note.id,
+                              onUse: () => setEmbedInUse(note.id),
+                              onRelease: () => setEmbedInUse(null),
+                            }
+                          : undefined
+                    }
+                    markNumber={marks.numbers.get(note.id)}
+                    artifactMarks={
+                      note.kind === "artifact" && canEdit && onChange !== undefined
+                        ? {
+                            pins: marks.pins.get(artifactOf.id) ?? NO_MARK_PINS,
+                            onAdd: (mark, words) => markArtifact(note, artifactOf, mark, words),
+                          }
                         : undefined
                     }
                     onAddNext={
@@ -7126,10 +7178,16 @@ function BoardNote({
   agentWork,
   embed,
   bringIn,
+  markNumber,
+  artifactMarks,
 }: {
   /** A link card's Bring in, or a snapshot artifact's mark with Refresh. */
   readonly bringIn?: ReactNode;
-  /** A link card's page: whether it loads now and is in use, and how to use and leave it. */
+  /** A marked note's number on the artifact it points into, while a line joins them. */
+  readonly markNumber?: number | undefined;
+  /** An artifact's marks and how one is added. Absent where the viewer may not add to the board. */
+  readonly artifactMarks?: ArtifactMarking | undefined;
+  /** A link card's page or an artifact's content: whether it loads and is in use, and the ways in and out. */
   readonly embed?:
     | {
         readonly live: boolean;
@@ -7369,6 +7427,11 @@ function BoardNote({
         ) : note.pinnedTo !== undefined ? (
           <MessageSquareTextIcon aria-hidden className="size-3 shrink-0 opacity-60" />
         ) : null}
+        {markNumber === undefined ? null : (
+          <BoardChip tone="primary" aria-label={`Mark ${markNumber} on the page`} data-board-mark>
+            {markNumber}
+          </BoardChip>
+        )}
         {/* A window's bar says what it is; its own title is below, and who added it beside. */}
         <span
           className={cn(
@@ -7657,6 +7720,9 @@ function BoardNote({
             onRestore={onRestore}
             onWrite={onWrite}
             people={people}
+            active={embed?.active === true}
+            onRelease={embed?.onRelease}
+            marks={artifactMarks}
           />
         ) : null}
         {code || pullRequest ? codeWindow : null}
@@ -7694,6 +7760,9 @@ function BoardNote({
         reactions={note.reactions ?? NO_REACTIONS}
         people={people}
         onReact={onReact === undefined ? undefined : (emoji) => onReact(note, emoji)}
+        // A window's body (a page, a diff, a prompt box) runs to its edges, so its chips get a
+        // band of their own with the card's inset; paper has its text's inset already above.
+        className={titled ? "border-t border-board-hairline px-3 py-2" : "px-3 pb-2.5"}
       />
       <ItemHandles
         from={noteRef(note.id)}

@@ -9,6 +9,8 @@ import {
   ROOM_BOARD_MAX_REACTIONS,
   ROOM_BOARD_MAX_REPLIES,
   ROOM_BOARD_MAX_THREADS,
+  ROOM_BOARD_MARK_SELECTOR_MAX_LENGTH,
+  ROOM_BOARD_MARK_TEXT_MAX_LENGTH,
   ROOM_BOARD_REMOVED_MAX,
   ROOM_BOARD_ROOM_BOX,
   ROOM_BOARD_THREAD_CARD,
@@ -38,6 +40,7 @@ import {
   type RoomBoardChange,
   type RoomBoardContextCard,
   type RoomBoardEdge,
+  type RoomBoardMark,
   type RoomBoardMention,
   type RoomBoardNote,
   type RoomBoardReaction,
@@ -268,6 +271,13 @@ function putNote(
       ...(change.pinnedTo === undefined || change.quote === undefined
         ? {}
         : { quote: change.quote }),
+      // Only a plain note points into a page.
+      ...(change.mark === undefined ||
+      kind !== undefined ||
+      change.pinnedTo !== undefined ||
+      change.section === true
+        ? {}
+        : { mark: change.mark }),
       ...(kind === "comment" ? { createdAt: at } : {}),
       ...(change.section === true ? { section: true } : {}),
     } satisfies RoomBoardNote);
@@ -1497,6 +1507,70 @@ export function roomLinkLabel(url: string | undefined, by: string): string {
 export function roomLinkPromptText(note: Pick<RoomBoardNote, "text" | "url">): string {
   const title = note.text.trim() || (note.url === undefined ? "" : roomEmbedOf(note.url)?.title);
   return [title, note.url].filter(Boolean).join("\n");
+}
+
+/** What people call an element of a page, by its tag. */
+export const ROOM_MARK_NOUNS: Readonly<Record<string, string>> = {
+  a: "link",
+  button: "button",
+  img: "image",
+  svg: "image",
+  video: "video",
+  p: "paragraph",
+  li: "list item",
+  input: "field",
+  textarea: "field",
+  select: "field",
+  table: "table",
+  form: "form",
+  nav: "menu",
+  header: "header",
+  footer: "footer",
+  h1: "heading",
+  h2: "heading",
+  h3: "heading",
+  h4: "heading",
+  h5: "heading",
+  h6: "heading",
+};
+const MARK_WHERE_LENGTH = 60;
+
+// A page's text is untrusted and may be long: one line, cut, and never able to close a code span.
+const markLine = (text: string | undefined, max: number) => {
+  const line = (text ?? "").replace(/[\s`]+/g, " ").trim();
+  return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line;
+};
+
+/** Where a marked note points, in words for people: `On the "Get a quote" button:`. */
+export function roomMarkWhere(mark: RoomBoardMark): string {
+  const quote = markLine(mark.quote, MARK_WHERE_LENGTH);
+  if (quote !== "") return `On "${quote}":`;
+  const noun = ROOM_MARK_NOUNS[mark.tag ?? ""];
+  const text = markLine(mark.text, MARK_WHERE_LENGTH);
+  if (text === "") return noun === undefined ? "On this part of the page:" : `On the ${noun}:`;
+  return `On the "${text}" ${noun ?? "part"}:`;
+}
+
+/**
+ * A marked note as a prompt carries it: the element as the page's source has it, then what the
+ * person wrote, without the line that said where in words when it still starts the note.
+ */
+export function roomMarkPromptText(note: Pick<RoomBoardNote, "text" | "mark">): string {
+  const text = note.text.trim();
+  const { mark } = note;
+  if (mark === undefined || text === "") return text;
+  const where = roomMarkWhere(mark);
+  const said = text.startsWith(where) ? text.slice(where.length).trim() : text;
+  const tag = markLine(mark.tag, 32);
+  const noun = ROOM_MARK_NOUNS[tag] ?? (tag === "" ? "element" : `<${tag}> element`);
+  const reads = markLine(mark.text, ROOM_BOARD_MARK_TEXT_MAX_LENGTH);
+  const quote = markLine(mark.quote, ROOM_BOARD_MARK_TEXT_MAX_LENGTH);
+  const detail = [
+    `${/^[aeio]/.test(noun) ? "an" : "a"} ${noun}${reads === "" ? "" : ` reading "${reads}"`}`,
+    ...(quote === "" ? [] : [`the selected text "${quote}"`]),
+  ].join(", ");
+  const selector = markLine(mark.selector, ROOM_BOARD_MARK_SELECTOR_MAX_LENGTH);
+  return `On the element matching \`${selector}\` (${detail}): ${said}`;
 }
 
 /**
