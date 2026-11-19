@@ -230,6 +230,38 @@ describe("RoomBoard sections", () => {
     await vi.waitFor(() => expect(removed()).toEqual(["empty", "frame"]));
   });
 
+  it("takes Ctrl+Z as soon as the delete-section dialog closes", async () => {
+    const board = renderBoard([
+      { id: "frame", text: "Plan", x: 0, y: 0, section: true, size: { w: 500, h: 400 } },
+      { id: "inside", text: "In", x: 60, y: 100 },
+    ]);
+    const { onChange } = board;
+    await using screen = await board.screen;
+    const remove = screen.container.querySelector<HTMLElement>(
+      '[data-board-item="note:frame"] button[aria-label="Delete section"]',
+    );
+    if (remove === null) throw new Error("Section frame has no delete button");
+    remove.click();
+    await userEvent.click(page.getByRole("button", { name: "Delete section only" }));
+    await vi.waitFor(() =>
+      expect(
+        onChange.mock.calls.some(
+          ([change]) => change.type === "note.remove" && change.noteId === "frame",
+        ),
+      ).toBe(true),
+    );
+    onChange.mockClear();
+    await vi.waitFor(() => expect(document.querySelector("[role=alertdialog]")).toBeNull());
+    await userEvent.keyboard("{Control>}z{/Control}");
+    await vi.waitFor(() =>
+      expect(
+        onChange.mock.calls.some(
+          ([change]) => change.type === "note.put" && change.noteId === "frame",
+        ),
+      ).toBe(true),
+    );
+  });
+
   it("puts a title back on Escape, sending nothing, and saves it on Enter", async () => {
     const board = renderBoard([
       { id: "frame", text: "Plan", x: 0, y: 500, section: true, size: { w: 500, h: 300 } },

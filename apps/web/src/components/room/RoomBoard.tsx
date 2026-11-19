@@ -6979,7 +6979,7 @@ export function RoomBoard({
               if (!open) setDeletingSection(null);
             }}
           >
-            <AlertDialogPopup>
+            <AlertDialogPopup finalFocus={surfaceRef}>
               <AlertDialogHeader>
                 <AlertDialogTitle>
                   {deletingSection?.noteIds.length === 1
