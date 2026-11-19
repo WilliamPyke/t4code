@@ -118,8 +118,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func takeHomeLock() -> Bool {
         try? FileManager.default.createDirectory(at: paths.base, withIntermediateDirectories: true)
-        lockFile = open(paths.lock.path, O_CREAT | O_RDWR, 0o644)
-        return lockFile >= 0 && flock(lockFile, LOCK_EX | LOCK_NB) == 0
+        lockFile = open(paths.lock.path, O_CREAT | O_RDWR | O_CLOEXEC, 0o644)
+        guard lockFile >= 0 else { return false }
+        // The copy an update or a move replaces may still be letting go of it.
+        for _ in 0..<50 {
+            if flock(lockFile, LOCK_EX | LOCK_NB) == 0 { return true }
+            usleep(200_000)
+        }
+        log.app("Another copy of Tinkjam Sync already runs; this one quits")
+        return false
     }
 
     // MARK: Setup
@@ -422,7 +429,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { @MainActor in
             await stopSync()
             do {
-                try AppUpdater.launchSwap(staged)
+                log.app("Restarting to install Tinkjam Sync for Mac \(staged.version)")
+                try AppUpdater.launchSwap(staged, log: paths.log)
                 onMainRunLoop { NSApp.terminate(nil) }
             } catch {
                 phase = .stopped("Could not install the new version: \(error.localizedDescription)")
@@ -524,10 +532,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                fm.isWritableFile(atPath: source.deletingLastPathComponent().path) {
                 try? fm.trashItem(at: source, resultingItemURL: nil)
             }
-            let relaunch = Process()
-            relaunch.executableURL = URL(fileURLWithPath: "/bin/sh")
-            relaunch.arguments = ["-c", "while kill -0 \(getpid()) 2>/dev/null; do sleep 0.2; done; open \"$1\"", "move", destination.path]
-            try relaunch.run()
+            try spawnDetachedScript("while kill -0 \(getpid()) 2>/dev/null; do sleep 0.2; done; /usr/bin/open \"$1\"",
+                                    ["move", destination.path], output: paths.log)
             log.app("Moved to \(destination.path); opening it from there")
             onMainRunLoop { NSApp.terminate(nil) }
             return true

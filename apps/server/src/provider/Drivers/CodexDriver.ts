@@ -219,7 +219,7 @@ export const CodexDriver: ProviderDriver<
         accentColor,
         environment,
         enabled,
-        config,
+        config: { ...config, binaryPath },
       },
       {
         onUsageLimits: (update) => snapshot.applyUsageLimits(update),

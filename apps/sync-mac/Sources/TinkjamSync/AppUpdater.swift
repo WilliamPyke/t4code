@@ -101,21 +101,18 @@ enum AppUpdater {
 
     /// Starts a small script that waits for this app to quit, swaps the bundles and opens the new
     /// one. Call it after Sync has stopped, then terminate.
-    static func launchSwap(_ staged: Staged) throws {
+    static func launchSwap(_ staged: Staged, log: URL) throws {
         let installed = Bundle.main.bundleURL.path
         let backup = workDir.appendingPathComponent("previous.app").path
+        // Opens the new copy before tidying up, and asks again if Launch Services is not ready.
         let script = """
+        say() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] app: $*"; }
         while kill -0 \(getpid()) 2>/dev/null; do sleep 0.2; done
         rm -rf "$3"
-        if mv "$1" "$3" && mv "$2" "$1"; then rm -rf "$3"; else [ -d "$1" ] || mv "$3" "$1"; fi
-        open "$1"
+        if mv "$1" "$3" && mv "$2" "$1"; then say "Installed the new version"; else [ -d "$1" ] || mv "$3" "$1"; say "Could not replace $1; opening it as it was"; fi
+        for attempt in 1 2 3 4 5; do /usr/bin/open "$1" && break; say "Could not open $1 (attempt $attempt)"; sleep 2; done
+        rm -rf "$3"
         """
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        process.arguments = ["-c", script, "tinkjam-sync-update", installed, staged.bundle.path, backup]
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try process.run()
+        try spawnDetachedScript(script, ["tinkjam-sync-update", installed, staged.bundle.path, backup], output: log)
     }
 }

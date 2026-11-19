@@ -174,6 +174,26 @@ final class LogFile {
     func app(_ line: String) { write("app: \(line)") }
 }
 
+/// Starts `/bin/sh -c script args…` in a session of its own, so it outlives this app whether
+/// Finder or a login item started it; what it prints goes to `output`.
+func spawnDetachedScript(_ script: String, _ arguments: [String], output: URL) throws {
+    var attributes: posix_spawnattr_t? = nil
+    posix_spawnattr_init(&attributes)
+    defer { posix_spawnattr_destroy(&attributes) }
+    posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT))
+    var actions: posix_spawn_file_actions_t? = nil
+    posix_spawn_file_actions_init(&actions)
+    defer { posix_spawn_file_actions_destroy(&actions) }
+    posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
+    posix_spawn_file_actions_addopen(&actions, 1, output.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+    posix_spawn_file_actions_adddup2(&actions, 1, 2)
+    let argv: [UnsafeMutablePointer<CChar>?] = (["/bin/sh", "-c", script] + arguments).map { strdup($0) } + [nil]
+    defer { argv.forEach { free($0) } }
+    var pid: pid_t = 0
+    let status = posix_spawn(&pid, "/bin/sh", &actions, &attributes, argv, environ)
+    guard status == 0 else { throw SetupError("Could not start the installer: \(String(cString: strerror(status)))") }
+}
+
 /// Process table via sysctl, for ending Sync's whole tree (Sync itself and its cloudflared).
 enum ProcessTree {
     static func descendants(of root: pid_t) -> [pid_t] {
