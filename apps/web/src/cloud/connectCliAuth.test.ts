@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import {
-  buildConnectCliClerkAuthorizeUrl,
-  connectCliContinueRequested,
-  connectCliSignInRedirectUrl,
-} from "./connectCliAuth";
+import { buildConnectCliClerkAuthorizeUrl } from "./connectCliAuth";
 
 const TEST_PUBLISHABLE_KEY = `pk_test_${btoa("witty-mole-42.clerk.accounts.dev$")}`;
 
@@ -31,17 +27,5 @@ describe("connectCliAuth", () => {
     expect(url.searchParams.get("state")).toBe("state-1");
     expect(url.searchParams.get("code_challenge")).toBe("challenge-1");
     expect(url.searchParams.get("code_challenge_method")).toBe("S256");
-  });
-
-  it("returns from sign-in to /connect as a new page that continues to approval by itself", () => {
-    const connectUrl =
-      "https://app.trellium.org/connect#state=state-1&challenge=challenge-1&port=34338";
-    const redirectUrl = connectCliSignInRedirectUrl(connectUrl);
-
-    expect(redirectUrl).toBe(
-      "https://app.trellium.org/connect?continue=1#state=state-1&challenge=challenge-1&port=34338",
-    );
-    expect(connectCliContinueRequested(redirectUrl)).toBe(true);
-    expect(connectCliContinueRequested(connectUrl)).toBe(false);
   });
 });

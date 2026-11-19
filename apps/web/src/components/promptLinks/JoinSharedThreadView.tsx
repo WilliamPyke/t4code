@@ -1,8 +1,4 @@
-import {
-  guestEnvironmentId,
-  isGuestEnvironment,
-  scopeThreadRef,
-} from "@t3tools/client-runtime/environment";
+import { isGuestEnvironment, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -25,7 +21,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 
 import { isElectron } from "~/env";
-import { findGuestShare, rememberGuestShare } from "~/guest/guestShares";
+import { findGuestShare, guestShareLocation, rememberGuestShare } from "~/guest/guestShares";
 import { useScratchProject } from "~/hooks/useScratchProject";
 import { randomUUID } from "~/lib/utils";
 import { resolveProjectDefaultProviderModelSelection } from "~/providerInstances";
@@ -279,11 +275,7 @@ export function JoinSharedThreadView({ link }: { readonly link: JoinLink }) {
     }
     // Boards first: a plain join lands on the room's board; the joined thread is in the sidebar.
     if (task === undefined && shared !== undefined) {
-      void navigate({
-        to: "/$environmentId/$threadId",
-        params: { environmentId: guestEnvironmentId(shared.shareId), threadId: shared.threadId },
-        replace: true,
-      });
+      void navigate({ ...guestShareLocation({ ...shared, host: link.host }), replace: true });
       return;
     }
     // A room on an older server names no share, so its task cannot be taken: it stays a draft.

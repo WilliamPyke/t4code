@@ -1,12 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
-import { guestEnvironmentId } from "@t3tools/client-runtime/environment";
 import { createFileRoute, Navigate } from "@tanstack/react-router";
 
 import { BoardsHome } from "../components/boards/BoardsHome";
 import { GuestNotice } from "../components/guest/GuestThreadView";
 import { HostedEmptyState } from "../components/HostedEmptyState";
 import { cloudBoardsOrigin } from "../guest/cloudBoardsHost";
-import { guestSharesAtom } from "../guest/guestShares";
+import { guestShareLocation, guestSharesAtom } from "../guest/guestShares";
 import { SidebarInset } from "../components/ui/sidebar";
 import { useEnvironments } from "../state/environments";
 
@@ -21,16 +20,7 @@ function ChatIndexRouteView() {
     if (!isReady) return null;
     if (environments.length === 0 && !cloud) {
       if (latestShare !== undefined) {
-        return (
-          <Navigate
-            to="/$environmentId/$threadId"
-            params={{
-              environmentId: guestEnvironmentId(latestShare.shareId),
-              threadId: latestShare.threadId,
-            }}
-            replace
-          />
-        );
+        return <Navigate {...guestShareLocation(latestShare)} replace />;
       }
       return authGateState.status === "guest" ? (
         <SidebarInset className="flex h-dvh">

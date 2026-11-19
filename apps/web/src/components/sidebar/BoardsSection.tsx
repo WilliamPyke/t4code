@@ -1,14 +1,16 @@
 import { useAtomValue } from "@effect/atom-react";
-import {
-  guestEnvironmentId,
-  isGuestEnvironment,
-  scopeThreadRef,
-} from "@t3tools/client-runtime/environment";
+import { isGuestEnvironment, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { Link, useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import { LayoutGridIcon, PlusIcon } from "lucide-react";
 
-import { accountBoardsAtom, guestSharesAtom, isCloudShare } from "~/guest/guestShares";
+import { sharedThreadLocationOf } from "~/guest/boardAddress";
+import {
+  accountBoardsAtom,
+  guestShareLocation,
+  guestSharesAtom,
+  isCloudShare,
+} from "~/guest/guestShares";
 import { openListedBoard, useWorkspaceScope, useWorkspaces } from "~/guest/workspaces";
 import { cn } from "~/lib/utils";
 import { useThreadShells } from "~/state/entities";
@@ -129,11 +131,7 @@ export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
                     />
                   ) : (
                     <Link
-                      to="/$environmentId/$threadId"
-                      params={{
-                        environmentId: guestEnvironmentId(board.shareId),
-                        threadId: board.threadId,
-                      }}
+                      {...sharedThreadLocationOf(board, board.cloud)}
                       {...(board.remote
                         ? {
                             // Only the account lists it: a session here first, as the same person.
@@ -144,13 +142,7 @@ export function BoardsSection({ canStart }: { readonly canStart: boolean }) {
                                   toastManager.add({ type: "error", title: opened });
                                   return;
                                 }
-                                void navigate({
-                                  to: "/$environmentId/$threadId",
-                                  params: {
-                                    environmentId: guestEnvironmentId(opened.shareId),
-                                    threadId: opened.threadId,
-                                  },
-                                });
+                                void navigate(guestShareLocation(opened));
                               });
                             },
                           }

@@ -26,6 +26,7 @@ import * as Stream from "effect/Stream";
 import { Atom, AtomRegistry } from "effect/reactivity";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
+import { sharedThreadLocationOf } from "./boardAddress";
 import {
   acceptedGuestLinkHost,
   cloudBoardsHost,
@@ -296,6 +297,11 @@ export const guestShareOrigin = (host: string) =>
 /** Whether a joined share is a board on the cloud board host, on nobody's machine. */
 export const isCloudShare = (share: Pick<JoinedGuestShare, "host">) =>
   share.host === cloudBoardsHost();
+
+/** Where a joined share opens in this app: for links to it and for going to it. */
+export const guestShareLocation = (
+  share: Pick<JoinedGuestShare, "host" | "shareId" | "threadId">,
+) => sharedThreadLocationOf(share, isCloudShare(share));
 
 export const guestShareEndpointOf = (share: JoinedGuestShare): GuestShareEndpoint => ({
   httpBaseUrl: guestShareOrigin(share.host),

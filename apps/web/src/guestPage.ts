@@ -1,4 +1,4 @@
-import { isGuestEnvironment } from "@t3tools/client-runtime/environment";
+import { isSharedThreadPathname } from "./guest/boardAddress";
 
 /** The page a guest link opens. It takes the guest's name and hands over to the app. */
 export const GUEST_PAGE_PATH = "/guest";
@@ -13,8 +13,7 @@ export const isGuestEntryPath = (pathname: string) =>
 // Until the root route decides, a load that starts on a guest's page counts as a guest's.
 let guestOnly =
   typeof window !== "undefined" &&
-  (isGuestEntryPath(window.location.pathname) ||
-    isGuestEnvironment(window.location.pathname.split("/")[1]));
+  (isGuestEntryPath(window.location.pathname) || isSharedThreadPathname(window.location.pathname));
 
 /**
  * Whether this browser is only a guest here: it has no session on the host that serves this

@@ -35,7 +35,7 @@ import {
   suggestedBoardName,
 } from "~/guest/cloudBoards";
 import { cloudBoardsOrigin } from "~/guest/cloudBoardsHost";
-import { type JoinedGuestShare, rememberGuestShare } from "~/guest/guestShares";
+import { type JoinedGuestShare, guestShareLocation, rememberGuestShare } from "~/guest/guestShares";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import { useScratchProject } from "~/hooks/useScratchProject";
 import { registerCommands } from "~/shortcuts/dispatcher";
@@ -413,10 +413,7 @@ function useCreateCloudBoard() {
     if (notes > 0) fitRoomBoardOnOpen(`guest:${created.shareId}`, notes);
     if (title === null) nameBoardOnOpen(ref);
     // Straight onto the new board, wherever it was started from; its template lands there live.
-    void navigate({
-      to: "/$environmentId/$threadId",
-      params: { environmentId: ref.environmentId, threadId: ref.threadId },
-    });
+    void navigate(guestShareLocation(created));
     void putOnCloudBoard(created, changes).then((complete) => {
       if (!complete) toastTemplateMissing();
     });

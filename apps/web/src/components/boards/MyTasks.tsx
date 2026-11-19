@@ -80,10 +80,7 @@ export function MyTasks() {
       toastManager.add({ type: "error", title: "Could not open the board", description: target });
       return;
     }
-    void navigate({
-      to: "/$environmentId/$threadId",
-      params: { environmentId: target.environmentId, threadId: target.threadId },
-    });
+    void navigate(target);
   };
   return (
     <Popover

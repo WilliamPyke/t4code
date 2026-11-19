@@ -52,7 +52,7 @@ import {
   type ThreadGuestMessageStatus,
 } from "@t3tools/contracts";
 import { buildJoinLink } from "@t3tools/shared/promptLinks";
-import { useNavigate } from "@tanstack/react-router";
+import { Navigate, useNavigate, useParams } from "@tanstack/react-router";
 import type { LegendListRef } from "@legendapp/list/react";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -76,12 +76,14 @@ import {
   guestRoomCursorsAtom,
   guestRoomViewsAtom,
   guestShareEndpointOf,
+  guestShareLocation,
   guestSharesAtom,
   isCloudShare,
   type JoinedGuestShare,
   markGuestShareOpened,
   reopeningSharesAtom,
 } from "~/guest/guestShares";
+import { CLOUD_BOARD_PATH } from "~/guest/boardAddress";
 import { boardLinksOf } from "~/guest/boardLinks.logic";
 import { cloudBoardsHost } from "~/guest/cloudBoardsHost";
 import { copyCloudBoard, renameCloudBoard } from "~/guest/cloudBoards";
@@ -386,8 +388,19 @@ export function GuestThreadRoute({ threadRef }: { readonly threadRef: ScopedThre
     reopening,
     cloud: share === null && cloudBoardsHost() !== null,
   });
+  // A cloud board opened at its long address (a bookmark, an old link) moves to its own.
+  const atLongAddress = useParams({
+    strict: false,
+    select: (params) =>
+      params.shareId === undefined && params.environmentId === threadRef.environmentId,
+  });
+  const location =
+    share === null || share.threadId !== threadRef.threadId ? null : guestShareLocation(share);
   return (
     <SidebarInset className="flex h-svh min-h-0 flex-col overflow-hidden overscroll-y-none md:h-dvh">
+      {atLongAddress && location?.to === CLOUD_BOARD_PATH ? (
+        <Navigate {...location} search hash replace />
+      ) : null}
       {share === null && step === "opening" ? (
         <GuestNotice title="Opening the board..." />
       ) : share === null || share.threadId !== threadRef.threadId ? (
@@ -971,13 +984,7 @@ function GuestThreadSession({
                                       });
                                       return;
                                     }
-                                    void navigate({
-                                      to: "/$environmentId/$threadId",
-                                      params: {
-                                        environmentId: guestEnvironmentId(made.shareId),
-                                        threadId: made.threadId,
-                                      },
-                                    });
+                                    void navigate(guestShareLocation(made));
                                   }
                                 : undefined
                             }

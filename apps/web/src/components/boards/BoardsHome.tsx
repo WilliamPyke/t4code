@@ -1,9 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import {
-  guestEnvironmentId,
-  isGuestEnvironment,
-  scopeThreadRef,
-} from "@t3tools/client-runtime/environment";
+import { isGuestEnvironment, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   EnvironmentId,
   ROOM_BOARD_SUMMARY_MAX_BOARDS,
@@ -26,8 +22,10 @@ import { type MouseEvent, useEffect, useState } from "react";
 import { isElectron } from "~/env";
 import { refreshAccountBoards, useBoardAccount } from "~/guest/boardAccount";
 import { useInboxCount } from "~/guest/inbox";
+import { sharedThreadLocationOf } from "~/guest/boardAddress";
 import {
   accountBoardsAtom,
+  guestShareLocation,
   guestSharesAtom,
   isCloudShare,
   localBoardPreviewsAtom,
@@ -442,10 +440,7 @@ function BoardTile({
       toastManager.add({ type: "error", title: opened });
       return;
     }
-    void navigate({
-      to: "/$environmentId/$threadId",
-      params: { environmentId: guestEnvironmentId(opened.shareId), threadId: opened.threadId },
-    });
+    void navigate(guestShareLocation(opened));
   };
   const subtitle =
     board.kind === "own"
@@ -616,10 +611,7 @@ function tileLink(board: HomeBoard) {
         scopeThreadRef(EnvironmentId.make(board.environmentId), ThreadId.make(board.threadId)),
       );
     case "joined":
-      return {
-        to: "/$environmentId/$threadId" as const,
-        params: { environmentId: guestEnvironmentId(board.shareId), threadId: board.threadId },
-      };
+      return sharedThreadLocationOf(board, board.cloud);
     case "team":
       return { to: "/teams/$teamId" as const, params: { teamId: board.teamId } };
   }

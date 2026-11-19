@@ -1,9 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
-import { guestEnvironmentId } from "@t3tools/client-runtime/environment";
 import { Link } from "@tanstack/react-router";
 import { EyeIcon, XIcon } from "lucide-react";
 
-import { forgetGuestShare, guestSharesAtom } from "~/guest/guestShares";
+import { forgetGuestShare, guestShareLocation, guestSharesAtom } from "~/guest/guestShares";
 
 import { Button } from "../ui/button";
 
@@ -28,19 +27,7 @@ export function ViewedBoards() {
       <ul className="flex flex-col gap-1">
         {viewed.map((share) => (
           <li key={share.shareId} className="flex min-w-0 items-center gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              render={
-                <Link
-                  to="/$environmentId/$threadId"
-                  params={{
-                    environmentId: guestEnvironmentId(share.shareId),
-                    threadId: share.threadId,
-                  }}
-                />
-              }
-            >
+            <Button variant="ghost" size="sm" render={<Link {...guestShareLocation(share)} />}>
               <EyeIcon />
               <span className="truncate">{share.title || "Untitled board"}</span>
             </Button>

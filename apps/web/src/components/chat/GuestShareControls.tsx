@@ -1,5 +1,4 @@
 import { useAtomValue } from "@effect/atom-react";
-import { guestEnvironmentId } from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -32,7 +31,7 @@ import { CheckIcon, CopyIcon, EllipsisIcon, RadioIcon, UserIcon } from "lucide-r
 import { useState } from "react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
-import { guestSharesAtom } from "~/guest/guestShares";
+import { guestShareLocation, guestSharesAtom } from "~/guest/guestShares";
 import { useComposerHandleContext } from "~/composerHandleContext";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { ensureLocalApi } from "~/localApi";
@@ -802,15 +801,7 @@ export function RoomLinkIndicator({ threadRef }: { readonly threadRef: ScopedThr
         <Button
           size="xs"
           variant="ghost-muted"
-          onClick={() =>
-            void navigate({
-              to: "/$environmentId/$threadId",
-              params: {
-                environmentId: guestEnvironmentId(room.shareId),
-                threadId: room.threadId,
-              },
-            })
-          }
+          onClick={() => void navigate(guestShareLocation(room))}
         >
           Board
         </Button>

@@ -482,8 +482,9 @@ const serveLoopbackCallback = Effect.fn("cloud.cli_token.serve_loopback_callback
     readonly metadata: CloudCliOAuthConfig;
     readonly state: string;
     readonly start?: { readonly url: string; readonly computerName: string };
+    readonly boardsUrl: string;
   }) {
-    const { metadata, state } = input;
+    const { metadata, state, boardsUrl } = input;
     const callback = yield* Deferred.make<string>();
     const layerCallbackRoute = HttpRouter.add(
       "GET",
@@ -493,13 +494,18 @@ const serveLoopbackCallback = Effect.fn("cloud.cli_token.serve_loopback_callback
         const url = new URL(request.originalUrl, metadata.redirectUri);
         const code = url.searchParams.get("code");
         if (url.searchParams.get("state") !== state || !code) {
-          return HttpServerResponse.text(renderLoopbackAuthorizationFailedHtml(), {
+          return HttpServerResponse.text(renderLoopbackAuthorizationFailedHtml({ boardsUrl }), {
             status: 400,
             contentType: "text/html; charset=utf-8",
           });
         }
         yield* Deferred.succeed(callback, code);
-        return HttpServerResponse.html(renderLoopbackAuthorizationCompleteHtml());
+        return HttpServerResponse.html(
+          renderLoopbackAuthorizationCompleteHtml({
+            boardsUrl,
+            ...(input.start === undefined ? {} : { computerName: input.start.computerName }),
+          }),
+        );
       }),
     );
     const layerRoutes =
@@ -595,6 +601,7 @@ export const approveComputerLogin = Effect.fn("cloud.cli_token.approve_computer_
   const callback = yield* serveLoopbackCallback({
     metadata,
     state,
+    boardsUrl: hostedAppUrl,
     start: {
       url: buildConnectAuthorizeRequestUrl({
         hostedAppUrl,
@@ -677,7 +684,7 @@ export const make = Effect.gen(function* () {
     const metadata = yield* cloudCliOAuthConfig;
     const hostedAppUrl = yield* hostedAppUrlConfig;
     const { verifier, challenge, state } = yield* makePkceRequest;
-    const callback = yield* serveLoopbackCallback({ metadata, state });
+    const callback = yield* serveLoopbackCallback({ metadata, state, boardsUrl: hostedAppUrl });
     // /connect establishes a Clerk session first; /oauth/authorize loses parameters across sign-in.
     const authorizationUrl = buildConnectAuthorizeRequestUrl({
       hostedAppUrl,

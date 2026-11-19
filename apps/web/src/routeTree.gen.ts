@@ -57,6 +57,7 @@ import { Route as ChatSettingsAppearanceRouteImport } from './routes/_chat.setti
 import { Route as ChatSettingsAccessRouteImport } from './routes/_chat.settings.access'
 import { Route as ChatSettingsAboutRouteImport } from './routes/_chat.settings.about'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
+import { Route as ChatBShareIdRouteImport } from './routes/_chat.b.$shareId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
 import { Route as ChatBoardRoomEnvironmentIdRoomThreadIdRouteImport } from './routes/_chat.board.$roomEnvironmentId.$roomThreadId'
 
@@ -304,6 +305,11 @@ const ChatDraftDraftIdRoute = ChatDraftDraftIdRouteImport.update({
   path: '/draft/$draftId',
   getParentRoute: () => ChatRoute,
 } as any)
+const ChatBShareIdRoute = ChatBShareIdRouteImport.update({
+  id: '/b/$shareId',
+  path: '/b/$shareId',
+  getParentRoute: () => ChatRoute,
+} as any)
 const ChatEnvironmentIdThreadIdRoute =
   ChatEnvironmentIdThreadIdRouteImport.update({
     id: '/$environmentId/$threadId',
@@ -335,6 +341,7 @@ export interface FileRoutesByFullPath {
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/r/$name': typeof RNameRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
+  '/b/$shareId': typeof ChatBShareIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/settings/about': typeof ChatSettingsAboutRoute
   '/settings/access': typeof ChatSettingsAccessRoute
@@ -386,6 +393,7 @@ export interface FileRoutesByTo {
   '/r/$name': typeof RNameRoute
   '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
+  '/b/$shareId': typeof ChatBShareIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/settings/about': typeof ChatSettingsAboutRoute
   '/settings/access': typeof ChatSettingsAccessRoute
@@ -439,6 +447,7 @@ export interface FileRoutesById {
   '/r/$name': typeof RNameRoute
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
+  '/_chat/b/$shareId': typeof ChatBShareIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/_chat/settings/about': typeof ChatSettingsAboutRoute
   '/_chat/settings/access': typeof ChatSettingsAccessRoute
@@ -492,6 +501,7 @@ export interface FileRouteTypes {
     | '/projects/$projectKey'
     | '/r/$name'
     | '/$environmentId/$threadId'
+    | '/b/$shareId'
     | '/draft/$draftId'
     | '/settings/about'
     | '/settings/access'
@@ -543,6 +553,7 @@ export interface FileRouteTypes {
     | '/r/$name'
     | '/'
     | '/$environmentId/$threadId'
+    | '/b/$shareId'
     | '/draft/$draftId'
     | '/settings/about'
     | '/settings/access'
@@ -595,6 +606,7 @@ export interface FileRouteTypes {
     | '/r/$name'
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
+    | '/_chat/b/$shareId'
     | '/_chat/draft/$draftId'
     | '/_chat/settings/about'
     | '/_chat/settings/access'
@@ -979,6 +991,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatDraftDraftIdRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/b/$shareId': {
+      id: '/_chat/b/$shareId'
+      path: '/b/$shareId'
+      fullPath: '/b/$shareId'
+      preLoaderRoute: typeof ChatBShareIdRouteImport
+      parentRoute: typeof ChatRoute
+    }
     '/_chat/$environmentId/$threadId': {
       id: '/_chat/$environmentId/$threadId'
       path: '/$environmentId/$threadId'
@@ -1071,6 +1090,7 @@ interface ChatRouteChildren {
   ChatWhatsNewRoute: typeof ChatWhatsNewRoute
   ChatIndexRoute: typeof ChatIndexRoute
   ChatEnvironmentIdThreadIdRoute: typeof ChatEnvironmentIdThreadIdRoute
+  ChatBShareIdRoute: typeof ChatBShareIdRoute
   ChatDraftDraftIdRoute: typeof ChatDraftDraftIdRoute
   ChatTNameRoute: typeof ChatTNameRoute
   ChatTeamsTeamIdRoute: typeof ChatTeamsTeamIdRoute
@@ -1088,6 +1108,7 @@ const ChatRouteChildren: ChatRouteChildren = {
   ChatWhatsNewRoute: ChatWhatsNewRoute,
   ChatIndexRoute: ChatIndexRoute,
   ChatEnvironmentIdThreadIdRoute: ChatEnvironmentIdThreadIdRoute,
+  ChatBShareIdRoute: ChatBShareIdRoute,
   ChatDraftDraftIdRoute: ChatDraftDraftIdRoute,
   ChatTNameRoute: ChatTNameRoute,
   ChatTeamsTeamIdRoute: ChatTeamsTeamIdRoute,

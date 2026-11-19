@@ -1,5 +1,4 @@
 import { useAtomValue } from "@effect/atom-react";
-import { guestEnvironmentId } from "@t3tools/client-runtime/environment";
 import { guestShareRequest } from "@t3tools/client-runtime/rpc";
 import {
   GUEST_HOST_PARAM,
@@ -19,6 +18,7 @@ import {
   forgetGuestShare,
   guestLinkHost,
   guestShareEndpointOf,
+  guestShareLocation,
   guestShareOrigin,
   guestSharesAtom,
   type JoinedGuestShare,
@@ -178,11 +178,7 @@ export function GuestPage() {
     <BoardBackdrop className="relative flex h-dvh flex-col px-4 text-foreground">
       {open === null ? <AccountCorner /> : null}
       {open !== null ? (
-        <Navigate
-          to="/$environmentId/$threadId"
-          params={{ environmentId: guestEnvironmentId(open.shareId), threadId: open.threadId }}
-          replace
-        />
+        <Navigate {...guestShareLocation(open)} replace />
       ) : checking !== null || (step.step === "invalid" && accountStep === "opening") ? (
         <GuestNotice title="Opening the board..." />
       ) : step.step === "invalid" || host === null || credential === null ? (

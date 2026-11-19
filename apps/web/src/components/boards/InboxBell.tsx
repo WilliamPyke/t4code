@@ -98,10 +98,7 @@ function SignedInBell({ nudge }: { readonly nudge: string | undefined }) {
       toastManager.add({ type: "error", title: "Could not open the board", description: target });
       return;
     }
-    void navigate({
-      to: "/$environmentId/$threadId",
-      params: { environmentId: target.environmentId, threadId: target.threadId },
-    });
+    void navigate(target);
   };
   const answer = async (item: CloudInboxItem, approve: boolean) => {
     setAnswering(item.id);

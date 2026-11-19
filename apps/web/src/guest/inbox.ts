@@ -1,5 +1,4 @@
 import { useAtomValue } from "@effect/atom-react";
-import { guestEnvironmentId } from "@t3tools/client-runtime/environment";
 import {
   CLOUD_BOARD_ACCESS_ANSWER_ROUTE,
   CLOUD_BOARD_ACCESS_ROUTE,
@@ -14,8 +13,6 @@ import {
   GUEST_SHARE_PARAM,
   type CloudInboxItem,
   type CloudMyTask,
-  type EnvironmentId,
-  type ThreadId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -29,7 +26,7 @@ import {
   openAccountBoard,
   readBoardAccountProfile,
 } from "./boardAccount";
-import { findGuestShare, reopenGuestShare } from "./guestShares";
+import { findGuestShare, guestShareLocation, reopenGuestShare } from "./guestShares";
 import { openListedBoard } from "./workspaces";
 
 /**
@@ -244,7 +241,7 @@ export async function openInboxBoard(target: {
   readonly workspaceId?: string | undefined;
   readonly noteId?: string | undefined;
   readonly task?: boolean | undefined;
-}): Promise<{ readonly environmentId: EnvironmentId; readonly threadId: ThreadId } | string> {
+}): Promise<ReturnType<typeof guestShareLocation> | string> {
   const local = findGuestShare(target.shareId);
   let share = local !== null && local.viewOnly !== true ? local : null;
   if (share === null) {
@@ -264,7 +261,7 @@ export async function openInboxBoard(target: {
   if (target.noteId !== undefined) {
     requestBoardFocus(target.shareId, { noteId: target.noteId, plan: target.task === true });
   }
-  return { environmentId: guestEnvironmentId(share.shareId), threadId: share.threadId };
+  return guestShareLocation(share);
 }
 
 /**
