@@ -735,20 +735,24 @@ function BoardPeople({
             >
               {initialOf(guest.name)}
             </PersonDot>
-            <span className="min-w-0 flex-1 truncate">
-              {guest.name}
-              {guest.id === viewer ? <span className="text-muted-foreground"> (you)</span> : null}
-              {guest.id === maker ? (
-                <span className="text-muted-foreground"> · made it</span>
-              ) : null}
-              {sameName.has(guest.id) ? (
-                <span className="text-muted-foreground"> · joined {joinedOn(guest.joinedAt)}</span>
-              ) : null}
-              {!isHere ? <span className="text-muted-foreground"> · away</span> : null}
+            <span className="min-w-0 flex-1">
+              <span className="block truncate">
+                {guest.name}
+                {guest.id === viewer ? <span className="text-muted-foreground"> (you)</span> : null}
+                {guest.id === maker ? (
+                  <span className="text-muted-foreground"> · made it</span>
+                ) : null}
+                {sameName.has(guest.id) ? (
+                  <span className="text-muted-foreground">
+                    {" "}
+                    · joined {joinedOn(guest.joinedAt)}
+                  </span>
+                ) : null}
+                {!isHere ? <span className="text-muted-foreground"> · away</span> : null}
+              </span>
               {note === null ? null : (
-                <span className="text-muted-foreground" data-cloud-board-link-access>
-                  {" "}
-                  · {note}
+                <span className="block text-muted-foreground" data-cloud-board-link-access>
+                  {note}
                 </span>
               )}
             </span>
