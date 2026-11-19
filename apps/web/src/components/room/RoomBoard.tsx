@@ -301,6 +301,7 @@ import { type BoardLineShape, boardLine } from "./boardLineRoute.logic";
 import { markBoardGuideStep, showBoardGuide } from "./boardGuideState";
 import { BoardEmbedIcon, RoomEmbedBody, useBoardSurfaceSize } from "./RoomBoardEmbed";
 import {
+  BOARD_EMBED_MIN_ZOOM,
   boardCanFramePage,
   boardEmbedTitleOf,
   boardEmbedTitleUrl,
@@ -1314,6 +1315,8 @@ export function RoomBoard({
   const openEmbed = (noteId: string) => {
     showEmbed(noteId);
     setEmbedInUse(noteId);
+    // Too far out for its page to load, a click zooms in to the card instead.
+    if (view.zoom < BOARD_EMBED_MIN_ZOOM) zoomToCard(noteRef(noteId));
   };
   // What the address typed in the toolbar adds: a link card or a pull request window.
   const [draftKind, setDraftKind] = useState<"link" | "pull-request">("link");
@@ -2698,6 +2701,27 @@ export function RoomBoard({
       height: top === 0 ? surface.height : height,
     });
     if (next === shifted) return;
+    setFollowing(null);
+    setView({ ...next, y: next.y + top });
+  };
+  // Far enough in for a card's page to load, as `reveal` centres it, when the board is too far out.
+  const zoomToCard = (ref: string) => {
+    const element = drawnItem(ref);
+    const area = boardAreaOf(surfaceRef.current);
+    if (element === null || area === null) return;
+    const rect = drawnRect(element);
+    const cover = chromeCoverOf(surfaceRef.current);
+    const height = area.height - cover.top - cover.bottom;
+    const top = height < area.height / 2 ? 0 : cover.top;
+    const zoomed = {
+      ...view,
+      zoom: Math.max(view.zoom, BOARD_EMBED_MIN_ZOOM),
+      y: view.y - top,
+    };
+    const next = panToCentre(zoomed, rect, {
+      width: area.width,
+      height: top === 0 ? area.height : height,
+    });
     setFollowing(null);
     setView({ ...next, y: next.y + top });
   };
@@ -6576,6 +6600,7 @@ export function RoomBoard({
                         ? {
                             live: liveEmbeds.has(note.id),
                             active: embedInUse === note.id && liveEmbeds.has(note.id),
+                            zoomedOut: view.zoom < BOARD_EMBED_MIN_ZOOM,
                             onUse: () => openEmbed(note.id),
                             onRelease: () => setEmbedInUse(null),
                           }
@@ -7508,6 +7533,8 @@ function BoardNote({
     | {
         readonly live: boolean;
         readonly active: boolean;
+        /** The board is too far out for a framed page to load. */
+        readonly zoomedOut?: boolean;
         readonly onUse: () => void;
         readonly onRelease: () => void;
       }
@@ -8061,6 +8088,7 @@ function BoardNote({
             url={note.url}
             live={embed?.live === true}
             active={embed?.active === true}
+            zoomedOut={embed?.zoomedOut === true}
             onRelease={() => embed?.onRelease()}
             framed={note.framed === true}
             onFrame={onFramePage === undefined ? undefined : (framed) => onFramePage(note, framed)}
