@@ -19,6 +19,7 @@ export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
       "Mark up, on an artifact showing a page: click a part of the page, say what should change, and it becomes a numbered note your agent reads with the exact spot, the next time you send it a prompt.",
       "Click an artifact before it scrolls, so the wheel pans the board until you mean to use the page. Press Esc to give the board back.",
       "Pages have a Refresh button, and a box with several artifacts says which one its next reply goes into.",
+      "Right-click a link in an artifact's page to open it beside the artifact: another site as a card showing its page, a spot further down as a second view scrolled there, and a page that is not made yet as an empty artifact for your agent to write.",
     ],
   },
   {
