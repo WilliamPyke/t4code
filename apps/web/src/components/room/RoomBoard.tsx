@@ -6817,18 +6817,26 @@ export function RoomBoard({
                       <Toggle value="curve">Curved</Toggle>
                       <Toggle value="elbow">Elbow</Toggle>
                     </ToggleGroup>
-                    <Button
-                      size="icon-xs"
-                      variant="outline"
-                      aria-label="Delete line"
-                      // Focused without scrolling: inside the moved board, the browser would
-                      // scroll the board's box to bring it into view.
-                      ref={focusInPlace}
-                      onPointerDown={stopPointer}
-                      onClick={() => removeEdge(edge.id)}
-                    >
-                      <Trash2Icon />
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            aria-label="Delete line"
+                            // Focused without scrolling: inside the moved board, the browser
+                            // would scroll the board's box to bring it into view.
+                            ref={focusInPlace}
+                            onPointerDown={stopPointer}
+                            onClick={() => removeEdge(edge.id)}
+                          />
+                        }
+                      >
+                        <Trash2Icon />
+                        <span className="hidden sm:inline">Delete</span>
+                      </TooltipTrigger>
+                      <TooltipPopup side="top">Delete line</TooltipPopup>
+                    </Tooltip>
                   </div>
                 );
               })}
