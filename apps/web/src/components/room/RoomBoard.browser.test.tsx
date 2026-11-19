@@ -922,6 +922,20 @@ describe("RoomBoard keys and pointer", () => {
       await expect
         .element(screen.getByRole("textbox", { name: "Task", exact: true }).last())
         .toHaveFocus();
+
+      // A tap at the surface's very edge lands the card inside the view, under no chrome.
+      await userEvent.click(screen.getByRole("button", { name: "Note", exact: true }));
+      const edgeLayer = screen.container.querySelector<HTMLElement>('[data-board-place="note"]');
+      if (edgeLayer === null) throw new Error("The Note tool did not wait for a click");
+      const edgeBox = edgeLayer.getBoundingClientRect();
+      const had = new Set(puts(onChange).map((change) => change.noteId));
+      await userEvent.click(edgeLayer, { position: { x: 300, y: 2 } });
+      await vi.waitFor(() =>
+        expect(puts(onChange).some((change) => !had.has(change.noteId))).toBe(true),
+      );
+      const edged = drawnAt(puts(onChange).find((change) => !had.has(change.noteId))!.noteId);
+      expect(edged.top).toBeGreaterThanOrEqual(edgeBox.top);
+      expect(edged.bottom).toBeLessThanOrEqual(edgeBox.bottom);
     }
   });
 

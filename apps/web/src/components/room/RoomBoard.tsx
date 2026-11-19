@@ -2875,16 +2875,14 @@ export function RoomBoard({
     reveal({ x: value.x, y: value.y, width: size.w, height: size.h }, true);
     return id;
   };
-  /** Adds a tool's card centred on `at`, as FigJam does, or where it fits in view; caret in it. */
+  /** Adds a tool's card at `at`, kept in the part of the view the floating chrome leaves; caret in it. */
   const addToolCard = (tool: ArmedCardTool, at: BoardPoint | null) => {
     const size =
       tool === "section"
         ? BOARD_SECTION_SIZE
         : boardNewNoteSize(tool === "task" ? "task" : undefined);
-    const wanted =
-      at === null
-        ? undefined
-        : { x: Math.round(at.x - size.w / 2), y: Math.round(at.y - size.h / 2) };
+    // A tap means "here", over a card or not, so no taken rect dislodges it; the seen rect does.
+    const wanted = at === null ? undefined : boardPointedSpot(size, at, seenRect(), []);
     addAndType(() =>
       tool === "section"
         ? addSection(undefined, wanted)
