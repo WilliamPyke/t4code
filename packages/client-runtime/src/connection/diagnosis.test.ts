@@ -85,7 +85,7 @@ describe("presentConnectionDiagnosis", () => {
         cause: new TypeError("Failed to fetch"),
       }),
     );
-    expect(diagnose(backoff(failure))?.headline).toBe("This device can't reach Tinkjam Connect");
+    expect(diagnose(backoff(failure))?.headline).toBe("This device can't reach Tinkjam");
     expect(results(backoff(failure))).toEqual([
       "device:ok",
       "relay:failed",
@@ -103,7 +103,7 @@ describe("presentConnectionDiagnosis", () => {
       }),
     );
     const diagnosis = diagnose(backoff(failure));
-    expect(diagnosis?.headline).toBe("Tinkjam Connect returned an error");
+    expect(diagnosis?.headline).toBe("Tinkjam returned an error");
     expect(diagnosis?.steps.join(" ")).not.toContain("this device");
   });
 
@@ -133,7 +133,7 @@ describe("presentConnectionDiagnosis", () => {
   it("blames this device, not the host, while its own Tinkjam Connect sign-in loads", () => {
     const failure = new ConnectionTransientError({
       reason: "session-pending",
-      detail: "Waiting for the Tinkjam Connect sign-in to load.",
+      detail: "Waiting for the Tinkjam sign-in to load.",
     });
     const diagnosis = diagnose(backoff(failure));
     expect(diagnosis?.headline).not.toContain("did not answer");

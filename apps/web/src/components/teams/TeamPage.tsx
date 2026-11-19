@@ -76,12 +76,9 @@ function SignInToSeeTeams() {
   const { openAuthPrompt } = useT3ConnectAuthPrompt();
   return (
     <div className="flex flex-col items-center gap-3 p-8 text-center">
-      <TeamNotice
-        title="Sign in to see this team"
-        detail="Teams use your Tinkjam Connect account."
-      />
+      <TeamNotice title="Sign in to see this team" detail="Teams use your Tinkjam account." />
       <Button size="sm" onClick={openAuthPrompt}>
-        Sign in to Tinkjam Connect
+        Sign in to Tinkjam
       </Button>
     </div>
   );
@@ -98,8 +95,8 @@ export function TeamPage({ teamId }: { readonly teamId: string }) {
           <SignInToSeeTeams />
         ) : (
           <TeamNotice
-            title="Teams need Tinkjam Connect"
-            detail="This copy of Tinkjam has no Tinkjam Connect."
+            title="Teams need a Tinkjam account"
+            detail="This copy of Tinkjam cannot sign in to an account."
           />
         )}
       </TeamPageFrame>
@@ -401,7 +398,7 @@ function InviteLink({ teamId }: { readonly teamId: string }) {
         </Button>
       </div>
       <p className="text-muted-foreground text-xs">
-        Anyone signed in to Tinkjam Connect who opens it before{" "}
+        Anyone signed in to Tinkjam who opens it before{" "}
         {new Date(invite.expiresAt).toLocaleDateString()} joins the team.
       </p>
     </section>

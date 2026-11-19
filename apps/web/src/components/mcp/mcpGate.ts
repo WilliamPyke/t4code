@@ -78,8 +78,7 @@ export function resolveMcpGate(input: {
   if (!isManagedTunnelActive(linkState, endpoint?.providerKind)) return { kind: "turn-on" };
   if (!input.thisMachine) {
     if (relay.status === "loading") return { kind: "checking" };
-    if (relay.status === "failed")
-      return { kind: "error", message: "Could not reach Tinkjam Connect." };
+    if (relay.status === "failed") return { kind: "error", message: "Could not reach Tinkjam." };
     if (endpoint === undefined) return { kind: "turn-on" };
   }
   const { reachability } = input;

@@ -376,7 +376,7 @@ function GateScreen({
     case "sign-in":
       return (
         <GateMessage
-          title="Sign in to Tinkjam Connect"
+          title="Sign in to Tinkjam"
           lines={[
             `Apps like Poke and Claude run in the cloud. They need a public address to reach ${name}.`,
             `Tinkjam Connect gives ${name} that address. Each app still needs your approval.`,
@@ -389,7 +389,7 @@ function GateScreen({
               openAuthPrompt();
             }}
           >
-            Sign in to Tinkjam Connect
+            Sign in to Tinkjam
           </Button>
         </GateMessage>
       );

@@ -341,7 +341,7 @@ const layerCapabilities = Layer.effectContext(
         if (session === null) {
           return yield* new ConnectionBlockedError({
             reason: "authentication",
-            detail: "Sign in to Tinkjam Connect to connect this environment.",
+            detail: "Sign in to Tinkjam to connect this environment.",
           });
         }
         const token = yield* session.readClerkToken().pipe(
@@ -356,7 +356,7 @@ const layerCapabilities = Layer.effectContext(
         if (token === null) {
           return yield* new ConnectionBlockedError({
             reason: "authentication",
-            detail: "The Tinkjam Connect session is unavailable.",
+            detail: "The Tinkjam session is unavailable.",
           });
         }
         return token;

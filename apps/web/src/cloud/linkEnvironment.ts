@@ -271,7 +271,7 @@ export const checkCloudReachability: (input: {
         url: (urls) => urls.checkReachability(),
         request: ({ client, headers }) => client.checkReachability({ headers }),
       },
-      "Could not check Tinkjam Connect.",
+      "Could not check this computer's connection.",
     );
   });
 
@@ -330,7 +330,7 @@ export const unlinkEnvironmentFromCloud: (input: {
       .pipe(
         Effect.mapError(
           decodedRelayClientError(
-            "Disconnected locally, but Tinkjam Connect did not confirm it removed this environment",
+            "Disconnected locally, but Tinkjam did not confirm it removed this environment",
           ),
         ),
       );

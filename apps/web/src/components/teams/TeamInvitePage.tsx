@@ -17,7 +17,7 @@ export function TeamInvitePage({ name }: { readonly name: string }) {
           <ConfiguredTeamInvite name={name} />
         ) : (
           <EmptyHeader>
-            <EmptyTitle>Teams need Tinkjam Connect</EmptyTitle>
+            <EmptyTitle>Teams need a Tinkjam account</EmptyTitle>
             <EmptyDescription>Open this invite in the hosted Tinkjam app.</EmptyDescription>
           </EmptyHeader>
         )}
@@ -47,14 +47,14 @@ function ConfiguredTeamInvite({ name }: { readonly name: string }) {
         <EmptyTitle>Join a team</EmptyTitle>
         <EmptyDescription>
           {accountId === null
-            ? "Sign in to Tinkjam Connect to join. The team sees your account's name and picture."
-            : "You join with your Tinkjam Connect account. The team sees its name and picture."}
+            ? "Sign in to Tinkjam to join. The team sees your account's name and picture."
+            : "You join with your Tinkjam account. The team sees its name and picture."}
         </EmptyDescription>
       </EmptyHeader>
       <EmptyContent>
         {accountId === null ? (
           <Button size="sm" onClick={openAuthPrompt}>
-            Sign in to Tinkjam Connect
+            Sign in to Tinkjam
           </Button>
         ) : (
           <Button size="sm" disabled={state === "joining"} onClick={() => void join()}>

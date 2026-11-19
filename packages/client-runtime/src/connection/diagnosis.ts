@@ -100,15 +100,15 @@ function headline(host: string, located: Located, failure: ConnectionAttemptErro
     case "offline":
       return "This device is offline";
     case "session_pending":
-      return "This device is still loading its Tinkjam Connect sign-in";
+      return "This device is still loading its Tinkjam sign-in";
     case "outdated":
       return `${host} runs an older Tinkjam`;
     case "clock_skew":
       return "This device's clock is off";
     case "not_linked":
-      return `${host} is not linked to your Tinkjam Connect account`;
+      return `${host} is not linked to your Tinkjam account`;
     case "relay_error":
-      return "Tinkjam Connect returned an error";
+      return "Tinkjam returned an error";
     case "tunnel_pending":
       return `${host}'s tunnel is still being set up`;
     case "tunnel_not_enabled":
@@ -137,15 +137,15 @@ function headline(host: string, located: Located, failure: ConnectionAttemptErro
       return "This device could not prepare the connection";
     case "relay":
       return failure?.reason === "authentication"
-        ? "Tinkjam Connect did not accept this device's sign-in"
-        : "This device can't reach Tinkjam Connect";
+        ? "Tinkjam did not accept this device's sign-in"
+        : "This device can't reach Tinkjam";
     case "tunnel":
       // The relay already reached the host when this device fails on its own.
       return failure?.reason === "network" ||
         failure?.reason === "transport" ||
         failure?.reason === "timeout"
         ? `This device can't reach ${host}'s tunnel`
-        : `Tinkjam Connect could not reach ${host}'s tunnel`;
+        : `Tinkjam could not reach ${host}'s tunnel`;
     case "server":
       return failure?.reason === "authentication" || failure?.reason === "permission"
         ? `Tinkjam on ${host} did not accept this device`
@@ -169,7 +169,7 @@ function steps(host: string, located: Located, failure: ConnectionAttemptError |
       return [`Turn on automatic date and time on this device and on ${host}, then retry.`];
     case "not_linked":
       return [
-        "Check that this device is signed in to the same Tinkjam Connect account as the host.",
+        "Check that this device is signed in to the same Tinkjam account as the host.",
         `On ${host}, open Settings > Sharing & access and turn Tinkjam Connect on.`,
       ];
     case "tunnel_pending":
@@ -209,10 +209,10 @@ function steps(host: string, located: Located, failure: ConnectionAttemptError |
       ];
     case "relay":
       return failure?.reason === "authentication"
-        ? ["Sign out of Tinkjam Connect and sign in again."]
+        ? ["Sign out of Tinkjam and sign in again."]
         : [
             "Check this device's internet connection.",
-            "A VPN, firewall, or ad blocker on this device can block Tinkjam Connect.",
+            "A VPN, firewall, or ad blocker on this device can block Tinkjam.",
           ];
     case "tunnel":
       return failure?.reason === "network" ||

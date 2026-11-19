@@ -158,7 +158,7 @@ export function useCloudLinkController(environmentId: EnvironmentId | null) {
           reportUpdateFailure(
             cause,
             relayKeptLink
-              ? "Disconnected here, but Tinkjam Connect still lists it. Remove it in Account."
+              ? "Disconnected here, but Tinkjam still lists it. Remove it in Account."
               : undefined,
           );
         }
@@ -175,7 +175,7 @@ export function useCloudLinkController(environmentId: EnvironmentId | null) {
       }
       const clerkToken = tokenResult.value;
       if (!clerkToken) {
-        reportUpdateFailure(new Error("Sign in to Tinkjam Connect before enabling this."));
+        reportUpdateFailure(new Error("Sign in to Tinkjam before enabling this."));
         return false;
       }
       const currentManagedTunnel = isManagedTunnelActive(currentLinkState, relayProviderKind);

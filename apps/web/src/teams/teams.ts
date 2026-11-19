@@ -49,12 +49,12 @@ const teamsRequest = Effect.fn("teams.request")(function* <A>(
   const { relayUrl } = resolveCloudPublicConfig();
   const session = appAtomRegistry.get(managedRelaySessionAtom);
   if (relayUrl === null || session === null) {
-    return yield* failWith("Sign in to Tinkjam Connect to use teams.");
+    return yield* failWith("Sign in to Tinkjam to use teams.");
   }
   const token = yield* session
     .readClerkToken()
-    .pipe(Effect.mapError(() => failWith("Could not read your Tinkjam Connect sign-in.")));
-  if (!token) return yield* failWith("Sign in to Tinkjam Connect to use teams.");
+    .pipe(Effect.mapError(() => failWith("Could not read your Tinkjam sign-in.")));
+  if (!token) return yield* failWith("Sign in to Tinkjam to use teams.");
   const request = HttpClientRequest.make(init.method ?? "GET")(new URL(path, relayUrl)).pipe(
     HttpClientRequest.bearerToken(token),
   );
@@ -63,22 +63,20 @@ const teamsRequest = Effect.fn("teams.request")(function* <A>(
     .execute(
       init.body === undefined ? request : HttpClientRequest.bodyJsonUnsafe(request, init.body),
     )
-    .pipe(Effect.mapError(() => failWith("Could not reach Tinkjam Connect.")));
+    .pipe(Effect.mapError(() => failWith("Could not reach Tinkjam.")));
   const json = yield* response.json.pipe(Effect.orElseSucceed(() => null));
   if (response.status >= 400) {
     if (response.status === 429) return yield* failWith("Too many tries. Wait a minute.");
-    if (response.status === 401) return yield* failWith("Sign in to Tinkjam Connect again.");
+    if (response.status === 401) return yield* failWith("Sign in to Tinkjam again.");
     return yield* failWith(
       Option.match(decodeRefusal(json), {
-        onNone: () => "Tinkjam Connect could not do that. Try again.",
+        onNone: () => "Tinkjam could not do that. Try again.",
         onSome: (refusal) => refusal.message,
       }),
     );
   }
   return yield* Schema.decodeEffect(success)(json).pipe(
-    Effect.mapError(() =>
-      failWith("Tinkjam Connect answered with something this app cannot read."),
-    ),
+    Effect.mapError(() => failWith("Tinkjam answered with something this app cannot read.")),
   );
 }, Effect.provide(FetchHttpClient.layer));
 
@@ -241,7 +239,7 @@ export async function joinTeamThread(
   if (host === null) {
     return {
       ok: false,
-      message: "This thread's machine is outside this app's Tinkjam Connect domain.",
+      message: "This thread's machine is outside this app's Tinkjam domain.",
     };
   }
   const assertion = await run(

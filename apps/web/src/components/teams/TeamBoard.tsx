@@ -116,7 +116,7 @@ export function TeamBoard({
           role="status"
           className="rounded-board border border-board-hairline bg-card px-4 py-2.5 text-center text-muted-foreground text-sm shadow-board"
         >
-          {reachable ? "Loading the board..." : "Cannot reach Tinkjam Connect. Trying again."}
+          {reachable ? "Loading the board..." : "Cannot reach Tinkjam. Trying again."}
         </p>
       </BoardBackdrop>
     );
@@ -173,7 +173,7 @@ export function TeamBoard({
       onCursor={undefined}
       onUseNote={undefined}
       cards={cards}
-      summary={reachable ? summary : "Cannot reach Tinkjam Connect. Trying again."}
+      summary={reachable ? summary : "Cannot reach Tinkjam. Trying again."}
       backLabel="Threads"
       ownerAssignable={false}
       formerPeople={formerPeople}
