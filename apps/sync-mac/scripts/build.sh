@@ -124,6 +124,15 @@ cat > "$dist/mac.json" <<JSON
   "minimumSystemVersion": "13.0"
 }
 JSON
+# Installed copies refuse an unsigned mac.json. The release key normally stays on the release PC,
+# which signs this file there: node scripts/sign-release.ts sign apps/sync-mac/dist/mac.json
+release_key="${TINKJAM_RELEASE_KEY:-$HOME/.tinkjam-release/release-key.pem}"
+if [ -f "$release_key" ]; then
+  node "$here/../../scripts/sign-release.ts" sign "$dist/mac.json"
+else
+  echo "mac.json is NOT signed (no release key at $release_key). Sign it on the release PC before publishing:"
+  echo "  node scripts/sign-release.ts sign apps/sync-mac/dist/mac.json && node scripts/sign-release.ts verify apps/sync-mac/dist/mac.json"
+fi
 cp scripts/install.sh "$dist/install.sh"
 chmod +x "$dist/install.sh"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$app" 2>/dev/null || true

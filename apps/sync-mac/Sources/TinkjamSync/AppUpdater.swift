@@ -10,6 +10,14 @@ struct AppRelease: Decodable {
     let url: String
     let sha256: String
     let minimumSystemVersion: String?
+    /// Tinkjam's release key over the fields above (`scripts/sign-release.ts`); unsigned is refused.
+    let keyId: String?
+    let signature: String?
+
+    var isSigned: Bool {
+        ReleaseSignature.isValid(kind: "mac", version: version, build: build, url: url, sha256: sha256,
+                                 minimumSystemVersion: minimumSystemVersion, keyId: keyId, signature: signature)
+    }
 }
 
 /// The app updates itself: download the zip, check its SHA-256 and signature, unpack it beside
@@ -112,6 +120,10 @@ enum AppUpdater {
             let required = OperatingSystemVersion(majorVersion: parts.first ?? 0,
                                                   minorVersion: parts.count > 1 ? parts[1] : 0, patchVersion: 0)
             if !ProcessInfo.processInfo.isOperatingSystemAtLeast(required) { return .upToDate }
+        }
+        guard release.isSigned else {
+            throw SetupError(Plain.updateCheckFailed,
+                             detail: "mac.json for \(release.version) is not signed with Tinkjam's release key; not installed")
         }
         guard canReplaceInstalled, let url = URL(string: release.url) else { return .manual(release.version) }
         if let staged = stagedOnDisk(log: log), staged.version == release.version,

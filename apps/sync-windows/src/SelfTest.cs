@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 
 namespace TinkjamSync
 {
@@ -13,6 +15,21 @@ namespace TinkjamSync
         {
             if (ok) passed++;
             else { failed++; Console.WriteLine("FAIL " + name); }
+        }
+
+        static Dictionary<string, object> With(Dictionary<string, object> manifest, string key, object value)
+        {
+            manifest[key] = value;
+            return manifest;
+        }
+
+        static bool KeyImports(string blob)
+        {
+            try
+            {
+                using (var key = CngKey.Import(Convert.FromBase64String(blob), CngKeyBlobFormat.EccPublicBlob)) return key.KeySize == 256;
+            }
+            catch (Exception) { return false; }
         }
 
         public static int Run()
@@ -148,6 +165,45 @@ namespace TinkjamSync
             Check("default names", defaults.Suffix == "" && defaults.RunValueName == "TinkjamSync" && defaults.PassThrough().Count == 0);
             var parsedArgs = AppArgs.Parse(new[] { "/uninstall", "/SILENT", "--after-update", "--base-dir", @"C:\x" });
             Check("args", parsedArgs.Uninstall && parsedArgs.Silent && parsedArgs.AfterUpdate && parsedArgs.BaseDir == @"C:\x");
+
+            // Release signatures: a vector from scripts/sign-release.ts with a throwaway test key.
+            var testKeys = new Dictionary<string, string>
+            {
+                ["08b7216114b5e5ea"] = "RUNTMSAAAABzGR8OQYmSAU223Ty9t6pk4CwZ9lzzbo14lnSTJs3S+KxE4R6BP/G7p5bWppsqN17CfsHMpGziX1yMd9XhZD5z",
+            };
+            Func<Dictionary<string, object>> signed = () => new Dictionary<string, object>
+            {
+                ["kind"] = "windows",
+                ["version"] = "0.1.2+202611200000",
+                ["url"] = "https://trellium.org/downloads/TinkjamSyncSetup.exe?v=0.1.2%2B202611200000",
+                ["sha256"] = string.Concat(Enumerable.Repeat("ab", 32)),
+                ["keyId"] = "08b7216114b5e5ea",
+                ["signature"] = "9ux4cvEM2s+3O/PBMtfl4/SdrWbV1/n27UnLMeWZrXHU5zX+AhN9zZOMeVA73nonUbkbffgNRx+jndyqIGEE1w==",
+            };
+            Check("signature verifies", ReleaseSignature.Verify("windows", signed(), testKeys));
+            Check("signature null field is empty", ReleaseSignature.Verify("windows", With(signed(), "build", null), testKeys));
+            Check("signature other kind refused", !ReleaseSignature.Verify("sync", signed(), testKeys));
+            Check("signature tampered version refused", !ReleaseSignature.Verify("windows", With(signed(), "version", "0.1.3+202611200000"), testKeys));
+            Check("signature tampered sha refused", !ReleaseSignature.Verify("windows", With(signed(), "sha256", new string('c', 64)), testKeys));
+            Check("signature added field refused", !ReleaseSignature.Verify("windows", With(signed(), "minimumSystemVersion", "10"), testKeys));
+            Check("signature missing refused", !ReleaseSignature.Verify("windows", With(signed(), "signature", null), testKeys));
+            Check("signature garbage refused", !ReleaseSignature.Verify("windows", With(signed(), "signature", "nope"), testKeys));
+            Check("signature unknown key refused", !ReleaseSignature.Verify("windows", With(signed(), "keyId", "ffffffffffffffff"), testKeys));
+            Check("signature wrong key refused", !ReleaseSignature.Verify("windows", With(signed(), "keyId", "ef314cdf2274b761")));
+            Check("signature line break refused", ReleaseSignature.Canonical("windows", With(signed(), "url", "https://x\nsha256=y")) == null);
+            Check("release keys import", ReleaseSignature.PublicKeys.Count == 2 && ReleaseSignature.PublicKeys.Values.All(KeyImports));
+
+            // The package archive and npm.
+            Check("archive file", PackageArchive.SafeName("package/dist/bin.mjs") && PackageArchive.SafeName("package/"));
+            Check("archive outside package", !PackageArchive.SafeName("other/x") && !PackageArchive.SafeName("/package/x"));
+            Check("archive dot dot", !PackageArchive.SafeName("package/../x") && !PackageArchive.SafeName("package/a/../../x"));
+            Check("archive drive or backslash", !PackageArchive.SafeName("package/C:x") && !PackageArchive.SafeName("package\\..\\x"));
+            Check("archive plain", PackageArchive.PlainEntry("-rw-r--r--  0 0      0         123 Nov 19 18:55 package/x") && PackageArchive.PlainEntry("drwxr-xr-x  0 0      0           0 Nov 19 18:55 package/"));
+            Check("archive links", !PackageArchive.PlainEntry("lrwxr-xr-x  0 0 0 0 Nov 19 18:55 package/x -> /etc") && !PackageArchive.PlainEntry("-rw-r--r--  0 0 0 0 Nov 19 18:55 package/x link to package/y") && !PackageArchive.PlainEntry("hrw-r--r-- package/x"));
+            Check("archive listing", PackageArchive.SafeListing(new[] { "package/", "package/a" }, new[] { "d", "-" }) && !PackageArchive.SafeListing(new[] { "package/a" }, new[] { "-", "-" }) && !PackageArchive.SafeListing(new string[0], new string[0]));
+            Check("npm ci", string.Join(" ", NpmCommands.Ci("npm.js", @"C:\s\node_modules\tinkjam-sync", @"C:\c")) == @"npm.js ci --prefix C:\s\node_modules\tinkjam-sync --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error --cache C:\c");
+            Check("npm rebuild", string.Join(" ", NpmCommands.Rebuild("npm.js", "p", "c")) == "npm.js rebuild koffi node-pty --prefix p --loglevel=error --cache c");
+            Check("package layout", Home.LauncherIn(@"C:\a") == @"C:\a\node_modules\tinkjam-sync\bin\tinkjam-sync.mjs" && defaults.ServerEntry == Path.Combine(defaults.AppDir, @"node_modules\tinkjam-sync\dist\bin.mjs"));
 
             Console.WriteLine("self-test: " + passed + " passed, " + failed + " failed");
             return failed == 0 ? 0 : 1;

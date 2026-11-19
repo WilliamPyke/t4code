@@ -97,8 +97,10 @@ namespace TinkjamSync
         public string StagingDir => Path.Combine(RuntimeDir, "sync-staging");
         public string UpdateDir => Path.Combine(RuntimeDir, "update");
         public string AppDir => Path.Combine(BaseDir, "app");
-        public string ServerEntry => Path.Combine(AppDir, "node_modules", "tinkjam-sync", "dist", "bin.mjs");
-        public static string LauncherIn(string appDir) => Path.Combine(appDir, "node_modules", "tinkjam-sync", "bin", "tinkjam-sync.mjs");
+        public string ServerEntry => Path.Combine(PackageIn(AppDir), "dist", "bin.mjs");
+        /// <summary>The package, with its own dependencies in its node_modules.</summary>
+        public static string PackageIn(string appDir) => Path.Combine(appDir, "node_modules", "tinkjam-sync");
+        public static string LauncherIn(string appDir) => Path.Combine(PackageIn(appDir), "bin", "tinkjam-sync.mjs");
         public string SettingsPath => Path.Combine(BaseDir, "sync-app.json");
 
         /// <summary>Arguments that keep a relaunched copy on this same home and install folder.</summary>

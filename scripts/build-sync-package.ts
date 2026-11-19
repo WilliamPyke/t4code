@@ -19,6 +19,7 @@ import { selectCliRuntimeExternalDependencies } from "./lib/cli-external-package
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 import { windowsSystemTar } from "./lib/windows-tar.ts";
+import { requireReleaseKey, signFile } from "./sign-release.ts";
 import { syncVersion } from "./sync-package/updateCheck.ts";
 
 const SYNC_PACKAGE_NAME = "tinkjam-sync";
@@ -120,6 +121,7 @@ export function packagesWithoutIntegrity(lock: {
 }
 
 function main() {
+  const releaseKey = requireReleaseKey();
   const skipBundle = process.argv.includes("--skip-bundle");
   if (!skipBundle) run(process.execPath, ["--run", "build:bundle"], serverDir);
   const serverDist = NodePath.join(serverDir, "dist");
@@ -193,13 +195,16 @@ function main() {
   );
   NodeFS.rmSync(stageRoot, { recursive: true, force: true });
 
-  // Tinkjam Sync for Mac checks the tarball against this before installing it.
+  // The apps check the tarball against this, and this against the release key, before installing.
   const sha256 = NodeCrypto.createHash("sha256").update(NodeFS.readFileSync(tarball)).digest("hex");
-  NodeFS.writeFileSync(
-    NodePath.join(outputDir, "sync.json"),
-    `${JSON.stringify({ version, url: syncUrl, sha256 }, null, 2)}
-`,
-  );
+  const syncJson = NodePath.join(outputDir, "sync.json");
+  NodeFS.writeFileSync(syncJson, `${JSON.stringify({ version, url: syncUrl, sha256 }, null, 2)}\n`);
+  try {
+    signFile(syncJson, releaseKey);
+  } catch (error) {
+    NodeFS.rmSync(syncJson, { force: true });
+    throw error;
+  }
 
   const bytes = NodeFS.statSync(tarball).size;
   console.log(

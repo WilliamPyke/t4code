@@ -403,7 +403,8 @@ namespace TinkjamSync
                 return;
             }
             // First run: a fresh copy, which also clears out whatever an earlier `npx … --install` set up.
-            var staged = await StagePackage(quiet: false);
+            Set(Phase.SettingUp, "getting Tinkjam Sync");
+            var staged = await StagePackage(await Net.GetJson(SyncManifestUrl, "read sync.json"), quiet: false);
             await StopSync();
             await TakeOverWith(staged.Launcher);
             Set(Phase.SettingUp, "finishing");
@@ -419,12 +420,13 @@ namespace TinkjamSync
             File.Exists(Path.Combine(home.BaseDir, "start-sync.js")) ||
             File.Exists(Path.Combine(home.BaseDir, "sync-service.pid"));
 
-        /// <summary>Downloads, checks and installs the published package into the staging folder. The running one is untouched.</summary>
-        async Task<Staged> StagePackage(bool quiet)
+        /// <summary>
+        /// Downloads and checks the package sync.json names, unpacks it into the staging folder and
+        /// installs exactly its npm-shrinkwrap.json there. The running one is untouched.
+        /// </summary>
+        async Task<Staged> StagePackage(Dictionary<string, object> manifest, bool quiet)
         {
             void Say(string detail) { if (!quiet) Set(Phase.SettingUp, detail); }
-            Say("getting Tinkjam Sync");
-            var manifest = await Net.GetJson(SyncManifestUrl, "read sync.json");
             var version = Json.Text(manifest, "version");
             var url = Json.Text(manifest, "url") ?? SyncUrl;
             var sha = Json.Text(manifest, "sha256");
@@ -433,12 +435,16 @@ namespace TinkjamSync
                 Log.App("sync.json names no usable download (url " + url + ", sha256 " + (sha ?? "missing") + ")");
                 throw new SetupException(Words.ServerTrouble);
             }
+            if (!ReleaseSignature.Verify("sync", manifest))
+            {
+                Log.App("sync.json for " + (version ?? "?") + " is not signed with Tinkjam's release key; not installed");
+                throw new SetupException(Words.ServerTrouble);
+            }
             Alive();
             await Task.Run(() =>
             {
                 DeleteDir(home.StagingDir);
                 Directory.CreateDirectory(home.StagingDir);
-                File.WriteAllText(Path.Combine(home.StagingDir, "package.json"), "{\"name\":\"tinkjam-sync-app\",\"private\":true}\n");
             });
             var tarball = Path.Combine(home.StagingDir, "sync.tgz");
             await Net.Download(url + (version == null ? "" : "?v=" + Uri.EscapeDataString(version)), tarball, "download Tinkjam Sync",
@@ -452,20 +458,26 @@ namespace TinkjamSync
                 throw new SetupException(Words.Damaged);
             }
             Say("installing (this can take a few minutes)");
+            var packageDir = Home.PackageIn(home.StagingDir);
+            if (!await Task.Run(() => Unpack(tarball, packageDir)))
+            {
+                await Task.Run(() => DeleteDir(home.StagingDir));
+                throw new SetupException(Words.InstallFailed);
+            }
+            TryDelete(tarball);
+            Alive();
             var cache = Path.Combine(home.RuntimeDir, "npm-cache");
             var npm = Path.Combine(Path.GetDirectoryName(nodeExe), "node_modules", "npm", "bin", "npm-cli.js");
             var output = new StringBuilder();
-            var code = await Run(new[]
-            {
-                npm, "install", "--prefix", home.StagingDir, "--no-audit", "--no-fund", "--omit=dev", "--loglevel=error",
-                "--cache", cache, tarball,
-            }, line => { lock (output) { if (output.Length < 20000) output.AppendLine(line); } }, TimeSpan.FromMinutes(10), nodeFirstOnPath: true);
+            Action<string> collect = line => { lock (output) { if (output.Length < 20000) output.AppendLine(line); } };
+            var code = await Run(NpmCommands.Ci(npm, packageDir, cache), collect, TimeSpan.FromMinutes(10), nodeFirstOnPath: true);
+            if (code == 0) code = await Run(NpmCommands.Rebuild(npm, packageDir, cache), collect, TimeSpan.FromMinutes(5), nodeFirstOnPath: true);
             await Task.Run(() => { try { DeleteDir(cache); } catch (Exception) { } });
             Alive();
             var stagedLauncher = Home.LauncherIn(home.StagingDir);
             if (code != 0 || !File.Exists(stagedLauncher))
             {
-                Log.App("npm install ended with exit code " + code);
+                Log.App("npm ci ended with exit code " + code);
                 string said;
                 lock (output) said = output.ToString();
                 switch (Failures.Classify(said))
@@ -475,8 +487,66 @@ namespace TinkjamSync
                     default: throw new SetupException(Words.InstallFailed);
                 }
             }
-            TryDelete(tarball);
             return new Staged { Launcher = stagedLauncher, Version = await PackageVersion(stagedLauncher) ?? version };
+        }
+
+        /// <summary>
+        /// Windows' own tar (10 1803 and later) unpacks npm's `package/` folder as `target`, after
+        /// the listing shows only plain files and folders inside it. It refuses `..` and absolute paths too.
+        /// </summary>
+        static bool Unpack(string tarball, string target)
+        {
+            var tar = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "tar.exe");
+            if (!File.Exists(tar))
+            {
+                Log.App("Windows' own tar.exe is missing; it comes with Windows 10 version 1803 and later");
+                return false;
+            }
+            var names = Tool(tar, "-tzf", tarball);
+            var longListing = Tool(tar, "-tvzf", tarball);
+            if (names == null || longListing == null || !PackageArchive.SafeListing(names, longListing))
+            {
+                Log.App("sync.tgz holds something besides the package's own files and folders; not installed");
+                return false;
+            }
+            Directory.CreateDirectory(target);
+            if (Tool(tar, "-xzf", tarball, "-C", target, "--strip-components", "1") == null) return false;
+            foreach (var entry in Directory.EnumerateFileSystemEntries(target, "*", SearchOption.AllDirectories))
+            {
+                if ((File.GetAttributes(entry) & FileAttributes.ReparsePoint) == 0) continue;
+                Log.App("sync.tgz unpacked a link (" + entry + "); not installed");
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>Runs a program to its end: its output lines, or null when it failed.</summary>
+        static List<string> Tool(string exe, params string[] args)
+        {
+            var info = new ProcessStartInfo(exe, CommandLine.Join(args))
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            using (var process = Process.Start(info))
+            {
+                var error = process.StandardError.ReadToEndAsync();
+                var output = process.StandardOutput.ReadToEnd();
+                if (!process.WaitForExit(120_000))
+                {
+                    try { process.Kill(); } catch (Exception) { }
+                    Log.App(Path.GetFileName(exe) + " did not finish");
+                    return null;
+                }
+                if (process.ExitCode != 0)
+                {
+                    Log.App(Path.GetFileName(exe) + " ended with exit code " + process.ExitCode + ": " + error.Result.Trim());
+                    return null;
+                }
+                return output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).ToList();
+            }
         }
 
         /// <summary>
@@ -805,6 +875,12 @@ namespace TinkjamSync
                     if (manual) Notify?.Invoke("Tinkjam Sync is up to date", "You have version " + AppInfo.ShortVersion + ".", false);
                     return false;
                 }
+                if (!ReleaseSignature.Verify("windows", manifest))
+                {
+                    Log.App("windows.json offers " + version + " but is not signed with Tinkjam's release key; it tries again at the next check");
+                    if (manual) Notify?.Invoke("Couldn't check for updates", Words.ServerTrouble + " It tries again within the hour.", false);
+                    return false;
+                }
                 var path = Path.Combine(home.UpdateDir, "TinkjamSyncSetup-" + Regex.Replace(version, "[^0-9A-Za-z.]", "-") + ".exe");
                 // One already downloaded and intact is kept, so a new log-in downloads nothing again.
                 if (!await Task.Run(() => File.Exists(path) && Checksum.Matches(path, sha)))
@@ -851,15 +927,17 @@ namespace TinkjamSync
         {
             if (View.Busy || shuttingDown || nodeExe == null || FirstRun) return;
             if (View.Phase == Phase.SettingUp || View.Phase == Phase.Approving || View.Phase == Phase.Disconnecting) return;
-            string latest;
+            Dictionary<string, object> manifest;
             try
             {
-                latest = Json.Text(await Net.GetJson(SyncManifestUrl, "check for a newer Tinkjam Sync"), "version");
+                manifest = await Net.GetJson(SyncManifestUrl, "check for a newer Tinkjam Sync");
             }
             catch (SetupException)
             {
                 return;
             }
+            // The same manifest is staged, so the version compared is the one installed: never a downgrade.
+            var latest = Json.Text(manifest, "version");
             if (!Versions.IsNewer(settings.SyncVersion, latest) || View.Busy || shuttingDown) return;
             if (AgentsRunning())
             {
@@ -873,7 +951,7 @@ namespace TinkjamSync
             try
             {
                 systemProxy = await Task.Run(() => Net.SystemProxy());
-                var staged = await StagePackage(quiet: true);
+                var staged = await StagePackage(manifest, quiet: true);
                 if (shuttingDown) return;
                 if (AgentsRunning())
                 {

@@ -57,15 +57,25 @@ enum NodeRuntime {
     }
 }
 
-/// sync.json, published beside sync.tgz. A release without `sha256` is never installed.
+/// sync.json, published beside sync.tgz. A release without `sha256`, or not signed with the
+/// release key, is never installed.
 struct SyncRelease: Decodable {
     let version: String
     let url: String
     let sha256: String?
+    let build: String?
+    let minimumSystemVersion: String?
+    let keyId: String?
+    let signature: String?
+
+    var isSigned: Bool {
+        ReleaseSignature.isValid(kind: "sync", version: version, build: build, url: url, sha256: sha256,
+                                 minimumSystemVersion: minimumSystemVersion, keyId: keyId, signature: signature)
+    }
 }
 
-/// The published Tinkjam Sync package, installed with its npm dependencies by the private Node's
-/// npm, the way the launcher's `--install` lays it out: `<home>/app/node_modules/tinkjam-sync`.
+/// The published Tinkjam Sync package, unpacked as `<home>/app/node_modules/tinkjam-sync` (the
+/// launcher's `--install` layout) with exactly its npm-shrinkwrap.json installed by the private Node's npm.
 enum SyncPackage {
     static func isInstalled(_ paths: Paths) -> Bool {
         FileManager.default.fileExists(atPath: Paths.serverEntry(in: paths.app).path)
@@ -120,6 +130,10 @@ enum SyncPackage {
         guard let expected = release.sha256?.lowercased(), !expected.isEmpty else {
             throw SetupError(Plain.serverTrouble, detail: "sync.json names no sha256 for \(release.version); not installed")
         }
+        guard release.isSigned else {
+            throw SetupError(Plain.serverTrouble,
+                             detail: "sync.json for \(release.version) is not signed with Tinkjam's release key; not installed")
+        }
         let staging = paths.staging
         let downloads = paths.runtime.appendingPathComponent("downloads")
         let tarball = downloads.appendingPathComponent("sync.tgz")
@@ -159,21 +173,53 @@ enum SyncPackage {
             "npm_config_fund": "false",
             "npm_config_audit": "false",
         ]
-        let install = await run(paths.node, [paths.npmCLI.path, "install", tarball.path, "--prefix", staging.path,
-                                             "--omit=dev", "--no-save", "--loglevel=error"],
-                                environment: environment, currentDirectory: staging, timeout: 900)
+        let packageDir = Paths.package(in: staging)
+        if let problem = await unpack(tarball, into: packageDir) {
+            try? fm.removeItem(at: staging)
+            throw SetupError(Plain.setupFailed, detail: problem)
+        }
+        var install = await run(paths.node, NpmCommands.ci(paths.npmCLI.path, packageDir.path, npmCache.path),
+                                environment: environment, currentDirectory: packageDir, timeout: 900)
+        if install.succeeded {
+            install = await run(paths.node, NpmCommands.rebuild(paths.npmCLI.path, packageDir.path, npmCache.path),
+                                environment: environment, currentDirectory: packageDir, timeout: 300)
+        }
         if !install.output.isEmpty { log.app("npm: \(install.tail(20))") }
         guard install.succeeded, fm.fileExists(atPath: Paths.serverEntry(in: staging).path) else {
             try? fm.removeItem(at: staging)
             let offline = install.output.contains("ENOTFOUND") || install.output.contains("EAI_AGAIN")
                 || install.output.contains("ECONNREFUSED") || install.output.contains("ETIMEDOUT")
-            let detail = "npm install ended with \(install.status)"
+            let detail = "npm ci ended with \(install.status)"
             if install.output.contains("ENOSPC") { throw SetupError(Plain.diskFull, detail: detail) }
             throw offline
                 ? SetupError(Plain.offline, offline: true, detail: detail)
                 : SetupError(Plain.setupFailed, detail: detail)
         }
         return staging
+    }
+
+    /// macOS's tar unpacks npm's `package/` folder as `target`, after the listing shows only plain
+    /// files and folders inside it. It refuses `..` and absolute paths too. Returns what went wrong.
+    private static func unpack(_ tarball: URL, into target: URL) async -> String? {
+        let tar = URL(fileURLWithPath: "/usr/bin/tar")
+        let names = await run(tar, ["-tzf", tarball.path], timeout: 120)
+        let longListing = await run(tar, ["-tvzf", tarball.path], timeout: 120)
+        let lines = { (result: RunResult) in result.output.split(whereSeparator: \.isNewline).map(String.init) }
+        guard names.succeeded, longListing.succeeded,
+              PackageArchive.safeListing(names: lines(names), longListing: lines(longListing))
+        else { return "sync.tgz holds something besides the package's own files and folders" }
+        do { try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true) } catch {
+            return "could not make \(target.path): \(error.localizedDescription)"
+        }
+        let untar = await run(tar, ["-xzf", tarball.path, "-C", target.path, "--strip-components", "1"], timeout: 300)
+        guard untar.succeeded else { return "could not unpack sync.tgz: \(untar.tail(1))" }
+        let entries = FileManager.default.enumerator(at: target, includingPropertiesForKeys: [.isSymbolicLinkKey])
+        while let entry = entries?.nextObject() as? URL {
+            if (try? entry.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
+                return "sync.tgz unpacked a link (\(entry.path))"
+            }
+        }
+        return nil
     }
 
     /// A staged copy of what is installed now (APFS clones it, so it costs no space).

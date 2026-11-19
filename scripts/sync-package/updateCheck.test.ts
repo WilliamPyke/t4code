@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Signs a manifest with a throwaway key, as the release step does.
 import * as NodeCrypto from "node:crypto";
 
 import { describe, expect, it } from "vite-plus/test";

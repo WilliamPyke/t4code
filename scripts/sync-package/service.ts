@@ -349,7 +349,17 @@ const remove = (path: string) => NodeFS.rmSync(path, { recursive: true, force: t
  */
 export function pinnedInstallArgs(npmCli: string, packageDir: string) {
   return [
-    [npmCli, "ci", "--prefix", packageDir, "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"],
+    [
+      npmCli,
+      "ci",
+      "--prefix",
+      packageDir,
+      "--omit=dev",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      "--loglevel=error",
+    ],
     [npmCli, "rebuild", "koffi", "node-pty", "--prefix", packageDir, "--loglevel=error"],
   ];
 }
@@ -359,7 +369,15 @@ export function npmCliFor(execPath: string, platform: NodeJS.Platform, npmExecPa
   const beside =
     platform === "win32"
       ? NodePath.join(NodePath.dirname(execPath), "node_modules", "npm", "bin", "npm-cli.js")
-      : NodePath.join(NodePath.dirname(execPath), "..", "lib", "node_modules", "npm", "bin", "npm-cli.js");
+      : NodePath.join(
+          NodePath.dirname(execPath),
+          "..",
+          "lib",
+          "node_modules",
+          "npm",
+          "bin",
+          "npm-cli.js",
+        );
   return [npmExecPath, beside].find(
     (candidate) => candidate?.endsWith("npm-cli.js") === true && NodeFS.existsSync(candidate),
   );

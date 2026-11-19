@@ -13,6 +13,7 @@ import {
   launchAgentPlist,
   leftoverMarkers,
   parseSyncArgs,
+  pinnedInstallArgs,
   readConnectionState,
   serviceNames,
   servicePaths,
@@ -203,6 +204,41 @@ describe("Tinkjam Sync's background copy", () => {
       false,
     );
     expect(NodeFS.existsSync(`${service.paths.app}.new`)).toBe(false);
+  });
+
+  it("installs exactly the package's shrinkwrap when npm is at hand, not what npx put beside it", () => {
+    const npx = tempDir();
+    const packageDir = NodePath.join(npx, "node_modules", "tinkjam-sync");
+    NodeFS.mkdirSync(NodePath.join(packageDir, "dist"), { recursive: true });
+    NodeFS.writeFileSync(NodePath.join(packageDir, "dist", "bin.mjs"), "v1");
+    NodeFS.writeFileSync(NodePath.join(packageDir, "npm-shrinkwrap.json"), "{}");
+    NodeFS.mkdirSync(NodePath.join(packageDir, "node_modules", "stale"), { recursive: true });
+    NodeFS.mkdirSync(NodePath.join(npx, "node_modules", "dependency"), { recursive: true });
+    const tools = tempDir();
+    const calls = NodePath.join(tools, "calls.json");
+    // .cjs: a module type above the temp folder must not change how it loads.
+    const npmCli = NodePath.join(tools, "npm-cli.cjs");
+    NodeFS.writeFileSync(
+      npmCli,
+      `const fs = require("node:fs");
+const seen = fs.existsSync(${JSON.stringify(calls)}) ? JSON.parse(fs.readFileSync(${JSON.stringify(calls)}, "utf8")) : [];
+fs.writeFileSync(${JSON.stringify(calls)}, JSON.stringify([...seen, process.argv.slice(2)]));`,
+    );
+    const service = syncService(tempDir(), "linux");
+
+    service.copyPackage(packageDir, npmCli);
+
+    const installed = NodePath.dirname(NodePath.dirname(service.paths.serverEntry));
+    expect(NodeFS.readFileSync(service.paths.serverEntry, "utf8")).toBe("v1");
+    expect(NodeFS.existsSync(NodePath.join(installed, "node_modules", "stale"))).toBe(false);
+    expect(NodeFS.existsSync(NodePath.join(service.paths.app, "node_modules", "dependency"))).toBe(
+      false,
+    );
+    // npm ran in the staged copy, which then took the installed one's place.
+    const staged = NodePath.join(`${service.paths.app}.new`, "node_modules", "tinkjam-sync");
+    expect(JSON.parse(NodeFS.readFileSync(calls, "utf8"))).toEqual(
+      pinnedInstallArgs(npmCli, staged).map((args) => args.slice(1)),
+    );
   });
 
   it("trusts only a status the running Sync wrote since it started", () => {

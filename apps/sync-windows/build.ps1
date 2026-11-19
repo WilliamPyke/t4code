@@ -8,6 +8,10 @@ $downloads = 'https://trellium.org/downloads'
 $env:DOTNET_NOLOGO = '1'
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
+$repo = Resolve-Path (Join-Path $root '..\..')
+# windows.json is signed with the release key (scripts/sign-release.ts); installed copies refuse it unsigned.
+$releaseKey = if ($env:TINKJAM_RELEASE_KEY) { $env:TINKJAM_RELEASE_KEY } else { Join-Path $HOME '.tinkjam-release\release-key.pem' }
+if (-not (Test-Path $releaseKey)) { throw "No release key at $releaseKey (TINKJAM_RELEASE_KEY): windows.json can't be signed, so nothing was built." }
 
 [xml]$project = Get-Content (Join-Path $root 'TinkjamSync.csproj')
 $prefix = @($project.Project.PropertyGroup | ForEach-Object { $_.VersionPrefix } | Where-Object { $_ })[0]
@@ -46,7 +50,10 @@ $manifest = [ordered]@{
   url = "$downloads/TinkjamSyncSetup.exe?v=" + [Uri]::EscapeDataString($version)
   sha256 = $sha
 }
-[IO.File]::WriteAllText((Join-Path $dist 'windows.json'), ($manifest | ConvertTo-Json) + "`n", $utf8)
+$windowsJson = Join-Path $dist 'windows.json'
+[IO.File]::WriteAllText($windowsJson, ($manifest | ConvertTo-Json) + "`n", $utf8)
+node (Join-Path $repo 'scripts\sign-release.ts') sign $windowsJson
+if ($LASTEXITCODE -ne 0) { Remove-Item $windowsJson; throw 'Signing windows.json failed; it was removed so an unsigned one is never published.' }
 Copy-Item (Join-Path $root 'install.ps1') (Join-Path $dist 'install.ps1')
 
 $bytes = (Get-Item $setup).Length

@@ -4,13 +4,15 @@ A menu bar app that sets up, runs and updates Tinkjam Sync, so nobody needs a te
 AppKit and SwiftPM only; no Xcode project.
 
 - First launch downloads Node.js (pinned version and SHA-256 in `Sources/TinkjamSync/Config.swift`)
-  into `~/.tinkjam/runtime`, installs the published Sync package (`https://trellium.org/sync.json`,
-  `sync.tgz`) with that Node's npm into `~/.tinkjam/app`, and starts it.
+  into `~/.tinkjam/runtime`, unpacks the published Sync package (`https://trellium.org/sync.json`,
+  `sync.tgz`) into `~/.tinkjam/app/node_modules/tinkjam-sync`, installs exactly its
+  `npm-shrinkwrap.json` there with that Node's `npm ci`, and starts it.
 - The app is the only Sync: it removes the npx-installed LaunchAgent with the package's own
   `--uninstall` (the account stays connected), ends any other Sync of the home, runs Sync as its
   child and stops the whole tree on Quit. It is its own login item (`SMAppService.mainApp`).
 - It checks `sync.json` and `downloads/mac.json` on launch, hourly and on waking. A newer Sync
-  installs by itself once no agent is running; `sync.json` must carry the tarball's `sha256`. A
+  installs by itself once no agent is running; `sync.json` must carry the tarball's `sha256` and,
+  like `mac.json`, a signature by the release key (`scripts/sign-release.ts`). A
   newer app is downloaded, checked, and installed at the next launch or when no agent is running;
   the menu also offers "Restart to Update".
 - The menu follows `~/.tinkjam/userdata/sync-status.json`, which Sync rewrites every 30 seconds,
@@ -40,8 +42,11 @@ TINKJAM_NOTARY_PROFILE=tinkjam-notary apps/sync-mac/scripts/build.sh
 
 ## Publish
 
-Upload everything in `dist/` to `https://trellium.org/downloads/`. Installed copies read
-`mac.json` (`version`, `url`, `sha256`, `minimumSystemVersion`) and update to a newer `version`.
+Installed copies refuse a `mac.json` the release key did not sign. The key stays on the release
+PC, so copy `dist/mac.json` there and run `node scripts/sign-release.ts sign <path to mac.json>`
+(then `verify`) unless `build.sh` found the key itself. Then upload everything in `dist/` to
+`https://trellium.org/downloads/`. Installed copies read `mac.json` (`version`, `build`, `url`,
+`sha256`, `minimumSystemVersion`, `keyId`, `signature`) and update to a newer `version`.
 Agents and terminals install with `curl -fsSL https://trellium.org/downloads/install.sh | bash`.
 
 ## Testing without touching the real setup
