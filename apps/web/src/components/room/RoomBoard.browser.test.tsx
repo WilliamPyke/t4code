@@ -954,6 +954,20 @@ describe("RoomBoard keys and pointer", () => {
       await expect
         .element(screen.getByRole("textbox", { name: "Task", exact: true }).last())
         .toHaveFocus();
+
+      // A tap at the surface's very edge lands the card inside the view, under no chrome.
+      await userEvent.click(screen.getByRole("button", { name: "Note", exact: true }));
+      const edgeLayer = screen.container.querySelector<HTMLElement>('[data-board-place="note"]');
+      if (edgeLayer === null) throw new Error("The Note tool did not wait for a click");
+      const edgeBox = edgeLayer.getBoundingClientRect();
+      const had = new Set(puts(onChange).map((change) => change.noteId));
+      await userEvent.click(edgeLayer, { position: { x: 300, y: 2 } });
+      await vi.waitFor(() =>
+        expect(puts(onChange).some((change) => !had.has(change.noteId))).toBe(true),
+      );
+      const edged = drawnAt(puts(onChange).find((change) => !had.has(change.noteId))!.noteId);
+      expect(edged.top).toBeGreaterThanOrEqual(edgeBox.top);
+      expect(edged.bottom).toBeLessThanOrEqual(edgeBox.bottom);
     }
   });
 
@@ -1239,6 +1253,73 @@ describe("RoomBoard lines", () => {
       position: {
         x: (a.right + rectOf("b").left) / 2 - under.left,
         y: (a.top + a.bottom) / 2 - under.top,
+      },
+    });
+    await expect.element(screen.getByRole("button", { name: "Delete line" })).toBeVisible();
+  });
+
+  it("focuses the link field when it opens, and Escape closes it back to the board", async () => {
+    const board = renderBoard([{ id: "a", text: "First", x: 0, y: 0 }]);
+    await using screen = await board.screen;
+    await userEvent.click(screen.getByRole("button", { name: "Link" }));
+    const field = screen.getByRole("textbox", { name: "Link" });
+    await expect.element(field).toBeVisible();
+    await vi.waitFor(() => {
+      if (document.activeElement !== field.element()) {
+        throw new Error("the link field is not focused");
+      }
+    });
+    await userEvent.keyboard("{Escape}");
+    await expect.element(field).not.toBeInTheDocument();
+    await vi.waitFor(() => {
+      const surface = screen.getByRole("application", { name: "Room board" }).element();
+      if (document.activeElement !== surface) throw new Error("the board is not focused");
+    });
+  });
+
+  it("selects a line 6px off the line, where a card's grip band covers it", async () => {
+    const board = render(
+      <RoomBoard
+        title="Launch"
+        room={{
+          messages: [],
+          board: {
+            positions: {},
+            notes: [
+              { id: "a", text: "First", x: 0, y: 0 },
+              { id: "b", text: "Second", x: 212, y: 0 },
+            ],
+            edges: [{ id: "line", from: "note:a", to: "note:b" }],
+          },
+        }}
+        online={[]}
+        messages={[]}
+        viewer={null}
+        ownerName={undefined}
+        cursorLayer={null}
+        onOpenThread={() => {}}
+        onOpenReply={() => {}}
+        onChange={async () => true}
+        onCursor={undefined}
+        onUseNote={undefined}
+      />,
+      { container: sizedContainer() },
+    );
+    await using screen = await board;
+    const rectOf = (id: string) => {
+      const element = screen.container.querySelector(`[data-board-item="note:${id}"]`);
+      if (element === null) throw new Error(`The board did not draw note ${id}`);
+      return element.getBoundingClientRect();
+    };
+    const surface = screen.getByRole("application", { name: "Room board" });
+    const under = surface.element().getBoundingClientRect();
+    const a = rectOf("a");
+    // The card's east grip band reaches a couple of px past its edge, over the line's
+    // hit path; 6px off the line the press is the line's, never a resize's.
+    await userEvent.click(surface, {
+      position: {
+        x: a.right + 1 - under.left,
+        y: (a.top + a.bottom) / 2 + 6 - under.top,
       },
     });
     await expect.element(screen.getByRole("button", { name: "Delete line" })).toBeVisible();

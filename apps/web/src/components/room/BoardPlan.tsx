@@ -591,9 +591,16 @@ export function BoardPlan({
           <EmptyHeader>
             <EmptyTitle>Plan the work</EmptyTitle>
             <EmptyDescription>
-              {canEdit
-                ? "The Plan shows this board's tasks to move through, and every task you add here is a card on the board too. Press C to add one."
-                : "The Plan shows this board's tasks to move through. This board has none yet."}
+              {canEdit ? (
+                <>
+                  The Plan shows this board&apos;s tasks to move through, and every task you add
+                  here is a card on the board too.{" "}
+                  <span className="pointer-coarse:hidden">Press C to add one.</span>
+                  <span className="hidden pointer-coarse:inline">Tap + to add one.</span>
+                </>
+              ) : (
+                "The Plan shows this board's tasks to move through. This board has none yet."
+              )}
             </EmptyDescription>
           </EmptyHeader>
           {canEdit ? (

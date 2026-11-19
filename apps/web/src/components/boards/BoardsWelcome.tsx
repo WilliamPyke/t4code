@@ -57,6 +57,7 @@ export function BoardsWelcome() {
   const named = asked && accountName !== null && !submitted;
   const typing = asked && !named;
   const name = draft.name ?? suggested;
+  const needsName = typing && name.trim() === "";
   const change = (patch: Partial<WelcomeDraft>) => {
     const next = { ...draft, ...patch };
     setDraft(next);
@@ -64,7 +65,7 @@ export function BoardsWelcome() {
   };
   const start = async (event: FormEvent) => {
     event.preventDefault();
-    if (busy || (typing && name.trim() === "")) return;
+    if (busy || needsName) return;
     if (typing) {
       setSubmitted(true);
       rememberBoardName(name);
@@ -193,6 +194,7 @@ export function BoardsWelcome() {
               </label>
             </div>
             <p id={helpId} className="text-xs text-pretty text-muted-foreground">
+              {needsName ? "Add your name to start a board. " : ""}
               {typing
                 ? "People you invite see your name. Naming the board is optional, and you can rename it later."
                 : "Naming the board is optional, and you can rename it later."}
@@ -202,7 +204,7 @@ export function BoardsWelcome() {
             <Button
               type="submit"
               size="lg"
-              disabled={busy || (typing && name.trim() === "")}
+              disabled={busy || needsName}
               aria-busy={busy || undefined}
               data-welcome-start
             >

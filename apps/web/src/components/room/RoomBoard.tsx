@@ -981,6 +981,16 @@ const edgeAt = (x: number, y: number) =>
         element instanceof SVGElement && element.dataset.boardEdge !== undefined,
     )?.dataset.boardEdge ?? null;
 
+/** A grip's band reaches outside its card; past the card's edge a press it covers is the line's. */
+const linePressOnGrip = (target: EventTarget | null, x: number, y: number) => {
+  if (!(target instanceof Element) || target.closest("[data-board-grip]") === null) return null;
+  const box = target.closest<HTMLElement>("[data-board-item]")?.getBoundingClientRect();
+  if (box === undefined || (x >= box.left && x <= box.right && y >= box.top && y <= box.bottom)) {
+    return null;
+  }
+  return edgeAt(x, y);
+};
+
 /**
  * A shared thread laid out as a board: the thread boxes everyone added, each its own
  * conversation, each person in the room, and their cards, with lines between them. The
@@ -2889,16 +2899,14 @@ export function RoomBoard({
     reveal({ x: value.x, y: value.y, width: size.w, height: size.h }, true);
     return id;
   };
-  /** Adds a tool's card centred on `at`, as FigJam does, or where it fits in view; caret in it. */
+  /** Adds a tool's card at `at`, kept in the part of the view the floating chrome leaves; caret in it. */
   const addToolCard = (tool: ArmedCardTool, at: BoardPoint | null) => {
     const size =
       tool === "section"
         ? BOARD_SECTION_SIZE
         : boardNewNoteSize(tool === "task" ? "task" : undefined);
-    const wanted =
-      at === null
-        ? undefined
-        : { x: Math.round(at.x - size.w / 2), y: Math.round(at.y - size.h / 2) };
+    // A tap means "here", over a card or not, so no taken rect dislodges it; the seen rect does.
+    const wanted = at === null ? undefined : boardPointedSpot(size, at, seenRect(), []);
     addAndType(() =>
       tool === "section"
         ? addSection(undefined, wanted)
@@ -3915,6 +3923,12 @@ export function RoomBoard({
     send({ kind: "note", id: note.id }, null);
     addLink(url, { x: note.x, y: note.y });
   };
+  // A menu hands its trigger the focus back as it closes, after the field mounted, so a
+  // frame on the field takes it; preventScroll keeps the page where the bar left it.
+  const linkField = useStableCallback((element: HTMLInputElement | null) => {
+    if (element === null) return;
+    window.requestAnimationFrame(() => element.focus({ preventScroll: true }));
+  });
   const startLinkDraft = () => {
     setDraftKind("link");
     setLinkDraft("");
@@ -5753,7 +5767,7 @@ export function RoomBoard({
                         ? "Paste a GitHub pull request link"
                         : "Paste or type a link"
                     }
-                    autoFocus
+                    ref={linkField}
                     value={linkDraft}
                     aria-invalid={linkDraft.trim() !== "" && draftUrl(linkDraft) === null}
                     onChange={(event) => setLinkDraft(event.target.value)}
@@ -5946,6 +5960,12 @@ export function RoomBoard({
             }
             // Keys act on the board during and after a gesture: Escape, Delete, the arrows.
             event.currentTarget.focus({ preventScroll: true });
+            // A press past a card's edge that a grip's band covers is the line's; claiming it
+            // here keeps the grip from starting a resize, and the click selects the line.
+            if (linePressOnGrip(target, event.clientX, event.clientY) !== null) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
             if (
               !canEdit ||
               !(target instanceof Element) ||
@@ -5967,6 +5987,14 @@ export function RoomBoard({
               return toggleSelected(ref);
             }
             press.current = { on: ref, x: event.clientX, y: event.clientY, moved: false };
+          }}
+          onClickCapture={(event) => {
+            // The line a covered grip's press belongs to (see onPointerDownCapture).
+            const edge = linePressOnGrip(event.target, event.clientX, event.clientY);
+            if (edge === null) return;
+            event.preventDefault();
+            event.stopPropagation();
+            selectEdge(edge);
           }}
           onMouseDownCapture={(event) => {
             // A press that moves, pans, selects or draws would also select the page's text, or start
@@ -6814,18 +6842,26 @@ export function RoomBoard({
                       <Toggle value="curve">Curved</Toggle>
                       <Toggle value="elbow">Elbow</Toggle>
                     </ToggleGroup>
-                    <Button
-                      size="icon-xs"
-                      variant="outline"
-                      aria-label="Delete line"
-                      // Focused without scrolling: inside the moved board, the browser would
-                      // scroll the board's box to bring it into view.
-                      ref={focusInPlace}
-                      onPointerDown={stopPointer}
-                      onClick={() => removeEdge(edge.id)}
-                    >
-                      <Trash2Icon />
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            aria-label="Delete line"
+                            // Focused without scrolling: inside the moved board, the browser
+                            // would scroll the board's box to bring it into view.
+                            ref={focusInPlace}
+                            onPointerDown={stopPointer}
+                            onClick={() => removeEdge(edge.id)}
+                          />
+                        }
+                      >
+                        <Trash2Icon />
+                        <span className="hidden sm:inline">Delete</span>
+                      </TooltipTrigger>
+                      <TooltipPopup side="top">Delete line</TooltipPopup>
+                    </Tooltip>
                   </div>
                 );
               })}
@@ -7340,10 +7376,12 @@ function LineLegend() {
             <span aria-hidden className={cn(swatch, "border-muted-foreground/70")} />
             Any other line: only shows a link
           </span>
-          <span className="mt-1 border-t border-board-hairline pt-1.5">
+          <span className="mt-1 border-t border-board-hairline pt-1.5 pointer-coarse:hidden">
             {boardVoteShortcut()} votes for the selected cards, or takes your votes back
           </span>
-          <span>{boardAskShortcut()} asks an agent about the selected cards</span>
+          <span className="pointer-coarse:hidden">
+            {boardAskShortcut()} asks an agent about the selected cards
+          </span>
         </div>
       </PopoverPopup>
     </Popover>
