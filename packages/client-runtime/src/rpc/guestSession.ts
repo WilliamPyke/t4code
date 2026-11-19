@@ -77,8 +77,8 @@ export class GuestShareAccess extends Context.Reference<{
     shareId: string,
     event: RoomAgentsEvent | RoomCursorsEvent,
   ) => Effect.Effect<void>;
-  /** The share ended, or this guest was removed. The platform forgets it. */
-  readonly ended: (shareId: string) => Effect.Effect<void>;
+  /** The share ended, or this guest was removed; `detail` is why, where the host named it. */
+  readonly ended: (shareId: string, detail?: string) => Effect.Effect<void>;
 }>("@t3tools/client-runtime/rpc/guestSession/GuestShareAccess", {
   defaultValue: () => ({
     share: () => Effect.succeedNone,
@@ -260,6 +260,9 @@ const decodeOutputFrame = Schema.decodeUnknownOption(
 const decodeItem = Schema.decodeUnknownEffect(Schema.toCodecJson(OrchestrationV2GetTurnItemResult));
 const decodeHistoryPage = Schema.decodeUnknownEffect(
   Schema.toCodecJson(OrchestrationV2ThreadHistoryPage),
+);
+const decodeRefusalDetail = Schema.decodeUnknownOption(
+  Schema.Struct({ detail: Schema.optional(Schema.String) }),
 );
 
 /** Null for anything the server would never send, so a bad frame is skipped, not fatal. */
@@ -455,11 +458,12 @@ export const connectGuestSession = Effect.fn("GuestSession.connect")(function* (
   });
   /** The owner's server no longer lets this guest in. Nothing else answers 403 or 410 here. */
   const refused = (status: number | null) => status === 403 || status === 410;
-  const ended = access
-    .ended(target.shareId)
-    .pipe(Effect.andThen(Deferred.fail(disconnected, endedError)), Effect.asVoid);
+  const ended = (detail?: string) =>
+    access
+      .ended(target.shareId, detail)
+      .pipe(Effect.andThen(Deferred.fail(disconnected, endedError)), Effect.asVoid);
   const lost = Deferred.fail(disconnected, lostError).pipe(Effect.asVoid);
-  const stopped = (status: number | null) => (refused(status) ? ended : lost);
+  const stopped = (status: number | null) => (refused(status) ? ended() : lost);
 
   const request = (
     route: string,
@@ -498,7 +502,12 @@ export const connectGuestSession = Effect.fn("GuestSession.connect")(function* (
       response.ok
         ? Effect.void
         : refused(response.status)
-          ? Effect.andThen(access.ended(target.shareId), Effect.fail(endedError))
+          ? Effect.promise(() => response.json().catch(() => null)).pipe(
+              Effect.flatMap((body: unknown) =>
+                access.ended(target.shareId, Option.getOrNull(decodeRefusalDetail(body))?.detail),
+              ),
+              Effect.andThen(Effect.fail(endedError)),
+            )
           : Effect.fail(lostError),
     ),
   );
@@ -586,7 +595,11 @@ export const connectGuestSession = Effect.fn("GuestSession.connect")(function* (
             case "ended":
               return [
                 synchronized,
-                [ended.pipe(Effect.as<ReadonlyArray<OrchestrationV2ThreadStreamItem>>([]))],
+                [
+                  ended(event.detail).pipe(
+                    Effect.as<ReadonlyArray<OrchestrationV2ThreadStreamItem>>([]),
+                  ),
+                ],
               ] as const;
             case "thread":
               // The thread state waits for this marker before it calls the thread live.

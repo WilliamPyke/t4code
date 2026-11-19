@@ -57,7 +57,7 @@ const host = (
     new Response(null, { status: 204 }),
 ) => {
   const sent: Array<SentRequest> = [];
-  const ended: Array<string> = [];
+  const ended: Array<{ readonly shareId: string; readonly detail: string | undefined }> = [];
   const titles: Array<string> = [];
   const online: Array<ReadonlyArray<string>> = [];
   const live: Array<string> = [];
@@ -79,7 +79,7 @@ const host = (
         viewed: (_shareId, view) => Effect.sync(() => void titles.push(view.title)),
         presence: (_shareId, guests) => Effect.sync(() => void online.push(guests)),
         live: (_shareId, event) => Effect.sync(() => void live.push(event.type)),
-        ended: (shareId) => Effect.sync(() => void ended.push(shareId)),
+        ended: (shareId, detail) => Effect.sync(() => void ended.push({ shareId, detail })),
       }),
     );
   return { sent, ended, titles, online, live, run };
@@ -194,7 +194,7 @@ it.effect("reads the thread from the share's stream, and forgets the share when 
           { type: "thread", item: { kind: "synchronized" } },
           { type: "thread", item: { kind: "synchronized" } },
           { type: "from-a-newer-server" },
-          { type: "ended" },
+          { type: "ended", detail: "sharing_off" },
           { type: "thread", item: { kind: "synchronized" } },
         ])
       : new Response(null, { status: 204 }),
@@ -218,7 +218,7 @@ it.effect("reads the thread from the share's stream, and forgets the share when 
       expect(owner.titles).toEqual(["Renamed"]);
       expect(owner.online).toEqual([["guest-1"]]);
       expect(owner.live).toEqual(["agents", "cursors"]);
-      expect(owner.ended).toEqual(["share-1"]);
+      expect(owner.ended).toEqual([{ shareId: "share-1", detail: "sharing_off" }]);
       const closed = yield* Effect.flip(session.closed);
       expect(closed._tag).toBe("ConnectionBlockedError");
       // On the owner's own host there is no token: the share's cookie signs each request.
@@ -243,12 +243,14 @@ it.effect("reads the thread from the share's stream, and forgets the share when 
 });
 
 it.effect("forgets a share its owner's server no longer lets this guest into", () => {
-  const owner = host(() => new Response(null, { status: 403 }));
+  const owner = host(() =>
+    Response.json({ reason: "invalid", detail: "replaced" }, { status: 403 }),
+  );
   return owner.run(
     Effect.gen(function* () {
       const { session } = yield* connectGuestSession(prepared("guest-token"), TARGET);
       expect((yield* Effect.flip(session.ready))._tag).toBe("ConnectionBlockedError");
-      expect(owner.ended).toEqual(["share-1"]);
+      expect(owner.ended).toEqual([{ shareId: "share-1", detail: "replaced" }]);
     }),
   );
 });

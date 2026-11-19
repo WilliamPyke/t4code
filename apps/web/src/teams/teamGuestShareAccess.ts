@@ -48,10 +48,10 @@ export const layerTeamGuestShareAccess = Layer.effect(
         }
         return yield* base.share(shareId);
       }),
-      ended: Effect.fn("TeamGuestShareAccess.ended")(function* (shareId: string) {
+      ended: Effect.fn("TeamGuestShareAccess.ended")(function* (shareId: string, detail?: string) {
         const stored = findGuestShare(shareId);
         if (stored?.team !== undefined && (yield* rejoin(stored))) return;
-        yield* base.ended(shareId);
+        yield* base.ended(shareId, detail);
       }),
     });
   }),

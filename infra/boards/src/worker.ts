@@ -55,6 +55,7 @@ import {
   GuestRedeemRequest,
   GuestShareId,
   GuestTurnRequest,
+  isCloudBoardViewCredential,
   RoomBoardAgentChangeRequest,
   RoomBoardChange,
   ThreadId,
@@ -102,6 +103,7 @@ import {
   changeBoard,
   checkDelete,
   checkInvite,
+  checkViewLink,
   invitePreviewOf,
   checkViewerRoom,
   streamsPastCap,
@@ -209,7 +211,11 @@ const HEARTBEAT_MS = 20_000;
 
 const failureResponse = (failure: RoomFailure) =>
   Response.json(
-    { reason: failure.reason, message: failure.message },
+    {
+      reason: failure.reason,
+      message: failure.message,
+      ...(failure.detail === undefined ? {} : { detail: failure.detail }),
+    },
     { status: failure.status, headers: NO_STORE },
   );
 const noContent = () => new Response(null, { status: 204, headers: NO_STORE });
@@ -727,7 +733,7 @@ export class BoardRoom extends DurableObject<Env> {
     this.room = null;
     if (this.previewTimer !== null) clearTimeout(this.previewTimer);
     this.previewTimer = null;
-    for (const stream of this.streams) this.drop(stream, true);
+    for (const stream of this.streams) this.drop(stream, true, "ended");
     this.live = EMPTY_LIVE;
     this.agents = EMPTY_AGENTS;
     await this.ctx.storage.deleteAlarm();
@@ -763,8 +769,9 @@ export class BoardRoom extends DurableObject<Env> {
         const body = decodeInvite(await request.text());
         if (Option.isNone(body)) return failureResponse(roomFailure("bad_request"));
         const room = this.room;
-        if (room === null || !isViewLink(room, await hashSecret(body.value.credential))) {
-          return failureResponse(roomFailure("invalid"));
+        const refused = checkViewLink(room, await hashSecret(body.value.credential));
+        if (refused !== null || room === null) {
+          return failureResponse(refused ?? roomFailure("invalid"));
         }
         // The view link is its own session: changing the link ends every page opened with it.
         const result: GuestRedeemResult = {
@@ -792,8 +799,14 @@ export class BoardRoom extends DurableObject<Env> {
       if (url.pathname === CLOUD_BOARD_OUTLINE_ROUTE) return outlined(room);
       return noContent();
     }
-    // The board was deleted, or this person was taken off it.
-    if (guest === undefined || room === null) return failureResponse(roomFailure("ended"));
+    // The board was deleted, or this person was taken off it. A page still holding a view link
+    // is told why the link no longer opens the board.
+    if (guest === undefined || room === null) {
+      const refused = isCloudBoardViewCredential(bearerOf(request))
+        ? checkViewLink(room, hash)
+        : null;
+      return failureResponse(refused ?? roomFailure("ended"));
+    }
     const refused = checkAccess(canChange(guest) ? "edit" : "view", url.pathname);
     if (refused !== null) return failureResponse(refused);
     switch (url.pathname) {
@@ -1148,11 +1161,11 @@ export class BoardRoom extends DurableObject<Env> {
     return managesBoard(room, guest, role);
   }
 
-  /** Ends every page opened with a view link that no longer opens the board. */
+  /** Ends every page opened with a view link that no longer opens the board, telling it why. */
   private endOldViews() {
     for (const stream of this.streams) {
       if (stream.viewHash !== null && !isViewLink(this.room, stream.viewHash)) {
-        this.drop(stream, true);
+        this.drop(stream, true, checkViewLink(this.room, stream.viewHash)?.detail);
       }
     }
   }
@@ -1764,12 +1777,13 @@ export class BoardRoom extends DurableObject<Env> {
     });
   }
 
-  /** Forgets a stream; `ended` tells its page the board ended for them first. */
-  private drop(stream: OpenStream, ended = false) {
+  /** Forgets a stream; `ended` tells its page the board ended for them first, and why it did. */
+  private drop(stream: OpenStream, ended = false, detail?: string) {
     if (!this.streams.delete(stream)) return;
     if (ended) {
+      const frame = sseFrame(detail === undefined ? { type: "ended" } : { type: "ended", detail });
       stream.writer
-        .write(encoder.encode(sseFrame({ type: "ended" })))
+        .write(encoder.encode(frame))
         .then(() => stream.writer.close())
         .catch(() => undefined);
     } else stream.writer.abort().catch(() => undefined);

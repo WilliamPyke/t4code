@@ -150,12 +150,19 @@ export interface RoomFailure {
   /** What the client reads; `bad_request` goes out as `invalid`, as the machine host says it. */
   readonly reason: string;
   readonly message: string;
+  /** Which refusal it is, for a client new enough to choose its own words. */
+  readonly detail?: string;
 }
 
-export const roomFailure = (reason: RoomFailureReason, message?: string): RoomFailure => ({
+export const roomFailure = (
+  reason: RoomFailureReason,
+  message?: string,
+  detail?: string,
+): RoomFailure => ({
   status: FAILURES[reason].status,
   reason: reason === "bad_request" ? "invalid" : reason,
   message: message ?? FAILURES[reason].message,
+  ...(detail === undefined ? {} : { detail }),
 });
 
 const NEEDS_AN_OWNER =
@@ -218,19 +225,24 @@ export const linkSharingOf = (room: CloudRoom): CloudBoardLinkSharing =>
   room.sharing ?? (room.inviteHash !== "" ? "edit" : room.viewLink !== undefined ? "view" : "off");
 
 // Each keeps the "not valid" reason an older client already knows how to show.
+const LINK_ENDED =
+  "This board has ended, or the link is not valid. Ask whoever shared it with you for a new link.";
+const LINK_REPLACED =
+  "This link does not open the board any more. Ask whoever shared it for a new one.";
 const SHARING_OFF =
-  "Link sharing is off for this board. Ask whoever shared it to turn it on, then try again.";
+  "Link sharing is off for this board. Ask whoever shared it to turn it on or add you.";
 const ONLY_VIEWING =
   "This board's link now only lets people look at it. Ask whoever shared it for the view link.";
 
 // An empty `inviteHash` is the edit link turned off: no credential hashes to it.
 export function checkInvite(room: CloudRoom | null, inviteHash: string): RoomFailure | null {
-  if (room === null || room.inviteHash === "" || room.inviteHash !== inviteHash) {
-    return roomFailure("invalid");
+  if (room === null) return roomFailure("invalid", LINK_ENDED, "ended");
+  if (room.inviteHash === "" || room.inviteHash !== inviteHash) {
+    return roomFailure("invalid", LINK_REPLACED, "replaced");
   }
   const sharing = linkSharingOf(room);
-  if (sharing === "off") return roomFailure("invalid", SHARING_OFF);
-  return sharing === "view" ? roomFailure("invalid", ONLY_VIEWING) : null;
+  if (sharing === "off") return roomFailure("invalid", SHARING_OFF, "sharing_off");
+  return sharing === "view" ? roomFailure("invalid", ONLY_VIEWING, "view_only") : null;
 }
 
 /**
@@ -246,9 +258,23 @@ export const invitePreviewOf = (room: CloudRoom): GuestInvitePreview => {
   };
 };
 
+/**
+ * Whether `hash` opens the board to look at, or why not: a hash that is not the link the board
+ * has now was replaced by a new link, or never opened anything; `detail` cannot tell those apart.
+ */
+export function checkViewLink(room: CloudRoom | null, hash: string): RoomFailure | null {
+  if (room === null) return roomFailure("invalid", LINK_ENDED, "ended");
+  if (room.viewLink?.hash === hash) {
+    return linkSharingOf(room) === "off"
+      ? roomFailure("invalid", SHARING_OFF, "sharing_off")
+      : null;
+  }
+  return roomFailure("invalid", LINK_REPLACED, "replaced");
+}
+
 /** Whether `hash` is the board's view link now, which opens it to look at and nothing more. */
 export const isViewLink = (room: CloudRoom | null, hash: string): boolean =>
-  room !== null && room.viewLink?.hash === hash && linkSharingOf(room) !== "off";
+  checkViewLink(room, hash) === null;
 
 /** People looking on from the view link at once, on one board. */
 export const CLOUD_BOARD_MAX_VIEWERS = 200;
@@ -692,7 +718,7 @@ export type CloudStreamEvent =
     }
   | RoomCursorsEvent
   | RoomAgentsEvent
-  | { readonly type: "ended" };
+  | { readonly type: "ended"; readonly detail?: string };
 
 export const sseFrame = (event: CloudStreamEvent) => `data: ${JSON.stringify(event)}\n\n`;
 
