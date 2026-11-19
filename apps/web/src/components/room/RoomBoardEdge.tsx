@@ -38,11 +38,25 @@ export interface BoardLineObstacle extends BoardBox {
 }
 
 // The shape this person last gave a line on each board, which their next line there takes.
+// Kept for the tab, so a reload does not forget it.
 const lastShapes = new Map<string, BoardLineShape>();
-export const lastBoardLineShape = (board: string): BoardLineShape =>
-  lastShapes.get(board) ?? "curve";
+const shapeKey = (board: string) => `tinkjam:board-line-shape:v1:${board}`;
+export const lastBoardLineShape = (board: string): BoardLineShape => {
+  const held = lastShapes.get(board);
+  if (held !== undefined) return held;
+  let stored: string | null = null;
+  try {
+    stored = sessionStorage.getItem(shapeKey(board));
+  } catch {}
+  const shape = stored === "elbow" ? "elbow" : "curve";
+  lastShapes.set(board, shape);
+  return shape;
+};
 export const rememberBoardLineShape = (board: string, shape: BoardLineShape) => {
   lastShapes.set(board, shape);
+  try {
+    sessionStorage.setItem(shapeKey(board), shape);
+  } catch {}
 };
 
 // An underdamped spring: a line's belly trails its cards, swings past once and settles in about
