@@ -37,6 +37,7 @@ import { useStableCallback } from "~/hooks/useStableCallback";
 import { cn } from "~/lib/utils";
 
 import { Button } from "../ui/button";
+import { toastManager } from "../ui/toast";
 import { boardCanFramePage } from "./boardEmbed.logic";
 import { boardFrameVerdict, boardOwnHosts, useBoardFrameCheck } from "./boardFrameCheck";
 import type { BoardSize } from "./roomBoard.logic";
@@ -223,8 +224,14 @@ export function RoomEmbedBody({
     setAsking(true);
     void boardFrameVerdict(url).then((verdict) => {
       setAsking(false);
-      if (verdict === "refused") setBlocked(url);
-      else frameIt(true);
+      if (verdict === "refused") {
+        setBlocked(url);
+        toastManager.add({
+          type: "info",
+          title: "This page can't be shown here",
+          description: REFUSED,
+        });
+      } else frameIt(true);
     });
   };
   const tryAnyway = () => {
@@ -236,7 +243,7 @@ export function RoomEmbedBody({
     <div ref={bodyRef} className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 pb-2">
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-2xs text-muted-foreground">
-          {stays ? <span className="line-clamp-2">{REFUSED}</span> : addedBy}
+          {addedBy}
         </div>
         {actions}
         {onFrame === undefined || !canFramePage ? null : (

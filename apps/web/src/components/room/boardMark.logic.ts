@@ -450,7 +450,19 @@ function boardMarkPage(
     )
       return;
     if (click) {
-      if (href.charAt(0) === "#" || anchor.hasAttribute("download")) return;
+      if (anchor.hasAttribute("download")) return;
+      // A srcdoc page's address is its parent's, so its own "#spot" link would load the app here.
+      if (href.charAt(0) === "#") {
+        event.preventDefault();
+        let spot = href.slice(1);
+        try {
+          spot = decodeURIComponent(spot);
+        } catch {
+          spot = "";
+        }
+        scrollToSpot(spot);
+        return;
+      }
       if (scheme !== null && !/^https?$/i.test(scheme[1] || "")) return;
       if (
         scheme === null &&
