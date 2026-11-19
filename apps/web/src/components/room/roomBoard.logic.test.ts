@@ -1061,7 +1061,7 @@ describe("boardConnector", () => {
     // One whose end is behind its start, on the sides it keeps, hooks round to it.
     const behind = boardNoteBox({ x: 300, y: 400 });
     expect(boardConnector(card, behind, undefined, { sides: ["right", "left"] }).path).toBe(
-      "M320 120 C414 120, 202 472, 296 472",
+      "M320 220 C376 220, 240 420, 296 420",
     );
   });
 
