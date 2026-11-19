@@ -1593,8 +1593,20 @@ export const GuestRedeemResult = Schema.Struct({
   shareId: GuestShareId,
   /** The shared thread, which the guest's stream names too. */
   threadId: Schema.optional(ThreadId),
+  /** What the board is called, where the host says so, so the page never shows a stand-in. */
+  title: Schema.optional(Schema.String),
 });
 export type GuestRedeemResult = typeof GuestRedeemResult.Type;
+
+/**
+ * What an invite is for, told only to someone who sent its credential: the board's name and who
+ * made it. An older host answers 204 with no body.
+ */
+export const GuestInvitePreview = Schema.Struct({
+  title: Schema.optional(Schema.String),
+  maker: Schema.optional(Schema.String),
+});
+export type GuestInvitePreview = typeof GuestInvitePreview.Type;
 
 /**
  * The fields of a guest message. The page posts them as multipart form data, with each file as a

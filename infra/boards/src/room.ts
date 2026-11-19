@@ -6,6 +6,7 @@ import {
   type CloudBoardRole,
   type GuestCursorRequest,
   type GuestId,
+  type GuestInvitePreview,
   type GuestShareId,
   type GuestShareView,
   type RoomBoard,
@@ -211,6 +212,19 @@ export const checkInvite = (room: CloudRoom | null, inviteHash: string): RoomFai
   room === null || room.inviteHash === "" || room.inviteHash !== inviteHash
     ? roomFailure("invalid")
     : null;
+
+/**
+ * What the edit link's holder is told before joining: the board's name and its maker's. Read only
+ * after `checkInvite` passed, so nobody without the link learns either.
+ */
+export const invitePreviewOf = (room: CloudRoom): GuestInvitePreview => {
+  const maker = room.guests.find((guest) => guest.id === room.maker)?.name.trim() ?? "";
+  const title = room.title.trim();
+  return {
+    ...(title === "" || title === DEFAULT_BOARD_TITLE ? {} : { title }),
+    ...(maker === "" ? {} : { maker }),
+  };
+};
 
 /** Whether `hash` is the board's view link now, which opens it to look at and nothing more. */
 export const isViewLink = (room: CloudRoom | null, hash: string): boolean =>

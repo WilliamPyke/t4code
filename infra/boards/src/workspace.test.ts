@@ -87,6 +87,7 @@ describe("workspace rules", () => {
       name: "Acme",
       color: "blue",
       members: 1,
+      owner: "Ada",
     });
   });
 

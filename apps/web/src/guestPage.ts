@@ -25,3 +25,16 @@ export const isGuestOnlySession = () => guestOnly;
 export function setGuestOnlySession(value: boolean) {
   guestOnly = value;
 }
+
+// Whether this page load began on a board's address and has shown no board yet.
+let landingOnBoard = guestOnly;
+
+/**
+ * Whether a wait for a board should cover the whole window: only on the way in from a link, so
+ * the app's sidebar never shows alone first. Moving between boards later leaves the sidebar be.
+ */
+export const isLandingOnBoard = () => landingOnBoard;
+
+export function endBoardLanding() {
+  landingOnBoard = false;
+}

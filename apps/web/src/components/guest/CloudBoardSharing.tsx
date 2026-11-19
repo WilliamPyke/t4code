@@ -11,7 +11,7 @@ import {
   Trash2Icon,
   UsersIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 
 import { sharedNameIds } from "~/guest/boardAccount.logic";
 import type { BoardLinks } from "~/guest/boardLinks.logic";
@@ -24,6 +24,7 @@ import {
 } from "~/guest/cloudBoards";
 import type { JoinedGuestShare } from "~/guest/guestShares";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { cn } from "~/lib/utils";
 import { ensureLocalApi } from "~/localApi";
 
@@ -31,6 +32,14 @@ import { useDeleteCloudBoard, useForgetJoinedBoard } from "../boards/removeJoine
 import { PersonDot } from "../room/BoardChrome";
 import { boardCursorColor } from "../room/roomBoard.logic";
 import { Button } from "../ui/button";
+import {
+  Dialog,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+  DialogTrigger,
+} from "../ui/dialog";
 import { Input } from "../ui/input";
 import {
   Menu,
@@ -44,6 +53,7 @@ import {
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
+import { boardPeopleSummary, boardShareControls, viewingLabel } from "./cloudBoardSharing.logic";
 
 const LINK_WORDS: Record<
   CloudBoardLinkKind,
@@ -61,12 +71,11 @@ const LINK_WORDS: Record<
   },
 };
 
-export const viewingLabel = (viewing: number) => `${viewing} viewing`;
-
 /**
  * Sharing a cloud board: its two links, "can edit" and "can view", each copied in one click, and
  * who is on the board. Whoever manages it turns each link on and off, makes it anew, and says who
- * can edit. A menu beside it leaves the board, or deletes it for its maker.
+ * can edit. A menu beside it leaves the board, or deletes it for its maker. On a narrow board it
+ * keeps to its marks, and on a phone Share opens as a sheet, like the app's other dialogs.
  */
 export function CloudBoardSharing({
   share,
@@ -107,7 +116,9 @@ export function CloudBoardSharing({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const isMaker = maker !== undefined && maker === viewer;
+  const controls = boardShareControls({ manage, isMaker, links });
   const here = guests.filter((guest) => online.includes(guest.id));
+  const asSheet = useMediaQuery("max-sm");
 
   // A confirmation never opens over this popover: closing it first leaves nothing behind.
   const confirmed = async (question: ReadonlyArray<string>) => {
@@ -178,93 +189,130 @@ export function CloudBoardSharing({
       role === "view" ? `${guest.name} can only view now` : `${guest.name} can edit now`,
     );
 
+  const shareLabel = `Share this board. ${here.length <= 1 ? "Only you" : `${here.length} people`} here now.`;
+  // A narrow board keeps two faces and the word; the narrowest phones, the faces alone.
+  const shareMark: ReactNode = (
+    <>
+      <span aria-hidden className="flex items-center -space-x-1">
+        {here.slice(0, 4).map((guest, index) => (
+          <PersonDot
+            key={guest.id}
+            color={boardCursorColor(guests, guest.id)}
+            className={cn(
+              "size-5 text-2xs font-semibold ring-2 ring-card",
+              index > 1 && "@max-xl/board:hidden",
+            )}
+          >
+            {initialOf(guest.name)}
+          </PersonDot>
+        ))}
+      </span>
+      {here.length === 0 ? <UsersIcon /> : null}
+      {here.length > 4 ? (
+        <span className="text-xs @max-xl/board:hidden">+{here.length - 4}</span>
+      ) : null}
+      <span className="@max-[22rem]/board:sr-only">Share</span>
+    </>
+  );
+  const shareBody: ReactNode = (
+    <>
+      <div className="mb-4 flex flex-col gap-4">
+        {links.edit === undefined ? null : (
+          <BoardLinkRow
+            kind="edit"
+            link={editLink}
+            manage={controls.changeLinks}
+            busy={busy}
+            onChange={(on) => changeLink("edit", on, links.edit ?? null)}
+          />
+        )}
+        <BoardLinkRow
+          kind="view"
+          link={links.view === null ? null : cloudBoardLink(share, links.view)}
+          manage={controls.changeLinks}
+          busy={busy}
+          onChange={(on) => changeLink("view", on, links.view)}
+        />
+      </div>
+      {controls.allowCopies ? (
+        <label className="mb-4 flex items-center justify-between gap-3">
+          <span className="flex min-w-0 flex-col">
+            <span className="text-sm font-medium">Allow copies</span>
+            <span className="text-xs text-muted-foreground">
+              Anyone who can see the board can make their own copy of it.
+            </span>
+          </span>
+          <Switch
+            checked={copies}
+            disabled={busy}
+            onCheckedChange={(on) =>
+              void run(
+                () => setCloudBoardCopies(share, on),
+                on ? "Copies allowed" : "Copies turned off",
+              )
+            }
+            data-cloud-board-copies
+          />
+        </label>
+      ) : null}
+      <p className="mb-2 text-xs font-medium text-muted-foreground" data-cloud-board-people-count>
+        {boardPeopleSummary({ joined: guests.length, here: here.length, viewing })}
+      </p>
+      <BoardPeople
+        guests={guests}
+        viewer={viewer}
+        maker={maker}
+        online={online}
+        viewers={viewers}
+        manage={controls.changePeople && !busy ? { remove, setRole } : undefined}
+      />
+    </>
+  );
+
   return (
     <span className="flex min-w-0 items-center gap-1">
       {viewing > 0 ? (
-        <span className="flex shrink-0 items-center gap-1 px-1 text-xs text-muted-foreground">
+        <span className="flex shrink-0 items-center gap-1 px-1 text-xs text-muted-foreground @max-xl/board:hidden">
           <EyeIcon className="size-3.5" aria-hidden />
           {viewingLabel(viewing)}
         </span>
       ) : null}
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger
-          render={<Button size="xs" variant="ghost-muted" data-cloud-board-people />}
-          aria-label={`Share this board. ${here.length <= 1 ? "Only you" : `${here.length} people`} here now.`}
-        >
-          <span aria-hidden className="flex items-center -space-x-1">
-            {here.slice(0, 4).map((guest) => (
-              <PersonDot
-                key={guest.id}
-                color={boardCursorColor(guests, guest.id)}
-                className="size-5 text-2xs font-semibold ring-2 ring-card"
-              >
-                {initialOf(guest.name)}
-              </PersonDot>
-            ))}
-          </span>
-          {here.length === 0 ? <UsersIcon /> : null}
-          {here.length > 4 ? <span className="text-xs">+{here.length - 4}</span> : null}
-          Share
-        </PopoverTrigger>
-        <PopoverPopup width="md" align="end">
-          <PopoverTitle className="mb-3">Share this board</PopoverTitle>
-          <div className="mb-4 flex flex-col gap-4">
-            {links.edit === undefined ? null : (
-              <BoardLinkRow
-                kind="edit"
-                link={editLink}
-                manage={manage}
-                busy={busy}
-                onChange={(on) => changeLink("edit", on, links.edit ?? null)}
-              />
-            )}
-            <BoardLinkRow
-              kind="view"
-              link={links.view === null ? null : cloudBoardLink(share, links.view)}
-              manage={manage}
-              busy={busy}
-              onChange={(on) => changeLink("view", on, links.view)}
-            />
-          </div>
-          {manage ? (
-            <label className="mb-4 flex items-center justify-between gap-3">
-              <span className="flex min-w-0 flex-col">
-                <span className="text-sm font-medium">Allow copies</span>
-                <span className="text-xs text-muted-foreground">
-                  Anyone who can see the board can make their own copy of it.
-                </span>
-              </span>
-              <Switch
-                checked={copies}
-                disabled={busy}
-                onCheckedChange={(on) =>
-                  void run(
-                    () => setCloudBoardCopies(share, on),
-                    on ? "Copies allowed" : "Copies turned off",
-                  )
-                }
-                data-cloud-board-copies
-              />
-            </label>
-          ) : null}
-          <p className="mb-2 text-xs font-medium text-muted-foreground">
-            On this board · {here.length <= 1 ? "only you here now" : `${here.length} here now`}
-            {viewing > 0 ? ` · ${viewingLabel(viewing)}` : ""}
-          </p>
-          <BoardPeople
-            guests={guests}
-            viewer={viewer}
-            maker={maker}
-            online={online}
-            viewers={viewers}
-            manage={manage && !busy ? { remove, setRole } : undefined}
-          />
-        </PopoverPopup>
-      </Popover>
+      {asSheet ? (
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogTrigger
+            render={<Button size="xs" variant="ghost-muted" data-cloud-board-people />}
+            aria-label={shareLabel}
+          >
+            {shareMark}
+          </DialogTrigger>
+          <DialogPopup>
+            <DialogHeader>
+              <DialogTitle>Share this board</DialogTitle>
+            </DialogHeader>
+            <DialogPanel>
+              <div>{shareBody}</div>
+            </DialogPanel>
+          </DialogPopup>
+        </Dialog>
+      ) : (
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger
+            render={<Button size="xs" variant="ghost-muted" data-cloud-board-people />}
+            aria-label={shareLabel}
+          >
+            {shareMark}
+          </PopoverTrigger>
+          <PopoverPopup width="md" align="end">
+            <PopoverTitle className="mb-3">Share this board</PopoverTitle>
+            {shareBody}
+          </PopoverPopup>
+        </Popover>
+      )}
       {editLink === null ? null : (
         <Button size="xs" onClick={() => copyToClipboard(editLink)} data-cloud-board-invite>
           {isCopied ? <CheckIcon /> : <LinkIcon />}
-          {isCopied ? "Copied" : "Copy invite link"}
+          {/* Read out at every width; a narrow board shows the mark alone. */}
+          <span className="@max-xl/board:sr-only">{isCopied ? "Copied" : "Copy invite link"}</span>
         </Button>
       )}
       <Menu>
@@ -275,7 +323,7 @@ export function CloudBoardSharing({
           <EllipsisIcon />
         </MenuTrigger>
         <MenuPopup align="end">
-          {isMaker ? (
+          {controls.deleteBoard ? (
             <MenuItem
               variant="destructive"
               disabled={busy}
@@ -382,7 +430,10 @@ function BoardLinkRow({
             size="sm"
             value={link}
             aria-label={`${words.title} link`}
-            onFocus={(event) => event.currentTarget.select()}
+            // Selected for a keyboard to copy; a finger would get the phone's selection handles.
+            onFocus={(event) => {
+              if (!window.matchMedia("(pointer: coarse)").matches) event.currentTarget.select();
+            }}
             data-cloud-board-invite-link={kind === "edit" ? "" : undefined}
           />
           <Button

@@ -117,6 +117,8 @@ export const CloudWorkspacePreview = Schema.Struct({
   name: Schema.String,
   color: RoomBoardNoteColor,
   members: Schema.Number,
+  /** The name of the owner who has been in it longest, so the invite says whose it is. */
+  owner: Schema.optional(Schema.String),
 });
 export type CloudWorkspacePreview = typeof CloudWorkspacePreview.Type;
 

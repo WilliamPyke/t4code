@@ -292,6 +292,15 @@ export function workspaceView(
   };
 }
 
+// Told to whoever holds the invite, who sees every member's name once they join.
+const ownerNameOf = (state: WorkspaceState) => {
+  const owner = state.members
+    .filter((member) => member.role === "owner")
+    .toSorted((left, right) => left.joinedAt.localeCompare(right.joinedAt))[0]
+    ?.name.trim();
+  return owner === undefined || owner === "" ? {} : { owner };
+};
+
 /** What an invite link shows before anyone signs in. */
 export const previewOf = (
   state: WorkspaceState | null,
@@ -299,7 +308,13 @@ export const previewOf = (
 ): CloudWorkspacePreview | null =>
   state === null || state.invite === undefined || state.invite !== code
     ? null
-    : { id: state.id, name: state.name, color: state.color, members: state.members.length };
+    : {
+        id: state.id,
+        name: state.name,
+        color: state.color,
+        members: state.members.length,
+        ...ownerNameOf(state),
+      };
 
 export type BoardPlacement =
   | { readonly account: string; readonly into: string }

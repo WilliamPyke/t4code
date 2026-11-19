@@ -34,9 +34,10 @@ describe("the first view of a board", () => {
     });
     expect(whole).toBe(false);
     expect(view.zoom).toBeGreaterThanOrEqual(BOARD_FIRST_VIEW_MIN_ZOOM);
-    // Goals, at the board's top-left, sits at the top-left of the screen, not in the middle.
+    // Goals, at the board's top-left, sits at the top-left of the screen, not in the middle, and
+    // below the hint that offers the rest, which shows under the header (60 + 12 + 40).
     expect(view.x + goals.x * view.zoom).toBe(72);
-    expect(view.y + goals.y * view.zoom).toBe(72);
+    expect(view.y + goals.y * view.zoom).toBe(112);
   });
 
   it("centres a start in the middle of the board, and shows a start too big from its corner", () => {

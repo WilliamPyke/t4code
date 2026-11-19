@@ -16,7 +16,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { toastManager } from "../ui/toast";
-import { viewingLabel } from "./CloudBoardSharing";
+import { viewingLabel } from "./cloudBoardSharing.logic";
 
 /**
  * What someone who can only look sees in place of the board's sharing: that it is view only, how
@@ -73,9 +73,7 @@ export function ViewOnlyBar({
       {copy !== undefined ? (
         <MakeACopy copy={copy} />
       ) : account.status === "signed-out" ? (
-        <Button size="xs" variant="ghost-muted" onClick={openAuthPrompt} data-view-only-sign-in>
-          Sign in to ask for edit access
-        </Button>
+        <SignInToAsk signIn={openAuthPrompt} />
       ) : account.status !== "signed-in" ? (
         <span className="truncate">· Ask whoever shared it for edit access</span>
       ) : asked !== null ? (
@@ -107,6 +105,29 @@ function MakeACopy({ copy }: { readonly copy: () => Promise<void> }) {
         Make a copy
       </Button>
     </>
+  );
+}
+
+/** Says what asking does before the sign-in it needs, which says nothing of boards. */
+function SignInToAsk({ signIn }: { readonly signIn: () => void }) {
+  return (
+    <Popover>
+      <PopoverTrigger render={<Button size="xs" variant="ghost-muted" data-view-only-sign-in />}>
+        Sign in to ask for edit access
+      </PopoverTrigger>
+      <PopoverPopup width="md" align="end">
+        <PopoverTitle className="mb-2">Ask for edit access</PopoverTitle>
+        <div className="flex flex-col gap-2">
+          <p className="text-xs text-muted-foreground">
+            Sign in or create an account first, then press Ask for edit access. Whoever made this
+            board gets your request in their inbox and can let you edit.
+          </p>
+          <Button size="sm" onClick={signIn} data-view-only-sign-in-continue>
+            Sign in
+          </Button>
+        </div>
+      </PopoverPopup>
+    </Popover>
   );
 }
 

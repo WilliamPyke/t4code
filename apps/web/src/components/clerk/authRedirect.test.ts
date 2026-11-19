@@ -31,8 +31,17 @@ describe("staysInApp", () => {
   it.each([
     ["the home, where signing in from the welcome and signing out both land", "/", true],
     ["the home with a query", "/?from=invite", true],
-    // These read an invite or a pairing as they load, so they keep their new document.
-    ["a join page", "/guest?share=abc", false],
+    // The invite pages hold their invite in memory, so signing in there needs no new document.
+    ["a board's invite page", "/guest?host=boards.example.org&share=abc", true],
+    ["a workspace's invite page, its code already out of the address", "/join-workspace", true],
+    [
+      "a workspace's invite page with its code, which a plain move would only scroll to",
+      "/join-workspace?signed-in=1#code",
+      false,
+    ],
+    // These read a session or a pairing as they load, so they keep their new document.
+    ["a board", "/b/abc", false],
+    ["a pairing page", "/pair?token=abc", false],
     [
       "the home with a fragment, which a plain move would only scroll to",
       "/?signed-in=1#code",

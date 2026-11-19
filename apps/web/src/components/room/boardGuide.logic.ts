@@ -17,8 +17,31 @@ export interface BoardGuideInput {
   readonly othersJoined: boolean;
   /** The viewer's own agent on this board; `none` where the board takes none of theirs. */
   readonly agent: "here" | "absent" | "none";
-  /** The steps this person did before, as this browser remembers them. */
+  /** The steps this person did before, as this browser remembers them for them. */
   readonly done: ReadonlyArray<string>;
+}
+
+/** The guide as a browser keeps it for one person: `owner` is their account, null signed out. */
+export interface BoardGuideKept {
+  readonly owner: string | null;
+  readonly hidden: boolean;
+  readonly collapsed: boolean;
+  readonly done: ReadonlyArray<string>;
+}
+
+/**
+ * The guide this browser keeps once `signedIn` (null: nobody) is seen signed in. Progress is a
+ * person's: what was done signed out goes with whoever then signs in, as their boards do, and
+ * anyone else, a sign-out included, starts from `fresh`.
+ */
+export function boardGuideAfterSignIn(
+  kept: BoardGuideKept | null,
+  signedIn: string | null,
+  fresh: BoardGuideKept,
+): BoardGuideKept {
+  if (kept === null) return fresh;
+  if (kept.owner === signedIn) return kept;
+  return kept.owner === null ? { ...kept, owner: signedIn } : fresh;
 }
 
 /** The first-run steps that apply to this viewer on this board, each ticked or not. */

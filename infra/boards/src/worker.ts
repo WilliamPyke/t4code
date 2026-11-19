@@ -94,6 +94,7 @@ import {
   changeBoard,
   checkDelete,
   checkInvite,
+  invitePreviewOf,
   checkViewerRoom,
   createRoom,
   cursorsEventFor,
@@ -466,6 +467,7 @@ async function route(request: Request, env: Env): Promise<Response> {
         token: opened.token,
         shareId: opened.board.shareId,
         threadId: opened.board.threadId,
+        title: opened.board.title,
       };
       return Response.json(result, { headers: NO_STORE });
     }
@@ -656,8 +658,11 @@ export class BoardRoom extends DurableObject<Env> {
       case INVITE_ROUTE: {
         const body = decodeInvite(await request.text());
         if (Option.isNone(body)) return failureResponse(roomFailure("bad_request"));
-        const refused = checkInvite(this.room, await hashSecret(body.value.credential));
-        return refused === null ? noContent() : failureResponse(refused);
+        const room = this.room;
+        const refused = checkInvite(room, await hashSecret(body.value.credential));
+        return refused !== null || room === null
+          ? failureResponse(refused ?? roomFailure("invalid"))
+          : Response.json(invitePreviewOf(room), { headers: NO_STORE });
       }
       case REDEEM_ROUTE:
         return this.redeem(await request.text());
@@ -673,6 +678,7 @@ export class BoardRoom extends DurableObject<Env> {
           token: body.value.credential,
           shareId: room.shareId,
           threadId: room.threadId,
+          title: room.title,
         };
         return Response.json(result, { headers: NO_STORE });
       }
@@ -878,6 +884,7 @@ export class BoardRoom extends DurableObject<Env> {
       token,
       shareId: joined.success.shareId,
       threadId: joined.success.threadId,
+      title: joined.success.title,
     };
     return Response.json(result, { headers: NO_STORE });
   }

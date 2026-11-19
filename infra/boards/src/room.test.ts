@@ -28,6 +28,7 @@ import {
   changeBoard,
   checkDelete,
   checkInvite,
+  invitePreviewOf,
   checkViewerRoom,
   createRoom,
   cursorsEventFor,
@@ -279,6 +280,13 @@ describe("cloud room", () => {
     );
     expect(checkInvite(remade, "invite-hash")).not.toBeNull();
     expect(checkInvite(remade, "new-hash")).toBeNull();
+    // The link's holder is told whose board it is, and its name once it has one of its own.
+    expect(invitePreviewOf(remade)).toEqual({ maker: "Ada" });
+    expect(invitePreviewOf(renameRoom(remade, "Onboarding v2", NOW))).toEqual({
+      title: "Onboarding v2",
+      maker: "Ada",
+    });
+    expect(invitePreviewOf(Result.getOrThrow(removePerson(remade, maker, maker, NOW)))).toEqual({});
     expect(viewFor(remade, remade.guests[1]!).links).toEqual({ edit: "share-one-0000.new" });
   });
 

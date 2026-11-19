@@ -15,6 +15,7 @@ import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { isElectron } from "../env";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { boardsToClaim, sharesOfOtherAccounts } from "./boardAccount.logic";
+import { keepBoardGuideFor } from "../components/room/boardGuideState";
 import { toastManager } from "../components/ui/toast";
 import {
   noteSignedInAccount,
@@ -224,9 +225,12 @@ async function claimLocalBoards(): Promise<void> {
 /**
  * Follows who is signed in: their boards are read and this browser's are added to them. When an
  * account signs out or another signs in, everything of the last one's goes from this browser:
- * its boards, their previews, its names and the name typed here before it signed in.
+ * its boards, their previews, its names, the name typed here before it signed in, and its
+ * progress through the board's getting-started guide.
  */
 export function syncBoardAccount(session: BoardAccountSession | null): void {
+  // Before anything shows as loaded: the board's guide is this person's from its first paint.
+  keepBoardGuideFor(session?.userId ?? null);
   appAtomRegistry.set(boardAccountLoadedAtom, true);
   const before = readBoardAccount();
   const listedBefore = appAtomRegistry.get(accountBoardsAtom) ?? [];

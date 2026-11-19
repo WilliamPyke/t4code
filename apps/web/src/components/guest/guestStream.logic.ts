@@ -107,6 +107,27 @@ export function guestBoardOpenStep(input: {
   return input.account === "signed-in" ? "account" : "invalid";
 }
 
+/**
+ * How an edit link's invite is joined. A signed-in account with a name joins a cloud board under
+ * it at once; anyone else is asked, an account with no name included, and what it answers becomes
+ * its name. Nobody joins under a name they did not choose.
+ */
+export function inviteJoinStep(input: {
+  readonly cloud: boolean;
+  readonly account:
+    | { readonly status: "off" | "loading" | "signed-out" }
+    | { readonly status: "signed-in"; readonly name: string | null };
+  /** Joining as the account was refused; the form says why and asks instead. */
+  readonly failed: boolean;
+}): { readonly step: "ask" | "wait" } | { readonly step: "join"; readonly name: string } {
+  const { account } = input;
+  if (!input.cloud || input.failed) return { step: "ask" };
+  if (account.status === "loading") return { step: "wait" };
+  if (account.status !== "signed-in") return { step: "ask" };
+  const name = account.name?.trim() ?? "";
+  return name === "" ? { step: "ask" } : { step: "join", name };
+}
+
 const GUEST_ENVIRONMENT_PREFIX = "guest-share-";
 
 /** The share a board's address names by its environment, or null for any other address. */

@@ -6,6 +6,7 @@ import {
   GUEST_NAME_MAX_LENGTH,
   GUEST_SHARE_PARAM,
   GUEST_SIGN_IN_PARAM,
+  GuestInvitePreview,
   GuestSignInFailure,
   isCloudBoardViewCredential,
 } from "@t3tools/contracts";
@@ -31,12 +32,13 @@ import { redeemInvite } from "~/guest/redeemInvite";
 import { AccountCorner } from "../boards/BoardsAccount";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { BoardBackdrop } from "../room/BoardChrome";
+import { TinkjamLoading } from "../TinkjamLoading";
 import { TinkjamWordmark } from "../TinkjamLogo";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { useAccountBoardOpen } from "./useAccountBoardOpen";
 import { GuestNotice, noteGuestSignInFailure } from "./GuestThreadView";
-import { guestEntryStep, inviteShareId } from "./guestStream.logic";
+import { guestEntryStep, inviteJoinStep, inviteShareId } from "./guestStream.logic";
 
 interface GuestEntry {
   /** Unspent invite from the URL hash, if this load came from a link. */
@@ -51,6 +53,7 @@ interface GuestEntry {
 let captured: { readonly href: string; readonly entry: GuestEntry } | null = null;
 
 const decodeSignInFailure = Schema.decodeUnknownOption(GuestSignInFailure);
+const decodeInvitePreview = Schema.decodeUnknownOption(GuestInvitePreview);
 
 // Per tab: an invite kept while its person signs in, since a sign-in that leaves the page comes
 // back without the address's hash. Never sent anywhere; read back once, for the same board.
@@ -61,6 +64,12 @@ const decodePendingInvite = Schema.decodeUnknownOption(Schema.fromJsonString(Pen
 function keepInviteForSignIn(shareId: string, credential: string) {
   try {
     window.sessionStorage.setItem(PENDING_INVITE_KEY, JSON.stringify({ shareId, credential }));
+  } catch {}
+}
+
+function forgetKeptInvite() {
+  try {
+    window.sessionStorage.removeItem(PENDING_INVITE_KEY);
   } catch {}
 }
 
@@ -174,33 +183,25 @@ export function GuestPage() {
   }, [checking]);
 
   const open = joined ?? (step.step === "open" ? step.share : null);
+  const onJoined = (share: JoinedGuestShare) => {
+    // Signing in without leaving the page never read the invite back; it is spent now.
+    forgetKeptInvite();
+    rememberGuestShare(share);
+    setJoined(share);
+  };
   return (
     <BoardBackdrop className="relative flex h-dvh flex-col px-4 text-foreground">
       {open === null ? <AccountCorner /> : null}
       {open !== null ? (
         <Navigate {...guestShareLocation(open)} replace />
       ) : checking !== null || (step.step === "invalid" && accountStep === "opening") ? (
-        <GuestNotice title="Opening the board..." />
+        <TinkjamLoading cover label="Opening the board" />
       ) : step.step === "invalid" || host === null || credential === null ? (
         INVALID
       ) : isCloudBoardViewCredential(credential) ? (
-        <ViewStep
-          credential={credential}
-          host={host}
-          onJoined={(share) => {
-            rememberGuestShare(share);
-            setJoined(share);
-          }}
-        />
+        <ViewStep credential={credential} host={host} onJoined={onJoined} />
       ) : (
-        <JoinStep
-          credential={credential}
-          host={host}
-          onJoined={(share) => {
-            rememberGuestShare(share);
-            setJoined(share);
-          }}
-        />
+        <JoinStep credential={credential} host={host} onJoined={onJoined} />
       )}
     </BoardBackdrop>
   );
@@ -216,26 +217,31 @@ interface JoinProps {
 }
 
 /**
- * Joins straight away when signed in, under the account's name, and asks only for a name
- * otherwise. Anyone already on the board comes back as the same person either way.
+ * Joins straight away under the account's name when it has one, and asks for a name otherwise
+ * (see `inviteJoinStep`). Anyone already on the board comes back as the same person either way.
  */
 function JoinStep(props: JoinProps) {
-  const cloud = isCloudBoardsHost(props.host);
   const account = useBoardAccount();
   const [failed, setFailed] = useState<string | null>(null);
-  if (!cloud || account.status === "off" || account.status === "signed-out" || failed !== null) {
-    return <NameForm {...props} error={failed} />;
+  const step = inviteJoinStep({
+    cloud: isCloudBoardsHost(props.host),
+    account,
+    failed: failed !== null,
+  });
+  if (step.step === "join") {
+    return <JoinAsAccount {...props} name={step.name} onFailed={setFailed} />;
   }
-  if (account.status === "loading") return <GuestNotice title="Opening the board..." />;
-  return <JoinAsAccount {...props} onFailed={setFailed} />;
+  if (step.step === "wait") return <TinkjamLoading cover label="Opening the board" />;
+  return <NameForm {...props} error={failed} />;
 }
 
 function JoinAsAccount({
   credential,
   host,
+  name,
   onJoined,
   onFailed,
-}: JoinProps & { readonly onFailed: (message: string) => void }) {
+}: JoinProps & { readonly name: string; readonly onFailed: (message: string) => void }) {
   const settle = useEffectEvent((joined: JoinedGuestShare | string) => {
     if (typeof joined === "string") onFailed(joined);
     else onJoined(joined);
@@ -243,14 +249,14 @@ function JoinAsAccount({
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- joins the board on its host once, as the signed-in account
   useEffect(() => {
     let stopped = false;
-    void redeemInvite({ credential, host, name: suggestedBoardName() }).then((joined) => {
+    void redeemInvite({ credential, host, name }).then((joined) => {
       if (!stopped) settle(joined);
     });
     return () => {
       stopped = true;
     };
-  }, [credential, host]);
-  return <GuestNotice title="Opening the board..." />;
+  }, [credential, host, name]);
+  return <TinkjamLoading cover label="Opening the board" />;
 }
 
 /** A view link opens the board at once: no name, no sign-in, and nobody's seat. */
@@ -271,7 +277,7 @@ function ViewStep({ credential, host, onJoined }: JoinProps) {
     };
   }, [credential, host]);
   return failed === null ? (
-    <GuestNotice title="Opening the board..." />
+    <TinkjamLoading cover label="Opening the board" />
   ) : (
     <GuestNotice title="This board could not be opened" detail={failed} />
   );
@@ -285,10 +291,13 @@ function NameForm({
 }: JoinProps & { readonly error: string | null }) {
   const [name, setName] = useState(suggestedBoardName);
   const cloud = isCloudBoardsHost(host);
+  // Signed in with no name yet: what they type here becomes the account's name.
+  const naming = useBoardAccount().status === "signed-in";
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(initialError);
-  const [ended, setEnded] = useState(false);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- asks the host whether the invite still opens anything before asking for a name
+  // What the host says of the invite: that it ended, or what it opens; null until it answers.
+  const [told, setTold] = useState<GuestInvitePreview | "ended" | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- asks the host whether the invite still opens anything, and what, before asking for a name
   useEffect(() => {
     let stopped = false;
     void fetch(`${guestShareOrigin(host)}${GUEST_ROUTE_PREFIX}/invite`, {
@@ -296,18 +305,29 @@ function NameForm({
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ credential }),
       credentials: "omit",
-    }).then(
-      // Only a plain refusal counts: an older host has no such route.
-      (response) => {
-        if (!stopped && SESSION_REFUSED.has(response.status)) setEnded(true);
-      },
-      () => {},
-    );
+    })
+      .then(
+        // Only a plain refusal counts: an older host has no such route.
+        async (response) => {
+          if (SESSION_REFUSED.has(response.status)) return "ended" as const;
+          // Only the cloud board host says what the invite opens; no other answer is read.
+          const body: unknown =
+            cloud && response.ok ? await response.json().catch(() => null) : null;
+          return Option.getOrElse(decodeInvitePreview(body), () => ({}));
+        },
+        () => ({}),
+      )
+      .then((answer) => {
+        if (!stopped) setTold(answer);
+      });
     return () => {
       stopped = true;
     };
-  }, [credential, host]);
-  if (ended) return INVALID;
+  }, [cloud, credential, host]);
+  if (told === "ended") return INVALID;
+  // The cloud host answers at once; waiting for it shows the card whole, with nothing changing.
+  if (cloud && told === null) return <TinkjamLoading cover label="Opening the invite" />;
+  const invite = told ?? {};
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const trimmed = name.trim();
@@ -319,8 +339,9 @@ function NameForm({
       setError(joined);
       return;
     }
-    rememberBoardName(trimmed);
+    // The board first: once this browser has it, nothing here can join it a second time.
     onJoined(joined);
+    rememberBoardName(trimmed);
   };
   return (
     <form
@@ -329,10 +350,18 @@ function NameForm({
     >
       <TinkjamWordmark />
       <div className="flex flex-col gap-1">
-        <h1 className="text-lg font-semibold tracking-tight">You're invited to a board</h1>
+        <h1 className="text-lg font-semibold tracking-tight wrap-break-word" data-guest-invite>
+          {inviteHeading(invite)}
+        </h1>
         <p className="text-sm text-muted-foreground">
           {cloud ? (
-            "Pick the name everyone on it will see. You can change it later."
+            <>
+              {invite.title !== undefined && invite.maker !== undefined
+                ? `${invite.maker} made this board. `
+                : null}
+              Pick the name everyone on it will see.{" "}
+              {naming ? "It becomes the name on your account." : "You can change it later."}
+            </>
           ) : (
             <>
               Shared with you from <span className="font-medium text-foreground">{host}</span>
@@ -368,6 +397,14 @@ function NameForm({
     </form>
   );
 }
+
+/** Which board the invite is for, as far as its host said: its name, else whose it is. */
+const inviteHeading = ({ title, maker }: GuestInvitePreview) =>
+  title !== undefined
+    ? `You're invited to "${title}"`
+    : maker !== undefined
+      ? `You're invited to ${maker}'s board`
+      : "You're invited to a board";
 
 /** Signs in first, to join under the account and find the board again on any device. */
 function SignInInstead({ credential }: { readonly credential: string }) {

@@ -364,7 +364,7 @@ export async function openViewLink(input: {
       shareId: opened.shareId,
       threadId: opened.threadId,
       token: opened.token,
-      title: "Shared board",
+      title: opened.title?.trim() || "Shared board",
       joinedAt: new Date().toISOString(),
       viewOnly: true,
     };

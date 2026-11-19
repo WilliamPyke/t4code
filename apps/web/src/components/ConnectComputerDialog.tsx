@@ -9,7 +9,11 @@ import { create } from "zustand";
 import { environmentCatalog } from "~/connection/catalog";
 import { useAtomCommand } from "~/state/use-atom-command";
 
-import { ConnectComputerRoutes, WaitingForComputer } from "./guest/BringAgentDialog";
+import {
+  ConnectComputerRoutes,
+  WaitingForComputer,
+  onPhoneOrTablet,
+} from "./guest/BringAgentDialog";
 import { ComputerRow, ComputersLoading, ComputersNotLoaded } from "./guest/ComputerRow";
 import { useRemoveComputer, useYourComputers } from "./guest/yourComputers";
 import { Button } from "./ui/button";
@@ -97,10 +101,12 @@ export function ConnectComputerSteps() {
   }, [newlyOnlineKey]);
 
   const connected = computers.find((computer) => computer.status === "ready");
+  // On a phone nobody is about to press Connect here, so nothing waits for a first computer.
+  const waits = withAccount && signedIn && (list.failed || !onPhoneOrTablet());
   return (
     <div className="flex flex-col gap-5">
       {/* Above the steps, so a computer that connects shows where the wait was and moves nothing. */}
-      {computers.length === 0 && !(withAccount && signedIn) ? null : (
+      {computers.length === 0 && !waits ? null : (
         <section className="flex flex-col gap-2" data-your-computers>
           <h3 className="text-sm font-medium">Your computers</h3>
           {computers.length > 0 ? (

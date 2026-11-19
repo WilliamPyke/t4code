@@ -17,6 +17,7 @@ import {
   guestEntryStep,
   guestFilesProblem,
   guestShareIdOfEnvironment,
+  inviteJoinStep,
   inviteShareId,
   nextAwaitingRowIds,
   unplacedGuestMessages,
@@ -176,6 +177,38 @@ describe("guestEntryStep", () => {
     );
     expect(guestEntryStep(looking, { credential: "board-3.v.secret", shareId: "board-3" })).toEqual(
       { step: "join" },
+    );
+  });
+});
+
+describe("inviteJoinStep", () => {
+  const signedIn = (name: string | null) => ({ status: "signed-in", name }) as const;
+  it("joins a cloud board under the account's own name, and asks an account that has none", () => {
+    expect(inviteJoinStep({ cloud: true, account: signedIn("Maya Lin"), failed: false })).toEqual({
+      step: "join",
+      name: "Maya Lin",
+    });
+    for (const name of [null, "", "  "]) {
+      expect(inviteJoinStep({ cloud: true, account: signedIn(name), failed: false })).toEqual({
+        step: "ask",
+      });
+    }
+  });
+  it("asks everyone else, and waits only while it does not know who is signed in", () => {
+    const ask = { step: "ask" };
+    expect(inviteJoinStep({ cloud: true, account: { status: "loading" }, failed: false })).toEqual({
+      step: "wait",
+    });
+    expect(
+      inviteJoinStep({ cloud: true, account: { status: "signed-out" }, failed: false }),
+    ).toEqual(ask);
+    expect(inviteJoinStep({ cloud: true, account: { status: "off" }, failed: false })).toEqual(ask);
+    // Someone else's computer never gets the account, and a refused join falls back to the form.
+    expect(inviteJoinStep({ cloud: false, account: signedIn("Maya Lin"), failed: false })).toEqual(
+      ask,
+    );
+    expect(inviteJoinStep({ cloud: true, account: signedIn("Maya Lin"), failed: true })).toEqual(
+      ask,
     );
   });
 });

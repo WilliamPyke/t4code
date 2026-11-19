@@ -1,7 +1,13 @@
 import type { RoomBoardChange } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { type BoardGuideInput, boardGuideStepOfChange, boardGuideSteps } from "./boardGuide.logic";
+import {
+  type BoardGuideInput,
+  type BoardGuideKept,
+  boardGuideAfterSignIn,
+  boardGuideStepOfChange,
+  boardGuideSteps,
+} from "./boardGuide.logic";
 
 const maker: BoardGuideInput = {
   canEdit: true,
@@ -74,5 +80,65 @@ describe("boardGuideStepOfChange", () => {
     },
   ])("$name", ({ change, isNew, step }) => {
     expect(boardGuideStepOfChange(change, isNew)).toBe(step);
+  });
+});
+
+describe("boardGuideAfterSignIn", () => {
+  const fresh = (owner: string | null): BoardGuideKept => ({
+    owner,
+    hidden: false,
+    collapsed: false,
+    done: [],
+  });
+  const kept = (owner: string | null): BoardGuideKept => ({
+    owner,
+    hidden: true,
+    collapsed: true,
+    done: ["note", "invite"],
+  });
+  it.each<{
+    name: string;
+    kept: BoardGuideKept | null;
+    signedIn: string | null;
+    after: BoardGuideKept;
+  }>([
+    {
+      name: "a browser that kept nothing starts the guide for whoever is here",
+      kept: null,
+      signedIn: "user_ada",
+      after: fresh("user_ada"),
+    },
+    {
+      name: "the same account keeps its steps",
+      kept: kept("user_ada"),
+      signedIn: "user_ada",
+      after: kept("user_ada"),
+    },
+    {
+      name: "another account signing in sees none of the last one's steps",
+      kept: kept("user_ada"),
+      signedIn: "user_grace",
+      after: fresh("user_grace"),
+    },
+    {
+      name: "signing out leaves nothing of the account's for the next person",
+      kept: kept("user_ada"),
+      signedIn: null,
+      after: fresh(null),
+    },
+    {
+      name: "steps done signed out go with the person who then signs in",
+      kept: kept(null),
+      signedIn: "user_ada",
+      after: kept("user_ada"),
+    },
+    {
+      name: "and are theirs alone: the next account starts again",
+      kept: boardGuideAfterSignIn(kept(null), "user_ada", fresh("user_ada")),
+      signedIn: "user_grace",
+      after: fresh("user_grace"),
+    },
+  ])("$name", ({ kept: before, signedIn, after }) => {
+    expect(boardGuideAfterSignIn(before, signedIn, fresh(signedIn))).toEqual(after);
   });
 });

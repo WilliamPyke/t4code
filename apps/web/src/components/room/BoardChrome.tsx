@@ -31,9 +31,12 @@ export const BOARD_HOVER_CHROME_CLASS =
 export const BOARD_SELECTED_CHROME_CLASS =
   "[&_[data-board-grip]]:opacity-100 [&_[data-board-link]]:pointer-events-auto";
 
-/** A small icon button in a card's header; it takes the card's text colour, paint or window. */
+/**
+ * A small icon button in a card's header; it takes the card's text colour, paint or window. A
+ * finger gets a taller target, kept narrow so it never takes a tap meant for its neighbour.
+ */
 export const BOARD_ICON_BUTTON_CLASS =
-  "grid size-6 shrink-0 place-items-center rounded-md opacity-60 transition-[opacity,background-color] hover:bg-current/10 hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset focus-visible:outline-none";
+  "relative grid size-6 shrink-0 place-items-center rounded-md opacity-60 pointer-coarse:after:absolute pointer-coarse:after:-inset-x-0.5 pointer-coarse:after:-inset-y-1.5 transition-[opacity,background-color] hover:bg-current/10 hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset focus-visible:outline-none";
 
 /** Floating chrome over the canvas: the header pills, the toolbar, the zoom pill. */
 export function BoardFloat({ className, ...props }: ComponentProps<"div">) {

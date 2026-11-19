@@ -20,15 +20,19 @@ export function resolveClerkSignInProps(href: string, isElectron: boolean): Cler
   return { forceRedirectUrl: returnUrl, signUpForceRedirectUrl: returnUrl };
 }
 
+// The home and the two invite pages follow the account as it changes and hold their invite in
+// memory, so a sign-in never has to load them again.
+const IN_APP_PATHS: ReadonlySet<string> = new Set(["/", "/guest", "/join-workspace"]);
+
 /**
  * Whether Clerk's move to `to` after a sign-in or sign-out can happen inside the app, with no page
- * load: only to the home, which follows the account as it changes. Other pages read what they
- * need as they load (an invite, a pairing), so they still get the new document Clerk gives them.
+ * load. Other pages read what they need as they load (a board's session, a pairing), so they
+ * still get the new document Clerk gives them.
  */
 export function staysInApp(to: string, origin: string): boolean {
   try {
     const url = new URL(to, origin);
-    return url.origin === origin && url.pathname === "/" && url.hash === "";
+    return url.origin === origin && IN_APP_PATHS.has(url.pathname) && url.hash === "";
   } catch {
     return false;
   }

@@ -13,6 +13,9 @@ const BOARD_FIRST_VIEW_ZOOM = 0.75;
 const NARROW_WIDTH = 640;
 const NARROW_GUTTER = 16;
 const CHROME_GAP = 12;
+// The "Showing where to start" hint sits under the header's end; the start opens clear of it. A
+// phone gets the same view, not the whole board, which is too small to read there.
+const HINT_ROOM = 40;
 
 /**
  * The view a board opens with for someone who has no view of it saved. The whole board when it
@@ -38,7 +41,7 @@ export function firstBoardView(input: {
       rect.y < first.y || (rect.y === first.y && rect.x < first.x) ? rect : first,
     );
   const side = area.width < NARROW_WIDTH ? NARROW_GUTTER : margin;
-  const top = Math.max(side, covered.top + CHROME_GAP);
+  const top = Math.max(side, covered.top + CHROME_GAP + HINT_ROOM);
   const room = {
     width: Math.max(1, area.width - side * 2),
     height: Math.max(1, area.height - top - Math.max(side, covered.bottom + CHROME_GAP)),

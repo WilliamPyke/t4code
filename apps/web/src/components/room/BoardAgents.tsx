@@ -394,6 +394,7 @@ export function BoardAgents({
   hasThreadBoxes,
   recent,
   cloud = false,
+  viewing = false,
   bringAgent,
   takeAgentAway,
 }: {
@@ -414,6 +415,8 @@ export function BoardAgents({
   readonly recent: ReadonlyArray<BoardAgentRecent>;
   /** The board is on a cloud host that no agent can join. */
   readonly cloud?: boolean;
+  /** This person can only look at the board, so can bring no agent to it. */
+  readonly viewing?: boolean;
   /** On a cloud board this person has brought no agent to yet: how they bring one. */
   readonly bringAgent?: (() => void) | undefined;
   /** This person's agent is on this cloud board: takes it off again. */
@@ -532,7 +535,8 @@ export function BoardAgents({
 
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
-      <BoardFloat className="p-1 @max-2xl/board:hidden">
+      {/* A narrow board's two-row header has room for it; in between, More tools carries it. */}
+      <BoardFloat className="pointer-events-auto p-1 @max-xl/board:order-1 @xl/board:@max-2xl/board:hidden">
         <Tooltip>
           <TooltipTrigger
             render={
@@ -668,9 +672,11 @@ export function BoardAgents({
             </div>
           ) : (
             <p className="px-1.5 pb-1 text-2xs text-muted-foreground">
-              {cloud
-                ? "Agents cannot join this board."
-                : "Add an agent with Thread in the toolbar, or select cards and choose Ask an agent."}
+              {viewing
+                ? "You are viewing this board. Agents join when you can edit it."
+                : cloud
+                  ? "Agents cannot join this board."
+                  : "Add an agent with Thread in the toolbar, or select cards and choose Ask an agent."}
             </p>
           )}
           {recent.length === 0 ? null : (

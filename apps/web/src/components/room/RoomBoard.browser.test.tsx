@@ -51,8 +51,8 @@ function renderBoard(
   const onChange = vi.fn(takes);
   // The first-run guide floats over the bottom right corner, where these tests click the board.
   localStorage.setItem(
-    "t3code:board-guide:v1",
-    JSON.stringify({ hidden: true, collapsed: false, done: [] }),
+    "t3code:board-guide:v2",
+    JSON.stringify({ owner: null, hidden: true, collapsed: false, done: [] }),
   );
   const element = (
     <RoomBoard

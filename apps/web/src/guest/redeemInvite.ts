@@ -57,7 +57,8 @@ export async function redeemInvite(input: {
       shareId: result.shareId,
       threadId: result.threadId,
       token: result.token,
-      title: "Shared thread",
+      // A stand-in until the stream names it: a cloud board is never called a thread.
+      title: result.title?.trim() || (cloud ? "Shared board" : "Shared thread"),
       joinedAt: new Date().toISOString(),
       // Anyone on a cloud board can invite others with the link they came in on.
       ...(cloud ? { credential: input.credential } : {}),

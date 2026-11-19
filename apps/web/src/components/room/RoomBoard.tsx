@@ -581,8 +581,41 @@ function BoardTool({
 
 type ArmedCardTool = "note" | "task" | "section";
 
+/**
+ * What a picked tool waits for, above the toolbar and the zoom corner. A keyboard stops it with
+ * Esc; a finger has none, so it gets a Cancel.
+ */
+function BoardToolHint({
+  onCancel,
+  children,
+  ...props
+}: ComponentProps<"p"> & { readonly onCancel: () => void }) {
+  const touch = touchFirst();
+  return (
+    <p
+      {...props}
+      className="pointer-events-none absolute inset-x-0 bottom-28 z-30 flex justify-center px-4 @4xl/board:bottom-20"
+    >
+      <span className="flex items-center gap-1 rounded-board border border-board-hairline bg-card py-1 ps-3 pe-1 text-center text-xs text-muted-foreground shadow-board">
+        <span className="py-0.5 pe-2">
+          {children}
+          {touch ? null : " Esc to stop."}
+        </span>
+        {touch ? (
+          <span className="pointer-events-auto flex">
+            <Button size="xs" variant="ghost" onClick={onCancel}>
+              Cancel
+            </Button>
+          </span>
+        ) : null}
+      </span>
+    </p>
+  );
+}
+
+// A phone's toolbar has no room for them: without, its last tool stays inside it.
 const BoardToolDivider = () => (
-  <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-board-hairline" />
+  <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-board-hairline @max-md/board:hidden" />
 );
 
 /** A toolbar button's words, read out but not shown while the board is too narrow for them. */
@@ -859,6 +892,7 @@ export function RoomBoard({
   cards,
   summary,
   sharing,
+  sharingFolds = false,
   titleEditor,
   backLabel = "Thread",
   ownerAssignable = true,
@@ -944,6 +978,8 @@ export function RoomBoard({
   readonly summary?: string;
   /** Who is in the room and the way to share it, shown after the title in place of the summary. */
   readonly sharing?: ReactNode;
+  /** `sharing` narrows itself on a narrow board, so it stays in the header, not behind a menu. */
+  readonly sharingFolds?: boolean;
   /** Shown in place of the title in the header, to rename the board there. */
   readonly titleEditor?: ReactNode;
   readonly backLabel?: string;
@@ -4620,9 +4656,13 @@ export function RoomBoard({
     cards === undefined && holds.agents && bringAgent === undefined && cannotAddThread === null;
   // The guide's steps, stable so a pan or a drag does not render the guide again. The invite link
   // and Share live in the header the host gives the board.
+  // Only a control that is drawn: a narrow board folds some away, and a popover opened from a
+  // hidden button would have nowhere to open from.
   const inviteFromGuide = useStableCallback(() => {
     const control = (selector: string) =>
-      surfaceRef.current?.parentElement?.querySelector<HTMLElement>(selector) ?? null;
+      [...(surfaceRef.current?.parentElement?.querySelectorAll<HTMLElement>(selector) ?? [])].find(
+        (element) => element.getClientRects().length > 0,
+      ) ?? null;
     (
       control("[data-cloud-board-invite]") ??
       control("[data-board-share], [data-cloud-board-people]") ??
@@ -4727,19 +4767,20 @@ export function RoomBoard({
         <header
           data-board-chrome="top"
           className={cn(
-            // One row at every width: the title gives way first, then sharing folds into a menu.
-            "pointer-events-none z-30 flex items-start gap-2",
+            // One row where it fits: the title gives way first, then sharing folds. A narrow board
+            // gets two: the title and Agents, then the views and sharing.
+            "pointer-events-none z-30 flex items-start gap-2 @max-xl/board:flex-wrap",
             planShown ? "relative mx-3 mt-3 mb-2" : "absolute inset-x-3 top-3",
             COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
           )}
         >
-          <BoardFloat className="pointer-events-auto min-w-0 gap-0.5 p-1 pe-3">
+          <BoardFloat className="pointer-events-auto min-w-0 gap-0.5 p-1 pe-3 @max-xl/board:grow @max-xl/board:basis-[70%]">
             <Button size="sm" variant="ghost" onClick={onBack ?? onOpenThread}>
               <ArrowLeftIcon />
               <ToolLabel>{backLabel}</ToolLabel>
             </Button>
             <span aria-hidden className="me-1.5 h-4 w-px shrink-0 bg-board-hairline" />
-            <h1 className="min-w-0 truncate text-sm font-semibold">
+            <h1 className="min-w-0 truncate text-sm font-semibold @max-xl/board:flex-1">
               {titleEditor ?? title}
               {sharing === undefined ? (
                 <span className="ms-2 font-normal text-muted-foreground">
@@ -4750,7 +4791,7 @@ export function RoomBoard({
             {power.menu}
           </BoardFloat>
           {plannable ? (
-            <BoardFloat className="pointer-events-auto shrink-0 p-1">
+            <BoardFloat className="pointer-events-auto shrink-0 p-1 @max-xl/board:order-2">
               <BoardViewSwitch view={planShown ? pickedView : "board"} onView={pickView} />
             </BoardFloat>
           ) : null}
@@ -4785,7 +4826,8 @@ export function RoomBoard({
             )}
           </div>
           <div
-            className="pointer-events-auto ms-auto flex shrink-0 items-center gap-2"
+            // On a narrow board its floats are the header's own, placed across its two rows.
+            className="pointer-events-auto ms-auto flex shrink-0 items-center gap-2 @max-xl/board:contents"
             // Copying the invite link, from here or from the guide, is the guide's invite step.
             onClickCapture={(event) => {
               if (
@@ -4813,6 +4855,7 @@ export function RoomBoard({
                 isOnScreen={boxOnScreen}
                 hasThreadBoxes={threadBoxes.some((box) => box.id !== ROOM_BOARD_ROOM_BOX)}
                 cloud={!holds.agents}
+                viewing={viewOnly}
                 bringAgent={bringAgent}
                 takeAgentAway={takeAgentAway}
                 recent={agentRecent}
@@ -4832,12 +4875,16 @@ export function RoomBoard({
                 }
               />
             )}
-            {sharing === undefined ? null : (
+            {sharing === undefined ? null : sharingFolds ? (
+              <BoardFloat className="pointer-events-auto min-w-0 gap-1.5 p-1 ps-2 @max-xl/board:order-3 @max-xl/board:ms-auto @max-xl/board:gap-1 @max-xl/board:ps-1">
+                {sharing}
+              </BoardFloat>
+            ) : (
               <>
                 <BoardFloat className="min-w-0 gap-1.5 p-1 ps-2 @max-xl/board:hidden">
                   {sharing}
                 </BoardFloat>
-                <BoardFloat className="p-1 @xl/board:hidden">
+                <BoardFloat className="pointer-events-auto p-1 @max-xl/board:order-3 @max-xl/board:ms-auto @xl/board:hidden">
                   <Popover>
                     <PopoverTrigger
                       render={
@@ -4870,7 +4917,8 @@ export function RoomBoard({
               planShown && "invisible",
             )}
           >
-            <BoardFloat className="pointer-events-auto max-w-full gap-0.5 overflow-x-auto rounded-xl p-1">
+            {/* Tighter on the narrowest phones, so the last tool stays inside it. */}
+            <BoardFloat className="pointer-events-auto max-w-full gap-0.5 overflow-x-auto rounded-xl p-1 @max-sm/board:gap-0 @max-sm/board:px-0.5">
               {linkDraft === null ? (
                 <>
                   <WhyNot reason={cannotAdd}>
@@ -6316,27 +6364,22 @@ export function RoomBoard({
             />
           ) : null}
           {armedTool === null ? null : (
-            <p
-              data-board-place-hint
-              className="pointer-events-none absolute inset-x-0 bottom-20 z-30 flex justify-center px-4"
-            >
-              <span className="rounded-board border border-board-hairline bg-card px-3 py-1.5 text-center text-xs text-muted-foreground shadow-board">
-                Click the board where the {armedTool} goes. Esc to stop.
-              </span>
-            </p>
+            <BoardToolHint data-board-place-hint onCancel={() => setArmedTool(null)}>
+              {touchFirst() ? "Tap" : "Click"} the board where the {armedTool} goes.
+            </BoardToolHint>
           )}
           {lineTool ? (
-            <p
+            <BoardToolHint
               role="status"
-              className="pointer-events-none absolute inset-x-0 bottom-20 z-30 flex justify-center px-4"
+              onCancel={() => {
+                stopLinking();
+                setLineTool(false);
+              }}
             >
-              <span className="rounded-board border border-board-hairline bg-card px-3 py-1.5 text-center text-xs text-muted-foreground shadow-board">
-                {linking === null
-                  ? "Click the card the line starts from"
-                  : "Now click the card it points to"}
-                . Esc to stop.
-              </span>
-            </p>
+              {linking === null
+                ? `${touchFirst() ? "Tap" : "Click"} the card the line starts from.`
+                : `Now ${touchFirst() ? "tap" : "click"} the card it points to.`}
+            </BoardToolHint>
           ) : null}
           {commentPanel()}
           {room === null ? (
@@ -6960,7 +7003,11 @@ function BoardNote({
         )}
       >
         {note.kind === "task" ? (
-          <span className="flex items-center" onPointerDown={stopPointer}>
+          <span
+            // A finger gets more of the corner than the box itself.
+            className="flex items-center pointer-coarse:[&_[data-slot=checkbox]]:after:absolute pointer-coarse:[&_[data-slot=checkbox]]:after:-inset-2.5"
+            onPointerDown={stopPointer}
+          >
             <Checkbox
               aria-label="Done"
               checked={note.done === true}

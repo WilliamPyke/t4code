@@ -300,20 +300,23 @@ export function WorkspaceInvite({ workspace }: { readonly workspace: CloudWorksp
   const copyInvite = useCopyInvite();
   const alone = workspace.members.length === 1;
   return (
+    // Stacked on a phone: beside a wide button the words have no room.
     <div
-      className="flex flex-wrap items-center gap-3 rounded-board border border-dashed border-foreground/20 p-4"
+      className="flex flex-col gap-3 rounded-board border border-dashed border-foreground/20 p-4 sm:flex-row sm:items-center"
       data-workspace-invite
     >
-      <WorkspaceMark name={workspace.name} color={workspace.color} size="md" />
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <p className="text-sm font-semibold">
-          {alone ? `Invite your team to ${workspace.name}` : `No boards in ${workspace.name} yet`}
-        </p>
-        <p className="text-sm text-muted-foreground">
-          {alone
-            ? "Everyone you invite sees this workspace's boards and opens them as themselves. Tinkjam does not send emails yet: copy the link and send it."
-            : "Start one with New board, or move one of yours here from its menu."}
-        </p>
+      <div className="flex min-w-0 flex-1 items-start gap-3 sm:items-center">
+        <WorkspaceMark name={workspace.name} color={workspace.color} size="md" />
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <p className="text-sm font-semibold">
+            {alone ? `Invite your team to ${workspace.name}` : `No boards in ${workspace.name} yet`}
+          </p>
+          <p className="text-sm text-muted-foreground">
+            {alone
+              ? "Everyone you invite sees this workspace's boards and opens them as themselves. Tinkjam does not send emails yet: copy the link and send it."
+              : "Press New board to start one, and everyone in the workspace sees it. A board you already made can move here from its menu."}
+          </p>
+        </div>
       </div>
       {workspace.invite === undefined ? null : (
         <Button variant="outline" onClick={() => copyInvite(workspace)}>

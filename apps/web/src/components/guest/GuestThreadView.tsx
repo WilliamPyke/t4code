@@ -94,6 +94,7 @@ import { useThreadActions } from "~/hooks/useThreadActions";
 import { configuredHostedAppUrl } from "~/hostedPairing";
 import { useTheme } from "~/hooks/useTheme";
 import { cn, randomUUID } from "~/lib/utils";
+import { endBoardLanding, isLandingOnBoard } from "~/guestPage";
 import { deriveActiveWorkStartedAt, derivePhase, deriveThreadAgentWorking } from "~/session-logic";
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { useEnvironment, useEnvironmentProviders } from "~/state/environments";
@@ -122,6 +123,7 @@ import { ScrollToEndButton } from "../chat/TimelineOverlays";
 import type { TimelineRow } from "../chat/timelineRowContext";
 import { useTimelineFollow } from "../chat/useTimelineFollow";
 import { PersonDot } from "../room/BoardChrome";
+import { TinkjamLoading } from "../TinkjamLoading";
 import { composerDraftPick } from "../room/BoardModelPicker";
 import { boardAgentEndOf } from "../room/boardAgents.logic";
 import {
@@ -402,7 +404,7 @@ export function GuestThreadRoute({ threadRef }: { readonly threadRef: ScopedThre
         <Navigate {...location} search hash replace />
       ) : null}
       {share === null && step === "opening" ? (
-        <GuestNotice title="Opening the board..." />
+        <TinkjamLoading cover={isLandingOnBoard()} label="Opening the board" />
       ) : share === null || share.threadId !== threadRef.threadId ? (
         <GuestNotice
           title="This board has ended, or the link is not valid"
@@ -572,6 +574,10 @@ function GuestThreadSession({
     }
   });
   if (view === null || projection === null) {
+    // The plain wait is the mark alone; only trouble gets words.
+    if (!retrying && Option.isNone(thread.error)) {
+      return <TinkjamLoading cover={isLandingOnBoard()} label="Opening the board" />;
+    }
     return (
       <GuestNotice
         title={
@@ -593,6 +599,8 @@ function GuestThreadSession({
       />
     );
   }
+  // A board is on screen: from here a wait leaves the sidebar where it is.
+  endBoardLanding();
   const historyControls: MessagesTimelineHistoryControls | undefined = shouldShowLoadEarlierControl(
     thread.history,
   )
@@ -994,6 +1002,8 @@ function GuestThreadSession({
                         {sharing}
                       </>
                     ),
+                    // The view-only bar is a sentence, which a narrow board keeps behind its menu.
+                    sharingFolds: !viewOnly,
                   }
                 : {})}
               viewOnly={viewOnly}

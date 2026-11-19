@@ -13,7 +13,6 @@ import {
   TINKJAM_AGENT_PROMPT,
   TINKJAM_SYNC_COMMAND,
   TINKJAM_SYNC_MAC_COMMAND,
-  TINKJAM_SYNC_URL,
   TINKJAM_SYNC_WINDOWS_DOWNLOAD,
 } from "~/branding";
 import { environmentCatalog } from "~/connection/catalog";
@@ -201,7 +200,9 @@ export function BringAgentDialog({
   };
 
   const setup = <ConnectComputerRoutes withAccount={withAccount} signedIn={signedIn} />;
+  // On a phone nobody is about to press Connect, so nothing stands in for a computer to come.
   const waitingForFirst = withAccount && signedIn && !list.failed;
+  const phone = onPhoneOrTablet();
   const setupInline = size !== "compact" || computers.length === 0;
   return (
     <Dialog
@@ -274,7 +275,7 @@ export function BringAgentDialog({
                   })}
                 </ul>
               </section>
-            ) : list.loading || waitingForFirst ? (
+            ) : !phone && (list.loading || waitingForFirst) ? (
               <section className="flex flex-col gap-2">
                 <h3 className="text-sm font-medium">Your computers</h3>
                 {list.loading ? (
@@ -436,6 +437,9 @@ const detectOs = (): Os | null => {
   return /win/i.test(agent) ? "windows" : "linux";
 };
 
+/** Whether this is a phone or tablet, where no agent runs and Tinkjam Sync cannot be installed. */
+export const onPhoneOrTablet = () => detectOs() === null;
+
 /** How a computer gets connected: the Tinkjam Sync app, or an agent or a terminal installing it. */
 export function ConnectComputerRoutes({
   withAccount,
@@ -445,6 +449,8 @@ export function ConnectComputerRoutes({
   readonly signedIn: boolean;
 }) {
   const [os, setOs] = useState<Os | null>(detectOs);
+  // Read on a phone, the steps are for another machine: nothing here says "this computer".
+  const [elsewhere] = useState(onPhoneOrTablet);
   const signIn = withAccount && !signedIn;
   const connect = "Your browser opens by itself. Sign in if it asks, then press Connect.";
   return (
@@ -471,19 +477,20 @@ export function ConnectComputerRoutes({
           </ToggleGroup>
         </div>
         {os === null ? (
-          <div className="flex flex-col gap-1 text-sm" data-sync-other-device>
+          <div className="flex flex-col gap-3 text-sm" data-sync-other-device>
             <p>
-              Do this on the computer where your agent runs, not on this phone or tablet. Open this
-              page there:
+              Agents run on a computer, not on a phone or tablet. Open Tinkjam on your Mac or PC,
+              sign in, and connect it from there. Your boards will be waiting.
             </p>
-            <CopyLine text={TINKJAM_SYNC_URL} />
-            <p className="mt-1 text-xs text-muted-foreground">
-              Or pick that computer above to read the steps here.
+            <CopyAppLink />
+            <p className="text-xs text-muted-foreground">
+              To read the steps first, pick your computer above.
             </p>
           </div>
         ) : (
-          // All three share one cell, so the tallest sets its height and picking another moves nothing.
-          <div className="grid">
+          // All three share one cell, so the tallest sets its height and picking another moves
+          // nothing. One column no wider than the dialog: a long command wraps, never widens it.
+          <div className="grid grid-cols-1">
             <OsSteps shown={os === "mac"}>
               <ol className="flex flex-col gap-2.5 text-sm">
                 <Step number={1}>
@@ -510,22 +517,29 @@ export function ConnectComputerRoutes({
                 would refuse to open a normal download. Once installed it sits in your menu bar,
                 starts with your Mac and keeps itself up to date.
               </p>
-              <AgentRoute />
+              <AgentRoute elsewhere={elsewhere} />
             </OsSteps>
             <OsSteps shown={os === "windows"}>
               <ol className="flex flex-col gap-2.5 text-sm">
                 <Step number={1}>
-                  <span className="flex flex-wrap items-center gap-2">
-                    Download Tinkjam Sync and open the file.
-                    <Button
-                      size="sm"
-                      render={<a href={TINKJAM_SYNC_WINDOWS_DOWNLOAD} download />}
-                      data-sync-download
-                    >
-                      <DownloadIcon />
-                      Download for Windows
-                    </Button>
-                  </span>
+                  {elsewhere ? (
+                    <>
+                      On your PC, open Tinkjam, press Bring my agent and download Tinkjam Sync
+                      there. Then open the file.
+                    </>
+                  ) : (
+                    <span className="flex flex-wrap items-center gap-2">
+                      Download Tinkjam Sync and open the file.
+                      <Button
+                        size="sm"
+                        render={<a href={TINKJAM_SYNC_WINDOWS_DOWNLOAD} download />}
+                        data-sync-download
+                      >
+                        <DownloadIcon />
+                        Download for Windows
+                      </Button>
+                    </span>
+                  )}
                   <StepNote>
                     Windows does not recognise Tinkjam Sync yet, so it says it protected your PC.
                     Choose More info, then Run anyway.
@@ -542,7 +556,7 @@ export function ConnectComputerRoutes({
                 Once installed it sits in your system tray, starts with your computer and keeps
                 itself up to date.
               </p>
-              <AgentRoute />
+              <AgentRoute elsewhere={elsewhere} />
             </OsSteps>
             <OsSteps shown={os === "linux"}>
               <ol className="flex flex-col gap-2.5 text-sm">
@@ -565,9 +579,10 @@ export function ConnectComputerRoutes({
         )}
       </section>
       <p className="text-xs text-muted-foreground">
-        Tinkjam Sync lets your boards use the agents on this computer, such as Claude Code or Codex,
-        under your own account, with the access they already have on it. Nothing anyone else writes
-        reaches your agent unless you press Send. To stop it, quit it from its menu.
+        Tinkjam Sync lets your boards use the agents on {elsewhere ? "your" : "this"} computer, such
+        as Claude Code or Codex, under your own account, with the access they already have on it.
+        Nothing anyone else writes reaches your agent unless you press Send. To stop it, quit it
+        from its menu.
       </p>
       {withAccount ? null : (
         <div>
@@ -585,7 +600,7 @@ function OsSteps({ shown, children }: { readonly shown: boolean; readonly childr
   return (
     <div
       inert={!shown}
-      className={cn("col-start-1 row-start-1 flex flex-col gap-3", !shown && "invisible")}
+      className={cn("col-start-1 row-start-1 flex min-w-0 flex-col gap-3", !shown && "invisible")}
     >
       {children}
     </div>
@@ -610,7 +625,7 @@ function CopyLabel({ copied, children }: { readonly copied: boolean; readonly ch
  * The other way to install: the person's coding agent does it. The request is written for that
  * agent, so it is copied whole and only shown to whoever asks to read it.
  */
-function AgentRoute() {
+function AgentRoute({ elsewhere }: { readonly elsewhere: boolean }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard({ timeout: 2000, target: "command" });
   return (
     <div
@@ -619,15 +634,15 @@ function AgentRoute() {
     >
       <p className="min-w-48 flex-1 text-xs text-muted-foreground">
         <span className="font-medium text-foreground">Rather have your coding agent do it?</span>{" "}
-        Copy a ready-made request and paste it into Claude Code, Codex or another coding agent on
-        this computer.
+        Copy a ready-made request and paste it into Claude Code, Codex or another coding agent on{" "}
+        {elsewhere ? "that" : "this"} computer.
       </p>
       <Popover>
         <PopoverTrigger render={<Button size="sm" variant="ghost" />}>Read it</PopoverTrigger>
         <PopoverPopup side="top" align="end" width="md">
           <div className="flex flex-col gap-2">
             <PopoverTitle>What the request says</PopoverTitle>
-            <p className="rounded-lg border border-border bg-muted/50 px-3 py-2 text-xs break-words select-all">
+            <p className="rounded-lg border border-border bg-muted/50 px-3 py-2 text-xs wrap-anywhere select-all">
               {TINKJAM_AGENT_PROMPT}
             </p>
             <p className="text-xs text-muted-foreground">
@@ -654,10 +669,11 @@ function AgentRoute() {
 function CopyLine({ text, mono = false }: { readonly text: string; readonly mono?: boolean }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard({ timeout: 2000, target: "command" });
   return (
-    <div className="mt-1.5 flex items-start gap-2" data-sync-command>
+    // Side by side where there is room; on a phone the button sits under the whole line.
+    <div className="mt-1.5 flex flex-col gap-2 sm:flex-row sm:items-start" data-sync-command>
       <p
         className={cn(
-          "min-w-0 flex-1 rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm break-words select-all",
+          "min-w-0 rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm wrap-anywhere select-all sm:flex-1",
           mono && "font-mono",
         )}
       >
@@ -667,6 +683,26 @@ function CopyLine({ text, mono = false }: { readonly text: string; readonly mono
         {isCopied ? <CheckIcon /> : <CopyIcon />}
         <CopyLabel copied={isCopied}>Copy</CopyLabel>
       </Button>
+    </div>
+  );
+}
+
+/**
+ * For someone reading on a phone: Tinkjam's own address, to open on their computer. Never a board
+ * or invite link, which would hand on a way in.
+ */
+function CopyAppLink() {
+  const { copyToClipboard, isCopied } = useCopyToClipboard({ timeout: 2000, target: "link" });
+  const address = typeof window === "undefined" ? "" : window.location.origin;
+  return (
+    <div className="flex flex-col gap-1.5" data-sync-app-link>
+      <Button onClick={() => copyToClipboard(address, undefined)}>
+        {isCopied ? <CheckIcon /> : <CopyIcon />}
+        <CopyLabel copied={isCopied}>Copy link to open on my computer</CopyLabel>
+      </Button>
+      <p className="text-center text-xs wrap-anywhere text-muted-foreground">
+        {address.replace(/^https?:\/\//, "")}
+      </p>
     </div>
   );
 }
