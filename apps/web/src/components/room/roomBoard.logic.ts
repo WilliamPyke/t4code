@@ -42,6 +42,7 @@ import {
   ROOM_BOARD_NOTE_SIZE,
   ROOM_BOARD_SECTION_SIZE,
   ROOM_BOARD_TASK_SIZE,
+  roomArtifactSource,
   roomBoardCardChangedAt,
   roomBoardNoteOfRef,
   roomBoxIdOfRef,
@@ -1079,13 +1080,14 @@ export interface BoardLineEnds {
   readonly slots?: BoardLineSlots | undefined;
 }
 
-// A line alone on its side attaches no nearer a corner than this.
-const SLOT_MARGIN = 20;
+// A line attaches no nearer a corner than this.
+const SLOT_MARGIN = 12;
+const SLOT_BAND = 32;
 
 /**
- * Where a line between facing sides attaches along each: an end alone on its side (slot 0.5)
- * slides toward the other end, so cards side by side but offset get a straight or gentle line
- * in place of a tall S. Ends that share a side keep their slots.
+ * Where a line between facing sides attaches along each: each end slides from its slot toward
+ * the other end, so cards side by side but offset get a level or gentle line in place of a
+ * tall S.
  */
 function facingSlots(
   from: BoardBox,
@@ -1106,9 +1108,14 @@ function facingSlots(
   const a = span(from);
   const b = span(to);
   const at = (side: typeof a, slot: number) => side.low + side.length * slot;
-  const freeA = held[0] === 0.5;
-  const freeB = held[1] === 0.5;
-  if (!freeA && !freeB) return held;
+  // Lines sharing a side keep their order: slid all the way, they sit within this of its end.
+  const reach = (side: typeof a, slot: number, point: number, up: boolean) => {
+    const band = Math.min(SLOT_BAND, side.max - side.min);
+    return Math.max(
+      0,
+      up ? side.max - (1 - slot) * band - point : point - (side.min + slot * band),
+    );
+  };
   let pa = at(a, held[0]);
   let pb = at(b, held[1]);
   // Only as far as it takes for the line to run no steeper than it is long.
@@ -1121,8 +1128,8 @@ function facingSlots(
   const way = Math.sign(pb - pa);
   let excess = Math.abs(pb - pa) - gap;
   if (excess <= 0) return held;
-  const reachA = freeA ? Math.max(0, way > 0 ? a.max - pa : pa - a.min) : 0;
-  const reachB = freeB ? Math.max(0, way > 0 ? pb - b.min : b.max - pb) : 0;
+  const reachA = reach(a, held[0], pa, way > 0);
+  const reachB = reach(b, held[1], pb, way < 0);
   excess = Math.min(excess, reachA + reachB);
   const moveA = clamp(excess / 2, excess - reachB, reachA);
   pa += way * moveA;
@@ -1366,6 +1373,7 @@ const withServerFields = (note: RoomBoardNote, room: RoomBoardNote | undefined):
   const {
     answer: _answer,
     artifact: _artifact,
+    viewOf: _viewOf,
     thread: _thread,
     changes: _changes,
     pullRequest: _pullRequest,
@@ -1379,6 +1387,7 @@ const withServerFields = (note: RoomBoardNote, room: RoomBoardNote | undefined):
     ...own,
     ...(room?.answer === undefined ? {} : { answer: room.answer }),
     ...(room?.artifact === undefined ? {} : { artifact: room.artifact }),
+    ...(room?.viewOf === undefined ? {} : { viewOf: room.viewOf }),
     ...(room?.thread === undefined ? {} : { thread: room.thread }),
     ...(room?.changes === undefined ? {} : { changes: room.changes }),
     ...(room?.pullRequest === undefined ? {} : { pullRequest: room.pullRequest }),
@@ -2374,9 +2383,15 @@ export function boardPromptContext(
   const artifactEdges = edges.filter(
     (edge) => edge.from === target && notes.get(edge.to)?.kind === "artifact",
   );
-  const artifactEdge =
-    artifactEdges.find((edge) => notes.get(edge.to)?.id === picked) ?? artifactEdges[0];
-  const roots = artifactEdge === undefined ? [target] : [target, artifactEdge.to];
+  // Each as the artifact it shows: a view's is its source, once however many views the box has.
+  const artifacts = [
+    ...new Set(
+      artifactEdges.flatMap((edge) => roomArtifactSource(board, notes.get(edge.to)?.id) ?? []),
+    ),
+  ];
+  const pickedSource = roomArtifactSource(board, picked);
+  const artifact = artifacts.find((note) => note === pickedSource) ?? artifacts[0];
+  const roots = artifact === undefined ? [target] : [target, roomBoardNoteRef(artifact.id)];
   // A line into another card can carry it to several boxes, so its marks are each box's own.
   const marked = (edge: RoomBoardEdge): Pick<RoomBoardEdge, "sentAt" | "pinned"> => {
     if (roots.includes(edge.to)) return edge;
@@ -2442,8 +2457,12 @@ export function boardPromptContext(
   const lines = edges.filter((edge) => reached.has(edge.from) && carried(edge.to));
   const edgeStatus = new Map<string, BoardPromptCardStatus>();
   const cards: Array<BoardPromptCard> = [];
-  for (const note of found) {
-    const ref = roomBoardNoteRef(note.id);
+  for (const view of found) {
+    const ref = roomBoardNoteRef(view.id);
+    // A view goes as what it shows, and not at all when that artifact goes itself.
+    const source = view.viewOf === undefined ? undefined : roomArtifactSource(board, view.id);
+    if (source !== undefined && carried(roomBoardNoteRef(source.id))) continue;
+    const note = source?.artifact === undefined ? view : { ...view, artifact: source.artifact };
     const own = lines.filter((edge) => edge.from === ref);
     const through = lines.filter(
       (edge) => held.get(edge.from)?.some((card) => card.id === note.id) === true,
@@ -2487,35 +2506,35 @@ export function boardPromptContext(
     cards,
     edgeIds: new Set(lines.map((edge) => edge.id)),
     edgeStatus,
-    artifacts: artifactEdges.flatMap((edge) => notes.get(edge.to) ?? []),
-    artifact: artifactEdge === undefined ? null : (notes.get(artifactEdge.to) ?? null),
+    artifacts,
+    artifact: artifact ?? null,
     artifactEdgeIds: artifactEdges.map((edge) => edge.id),
   };
 }
 
 /**
- * The artifact whose version a new line from `from` shows in the empty artifact it ends on: `from`
- * itself when it is a filled artifact, or when it is a thread box the filled one it has a line to,
- * `picked` before the first. Null when the line ends anywhere else or nothing is there to show.
+ * The artifact a new line from `from` makes the empty artifact it ends on a live view of: the one
+ * `from` shows when it is an artifact, or when it is a thread box the one it has a line to,
+ * `picked` before the first. Null when the line ends anywhere else, or on a view or its own source.
  */
-export function boardArtifactCopySource(
+export function boardArtifactViewSource(
   board: RoomBoard,
   from: string,
   to: string,
   picked?: string,
 ): string | null {
-  const filled = (note: RoomBoardNote | undefined) =>
-    note?.kind === "artifact" && note.artifact !== undefined;
   const target = roomBoardNoteOfRef(board, to);
-  if (target?.kind !== "artifact" || target.artifact !== undefined || from === to) return null;
-  const source = roomBoardNoteOfRef(board, from);
-  if (filled(source)) return source?.id ?? null;
-  if (roomBoxIdOfRef(board, from) === undefined) return null;
-  const shown = (board.edges ?? [])
-    .filter((edge) => edge.from === from && edge.to !== to)
-    .map((edge) => roomBoardNoteOfRef(board, edge.to))
-    .filter(filled);
-  return (shown.find((note) => note?.id === picked) ?? shown[0])?.id ?? null;
+  if (target?.kind !== "artifact" || target.artifact !== undefined) return null;
+  if (target.viewOf !== undefined || from === to) return null;
+  const sources =
+    roomBoxIdOfRef(board, from) === undefined
+      ? [roomArtifactSource(board, roomBoardNoteOfRef(board, from)?.id)]
+      : (board.edges ?? [])
+          .filter((edge) => edge.from === from && edge.to !== to)
+          .map((edge) => roomArtifactSource(board, roomBoardNoteOfRef(board, edge.to)?.id));
+  const shown = sources.filter((note) => note !== undefined && note.id !== target.id);
+  const pickedSource = roomArtifactSource(board, picked);
+  return (shown.find((note) => note === pickedSource) ?? shown[0])?.id ?? null;
 }
 
 const STATUS_RANK: Readonly<Record<BoardPromptCardStatus, number>> = {
@@ -2669,7 +2688,9 @@ export function boardOwnBoxFor(
   viewer: string | null,
   artifactId: string,
 ): string | null {
-  const artifact = roomBoardNoteRef(artifactId);
+  // A view is rewritten by whatever rewrites the artifact it shows, along a line to either.
+  const shows = (id: string | undefined) => roomArtifactSource(board, id)?.id ?? id;
+  const artifact = shows(artifactId);
   const own = [
     ...(viewer === null ? [ROOM_BOARD_ROOM_BOX] : []),
     ...board.notes
@@ -2678,7 +2699,11 @@ export function boardOwnBoxFor(
   ];
   return (
     own.find((boxId) =>
-      (board.edges ?? []).some((edge) => edge.from === boardBoxRef(boxId) && edge.to === artifact),
+      (board.edges ?? []).some(
+        (edge) =>
+          edge.from === boardBoxRef(boxId) &&
+          shows(roomBoardNoteOfRef(board, edge.to)?.id) === artifact,
+      ),
     ) ?? null
   );
 }
@@ -2753,28 +2778,18 @@ export function boardArtifactAuthor(
 
 /**
  * What tells an artifact card from another one of the same box, said quietly under its author:
- * the card whose version it shows too, and that the viewer's next reply lands here (`receives`).
+ * the artifact a live view follows, or that the viewer's next reply lands here (`receives`).
  */
 export function boardArtifactVersionNote(
   board: RoomBoard,
   note: RoomBoardNote,
   receives: boolean,
 ): string | null {
-  const shown = note.artifact;
-  const twin =
-    shown === undefined
-      ? undefined
-      : board.notes.find(
-          (other) =>
-            other.id !== note.id &&
-            other.artifact?.turnId === shown.turnId &&
-            other.artifact.updatedAt === shown.updatedAt,
-        );
-  const parts = [
-    ...(twin === undefined ? [] : [`Same version as "${twin.text.trim() || "Untitled artifact"}"`]),
-    ...(receives ? ["Next reply goes here"] : []),
-  ];
-  return parts.length === 0 ? null : parts.join(" · ");
+  if (note.viewOf === undefined) return receives ? "Next reply goes here" : null;
+  const source = roomArtifactSource(board, note.id);
+  return source === undefined
+    ? null
+    : `Live view of "${source.text.trim() || "Untitled artifact"}"`;
 }
 
 /**

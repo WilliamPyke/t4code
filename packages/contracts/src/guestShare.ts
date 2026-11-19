@@ -694,6 +694,11 @@ export const RoomBoardNote = Schema.Struct({
   section: Schema.optional(Schema.Literal(true)),
   /** What an agent wrote into an artifact. No board change sets it. */
   artifact: Schema.optional(RoomArtifactContent),
+  /**
+   * An artifact that is a live view of another: it holds no content and shows that one's, at its
+   * own size. Only `artifact.view` sets it; `artifact.copy` and removing the source clear it.
+   */
+  viewOf: Schema.optional(RoomBoardNoteId),
   /** A thread box's recent turns. No board change sets it; it stays when the box changes. */
   thread: Schema.optional(RoomBoxState),
   /** A thread box's model, once someone picked one. Only `box.model` sets it. */
@@ -1076,11 +1081,21 @@ export const RoomBoardChange = Schema.Union([
     body: Schema.String.check(Schema.isMaxLength(ROOM_ARTIFACT_MAX_LENGTH)),
   }),
   /**
-   * Shows artifact `fromNoteId`'s version in the empty artifact `noteId` too, as it is: its author,
-   * prompt, time and the version it replaced. One that has content stays as it is.
+   * Gives the empty artifact `noteId`, or a view, artifact `fromNoteId`'s version as its own, as it
+   * is: its author, prompt, time and the version it replaced. A view stops following, even one of
+   * an artifact still empty. One that has content stays as it is.
    */
   Schema.Struct({
     type: Schema.Literal("artifact.copy"),
+    noteId: RoomBoardNote.fields.id,
+    fromNoteId: RoomBoardNote.fields.id,
+  }),
+  /**
+   * Makes the artifact `noteId`, which has no content of its own, a live view of artifact
+   * `fromNoteId`, or of the one that is a view of. Writing or restoring a view changes its source.
+   */
+  Schema.Struct({
+    type: Schema.Literal("artifact.view"),
     noteId: RoomBoardNote.fields.id,
     fromNoteId: RoomBoardNote.fields.id,
   }),

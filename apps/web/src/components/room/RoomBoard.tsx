@@ -89,6 +89,7 @@ import {
   canRestoreRoomArtifact,
   canUndoRoomAgentTurn,
   isRoomCardOwnedBy,
+  roomArtifactSource,
   roomBoardAfterAgentTurn,
   roomBoardNoteOfRef,
   roomBoxCodeWindows,
@@ -172,8 +173,8 @@ import {
   boardCodeEdgeIds,
   boardAgents,
   boardArtifactAuthor,
-  boardArtifactCopySource,
   boardArtifactVersionNote,
+  boardArtifactViewSource,
   boardArtifactWriting,
   boardBoxAgentLabel,
   boardBoxName,
@@ -1662,6 +1663,22 @@ export function RoomBoard({
           queueChange(noteRef(note.id), () =>
             onChange({ type: "artifact.write", noteId: note.id, body }),
           );
+  // A view that takes what it shows as its own and stops following, so two versions sit side by
+  // side. One of an artifact still empty only stops following.
+  const keepOf = (view: RoomBoardNote, source: RoomBoardNote | undefined) =>
+    onChange === undefined || !canEdit || view.viewOf === undefined
+      ? undefined
+      : {
+          label: source?.artifact === undefined ? "Stop following" : "Keep this version",
+          run: () =>
+            queueChange(noteRef(view.id), () =>
+              onChange({
+                type: "artifact.copy",
+                noteId: view.id,
+                fromNoteId: source?.id ?? view.id,
+              }),
+            ),
+        };
   const liveStore = use(RoomLiveContext);
   // What a drag moves on the page, by edit key: the element and where it was drawn as the drag
   // began, found on its first step after that.
@@ -3080,7 +3097,14 @@ export function RoomBoard({
   const [asking, setAsking] = useState<BoardAsking | null>(null);
   const askAfterMenu = useRef(false);
   const askKey = viewKey ?? shareId ?? title;
-  const askNotes = selectedNotes.filter((note) => note.kind !== "thread" && note.section !== true);
+  // Asking about a view asks about the artifact it shows.
+  const askNotes = [
+    ...new Set(
+      selectedNotes
+        .filter((note) => note.kind !== "thread" && note.section !== true)
+        .map((note) => roomArtifactSource(shown, note.id) ?? note),
+    ),
+  ];
   const askCards = boardAskCards(askNotes, (note) => {
     const card = boardPromptCard(note, people, boardNoteQuote(note, messages));
     // A link goes with what its snapshot says, unless the snapshot is asked about too.
@@ -3631,13 +3655,13 @@ export function RoomBoard({
       boardLine(lastBoardLineShape(lineBoard), linking.box, box).path,
     );
   };
-  // A new line into an empty artifact shows the version at its start there too, once the line is
-  // on the board. A board edit only, and not an undo step: no change empties an artifact again.
-  // A board held by an older server refuses it, and the card stays empty as it was.
-  const copyArtifactAlong = (from: string, to: string, queue: string, on = shown) => {
+  // A new line into an empty artifact makes it a live view of the artifact at its start, once the
+  // line is on the board. A board edit only, and not an undo step: "Stop following" is its way
+  // out. A board held by an older server refuses it, and the card stays empty as it was.
+  const viewArtifactAlong = (from: string, to: string, queue: string, on = shown) => {
     if (onChange === undefined) return;
     const boxId = roomBoxIdOfRef(on, from);
-    const fromNoteId = boardArtifactCopySource(
+    const fromNoteId = boardArtifactViewSource(
       on,
       from,
       to,
@@ -3645,15 +3669,15 @@ export function RoomBoard({
     );
     const noteId = roomBoardNoteOfRef(on, to)?.id;
     if (fromNoteId === null || noteId === undefined) return;
-    void queueChange(queue, () => onChange({ type: "artifact.copy", noteId, fromNoteId }));
+    void queueChange(queue, () => onChange({ type: "artifact.view", noteId, fromNoteId }));
   };
-  /** A box's "New artifact": a second one opens on the version the box's artifact shows. */
+  /** A box's "New artifact": a second one opens as a live view of the one the box rewrites. */
   const addBoxArtifact = (from: string) => {
     const id = addBeside(from, "artifact", "from");
     if (id === null) return;
     const added: RoomBoardNote = { id, text: "", x: 0, y: 0, kind: "artifact" };
     const to = noteRef(id);
-    copyArtifactAlong(from, to, to, { ...shown, notes: [...shown.notes, added] });
+    viewArtifactAlong(from, to, to, { ...shown, notes: [...shown.notes, added] });
   };
   /** Draws a line between two cards, unless one is there or the board holds no more. */
   const addEdge = (from: string, to: string) => {
@@ -3663,7 +3687,7 @@ export function RoomBoard({
     const elbow = lastBoardLineShape(lineBoard) === "elbow";
     const line = { id, from, to, ...(elbow ? { shape: "elbow" as const } : {}) };
     send({ kind: "edge", id }, line);
-    copyArtifactAlong(from, to, boardChangeQueueKey(shown, { kind: "edge", id }, line));
+    viewArtifactAlong(from, to, boardChangeQueueKey(shown, { kind: "edge", id }, line));
   };
   const startLink = (from: string, event: PointerEvent<HTMLElement>) => {
     const box = boxes.get(from);
@@ -6146,6 +6170,10 @@ export function RoomBoard({
               })}
               {shown.notes.map((note) => {
                 if (note.kind === "comment" || note.section === true) return null;
+                // A live view shows, restores and edits the artifact it follows.
+                const artifactSource =
+                  note.viewOf === undefined ? undefined : roomArtifactSource(shown, note.id);
+                const artifactOf = artifactSource ?? note;
                 const threadBox = { id: note.id, guestId: note.guestId, title: note.text.trim() };
                 // Like "New artifact", and only for whoever can prompt the box.
                 const canPage =
@@ -6231,15 +6259,17 @@ export function RoomBoard({
                     }
                     onUse={messageOf(note)}
                     onGive={giveOf(note)}
+                    artifactSource={artifactSource}
+                    onKeepArtifact={keepOf(note, artifactSource)}
                     artifactAuthor={
-                      note.artifact === undefined
+                      artifactOf.artifact === undefined
                         ? undefined
-                        : boardArtifactAuthor(note.artifact, people)
+                        : boardArtifactAuthor(artifactOf.artifact, people)
                     }
                     artifactWriting={
                       note.kind === "artifact"
                         ? boardArtifactWriting(
-                            note.id,
+                            artifactOf.id,
                             running,
                             hasProgress ? null : ownerWritingArtifactId,
                             people,
@@ -6252,10 +6282,10 @@ export function RoomBoard({
                         : null
                     }
                     boxName={boxName}
-                    onRestore={restoreOf(note)}
+                    onRestore={restoreOf(artifactOf)}
                     onAttachAgent={attachAgentOf(note)}
                     bringIn={bringIn.partOf(note)}
-                    onWrite={writeOf(note)}
+                    onWrite={writeOf(artifactOf)}
                     onAsk={
                       note.kind === "artifact" && askTargets.length > 0
                         ? () => askAboutArtifact(note)
@@ -6969,6 +6999,8 @@ function BoardNote({
   artifactAuthor,
   artifactWriting,
   artifactVersionNote,
+  artifactSource,
+  onKeepArtifact,
   boxName,
   onRestore,
   onAttachAgent,
@@ -7050,6 +7082,12 @@ function BoardNote({
   readonly artifactWriting: string | null;
   /** What tells this artifact from another of the same box, or null. */
   readonly artifactVersionNote: string | null;
+  /** The artifact a live view shows, whose content, progress and edits the card carries. */
+  readonly artifactSource: RoomBoardNote | undefined;
+  /** Makes a live view its own copy of what it shows, or just stops it following. */
+  readonly onKeepArtifact:
+    | { readonly label: string; readonly run: () => Promise<boolean> }
+    | undefined;
   readonly boxName: (boxId: string) => string;
   readonly onRestore: (() => Promise<boolean>) | undefined;
   /** Gives the viewer a thread box that rewrites this artifact, or shows the one they have. */
@@ -7501,8 +7539,9 @@ function BoardNote({
         {artifact ? bringIn : null}
         {artifact ? (
           <RoomArtifactLive
-            noteId={note.id}
-            artifact={note.artifact}
+            noteId={(artifactSource ?? note).id}
+            artifact={(artifactSource ?? note).artifact}
+            onKeep={onKeepArtifact}
             author={artifactAuthor}
             writingFallback={artifactWriting}
             versionNote={artifactVersionNote}

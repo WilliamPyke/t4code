@@ -71,7 +71,7 @@ import { chatMarkdownImageSources } from "@t3tools/shared/markdownPipeline";
 import { guestActivityFromRequest, guestTurnFromRequest } from "@t3tools/shared/guestRoom";
 import { buildGuestLink, buildShortGuestLink } from "@t3tools/shared/guestLinks";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
-import { roomBoardNoteOfRef, roomWindowBoxId } from "@t3tools/shared/roomBoard";
+import { roomArtifactSource, roomBoardNoteOfRef, roomWindowBoxId } from "@t3tools/shared/roomBoard";
 import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 import * as NodeOS from "node:os";
 
@@ -1946,9 +1946,7 @@ const make = Effect.gen(function* () {
     if (!allowUpdatesRead(`${share.id}:${guestId}`, DateTime.toEpochMillis(yield* DateTime.now))) {
       return yield* new GuestShareAccessError({ reason: "too_fast" });
     }
-    const note = share.board?.notes.find(
-      (candidate) => candidate.id === noteId && candidate.kind === "artifact",
-    );
+    const note = roomArtifactSource(share.board, noteId);
     if (note === undefined) return yield* new GuestShareAccessError({ reason: "artifact_gone" });
     const { redactor } = yield* redactorFor(thread);
     // The same card the guest's board shows them.

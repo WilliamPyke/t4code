@@ -24,6 +24,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
+import { roomBoardWithArtifactFilled } from "./guestRoom.ts";
 import {
   EMPTY_ROOM_BOARD,
   ROOM_COMMENT_THREAD_FULL,
@@ -33,6 +34,7 @@ import {
   roomArtifactAfterFill,
   roomArtifactBody,
   roomArtifactRequestOf,
+  roomArtifactSource,
   roomBoardAfterAgentTurn,
   roomBoardWithAgentChange,
   roomBoardWithBoxRunDone,
@@ -873,6 +875,66 @@ describe("applyRoomBoardChange", () => {
         Result.fail("This artifact is not on the board."),
       );
     }
+    // A view holds nothing and follows its source, an empty one too; a view of a view follows
+    // that one's source. Never over content, of itself, or of anything but an artifact.
+    const view = (noteId: string, fromNoteId: string): RoomBoardChange => ({
+      type: "artifact.view",
+      noteId,
+      fromNoteId,
+    });
+    const more: RoomBoard = {
+      ...board,
+      notes: [...board.notes, { id: "far", text: "Far", x: 0, y: 0, kind: "artifact" }],
+    };
+    const viewed = applied(applied(more, view("empty", "a")), view("far", "empty"));
+    expect(viewed.notes[1]).toStrictEqual({ ...more.notes[1], viewOf: "a" });
+    expect(viewed.notes[3]?.viewOf).toBe("a");
+    expect(roomArtifactSource(viewed, "far")).toBe(viewed.notes[0]);
+    expect(applied(viewed, view("empty", "a"))).toBe(viewed);
+    expect(applied(viewed, view("a", "empty"))).toBe(viewed);
+    expect(applied(more, view("empty", "empty"))).toBe(more);
+    expect(applied(more, view("far", "empty")).notes[3]?.viewOf).toBe("empty");
+    for (const [noteId, fromNoteId] of [
+      ["note", "a"],
+      ["empty", "note"],
+      ["empty", "gone"],
+    ] as const) {
+      expect(apply(more, view(noteId, fromNoteId))).toStrictEqual(
+        Result.fail("This artifact is not on the board."),
+      );
+    }
+    // A hand edit, a restore and an agent's reply through a view all land on its source.
+    const written = applied(viewed, write("far", "# Through"));
+    expect(written.notes[0]?.artifact?.body).toBe("# Through");
+    expect(written.notes[3]).toBe(viewed.notes[3]);
+    expect(applied(written, restore("empty")).notes[0]?.artifact?.body).toBe("# Two");
+    const filled = roomBoardWithArtifactFilled(viewed, "far", { ...first, turnId: "run:9" });
+    expect(filled.notes[0]?.artifact).toMatchObject({ turnId: "run:9", previous: secondShown });
+    expect(filled.notes[3]).toBe(viewed.notes[3]);
+    // Keeping a version makes the view its own copy, which stops following.
+    const keptCopy = applied(viewed, copy("far", "empty"));
+    expect(keptCopy.notes[3]).toStrictEqual({ ...more.notes[3], artifact: second });
+    expect(applied(keptCopy, write("a", "# Later")).notes[3]?.artifact?.body).toBe("# Two");
+    // A view of an artifact with nothing in it yet stops following all the same.
+    const early = applied(more, view("far", "empty"));
+    expect(applied(early, copy("far", "empty")).notes[3]).toStrictEqual(more.notes[3]);
+    // Removing the source leaves each view with what it showed; a view between passes its source.
+    const remove = (noteId: string): RoomBoardChange => ({ type: "note.remove", noteId });
+    const chained = applied(applied(more, view("far", "empty")), view("empty", "a"));
+    const sourceGone = Result.getOrThrow(
+      applyRoomBoardChange(chained, scope, null, remove("a"), at),
+    );
+    expect(
+      sourceGone.notes.map(({ id, viewOf, artifact }) => [id, viewOf, artifact?.body]),
+    ).toEqual([
+      ["empty", undefined, "# Two"],
+      ["note", undefined, undefined],
+      ["far", "empty", undefined],
+    ]);
+    const middleGone = Result.getOrThrow(
+      applyRoomBoardChange(chained, scope, null, remove("empty"), at),
+    );
+    expect(middleGone.notes.at(-1)?.viewOf).toBe("a");
     // The owner, whoever added the card, and whoever asked for or wrote either version.
     const eve = GuestId.make("guest:eve");
     const ada = GuestId.make("guest:ada");
@@ -1401,6 +1463,19 @@ describe("roomBoardWithCardsSent", () => {
     expect(roomBoardWithCardsSent(board, "box", "doc", ["note:far"], at).edges?.[1]).toEqual(far);
     // Another box's line, an uncarried card's, and an artifact the box has no line to stay new.
     expect(sentIds(roomBoardWithCardsSent(board, "box", "loose", ["note:b"], at))).toEqual([]);
+    // A view names the artifact it shows, and a box's line to a view reaches that artifact.
+    const viewed: RoomBoard = {
+      ...board,
+      notes: [...board.notes, note("view", { kind: "artifact", viewOf: "loose" })],
+    };
+    expect(sentIds(roomBoardWithCardsSent(viewed, "box", "view", ["note:b"], at))).toEqual([]);
+    const lined = {
+      ...viewed,
+      edges: [...(viewed.edges ?? []), { id: "box>view", from: "note:box", to: "note:view" }],
+    };
+    expect(sentIds(roomBoardWithCardsSent(lined, "box", "view", ["note:b"], at))).toEqual([
+      "b>loose",
+    ]);
     // A prompt naming no artifact, as one asked from a comment thread, still carried what is on
     // the artifact the box rewrites, as the box's next prompt finds its cards.
     expect(sentIds(roomBoardWithCardsSent(board, "box", undefined, ["note:b"], at))).toEqual([

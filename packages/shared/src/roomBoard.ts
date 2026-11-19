@@ -397,6 +397,25 @@ export function canRestoreRoomArtifact(
   );
 }
 
+/**
+ * The artifact a card shows and every write to it reaches: the card itself, or for a live view
+ * the artifact it follows, through any views between. Undefined for any other card, and for a
+ * view whose source is gone.
+ */
+export function roomArtifactSource(
+  board: RoomBoard | undefined,
+  noteId: string | undefined,
+): RoomBoardNote | undefined {
+  const find = (id: string | undefined) => board?.notes.find((note) => note.id === id);
+  const seen = new Set<string>();
+  let note = find(noteId);
+  while (note?.kind === "artifact" && note.viewOf !== undefined && !seen.has(note.id)) {
+    seen.add(note.id);
+    note = find(note.viewOf);
+  }
+  return note?.kind === "artifact" && note.viewOf === undefined ? note : undefined;
+}
+
 const withNote = (board: RoomBoard, note: RoomBoardNote, next: RoomBoardNote): RoomBoard => ({
   ...board,
   notes: board.notes.map((other) => (other === note ? next : other)),
@@ -771,10 +790,23 @@ export function applyRoomBoardChange(
       }
       const ref = roomBoardNoteRef(change.noteId);
       const kept = (board.removed ?? []).filter((entry) => !removedLongAgo(entry, at));
+      // A view of the card going keeps what it showed: its content, or the source it followed.
+      const notes = board.notes.flatMap((other): ReadonlyArray<RoomBoardNote> => {
+        if (other.id === change.noteId) return [];
+        if (other.viewOf !== change.noteId) return [other];
+        const { viewOf: _viewOf, ...own } = other;
+        return [
+          {
+            ...own,
+            ...(note.viewOf === undefined ? {} : { viewOf: note.viewOf }),
+            ...(note.artifact === undefined ? {} : { artifact: note.artifact }),
+          },
+        ];
+      });
       return Result.succeed(
         roomBoardWithEdges(
           withRemoved(
-            { ...board, notes: board.notes.filter((note) => note.id !== change.noteId) },
+            { ...board, notes },
             note.kind === "comment" ? [...kept, { note, at }].slice(-ROOM_BOARD_REMOVED_MAX) : kept,
           ),
           (edge) => edge.from !== ref && edge.to !== ref,
@@ -849,9 +881,10 @@ export function applyRoomBoardChange(
         edges: board.edges?.map((candidate) => (candidate === edge ? next : candidate)),
       });
     }
+    // Restoring or writing a view changes the artifact it shows.
     case "artifact.restore": {
-      const note = board.notes.find((candidate) => candidate.id === change.noteId);
-      const current = note?.kind === "artifact" ? note.artifact : undefined;
+      const note = roomArtifactSource(board, change.noteId);
+      const current = note?.artifact;
       if (note === undefined || current?.previous === undefined) return Result.succeed(board);
       if (!canRestoreRoomArtifact(note, author)) {
         return Result.fail(
@@ -864,8 +897,8 @@ export function applyRoomBoardChange(
       );
     }
     case "artifact.write": {
-      const note = board.notes.find((candidate) => candidate.id === change.noteId);
-      if (note?.kind !== "artifact") return Result.fail("This artifact is not on the board.");
+      const note = roomArtifactSource(board, change.noteId);
+      if (note === undefined) return Result.fail("This artifact is not on the board.");
       // Characters nobody can see have no place in text the whole room reads.
       const body = sanitizeLinkedPrompt(change.body).text.trim();
       if (body === "") return Result.fail("Write something first.");
@@ -892,8 +925,32 @@ export function applyRoomBoardChange(
       if (note?.kind !== "artifact" || from?.kind !== "artifact") {
         return Result.fail("This artifact is not on the board.");
       }
-      if (note.artifact !== undefined || from.artifact === undefined) return Result.succeed(board);
-      return Result.succeed(withNote(board, note, { ...note, artifact: from.artifact }));
+      const content = roomArtifactSource(board, from.id)?.artifact;
+      if (note.artifact !== undefined) return Result.succeed(board);
+      if (content === undefined && note.viewOf === undefined) return Result.succeed(board);
+      // A view stops following, with what it showed as its own, which may be nothing yet.
+      const { viewOf: _viewOf, ...own } = note;
+      return Result.succeed(
+        withNote(board, note, { ...own, ...(content === undefined ? {} : { artifact: content }) }),
+      );
+    }
+    case "artifact.view": {
+      const note = board.notes.find((candidate) => candidate.id === change.noteId);
+      const from = board.notes.find((candidate) => candidate.id === change.fromNoteId);
+      if (note?.kind !== "artifact" || from?.kind !== "artifact") {
+        return Result.fail("This artifact is not on the board.");
+      }
+      const source = roomArtifactSource(board, from.id);
+      // Never over content, nor of itself. The source found is no view, so no views go in a ring.
+      if (
+        note.artifact !== undefined ||
+        source === undefined ||
+        source.id === note.id ||
+        note.viewOf === source.id
+      ) {
+        return Result.succeed(board);
+      }
+      return Result.succeed(withNote(board, note, { ...note, viewOf: source.id }));
     }
     case "comment.reply": {
       const note = board.notes.find((candidate) => candidate.id === change.noteId);
@@ -1227,18 +1284,24 @@ export function roomBoardWithCardsSent(
 ): RoomBoard {
   const edges = board.edges ?? [];
   const box = roomBoxRef(boxId);
+  // The artifacts the box has a line to, each as the one it shows: a view's is its source.
+  const sources = edges.flatMap((edge) => {
+    const source =
+      edge.from === box
+        ? roomArtifactSource(board, roomBoardNoteOfRef(board, edge.to)?.id)
+        : undefined;
+    return source === undefined ? [] : [roomBoardNoteRef(source.id)];
+  });
   // A prompt naming none, as one asked from a comment thread, still found its cards on the
   // artifact the box rewrites, the first one it has a line to, as the board finds them.
+  const named = roomArtifactSource(board, artifactId);
   const artifact =
     artifactId === undefined
-      ? edges.find(
-          (edge) => edge.from === box && roomBoardNoteOfRef(board, edge.to)?.kind === "artifact",
-        )?.to
-      : roomBoardNoteRef(artifactId);
-  const rewrites =
-    artifact !== undefined &&
-    roomBoardNoteOfRef(board, artifact)?.kind === "artifact" &&
-    edges.some((edge) => edge.from === box && edge.to === artifact);
+      ? sources[0]
+      : named === undefined
+        ? undefined
+        : roomBoardNoteRef(named.id);
+  const rewrites = artifact !== undefined && sources.includes(artifact);
   const roots = new Set([box, ...(rewrites ? [artifact] : [])]);
   const sent = new Set(refs.filter((ref) => !roots.has(ref)));
   // Every card a prompt from this box carries, as it finds them: along lines into the box or its

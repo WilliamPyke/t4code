@@ -1,5 +1,5 @@
 import type { RoomBoard, RoomBoardNote } from "@t3tools/contracts";
-import { roomTaskStatus } from "@t3tools/shared/roomBoard";
+import { roomArtifactSource, roomTaskStatus } from "@t3tools/shared/roomBoard";
 
 import { BOARD_PLAN_COLUMNS, BOARD_PLAN_PRIORITIES, boardPlanColumns } from "./boardPlan.logic";
 import { boardLinkTitle, boardSnapshotLink } from "./boardSnapshot.logic";
@@ -153,6 +153,8 @@ export function boardHtmlText(html: string, max = BOARD_HTML_TEXT_MAX): string {
 /** An artifact under a heading of its own at `level`, or null for any other card. */
 function artifactMarkdown(board: RoomBoard, note: RoomBoardNote, level: number): string | null {
   if (note.kind !== "artifact") return null;
+  // A live view's artifact is exported where that artifact is, once.
+  if (note.viewOf !== undefined && roomArtifactSource(board, note.id) !== undefined) return null;
   const from = boardSnapshotLink(board, note.id);
   const title =
     from === undefined ? note.text.trim() || "Artifact" : `Snapshot of ${boardLinkTitle(from)}`;

@@ -22,7 +22,7 @@ import {
   roomBoxOn,
 } from "@t3tools/shared/guestRoom";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
-import { EMPTY_ROOM_BOARD } from "@t3tools/shared/roomBoard";
+import { EMPTY_ROOM_BOARD, roomArtifactSource } from "@t3tools/shared/roomBoard";
 import {
   roomBoardAgentAdd,
   roomBoardAgentUpdate,
@@ -186,9 +186,7 @@ export function artifactFor(
   room: CloudRoom,
   noteId: string,
 ): Result.Result<RoomArtifactRead, RoomFailure> {
-  const note = room.board?.notes.find(
-    (candidate) => candidate.id === noteId && candidate.kind === "artifact",
-  );
+  const note = roomArtifactSource(room.board, noteId);
   if (note === undefined) return Result.fail(roomFailure("artifact_gone"));
   return Result.succeed({
     title: note.text,

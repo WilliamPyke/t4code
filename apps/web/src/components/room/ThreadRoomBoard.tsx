@@ -106,7 +106,7 @@ function useOwnerRoom(threadRef: ScopedThreadRef | null) {
     serverEnvironment.changeGuestBoard.permissionAtom(threadRef?.environmentId ?? null),
   );
   const changeBoard = useAtomCommand(serverEnvironment.changeGuestBoard, "change the board");
-  // A server from before `artifact.copy` refuses it, and the card just stays empty.
+  // A server from before artifact views and copies refuses them, and the card stays as it was.
   const changeBoardQuietly = useAtomCommand(serverEnvironment.changeGuestBoard, {
     reportFailure: false,
     reportDefect: false,
@@ -114,7 +114,9 @@ function useOwnerRoom(threadRef: ScopedThreadRef | null) {
   const onChange =
     threadRef !== null && canChange
       ? (change: RoomBoardChange) =>
-          (change.type === "artifact.copy" ? changeBoardQuietly : changeBoard)({
+          (change.type === "artifact.copy" || change.type === "artifact.view"
+            ? changeBoardQuietly
+            : changeBoard)({
             environmentId: threadRef.environmentId,
             input: { threadId: threadRef.threadId, change },
           }).then((result) => result._tag === "Success")

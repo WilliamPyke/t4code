@@ -41,6 +41,7 @@ import { roomBoxOn } from "@t3tools/shared/guestRoom";
 import {
   roomArtifactBody,
   roomArtifactRequestOf,
+  roomArtifactSource,
   roomBoardCardIdentity,
   roomBoardNoteOfRef,
   roomBoxExcerpt,
@@ -457,9 +458,7 @@ const make = Effect.gen(function* () {
     }
     const commandId = yield* commandIdOf("prompt");
     const batch = yield* uuid;
-    const artifact = share.board?.notes.find(
-      (note) => note.id === input.artifactId && note.kind === "artifact",
-    );
+    const artifact = roomArtifactSource(share.board, input.artifactId);
     const comment = share.board?.notes.find(
       (note) => note.id === input.commentId && note.kind === "comment",
     );

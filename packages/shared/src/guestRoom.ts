@@ -35,6 +35,7 @@ import {
   applyRoomBoardChange,
   roomArtifactAfterFill,
   roomArtifactBody,
+  roomArtifactSource,
   roomBoardWithAgentChange,
   roomBoardWithBoxRunDone,
   roomBoardWithCardsSent,
@@ -105,11 +106,12 @@ export function roomBoardWithArtifactFilled(
   noteId: string,
   content: Omit<RoomArtifactContent, "previous">,
 ): RoomBoard {
-  const note = board.notes.find((candidate) => candidate.id === noteId);
+  // A view takes nothing itself: the reply goes into the artifact it shows.
+  const note = roomArtifactSource(board, noteId);
   const sameTurn = (version: Pick<RoomArtifactContent, "turnId" | "guestId"> | undefined) =>
     version?.turnId === content.turnId && version.guestId === content.guestId;
   // A turn that already wrote it, even one someone restored away since, writes nothing again.
-  if (note?.kind !== "artifact" || sameTurn(note.artifact) || sameTurn(note.artifact?.previous)) {
+  if (note === undefined || sameTurn(note.artifact) || sameTurn(note.artifact?.previous)) {
     return board;
   }
   const filled: RoomBoardNote = {
@@ -490,9 +492,7 @@ export function guestActivityFromRequest(
     task?.kind === "task" && (task.assignee === undefined || task.assignee.guestId === guestId)
       ? task.id
       : undefined;
-  const artifactId = notes.find(
-    (note) => note.id === request.artifactId && note.kind === "artifact",
-  )?.id;
+  const artifactId = roomArtifactSource(room.board, request.artifactId)?.id;
   const commentId = notes.find(
     (note) => note.id === request.commentId && note.kind === "comment",
   )?.id;

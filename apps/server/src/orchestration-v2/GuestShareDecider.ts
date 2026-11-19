@@ -36,6 +36,7 @@ import {
   EMPTY_ROOM_BOARD,
   ROOM_BOARD_FULL,
   applyRoomBoardChange,
+  roomArtifactSource,
   roomBoardCardIdentity,
   roomBoardNoteOfRef,
   roomBoardWithCardsSent,
@@ -238,10 +239,9 @@ export const roomScope = (room: ThreadRoom): RoomBoardScope => ({
   hasPerson: (guestId) => room.guests?.some((guest) => guest.id === guestId) === true,
 });
 
+// A view names the artifact it shows.
 const artifactOn = (share: Pick<ThreadRoom, "board">, noteId: string | undefined) =>
-  noteId === undefined
-    ? undefined
-    : share.board?.notes.find((note) => note.id === noteId && note.kind === "artifact");
+  roomArtifactSource(share.board, noteId);
 
 /**
  * Names the people of a room for labels everyone reads: a guest by name, and the owner, with no

@@ -53,8 +53,8 @@ import {
   boardAgentCode,
   boardAgents,
   boardArtifactAuthor,
-  boardArtifactCopySource,
   boardArtifactVersionNote,
+  boardArtifactViewSource,
   boardCommentAgentAuthor,
   boardCommentAskBoxes,
   boardCommentPromptCard,
@@ -1053,7 +1053,7 @@ describe("boardConnector", () => {
     // Far off to the side of a narrow gap, its ends slide along their sides until it is no taller
     // than the gap is wide.
     const tall = boardCardBox({ x: 380, y: 80 }, { w: 380, h: 600 });
-    expect(boardConnector(card, tall).path).toBe("M320 220 C350 220, 346 280, 376 280");
+    expect(boardConnector(card, tall).path).toBe("M320 212 C350 212, 346 272, 376 272");
     // A turn is one quarter curve, each end pulled along its own leg.
     expect(boardConnector(card, boardNoteBox({ x: 520, y: 620 })).path).toBe(
       "M320 120 C497.6 120, 616 318.4, 616 616",
@@ -1061,7 +1061,7 @@ describe("boardConnector", () => {
     // One whose end is behind its start, on the sides it keeps, hooks round to it.
     const behind = boardNoteBox({ x: 300, y: 400 });
     expect(boardConnector(card, behind, undefined, { sides: ["right", "left"] }).path).toBe(
-      "M320 220 C376 220, 240 420, 296 420",
+      "M320 212 C380 212, 236 428, 296 428",
     );
   });
 
@@ -1854,56 +1854,85 @@ describe("boardPromptContext", () => {
     expect(boardPromptContext(shared, people, [], "box2").artifact).toBeNull();
   });
 
-  it("shows a version in the empty artifact a new line ends on, and says which cards share one", () => {
+  it("makes the empty artifact a new line ends on a live view, and follows a view to its source", () => {
     const version = (turnId: string) => ({ body: "# Plan", turnId, updatedAt: "2026-11-12" });
     const shared = board(
       [
         note("one", { text: "First", kind: "artifact", artifact: version("run:1") }),
         note("two", { text: "", kind: "artifact", artifact: version("run:2") }),
-        note("copy", { text: "Copy", kind: "artifact", artifact: version("run:1") }),
+        note("view", { text: "Phone", kind: "artifact", viewOf: "one" }),
         note("empty", { text: "Empty", kind: "artifact" }),
         note("blank", { text: "Blank", kind: "artifact" }),
         note("plain"),
         note("box", { text: "Box", kind: "thread" }),
         note("bare", { text: "Bare", kind: "thread" }),
+        note("lost", { text: "Lost", kind: "artifact", viewOf: "gone" }),
       ],
       [
         arrow("note:box", "note:blank"),
         arrow("note:box", "note:one"),
+        arrow("note:box", "note:view"),
         arrow("note:box", "note:two"),
         arrow("note:box", "note:empty"),
       ],
     );
     const rows: ReadonlyArray<readonly [string, string, string | undefined, string | null]> = [
-      // From a filled artifact: that one.
+      // From an artifact: the one it shows, which may have nothing in it yet.
       ["note:two", "note:empty", undefined, "two"],
-      // From a box: the one it rewrites when that is filled, else the first filled it has.
-      ["note:box", "note:empty", undefined, "one"],
+      ["note:view", "note:empty", undefined, "one"],
+      ["note:blank", "note:empty", undefined, "blank"],
+      // From a box: the one it rewrites, else the first it has a line to.
+      ["note:box", "note:empty", undefined, "blank"],
       ["note:box", "note:empty", "two", "two"],
-      ["note:box", "note:empty", "blank", "one"],
-      // Nothing to show, or nowhere empty to show it.
+      ["note:box", "note:empty", "view", "one"],
+      // Nothing to follow, or nowhere empty to show it: a card with content, or a view already.
       ["note:bare", "note:empty", undefined, null],
-      ["note:blank", "note:empty", undefined, null],
       ["note:plain", "note:empty", undefined, null],
+      ["note:lost", "note:empty", undefined, null],
       ["note:one", "note:two", undefined, null],
+      ["note:two", "note:view", undefined, null],
       ["note:one", "note:plain", undefined, null],
       ["note:one", "card:thread", undefined, null],
       ["note:empty", "note:empty", undefined, null],
     ];
     for (const [from, to, picked, source] of rows) {
-      expect([from, to, picked, boardArtifactCopySource(shared, from, to, picked)]).toEqual([
+      expect([from, to, picked, boardArtifactViewSource(shared, from, to, picked)]).toEqual([
         from,
         to,
         picked,
         source,
       ]);
     }
-    const [one, two, , empty] = shared.notes;
-    expect(boardArtifactVersionNote(shared, one!, true)).toBe(
-      'Same version as "Copy" · Next reply goes here',
-    );
+    // A box with an artifact and a view of it has one artifact to rewrite, however it is named.
+    const context = boardPromptContext(shared, people, [], "box");
+    expect(context.artifacts.map((artifact) => artifact.id)).toEqual([
+      "blank",
+      "one",
+      "two",
+      "empty",
+    ]);
+    expect(context.artifactEdgeIds).toHaveLength(5);
+    expect(boardPromptContext(shared, people, [], "box", "view").artifact?.id).toBe("one");
+    const lone = board(shared.notes, [arrow("note:bare", "note:view")]);
+    expect(boardPromptContext(lone, people, [], "bare").artifacts).toEqual([shared.notes[0]]);
+    expect(boardOwnBoxFor(lone, null, "one")).toBe("bare");
+    // A view goes with a prompt as what it shows, and not beside the artifact itself.
+    const carried = board(shared.notes, [arrow("note:view", "note:bare")]);
+    expect(boardPromptContext(carried, people, [], "bare").cards.map((card) => card.text)).toEqual([
+      "Phone\n\n# Plan",
+    ]);
+    const twice = board(shared.notes, [
+      arrow("note:view", "note:bare"),
+      arrow("note:one", "note:bare"),
+    ]);
+    expect(boardPromptContext(twice, people, [], "bare").cards.map((card) => card.ref)).toEqual([
+      "note:one",
+    ]);
+    const [one, two, view, , , , , , lost] = shared.notes;
+    expect(boardArtifactVersionNote(shared, view!, true)).toBe('Live view of "First"');
+    expect(boardArtifactVersionNote(shared, one!, true)).toBe("Next reply goes here");
     expect(boardArtifactVersionNote(shared, two!, false)).toBeNull();
-    expect(boardArtifactVersionNote(shared, empty!, true)).toBe("Next reply goes here");
+    expect(boardArtifactVersionNote(shared, lost!, false)).toBeNull();
   });
 
   it("sends a card once, again once it changed, always when pinned, and new on an old board", () => {

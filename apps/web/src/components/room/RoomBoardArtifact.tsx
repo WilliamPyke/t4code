@@ -3,12 +3,14 @@ import {
   type RoomArtifactContent,
   type RoomBoxProgress,
 } from "@t3tools/contracts";
+import { RefreshCwIcon } from "lucide-react";
 import { type PointerEvent, useRef, useState } from "react";
 
 import { boardTimeLabel } from "../boards/boardsHome.logic";
 
 import ChatMarkdown from "../ChatMarkdown";
 import { Button } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { BoardChip } from "./BoardChrome";
 import {
   type BoardPeople,
@@ -32,7 +34,10 @@ export function RoomArtifactBody({
   artifact,
   draft,
   onWrite,
+  frame = 0,
 }: {
+  /** Counts the times someone pressed Refresh: a new number loads a page's frame afresh. */
+  readonly frame?: number;
   readonly artifact: RoomArtifactContent | undefined;
   /** The new version as it streams in; absent until its first text arrives. */
   readonly draft?: string | undefined;
@@ -71,8 +76,8 @@ export function RoomArtifactBody({
       <div className="flex min-h-0 flex-1 flex-col items-start gap-2 px-3 pb-3">
         <p className="text-xs text-muted-foreground">
           Nothing here yet. Draw a line from a thread box to this card, or use Attach my agent, then
-          prompt that box. Its reply shows here for everyone. A line from an artifact that has a
-          version shows that version here too.
+          prompt that box. Its reply shows here for everyone. A line from another artifact makes
+          this a live view of it.
         </p>
         {onWrite === undefined ? null : (
           <Button
@@ -92,6 +97,7 @@ export function RoomArtifactBody({
     <div className="flex min-h-0 flex-1 flex-col border-t border-board-hairline">
       {isBoardHtmlArtifact(artifact.body) ? (
         <iframe
+          key={frame}
           aria-label="Artifact page"
           sandbox="allow-scripts"
           srcDoc={artifact.body}
@@ -140,7 +146,10 @@ export function RoomArtifactLive({
   onWrite,
   people,
   versionNote = null,
+  onKeep,
 }: {
+  /** On a live view: makes it its own copy of what it shows, or just stops it following. */
+  readonly onKeep?: { readonly label: string; readonly run: () => Promise<boolean> } | undefined;
   /** What tells this card from another of the same box: "Same version as …", or null. */
   readonly versionNote?: string | null;
   readonly noteId: string;
@@ -158,6 +167,8 @@ export function RoomArtifactLive({
   const progress = useArtifactProgress(noteId);
   const draft = progress?.draft === undefined || progress.draft === "" ? undefined : progress.draft;
   const [editing, setEditing] = useState(false);
+  const [frame, setFrame] = useState(0);
+  const page = draft === undefined && artifact !== undefined && isBoardHtmlArtifact(artifact.body);
   // Not while an agent writes a new version: saving would race it.
   const edit =
     onWrite === undefined || progress !== undefined || writingFallback !== null
@@ -181,12 +192,24 @@ export function RoomArtifactLive({
         artifact={artifact}
         onRestore={onRestore}
         onEdit={edit}
+        onRefresh={page ? () => setFrame((current) => current + 1) : undefined}
         people={people}
       />
-      {versionNote === null ? null : (
-        <p className="shrink-0 truncate px-3 pb-1.5 text-2xs text-muted-foreground">
-          {versionNote}
-        </p>
+      {versionNote === null && onKeep === undefined ? null : (
+        <div className="flex min-w-0 shrink-0 items-center gap-1.5 px-3 pb-1.5">
+          <p className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">{versionNote}</p>
+          {onKeep === undefined ? null : (
+            <Button
+              size="micro"
+              variant="ghost-muted"
+              onPointerDown={stopPointer}
+              onClick={() => void onKeep.run()}
+              data-artifact-keep
+            >
+              {onKeep.label}
+            </Button>
+          )}
+        </div>
       )}
       {progress !== undefined ? (
         <p role="status" className="flex shrink-0 px-3 pb-1.5">
@@ -199,7 +222,7 @@ export function RoomArtifactLive({
           <BoardChip tone="primary">{writingFallback}</BoardChip>
         </p>
       )}
-      <RoomArtifactBody artifact={artifact} draft={draft} onWrite={edit} />
+      <RoomArtifactBody artifact={artifact} draft={draft} onWrite={edit} frame={frame} />
     </>
   );
 }
@@ -269,8 +292,11 @@ function RoomArtifactMeta({
   artifact,
   onRestore,
   onEdit,
+  onRefresh,
   people,
 }: {
+  /** Loads a page's frame afresh. Absent for text, which has nothing to reload. */
+  readonly onRefresh: (() => void) | undefined;
   /** Absent before anything was written. */
   readonly author: string | undefined;
   readonly artifact: RoomArtifactContent | undefined;
@@ -299,6 +325,25 @@ function RoomArtifactMeta({
             .filter((part) => part !== undefined && part !== "")
             .join(" · ")}
         </p>
+        {onRefresh === undefined ? null : (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  size="icon-micro"
+                  variant="ghost-muted"
+                  aria-label="Refresh page"
+                  onPointerDown={stopPointer}
+                  onClick={onRefresh}
+                  data-artifact-refresh
+                />
+              }
+            >
+              <RefreshCwIcon />
+            </TooltipTrigger>
+            <TooltipPopup side="top">Refresh</TooltipPopup>
+          </Tooltip>
+        )}
         {onEdit === undefined ? null : (
           <Button
             size="micro"

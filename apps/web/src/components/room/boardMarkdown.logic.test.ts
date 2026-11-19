@@ -91,6 +91,8 @@ describe("boardMarkdown", () => {
             updatedAt: "2026-11-01T00:00:00.000Z",
           },
         },
+        // A live view of the plan: the plan is exported once.
+        { id: "v", text: "Phone", x: 0, y: 1500, kind: "artifact", viewOf: "a" },
         { id: "box", text: "Agent", x: 900, y: 0, kind: "thread" },
         { id: "c", text: "A comment", x: 900, y: 600, kind: "comment" },
       ],

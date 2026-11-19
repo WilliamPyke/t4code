@@ -1,5 +1,5 @@
 import type { RoomBoard, RoomBoardNote } from "@t3tools/contracts";
-import { roomTaskStatus } from "@t3tools/shared/roomBoard";
+import { roomArtifactSource, roomTaskStatus } from "@t3tools/shared/roomBoard";
 
 import { boardCardKindName, boardCardLabel } from "./boardCommands.logic";
 import { boardLinkTitle } from "./boardSnapshot.logic";
@@ -193,7 +193,7 @@ export async function boardPng(
         : boardCardLabel(note);
     const body =
       note.kind === "artifact"
-        ? `${title}\n${note.artifact?.body ?? ""}`
+        ? `${title}\n${(roomArtifactSource(board, note.id) ?? note).artifact?.body ?? ""}`
         : note.kind === undefined || note.kind === "task"
           ? note.text
           : note.url === undefined
