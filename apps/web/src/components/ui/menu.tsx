@@ -26,6 +26,7 @@ function MenuPopup({
   alignOffset,
   side = "bottom",
   collisionAvoidance,
+  collisionBoundary,
   anchor,
   keepMounted = false,
   width = "default",
@@ -36,6 +37,7 @@ function MenuPopup({
   alignOffset?: MenuPrimitive.Positioner.Props["alignOffset"];
   side?: MenuPrimitive.Positioner.Props["side"];
   collisionAvoidance?: MenuPrimitive.Positioner.Props["collisionAvoidance"];
+  collisionBoundary?: MenuPrimitive.Positioner.Props["collisionBoundary"];
   anchor?: MenuPrimitive.Positioner.Props["anchor"];
   keepMounted?: boolean;
   width?: "default" | "content";
@@ -47,6 +49,7 @@ function MenuPopup({
         alignOffset={alignOffset}
         anchor={anchor}
         collisionAvoidance={collisionAvoidance}
+        collisionBoundary={collisionBoundary}
         className="z-[130]"
         data-slot="menu-positioner"
         render={renderClosingPositioner}

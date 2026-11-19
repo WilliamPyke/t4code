@@ -88,10 +88,14 @@ function useThreadGuestShare(threadRef: ScopedThreadRef | null): ThreadGuestShar
 }
 
 /** Ending a link nobody joined loses nothing, so only a joined one asks first. */
-async function confirmEndingLink(share: ThreadGuestShare | null, message: string) {
+async function confirmEndingLink(
+  share: ThreadGuestShare | null,
+  message: string,
+  confirmLabel: string,
+) {
   const joined = share?.guests?.length ?? (share?.guestName ? 1 : 0);
   if (joined === 0) return true;
-  return ensureLocalApi().dialogs.confirm(message, { variant: "destructive" });
+  return ensureLocalApi().dialogs.confirm(message, { variant: "destructive", confirmLabel });
 }
 
 export function GuestShareDialogHost() {
@@ -170,7 +174,7 @@ function GuestShareDialog({
         "Clear the board?",
         "Every card, arrow and comment thread on it is removed for everyone. This cannot be undone.",
       ].join("\n"),
-      { variant: "destructive" },
+      { variant: "destructive", confirmLabel: "Clear board" },
     );
     if (!confirmed) return;
     await clearRoomBoard({
@@ -220,6 +224,11 @@ function GuestShareDialog({
               sharedTeam !== null ? "Make a guest link instead?" : "Replace the guest link?",
               "Everyone on the current link loses access at once. A new link is made, and you need to send it again to everyone you want in the thread. The board stays as it is.",
             ].join("\n"),
+        team !== undefined
+          ? "Share with team"
+          : sharedTeam !== null
+            ? "Make guest link"
+            : "Replace link",
       ))
     ) {
       return;
@@ -560,6 +569,7 @@ function useStopSharing(threadRef: ScopedThreadRef) {
           ? "Everyone on the guest link loses access at once, and the link stops working. The board is kept for when you share again."
           : `Everyone in it loses access at once, and ${share.team.name} no longer lists it. The board is kept for when you share again.`,
       ].join("\n"),
+      "Stop sharing",
     );
     if (!confirmed) return;
     setClosing(true);

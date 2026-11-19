@@ -164,8 +164,8 @@ function TeamDetails({
     if (!outcome.ok) return setError(outcome.message);
     then?.(outcome.value);
   };
-  const confirm = (message: string) =>
-    ensureLocalApi().dialogs.confirm(message, { variant: "destructive" });
+  const confirm = (message: string, confirmLabel: string) =>
+    ensureLocalApi().dialogs.confirm(message, { variant: "destructive", confirmLabel });
   const goHome = () => void navigate({ to: "/" });
 
   return (
@@ -182,6 +182,7 @@ function TeamDetails({
                 if (
                   await confirm(
                     `Delete ${team.name}?\nEveryone loses the team, and its threads are no longer listed for them.`,
+                    "Delete team",
                   )
                 ) {
                   void act(() => deleteTeam(team.id), goHome);
@@ -199,6 +200,7 @@ function TeamDetails({
                 if (
                   await confirm(
                     `Leave ${team.name}?\nThreads you shared with it are no longer listed for the team.`,
+                    "Leave team",
                   )
                 ) {
                   void act(() => leaveTeam(team.id), goHome);
@@ -258,6 +260,7 @@ function TeamDetails({
                     if (
                       await confirm(
                         `Remove ${member.name} from ${team.name}?\nThreads they shared with the team are no longer listed.`,
+                        "Remove from team",
                       )
                     ) {
                       void act(() => removeTeamMember(team.id, member.userId));

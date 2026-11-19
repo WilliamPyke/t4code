@@ -304,12 +304,14 @@ Lines carry meaning. A note, task, link, comment, comment thread or artifact wit
 with the next prompt to that box, each with who wrote it, so anyone can steer a box by attaching a
 note to it. Once sent, a card stays out of that box's later prompts until it changes: an edited
 note or a comment thread with a new reply goes once more. Pin a card (**Always send**) to send it
-with every prompt. The box's message lists the cards that will go; remove any you do not want to
-send, or open **already sent** to send one again. On the board, a sent card's line is dashed and
+with every prompt. Anyone can draw a line into a box, but only the box's own person pins a line
+into it or sends a card along one again. The box's message lists the cards that will go, each
+marked with who changed it since it last went and who connected it, when that was someone else;
+remove any you do not want to send, or open **already sent** to send one again. On the board, a sent card's line is dashed and
 a pinned one is thicker. A connected note says where it stands: **To send**, **With the agent**
 while that prompt's run works, **Sent**, or **Done by agent** once the run finished. A run that
 fails or is stopped puts its notes back to **To send**. If the agent did not fix what a done note
-asked, press **Not fixed, send again** and it goes with the next prompt someone sends. A box's
+asked, the box's person can press **Not fixed, send again** and it goes with their next prompt. A box's
 menu, or its artifact's, offers **Remove done notes**. The owner sees the cards
 that went
 as a **Board** chip on the message, and opening it shows exactly what the agent got. The agent

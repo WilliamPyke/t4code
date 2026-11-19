@@ -32,7 +32,7 @@ export function boardEmbedTitleOf(answer: unknown): string | null {
 /** Framed pages one board shows at once; every other embed waits for a click. */
 export const BOARD_LIVE_EMBEDS_MAX = 4;
 /** Below this zoom a framed page is too small to read, so none loads. */
-const BOARD_EMBED_MIN_ZOOM = 0.4;
+export const BOARD_EMBED_MIN_ZOOM = 0.4;
 
 /**
  * Whether someone may choose to show this address's page in its link card: a source the board

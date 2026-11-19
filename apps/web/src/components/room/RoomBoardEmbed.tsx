@@ -181,6 +181,7 @@ export function RoomEmbedBody({
   url,
   live,
   active,
+  zoomedOut = false,
   onRelease,
   addedBy,
   actions,
@@ -201,6 +202,8 @@ export function RoomEmbedBody({
   readonly live: boolean;
   /** Whether the viewer is using its page now. */
   readonly active: boolean;
+  /** The board is too far out for a framed page to load; a click zooms in to the card. */
+  readonly zoomedOut?: boolean;
   readonly onRelease: () => void;
 }) {
   const sourceFrame =
@@ -242,7 +245,8 @@ export function RoomEmbedBody({
   return (
     <div ref={bodyRef} className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 pb-2">
-        <div className="flex min-w-0 flex-1 items-center gap-1.5 text-2xs text-muted-foreground">
+        {/* Its own width, up to a whole row: the buttons wrap under it rather than squeeze it. */}
+        <div className="flex min-w-0 max-w-full shrink-0 items-center gap-1.5 text-2xs text-muted-foreground">
           {addedBy}
         </div>
         {actions}
@@ -307,7 +311,13 @@ export function RoomEmbedBody({
           ) : null}
           {active ? null : (
             <BoardPageCover
-              label={loads ? "Click to interact" : `Click to show ${embed.name}`}
+              label={
+                loads
+                  ? "Click to interact"
+                  : zoomedOut
+                    ? `Zoom in to show ${embed.name}`
+                    : `Click to show ${embed.name}`
+              }
               quiet={loads}
             />
           )}
