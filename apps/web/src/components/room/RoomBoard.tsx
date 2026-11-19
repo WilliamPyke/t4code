@@ -3901,6 +3901,12 @@ export function RoomBoard({
     send({ kind: "note", id: note.id }, null);
     addLink(url, { x: note.x, y: note.y });
   };
+  // A menu hands its trigger the focus back as it closes, after the field mounted, so a
+  // frame on the field takes it; preventScroll keeps the page where the bar left it.
+  const linkField = useStableCallback((element: HTMLInputElement | null) => {
+    if (element === null) return;
+    window.requestAnimationFrame(() => element.focus({ preventScroll: true }));
+  });
   const startLinkDraft = () => {
     setDraftKind("link");
     setLinkDraft("");
@@ -5739,7 +5745,7 @@ export function RoomBoard({
                         ? "Paste a GitHub pull request link"
                         : "Paste or type a link"
                     }
-                    autoFocus
+                    ref={linkField}
                     value={linkDraft}
                     aria-invalid={linkDraft.trim() !== "" && draftUrl(linkDraft) === null}
                     onChange={(event) => setLinkDraft(event.target.value)}

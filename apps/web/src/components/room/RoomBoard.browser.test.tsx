@@ -1212,6 +1212,25 @@ describe("RoomBoard lines", () => {
     await expect.element(screen.getByRole("button", { name: "Delete line" })).toBeVisible();
   });
 
+  it("focuses the link field when it opens, and Escape closes it back to the board", async () => {
+    const board = renderBoard([{ id: "a", text: "First", x: 0, y: 0 }]);
+    await using screen = await board.screen;
+    await userEvent.click(screen.getByRole("button", { name: "Link" }));
+    const field = screen.getByRole("textbox", { name: "Link" });
+    await expect.element(field).toBeVisible();
+    await vi.waitFor(() => {
+      if (document.activeElement !== field.element()) {
+        throw new Error("the link field is not focused");
+      }
+    });
+    await userEvent.keyboard("{Escape}");
+    await expect.element(field).not.toBeInTheDocument();
+    await vi.waitFor(() => {
+      const surface = screen.getByRole("application", { name: "Room board" }).element();
+      if (document.activeElement !== surface) throw new Error("the board is not focused");
+    });
+  });
+
   it("selects a line 6px off the line, where a card's grip band covers it", async () => {
     const board = render(
       <RoomBoard
