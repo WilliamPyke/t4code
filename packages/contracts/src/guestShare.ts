@@ -668,6 +668,12 @@ export const RoomBoardNote = Schema.Struct({
    * window's GitHub pull request URL as `roomPullRequestOf` writes it.
    */
   url: Schema.optional(RoomBoardUrl),
+  /**
+   * A link card someone chose to show its page in, for a source the board does not frame itself.
+   * Each viewer's client still decides whether the address is safe to frame, and loads it only
+   * once they ask.
+   */
+  framed: Schema.optional(Schema.Literal(true)),
   /** The id of the thread's message this comment is pinned to. */
   pinnedTo: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
   /** A task someone's agent answered. No board change sets it; it stays when the task changes. */
@@ -749,6 +755,8 @@ export const RoomBoardEdge = Schema.Struct({
   ),
   /** The card goes with every prompt along this line, not only while it is new. */
   pinned: Schema.optional(Schema.Literal(true)),
+  /** Drawn with straight runs and square corners, around other cards. Absent: a curve. */
+  shape: Schema.optional(Schema.Literal("elbow")),
 });
 export type RoomBoardEdge = typeof RoomBoardEdge.Type;
 
@@ -1024,6 +1032,8 @@ export const RoomBoardChange = Schema.Union([
     priority: Schema.optional(Schema.NullOr(RoomTaskPriority)),
     assignee: Schema.optional(Schema.NullOr(RoomBoardAssignee)),
     color: RoomBoardNote.fields.color,
+    /** Absent keeps what it had, as an older client's edit does; false clears it. */
+    framed: Schema.optional(Schema.Boolean),
     section: RoomBoardNote.fields.section,
     /** Absent keeps those it had whose `@Name` the text still has. */
     mentions: RoomBoardNote.fields.mentions,
@@ -1036,8 +1046,15 @@ export const RoomBoardChange = Schema.Union([
     edgeId: RoomBoardEdge.fields.id,
     from: RoomBoardEdge.fields.from,
     to: RoomBoardEdge.fields.to,
+    shape: RoomBoardEdge.fields.shape,
   }),
   Schema.Struct({ type: Schema.Literal("edge.remove"), edgeId: RoomBoardEdge.fields.id }),
+  /** Draws an arrow as a curve or with square corners. */
+  Schema.Struct({
+    type: Schema.Literal("edge.shape"),
+    edgeId: RoomBoardEdge.fields.id,
+    shape: Schema.Literals(["curve", "elbow"]),
+  }),
   /** Makes the card an arrow carries go with every prompt, or only while it is new again. */
   Schema.Struct({
     type: Schema.Literal("edge.pin"),
@@ -1057,6 +1074,15 @@ export const RoomBoardChange = Schema.Union([
     type: Schema.Literal("artifact.write"),
     noteId: RoomBoardNote.fields.id,
     body: Schema.String.check(Schema.isMaxLength(ROOM_ARTIFACT_MAX_LENGTH)),
+  }),
+  /**
+   * Shows artifact `fromNoteId`'s version in the empty artifact `noteId` too, as it is: its author,
+   * prompt, time and the version it replaced. One that has content stays as it is.
+   */
+  Schema.Struct({
+    type: Schema.Literal("artifact.copy"),
+    noteId: RoomBoardNote.fields.id,
+    fromNoteId: RoomBoardNote.fields.id,
   }),
   /** Adds a reply to a comment thread. A reply id it already has changes nothing. */
   Schema.Struct({
@@ -1948,6 +1974,12 @@ export const CloudBoardCreateResult = Schema.Struct({
   credential: TrimmedNonEmptyString,
 });
 export type CloudBoardCreateResult = typeof CloudBoardCreateResult.Type;
+
+/**
+ * Whether a site lets other pages frame it (GET `?url=`), for a link card someone chose to show
+ * its page in: answers only `{ frame: "ok" | "refused" | "unknown" }`, to this deployment's pages.
+ */
+export const CLOUD_BOARD_FRAME_CHECK_ROUTE = `${CLOUD_BOARD_ROUTE}/frame-check`;
 
 /** Renames a cloud board: `?share=<share id>`, signed by anyone on it. */
 export const CLOUD_BOARD_TITLE_ROUTE = `${CLOUD_BOARD_ROUTE}/title`;

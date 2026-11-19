@@ -147,6 +147,28 @@ describe("applyRoomBoardChange", () => {
     expect(Result.isFailure(apply(task, put("t", { color: "blue" })))).toBe(true);
   });
 
+  it("shows a link card's page once someone chose to, until someone hides it", () => {
+    const link = { kind: "link", url: "https://example.com/pricing" } as const;
+    const added = applied(EMPTY_ROOM_BOARD, put("l", link));
+    const framed = applied(added, put("l", { framed: true }));
+    expect(framed.notes[0]?.framed).toBe(true);
+    // An older client's edit says nothing of it and keeps it.
+    expect(applied(framed, put("l", { x: 40 })).notes[0]?.framed).toBe(true);
+    expect(applied(framed, put("l", { framed: true }))).toBe(framed);
+    expect(applied(framed, put("l", { framed: false })).notes[0]).not.toHaveProperty("framed");
+    const refused: ReadonlyArray<Partial<Extract<RoomBoardChange, { type: "note.put" }>>> = [
+      {},
+      { kind: "task" },
+      { kind: "link", url: "http://example.com" },
+      { kind: "link", url: "https://192.168.0.1/admin" },
+      { kind: "link", url: "https://printer.local" },
+    ];
+    for (const fields of refused) {
+      const change = put("c", { ...fields, framed: true });
+      expect(Result.isFailure(apply(EMPTY_ROOM_BOARD, change))).toBe(true);
+    }
+  });
+
   it("toggles each person's own reaction on a card, within a cap", () => {
     const board: RoomBoard = {
       positions: {},
@@ -826,6 +848,31 @@ describe("applyRoomBoardChange", () => {
     expect(
       roomBoardCardIdentity(handWritten.notes[0]!, (id) => (id === sam ? "Sam" : undefined)),
     ).toMatchObject({ author: "guest", name: "Sam" });
+    // A copy shows the same version in an empty artifact, the one it replaced too, as nobody's edit.
+    const copy = (noteId: string, fromNoteId: string): RoomBoardChange => ({
+      type: "artifact.copy",
+      noteId,
+      fromNoteId,
+    });
+    const copied = applied(board, copy("empty", "a"));
+    expect(copied.notes[1]?.artifact).toStrictEqual(second);
+    expect(copied.notes[1]?.changed).toBeUndefined();
+    expect(copied.notes[0]).toBe(board.notes[0]);
+    expect(applied(copied, restore("empty")).notes[1]?.artifact?.body).toBe("# One");
+    // It never overwrites, and an empty source or the card itself gives nothing.
+    expect(applied(handWritten, copy("a", "a"))).toBe(handWritten);
+    expect(applied(copied, copy("empty", "a"))).toBe(copied);
+    expect(applied(board, copy("empty", "empty"))).toBe(board);
+    for (const [noteId, fromNoteId] of [
+      ["note", "a"],
+      ["empty", "note"],
+      ["gone", "a"],
+      ["empty", "gone"],
+    ] as const) {
+      expect(apply(board, copy(noteId, fromNoteId))).toStrictEqual(
+        Result.fail("This artifact is not on the board."),
+      );
+    }
     // The owner, whoever added the card, and whoever asked for or wrote either version.
     const eve = GuestId.make("guest:eve");
     const ada = GuestId.make("guest:ada");
@@ -916,6 +963,27 @@ describe("applyRoomBoardChange", () => {
     expect(Result.isFailure(apply(board, { type: "edge.pin", edgeId: "gone", pinned: true }))).toBe(
       true,
     );
+
+    // A line's shape is kept only when it is an elbow, and a new line can start as one.
+    const elbow = applied(pinned, { type: "edge.shape", edgeId: "e", shape: "elbow" });
+    expect(elbow.edges?.[0]).toEqual({ ...pinned.edges?.[0], shape: "elbow" });
+    expect(applied(elbow, { type: "edge.shape", edgeId: "e", shape: "elbow" })).toBe(elbow);
+    expect(applied(elbow, { type: "edge.shape", edgeId: "e", shape: "curve" }).edges?.[0]).toEqual(
+      pinned.edges?.[0],
+    );
+    expect(applied(board, { type: "edge.shape", edgeId: "e", shape: "curve" })).toBe(board);
+    expect(
+      Result.isFailure(apply(board, { type: "edge.shape", edgeId: "gone", shape: "elbow" })),
+    ).toBe(true);
+    expect(
+      applied(board, {
+        type: "edge.put",
+        edgeId: "g",
+        from: "note:t",
+        to: "card:thread",
+        shape: "elbow",
+      }).edges?.at(-1),
+    ).toEqual({ id: "g", from: "note:t", to: "card:thread", shape: "elbow" });
   });
 
   it("plans a task: its status agrees with done, and its due day and order stay until changed", () => {

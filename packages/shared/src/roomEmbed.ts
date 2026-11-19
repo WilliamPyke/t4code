@@ -62,6 +62,78 @@ export function isRoomEmbedFrameUrl(value: string): boolean {
   }
 }
 
+const hostOf = (hostname: string) => hostname.toLowerCase().replace(/\.$/, "");
+// Without a public suffix list: broader than a registrable site, never narrower.
+const siteOf = (host: string) => host.split(".").slice(-2).join(".");
+const PRIVATE_HOST = /(?:^|\.)(?:localhost|local|internal)$/;
+const IPV4_HOST = /^\d+(?:\.\d+){3}$/;
+
+/**
+ * Whether a person may choose to show this address inside a link card: plain https on a public
+ * host name, and not on the same site as any of `ownHosts` (the app's and the board host's), since
+ * a page of ours framed with its own origin could reach the signed-in session.
+ */
+export function isRoomEmbedPersonFrameUrl(
+  value: string,
+  ownHosts: ReadonlyArray<string> = [],
+): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:" || url.username !== "" || url.password !== "" || url.port !== "") {
+    return false;
+  }
+  const host = hostOf(url.hostname);
+  if (!host.includes(".") || host.startsWith("[") || IPV4_HOST.test(host)) return false;
+  if (PRIVATE_HOST.test(host)) return false;
+  return !ownHosts.some((own) => siteOf(hostOf(own)) === siteOf(host));
+}
+
+/** Whether a site lets other pages frame it: what `roomEmbedFrameVerdict` reads from its headers. */
+export type RoomEmbedFrameVerdict = "ok" | "refused" | "unknown";
+
+const ancestorAllows = (source: string, page: URL | null) => {
+  if (source === "*" || source === "https:") return true;
+  if (page === null) return false;
+  const match = /^(?:(https?):\/\/)?(\*\.)?([^/:*]+)(?::(\d+|\*))?(?:\/.*)?$/.exec(source);
+  if (match === null) return false;
+  const [, scheme, wild, host, port] = match;
+  if (scheme !== undefined && `${scheme}:` !== page.protocol && scheme !== "http") return false;
+  if (port !== undefined && port !== "*" && port !== page.port) return false;
+  if (port === undefined && page.port !== "") return false;
+  const pageHost = hostOf(page.hostname);
+  return wild === undefined ? pageHost === host : pageHost.endsWith(`.${host}`);
+};
+
+/**
+ * What a page's answer headers say about being framed by `pageOrigin`: `frame-ancestors` in any
+ * of its policies decides, and only without one does `X-Frame-Options` (`DENY`, `SAMEORIGIN`).
+ */
+export function roomEmbedFrameVerdict(
+  headers: { readonly frameOptions: string | null; readonly contentSecurityPolicy: string | null },
+  pageOrigin: string | null,
+): Exclude<RoomEmbedFrameVerdict, "unknown"> {
+  const page = pageOrigin !== null && URL.canParse(pageOrigin) ? new URL(pageOrigin) : null;
+  const ancestors = (headers.contentSecurityPolicy ?? "")
+    .split(",")
+    .flatMap((policy) => policy.split(";"))
+    .map((directive) => directive.trim().toLowerCase().split(/\s+/))
+    .filter(([name]) => name === "frame-ancestors")
+    .map(([, ...sources]) => sources);
+  if (ancestors.length > 0) {
+    return ancestors.every((sources) => sources.some((source) => ancestorAllows(source, page)))
+      ? "ok"
+      : "refused";
+  }
+  const options = (headers.frameOptions ?? "").toLowerCase().split(",");
+  return options.some((option) => ["deny", "sameorigin"].includes(option.trim()))
+    ? "refused"
+    : "ok";
+}
+
 const ID = /^[A-Za-z0-9_-]+$/;
 const YOUTUBE_ID = /^[A-Za-z0-9_-]{11}$/;
 const HEX_ID = /^[0-9a-f]+$/;

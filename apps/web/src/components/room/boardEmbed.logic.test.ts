@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   BOARD_LIVE_EMBEDS_MAX,
+  boardCanFramePage,
   boardEmbedTitleOf,
   boardEmbedTitleUrl,
   boardLiveEmbeds,
@@ -36,6 +37,28 @@ describe("boardLiveEmbeds", () => {
     expect(boardLiveEmbeds(row, view, 1, ["f0"]).has("f0")).toBe(true);
     expect(boardLiveEmbeds(row, view, 0.2, ["f0"]).size).toBe(0);
     expect(boardLiveEmbeds(row, { ...view, y: 5_000 }, 1, ["f0"]).size).toBe(0);
+  });
+
+  it("loads a page someone chose to show only for a viewer who asked for it", () => {
+    const page: RoomBoardNote = { ...figma("page", 0), url: "https://example.com/a", framed: true };
+    const unsafe: RoomBoardNote = { ...page, id: "unsafe", url: "https://192.168.0.1/" };
+    const { framed: _framed, ...hidden } = { ...page, id: "hidden" };
+    const notes = [page, unsafe, hidden];
+    expect(boardLiveEmbeds(notes, view, 1, []).size).toBe(0);
+    const asked = new Set(["page", "unsafe", "hidden"]);
+    expect([...boardLiveEmbeds(notes, view, 1, [], asked)]).toEqual(["page"]);
+  });
+});
+
+describe("boardCanFramePage", () => {
+  it("offers a page for any other public site, never one of ours or a source's own frame", () => {
+    const own = ["app.tinkjam.com"];
+    expect(boardCanFramePage("https://example.com/a", own)).toBe(true);
+    expect(boardCanFramePage("https://github.com/acme/app", own)).toBe(true);
+    expect(boardCanFramePage("https://www.figma.com/design/Key/File", own)).toBe(false);
+    expect(boardCanFramePage("https://boards.tinkjam.com/b/1", own)).toBe(false);
+    expect(boardCanFramePage("http://example.com/a", own)).toBe(false);
+    expect(boardCanFramePage(undefined, own)).toBe(false);
   });
 });
 

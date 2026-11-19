@@ -4,8 +4,10 @@ import {
   type RoomEmbedSource,
 } from "@t3tools/shared/roomEmbed";
 import {
+  AppWindowIcon,
   CircleDotIcon,
   ExternalLinkIcon,
+  EyeOffIcon,
   FigmaIcon,
   FileTextIcon,
   GithubIcon,
@@ -35,6 +37,8 @@ import { useStableCallback } from "~/hooks/useStableCallback";
 import { cn } from "~/lib/utils";
 
 import { Button } from "../ui/button";
+import { boardCanFramePage } from "./boardEmbed.logic";
+import { boardOwnHosts, useBoardFrameCheck } from "./boardFrameCheck";
 import type { BoardSize } from "./roomBoard.logic";
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
@@ -88,6 +92,9 @@ export function BoardEmbedIcon({ source }: { readonly source: RoomEmbedSource })
  */
 const FRAME_SANDBOX = "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox";
 const FRAME_ALLOW = "fullscreen; clipboard-write; picture-in-picture; encrypted-media";
+// A page someone chose to show is any site: its forms work, and it never navigates the board.
+const PAGE_SANDBOX = `${FRAME_SANDBOX} allow-forms`;
+const PAGE_ALLOW = "fullscreen";
 
 /** The board surface's size, which the part of the board in view is worked out from. */
 export function useBoardSurfaceSize(surfaceRef: RefObject<HTMLElement | null>) {
@@ -106,7 +113,8 @@ export function useBoardSurfaceSize(surfaceRef: RefObject<HTMLElement | null>) {
 /**
  * A link card's body: who added it and Open, and for a source that allows it, the live page.
  * The page stays inert under a cover, so the board pans and drags over it, until a click on the
- * cover lets the viewer use it; a click anywhere else or Escape gives the board back.
+ * cover lets the viewer use it; a click anywhere else or Escape gives the board back. Any other
+ * site's page shows once someone chose to (`framed`), and loads only for a viewer who asked.
  */
 export function RoomEmbedBody({
   embed,
@@ -116,9 +124,15 @@ export function RoomEmbedBody({
   onRelease,
   addedBy,
   actions,
+  framed = false,
+  onFrame,
 }: {
   readonly embed: RoomEmbed;
   readonly url: string;
+  /** Whether someone chose to show this address's own page in the card. */
+  readonly framed?: boolean;
+  /** Shows or hides the page for everyone. Absent where the viewer may not change the card. */
+  readonly onFrame?: ((framed: boolean) => void) | undefined;
   /** More buttons beside Open, such as bringing it in with an agent. */
   readonly actions?: ReactNode;
   /** Who put it on the board, as the card's footer shows them. */
@@ -129,8 +143,15 @@ export function RoomEmbedBody({
   readonly active: boolean;
   readonly onRelease: () => void;
 }) {
-  const frame =
+  const sourceFrame =
     embed.embedUrl !== undefined && isRoomEmbedFrameUrl(embed.embedUrl) ? embed.embedUrl : null;
+  const canFramePage = boardCanFramePage(url, boardOwnHosts());
+  const page = canFramePage && framed ? url : null;
+  const frame = sourceFrame ?? page;
+  // Null while the board host is asked: the page waits, so a site that refuses never flashes.
+  const check = useBoardFrameCheck(page);
+  const refused = page !== null && check === "refused";
+  const loads = live && (page === null || (check !== null && !refused));
   const bodyRef = useRef<HTMLDivElement>(null);
   const release = useStableCallback(onRelease);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a press outside the page or Escape, anywhere in the window, gives the board back
@@ -158,6 +179,17 @@ export function RoomEmbedBody({
           {addedBy}
         </div>
         {actions}
+        {onFrame === undefined || !canFramePage ? null : (
+          <Button
+            size="micro"
+            variant="outline"
+            onPointerDown={stopPointer}
+            onClick={() => onFrame(!framed)}
+          >
+            {framed ? <EyeOffIcon /> : <AppWindowIcon />}
+            {framed ? "Hide page" : "Show page here"}
+          </Button>
+        )}
         <Button
           size="micro"
           variant="outline"
@@ -169,14 +201,18 @@ export function RoomEmbedBody({
           Open
         </Button>
       </div>
-      {frame === null ? null : (
+      {frame === null ? null : refused ? (
+        <p className="flex min-h-40 flex-1 items-center justify-center border-t border-board-hairline bg-muted/40 p-4 text-center text-xs text-muted-foreground">
+          This site does not allow being shown inside other pages.
+        </p>
+      ) : (
         <div className="relative min-h-40 flex-1 overflow-hidden border-t border-board-hairline bg-muted/40">
-          {live ? (
+          {loads ? (
             <iframe
               src={frame}
               title={`${embed.name}: ${embed.title}`}
-              sandbox={FRAME_SANDBOX}
-              allow={FRAME_ALLOW}
+              sandbox={page === null ? FRAME_SANDBOX : PAGE_SANDBOX}
+              allow={page === null ? FRAME_ALLOW : PAGE_ALLOW}
               referrerPolicy={embed.source === "youtube" ? "strict-origin" : "no-referrer"}
               loading="lazy"
               className={cn(
@@ -196,10 +232,10 @@ export function RoomEmbedBody({
               <span
                 className={cn(
                   "rounded-md border border-board-hairline bg-card px-2 py-1 text-2xs text-muted-foreground shadow-board",
-                  live && "opacity-0 group-hover/embed:opacity-100",
+                  loads && "opacity-0 group-hover/embed:opacity-100",
                 )}
               >
-                {live ? "Click to interact" : `Click to show ${embed.name}`}
+                {loads ? "Click to interact" : `Click to show ${embed.name}`}
               </span>
             </div>
           )}

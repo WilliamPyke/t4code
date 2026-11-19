@@ -2,7 +2,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   isRoomEmbedFrameUrl,
+  isRoomEmbedPersonFrameUrl,
   roomEmbedBringInPrompt,
+  roomEmbedFrameVerdict,
   roomEmbedOf,
   roomEmbedReadHint,
 } from "./roomEmbed.ts";
@@ -204,6 +206,75 @@ describe("isRoomEmbedFrameUrl", () => {
     expect(isRoomEmbedFrameUrl("https://embed.figma.com.evil.test/design/k")).toBe(false);
     expect(isRoomEmbedFrameUrl("https://www.figma.com/design/k")).toBe(false);
     expect(isRoomEmbedFrameUrl("javascript:alert(1)")).toBe(false);
+  });
+});
+
+describe("isRoomEmbedPersonFrameUrl", () => {
+  const own = ["app.tinkjam.com", "boards.tinkjam.com"];
+
+  it.each([
+    "https://example.com/pricing?plan=team#top",
+    "https://docs.example.co.uk/guide",
+    "https://github.com/acme/app",
+  ])("lets a person frame %s", (url) => {
+    expect(isRoomEmbedPersonFrameUrl(url, own)).toBe(true);
+  });
+
+  it.each([
+    "http://example.com",
+    "javascript:alert(1)",
+    "data:text/html,hi",
+    "not an address",
+    "https://sam:secret@example.com",
+    "https://sam@example.com",
+    "https://example.com:8443",
+    "https://127.0.0.1",
+    "https://2130706433",
+    "https://0x7f.1",
+    "https://[::1]",
+    "https://[2001:db8::1]/",
+    "https://localhost",
+    "https://app.localhost",
+    "https://printer.local",
+    "https://vault.corp.internal",
+    "https://intranet",
+    "https://localhost./",
+    "https://tinkjam.com/boards",
+    "https://app.tinkjam.com/settings",
+    "https://BOARDS.tinkjam.com./api/boards",
+    "https://other.tinkjam.com",
+  ])("never frames %s", (url) => {
+    expect(isRoomEmbedPersonFrameUrl(url, own)).toBe(false);
+  });
+
+  it("leaves the sources the board frames itself to their own rule", () => {
+    expect(isRoomEmbedFrameUrl("https://example.com/pricing")).toBe(false);
+  });
+});
+
+describe("roomEmbedFrameVerdict", () => {
+  const page = "https://app.tinkjam.com";
+  const verdict = (frameOptions: string | null, contentSecurityPolicy: string | null) =>
+    roomEmbedFrameVerdict({ frameOptions, contentSecurityPolicy }, page);
+
+  it.each([
+    [null, null, "ok"],
+    ["DENY", null, "refused"],
+    ["SameOrigin", null, "refused"],
+    ["ALLOW-FROM https://else.example", null, "ok"],
+    [null, "default-src 'self'; script-src 'none'", "ok"],
+    [null, "frame-ancestors 'none'", "refused"],
+    [null, "default-src *; frame-ancestors 'self' https://partner.example", "refused"],
+    [null, "frame-ancestors *", "ok"],
+    [null, "frame-ancestors https:", "ok"],
+    [null, "frame-ancestors 'self' https://*.tinkjam.com", "ok"],
+    [null, "frame-ancestors app.tinkjam.com", "ok"],
+    [null, "frame-ancestors https://tinkjam.com", "refused"],
+    // frame-ancestors decides over X-Frame-Options, and every policy has to allow it.
+    ["DENY", "frame-ancestors *", "ok"],
+    [null, "frame-ancestors *, frame-ancestors 'none'", "refused"],
+  ] as const)("reads %s and %s as %s", (frameOptions, policy, expected) => {
+    expect(verdict(frameOptions, policy)).toBe(expected);
   });
 });
 

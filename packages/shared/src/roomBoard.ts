@@ -52,7 +52,7 @@ import * as Schema from "effect/Schema";
 
 import { replaceComposerContextReferences } from "./composerContextReferences.ts";
 import { sanitizeLinkedPrompt } from "./promptLinks.ts";
-import { roomEmbedOf } from "./roomEmbed.ts";
+import { isRoomEmbedPersonFrameUrl, roomEmbedOf } from "./roomEmbed.ts";
 
 export const ROOM_BOARD_FULL = "This board has as many notes as it holds. Remove one first.";
 export const ROOM_COMMENT_THREAD_FULL = `A comment thread holds ${ROOM_BOARD_MAX_REPLIES} replies. Start a new one.`;
@@ -242,6 +242,13 @@ function putNote(
   if (change.color !== undefined && (kind !== undefined || pinned !== undefined)) {
     return Result.fail("Only a note or a section can have a colour.");
   }
+  const framedUrl = existing === undefined ? change.url : existing.url;
+  if (
+    change.framed === true &&
+    (kind !== "link" || framedUrl === undefined || !isRoomEmbedPersonFrameUrl(framedUrl))
+  ) {
+    return Result.fail("Only a link card with a public https address can show its page.");
+  }
   const mentioned = roomMentionsOf(scope, author, change.text, change.mentions, existing?.mentions);
   if (Result.isFailure(mentioned)) return Result.fail(mentioned.failure);
   const mentions = mentioned.success;
@@ -273,6 +280,7 @@ function putNote(
     assignee: _assignee,
     size: _size,
     color: _color,
+    framed: _framed,
     mentions: _mentions,
     ...rest
   } = base;
@@ -290,6 +298,7 @@ function putNote(
   const assignee = change.assignee === undefined ? base.assignee : change.assignee;
   const size = change.size ?? base.size;
   const color = change.color ?? base.color;
+  const framed = change.framed ?? base.framed === true;
   // A card edited since a prompt carried it goes with the next one again.
   const edited =
     existing !== undefined &&
@@ -308,6 +317,7 @@ function putNote(
     ...(assignee === undefined || assignee === null ? {} : { assignee }),
     ...(size === undefined ? {} : { size }),
     ...(color === undefined ? {} : { color }),
+    ...(framed ? { framed: true } : {}),
     ...(mentions.length === 0 ? {} : { mentions }),
   };
   // Moving or resizing a card is not changing it, for whoever catches up on the board later.
@@ -356,6 +366,7 @@ const sameNote = (left: RoomBoardNote, right: RoomBoardNote) =>
   left.x === right.x &&
   left.y === right.y &&
   left.order === right.order &&
+  left.framed === right.framed &&
   sameSize(left.size, right.size);
 
 /**
@@ -799,7 +810,27 @@ export function applyRoomBoardChange(
       }
       return Result.succeed({
         ...board,
-        edges: [...edges, { id: change.edgeId, from: change.from, to: change.to }],
+        edges: [
+          ...edges,
+          {
+            id: change.edgeId,
+            from: change.from,
+            to: change.to,
+            ...(change.shape === undefined ? {} : { shape: change.shape }),
+          },
+        ],
+      });
+    }
+    // Anyone who may draw or remove a line may change how it is drawn.
+    case "edge.shape": {
+      const edge = board.edges?.find((candidate) => candidate.id === change.edgeId);
+      if (edge === undefined) return Result.fail("This arrow is not on the board.");
+      if ((edge.shape ?? "curve") === change.shape) return Result.succeed(board);
+      const { shape: _shape, ...rest } = edge;
+      const next = change.shape === "elbow" ? { ...rest, shape: change.shape } : rest;
+      return Result.succeed({
+        ...board,
+        edges: board.edges?.map((candidate) => (candidate === edge ? next : candidate)),
       });
     }
     case "edge.remove":
@@ -853,6 +884,16 @@ export function applyRoomBoardChange(
           changed: { at, ...person },
         }),
       );
+    }
+    // Anyone who may draw a line may copy along it. Nobody wrote a version, so `changed` stays.
+    case "artifact.copy": {
+      const note = board.notes.find((candidate) => candidate.id === change.noteId);
+      const from = board.notes.find((candidate) => candidate.id === change.fromNoteId);
+      if (note?.kind !== "artifact" || from?.kind !== "artifact") {
+        return Result.fail("This artifact is not on the board.");
+      }
+      if (note.artifact !== undefined || from.artifact === undefined) return Result.succeed(board);
+      return Result.succeed(withNote(board, note, { ...note, artifact: from.artifact }));
     }
     case "comment.reply": {
       const note = board.notes.find((candidate) => candidate.id === change.noteId);

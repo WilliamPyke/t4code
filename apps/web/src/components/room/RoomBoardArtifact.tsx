@@ -71,7 +71,8 @@ export function RoomArtifactBody({
       <div className="flex min-h-0 flex-1 flex-col items-start gap-2 px-3 pb-3">
         <p className="text-xs text-muted-foreground">
           Nothing here yet. Draw a line from a thread box to this card, or use Attach my agent, then
-          prompt that box. Its reply shows here for everyone.
+          prompt that box. Its reply shows here for everyone. A line from an artifact that has a
+          version shows that version here too.
         </p>
         {onWrite === undefined ? null : (
           <Button
@@ -138,7 +139,10 @@ export function RoomArtifactLive({
   onRestore,
   onWrite,
   people,
+  versionNote = null,
 }: {
+  /** What tells this card from another of the same box: "Same version as …", or null. */
+  readonly versionNote?: string | null;
   readonly noteId: string;
   readonly artifact: RoomArtifactContent | undefined;
   /** Whose agent wrote the current version; absent before anything was written. */
@@ -179,6 +183,11 @@ export function RoomArtifactLive({
         onEdit={edit}
         people={people}
       />
+      {versionNote === null ? null : (
+        <p className="shrink-0 truncate px-3 pb-1.5 text-2xs text-muted-foreground">
+          {versionNote}
+        </p>
+      )}
       {progress !== undefined ? (
         <p role="status" className="flex shrink-0 px-3 pb-1.5">
           <BoardChip tone="primary">

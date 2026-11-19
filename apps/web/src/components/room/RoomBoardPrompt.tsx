@@ -1,7 +1,9 @@
 import { ArrowUpIcon, FrameIcon, PinIcon, PinOffIcon, XIcon } from "lucide-react";
 import { type PointerEvent, type ReactNode, useState } from "react";
 
+import { boardTimeLabel } from "../boards/boardsHome.logic";
 import { Button } from "../ui/button";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -16,6 +18,16 @@ import {
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
 const NONE: ReadonlySet<string> = new Set();
 const PREVIEW_LENGTH = 240;
+
+/** An artifact a box can rewrite, and when the version it shows was written, if it has one. */
+interface BoardPromptArtifact {
+  readonly id: string;
+  readonly title: string;
+  readonly updatedAt: string | undefined;
+}
+const NO_ARTIFACTS: ReadonlyArray<BoardPromptArtifact> = [];
+const artifactName = (artifact: Pick<BoardPromptArtifact, "title">) =>
+  artifact.title.trim() === "" ? "Untitled artifact" : artifact.title.trim();
 
 const without = (set: ReadonlySet<string>, ref: string) => {
   const next = new Set(set);
@@ -55,11 +67,16 @@ export function BoardPromptBox({
   onPrompt,
   onPin,
   draft,
+  artifacts = NO_ARTIFACTS,
+  onPickArtifact,
 }: {
+  /** Every artifact the box has a line to, to pick which one the reply rewrites among several. */
+  readonly artifacts?: ReadonlyArray<BoardPromptArtifact>;
+  readonly onPickArtifact?: ((artifactId: string) => void) | undefined;
   /** A prompt prepared for this box, shown in its field until sent or dropped. */
   readonly draft?: BoardPromptDraft | undefined;
   readonly cards: ReadonlyArray<BoardPromptCard>;
-  /** The artifact the box has a line to, which the reply rewrites, or null. */
+  /** The artifact the reply rewrites, among those the box has a line to, or null. */
   readonly artifact: { readonly id: string; readonly title: string } | null;
   readonly label: string;
   readonly placeholder: string;
@@ -74,6 +91,8 @@ export function BoardPromptBox({
   const [putBack, setPutBack] = useState(NONE);
   const [showSent, setShowSent] = useState(false);
   const [sending, setSending] = useState(false);
+  // When the box was drawn: a version's age is said in words, as its card says it.
+  const [now] = useState(() => Date.now());
   // A prepared prompt fills the field once per preparation; dropping it empties the field.
   const [draftKey, setDraftKey] = useState<string | null>(null);
   if ((draft?.key ?? null) !== draftKey) {
@@ -337,10 +356,39 @@ export function BoardPromptBox({
       />
       {draft !== undefined ? (
         <p className="truncate text-2xs text-muted-foreground">{draft.fills}</p>
-      ) : artifact === null ? null : (
+      ) : artifact === null ? null : artifacts.length < 2 || onPickArtifact === undefined ? (
         <p className="truncate text-2xs text-muted-foreground">
-          {`Replies rewrite "${artifact.title.trim() === "" ? "Untitled artifact" : artifact.title.trim()}"`}
+          {`Replies rewrite "${artifactName(artifact)}"`}
         </p>
+      ) : (
+        <div className="flex min-w-0 items-center gap-1.5" data-reply-card>
+          <span className="shrink-0 text-2xs text-muted-foreground">Reply goes into</span>
+          <div className="min-w-0 flex-1">
+            <Select
+              value={artifact.id}
+              onValueChange={(next) => {
+                if (next !== null) onPickArtifact(next);
+              }}
+            >
+              <SelectTrigger size="xs" aria-label="Reply goes into">
+                <SelectValue>{artifactName(artifact)}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="start" alignItemWithTrigger={false}>
+                {artifacts.map((option) => (
+                  <SelectItem key={option.id} value={option.id}>
+                    {artifactName(option)}
+                    <span className="text-muted-foreground">
+                      {" · "}
+                      {option.updatedAt === undefined
+                        ? "empty"
+                        : (boardTimeLabel(option.updatedAt, now)?.toLowerCase() ?? "written")}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          </div>
+        </div>
       )}
       <div className="flex min-w-0 items-center gap-2">
         <div className="flex min-w-0 flex-1 items-center">{model}</div>

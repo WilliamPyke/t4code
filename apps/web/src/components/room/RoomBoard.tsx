@@ -19,6 +19,7 @@ import {
   type RoomBoardNote,
   type RoomBoardNoteColor,
   type RoomBoardReaction,
+  type RoomBoardEdge,
   type RoomBoardReactionEmoji,
   type RoomBoardSize,
   type RoomBoardViewport,
@@ -89,7 +90,9 @@ import {
   canUndoRoomAgentTurn,
   isRoomCardOwnedBy,
   roomBoardAfterAgentTurn,
+  roomBoardNoteOfRef,
   roomBoxCodeWindows,
+  roomBoxIdOfRef,
   roomBoxExcerpt,
   roomMentionsIn,
   roomTaskStatus,
@@ -124,6 +127,7 @@ import { Input } from "../ui/input";
 import { toastManager } from "../ui/toast";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   BOARD_CARD_WIDTH,
@@ -168,6 +172,8 @@ import {
   boardCodeEdgeIds,
   boardAgents,
   boardArtifactAuthor,
+  boardArtifactCopySource,
+  boardArtifactVersionNote,
   boardArtifactWriting,
   boardBoxAgentLabel,
   boardBoxName,
@@ -276,9 +282,16 @@ import { RoomArtifactLive } from "./RoomBoardArtifact";
 import { useBoardDrawnHeights } from "./roomBoardHeights";
 import { BoardGuide } from "./BoardGuide";
 import { boardGuideStepOfChange } from "./boardGuide.logic";
+import { type BoardLineShape, boardLine } from "./boardLineRoute.logic";
 import { markBoardGuideStep, showBoardGuide } from "./boardGuideState";
 import { BoardEmbedIcon, RoomEmbedBody, useBoardSurfaceSize } from "./RoomBoardEmbed";
-import { boardEmbedTitleOf, boardEmbedTitleUrl, boardLiveEmbeds } from "./boardEmbed.logic";
+import {
+  boardCanFramePage,
+  boardEmbedTitleOf,
+  boardEmbedTitleUrl,
+  boardLiveEmbeds,
+} from "./boardEmbed.logic";
+import { boardOwnHosts } from "./boardFrameCheck";
 import { type ReadRoomCodePatch, RoomCodeWindow } from "./RoomBoardCode";
 import { PullRequestStateIcon, RoomPullRequestWindow } from "./RoomBoardPullRequest";
 import { CommentPin, CommentThreadPanel } from "./RoomBoardComments";
@@ -369,7 +382,14 @@ import {
   boardPlanUntick,
   boardPlanWithStatus,
 } from "./boardPlan.logic";
-import { BoardEdgeLine, boardStroke, useBoardLineFocus } from "./RoomBoardEdge";
+import {
+  type BoardLineObstacle,
+  BoardEdgeLine,
+  boardStroke,
+  lastBoardLineShape,
+  rememberBoardLineShape,
+  useBoardLineFocus,
+} from "./RoomBoardEdge";
 import { TaskAssigneeDot, TaskDueChip, TaskPriorityMark } from "./BoardTaskMarks";
 import { MentionChips, useMentionPicker } from "./BoardMentions";
 import { useBoardFocusRequest } from "./boardFocus";
@@ -525,6 +545,28 @@ const EDGE_STROKE_WIDTHS: Readonly<Record<EdgeStroke, number>> = {
   selected: 3.5,
 };
 const EDGE_STROKES = Object.entries(EDGE_STROKE_COLORS);
+
+// Which artifact each box's next reply goes into, by box id, for this tab: a reload keeps it.
+const REPLY_CARDS_KEY = "tinkjam:board-reply-cards:v1";
+const readReplyCards = (): Readonly<Record<string, string>> => {
+  try {
+    const held: unknown = JSON.parse(sessionStorage.getItem(REPLY_CARDS_KEY) ?? "{}");
+    if (typeof held !== "object" || held === null) return {};
+    return Object.fromEntries(
+      Object.entries(held).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    );
+  } catch {
+    return {};
+  }
+};
+const keepReplyCards = (cards: Readonly<Record<string, string>>) => {
+  try {
+    sessionStorage.setItem(REPLY_CARDS_KEY, JSON.stringify(cards));
+  } catch {}
+  return cards;
+};
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
 
@@ -1155,19 +1197,28 @@ export function RoomBoard({
   const selectEdge = useStableCallback((id: string) =>
     setSelectedEdge((current) => (current === id ? null : id)),
   );
+  // Where this person's last choice of line shape is kept, for the next line they draw here.
+  const lineBoard = viewKey ?? shareId ?? title;
   const [linkDraft, setLinkDraft] = useState<string | null>(null);
   // The embeds this viewer clicked to show, newest last, and the one they are using now.
   const [embedsOpened, setEmbedsOpened] = useState<ReadonlyArray<string>>([]);
   const [embedInUse, setEmbedInUse] = useState<string | null>(null);
+  // The pages people chose to show that this viewer asked to load, for this visit to the board.
+  const [pagesShown, setPagesShown] = useState<ReadonlySet<string>>(() => new Set());
   const surfaceSize = useBoardSurfaceSize(surfaceRef);
   const liveEmbeds = boardLiveEmbeds(
     shown.notes,
     surfaceSize === null ? null : visibleBoardRect(view, surfaceSize),
     view.zoom,
     embedsOpened,
+    pagesShown,
   );
-  const openEmbed = (noteId: string) => {
+  const showEmbed = (noteId: string) => {
     setEmbedsOpened((opened) => [...opened.filter((id) => id !== noteId), noteId].slice(-8));
+    setPagesShown((pages) => (pages.has(noteId) ? pages : new Set(pages).add(noteId)));
+  };
+  const openEmbed = (noteId: string) => {
+    showEmbed(noteId);
     setEmbedInUse(noteId);
   };
   // What the address typed in the toolbar adds: a link card or a pull request window.
@@ -1512,8 +1563,26 @@ export function RoomBoard({
       stamp: work.stamp,
     };
   };
+  // Which of a box's several artifacts this person's next reply rewrites, by box, until they leave.
+  const [replyCards, setReplyCards] = useState(readReplyCards);
   const contexts = new Map(
-    threadBoxes.map((box) => [box.id, boardPromptContext(shown, people, messages, box.id)]),
+    threadBoxes.map((box) => [
+      box.id,
+      boardPromptContext(shown, people, messages, box.id, replyCards[box.id]),
+    ]),
+  );
+  // Said on a card only where the viewer's own box has several to choose from.
+  const replyTargets = new Set(
+    threadBoxes.flatMap((box) => {
+      const context = contexts.get(box.id);
+      return context !== undefined &&
+        context.artifact !== null &&
+        context.artifacts.length > 1 &&
+        onPromptBox !== undefined &&
+        canPromptBoardBox(box, viewer)
+        ? [context.artifact.id]
+        : [];
+    }),
   );
   const contextEdges = new Set([...contexts.values()].flatMap((context) => [...context.edgeIds]));
   // A line into several boxes reads as the most a card does along it: pinned, then going, then sent.
@@ -1527,9 +1596,7 @@ export function RoomBoard({
   }
   // A box's line to the code window that shows its changes fills it, as one to its artifact does.
   const artifactEdges = new Set([
-    ...[...contexts.values()].flatMap((context) =>
-      context.artifactEdgeId === null ? [] : [context.artifactEdgeId],
-    ),
+    ...[...contexts.values()].flatMap((context) => context.artifactEdgeIds),
     ...(cards === undefined ? boardCodeEdgeIds(shown) : []),
   ]);
   const edgeRole = (id: string): EdgeRole =>
@@ -1694,7 +1761,7 @@ export function RoomBoard({
     if (undoable && !unrecorded.current) remember({ target, before, after: value });
     const queue = after ?? boardChangeQueueKey(shown, target, value);
     setEdits((current) => putBoardEdit(board, current, target, value, false));
-    const change = boardChangeOf(target, value);
+    const change = boardChangeOf(target, value, before);
     const guideStep = boardGuideStepOfChange(change, before === null);
     void queueChange(queue, () => onChange(change)).then((taken) => {
       if (!taken) setEdits((current) => dropBoardEdit(current, target, value));
@@ -2316,6 +2383,17 @@ export function RoomBoard({
       ? (note: RoomBoardNote, color: RoomBoardNoteColor) => {
           setNoteColor(color);
           changeNote(note, (current) => ({ ...current, color }));
+        }
+      : undefined;
+  // Shows a link card's own page in it, or hides it, for everyone; whoever shows it has asked to
+  // load it. A team's relay may not keep it yet, so only a room's cards offer it.
+  const framePage =
+    canEdit && cards === undefined
+      ? (note: RoomBoardNote, framed: boolean) => {
+          if (framed) showEmbed(note.id);
+          changeNote(note, ({ framed: _framed, ...rest }) =>
+            framed ? { ...rest, framed: true } : rest,
+          );
         }
       : undefined;
   // A team's relay may not take reactions yet, so only a room's cards offer them.
@@ -3548,14 +3626,44 @@ export function RoomBoard({
       width: 0,
       height: 0,
     };
-    linkPath.current?.setAttribute("d", boardConnector(linking.box, box).path);
+    linkPath.current?.setAttribute(
+      "d",
+      boardLine(lastBoardLineShape(lineBoard), linking.box, box).path,
+    );
+  };
+  // A new line into an empty artifact shows the version at its start there too, once the line is
+  // on the board. A board edit only, and not an undo step: no change empties an artifact again.
+  // A board held by an older server refuses it, and the card stays empty as it was.
+  const copyArtifactAlong = (from: string, to: string, queue: string, on = shown) => {
+    if (onChange === undefined) return;
+    const boxId = roomBoxIdOfRef(on, from);
+    const fromNoteId = boardArtifactCopySource(
+      on,
+      from,
+      to,
+      boxId === undefined ? undefined : contexts.get(boxId)?.artifact?.id,
+    );
+    const noteId = roomBoardNoteOfRef(on, to)?.id;
+    if (fromNoteId === null || noteId === undefined) return;
+    void queueChange(queue, () => onChange({ type: "artifact.copy", noteId, fromNoteId }));
+  };
+  /** A box's "New artifact": a second one opens on the version the box's artifact shows. */
+  const addBoxArtifact = (from: string) => {
+    const id = addBeside(from, "artifact", "from");
+    if (id === null) return;
+    const added: RoomBoardNote = { id, text: "", x: 0, y: 0, kind: "artifact" };
+    const to = noteRef(id);
+    copyArtifactAlong(from, to, to, { ...shown, notes: [...shown.notes, added] });
   };
   /** Draws a line between two cards, unless one is there or the board holds no more. */
   const addEdge = (from: string, to: string) => {
     if (to === from || edges.length >= ROOM_BOARD_MAX_EDGES) return;
     if (edges.some((edge) => edge.from === from && edge.to === to)) return;
     const id = randomUUID();
-    send({ kind: "edge", id }, { id, from, to });
+    const elbow = lastBoardLineShape(lineBoard) === "elbow";
+    const line = { id, from, to, ...(elbow ? { shape: "elbow" as const } : {}) };
+    send({ kind: "edge", id }, line);
+    copyArtifactAlong(from, to, boardChangeQueueKey(shown, { kind: "edge", id }, line));
   };
   const startLink = (from: string, event: PointerEvent<HTMLElement>) => {
     const box = boxes.get(from);
@@ -3870,6 +3978,12 @@ export function RoomBoard({
   const resize: CardResize | undefined = canEdit
     ? { onResize: resizeCard, onEnd: endCardResize }
     : undefined;
+  const shapeEdge = (edge: RoomBoardEdge, shape: BoardLineShape) => {
+    rememberBoardLineShape(lineBoard, shape);
+    if ((edge.shape ?? "curve") === shape) return;
+    const { shape: _shape, ...rest } = edge;
+    send({ kind: "edge", id: edge.id }, shape === "elbow" ? { ...rest, shape } : rest);
+  };
   const removeEdge = (id: string) => {
     setSelectedEdge(null);
     send({ kind: "edge", id }, null);
@@ -3935,6 +4049,16 @@ export function RoomBoard({
           : []),
         ...(use === undefined ? [] : [{ label: "Use as message", run: use }]),
         ...(give === undefined ? [] : [{ label: "Give to my agent", run: give }]),
+        ...(framePage !== undefined &&
+        note.kind === "link" &&
+        boardCanFramePage(note.url, boardOwnHosts())
+          ? [
+              {
+                label: note.framed === true ? "Hide page" : "Show page here",
+                run: () => framePage(note, note.framed !== true),
+              },
+            ]
+          : []),
         ...(canDelete
           ? [
               {
@@ -4267,8 +4391,8 @@ export function RoomBoard({
   /** What a thread box offers below its conversation, as its buttons and its right-click menu. */
   const boxActions = (box: BoardThreadBox) => {
     const context = contexts.get(box.id);
-    // A box rewrites one artifact; a second would draw a line that does nothing.
-    const canAddArtifact = canEdit && !full && !artifactsFull && context?.artifact === null;
+    // A box with several keeps a version in each: a reply rewrites the one its prompt box names.
+    const canAddArtifact = canEdit && !full && !artifactsFull && context !== undefined;
     // Offered once per box; a box's changes show in each window it has a line to.
     const canAddCode =
       canEdit && !full && !codeFull && roomBoxCodeWindows(shown, box.id).length === 0;
@@ -4312,9 +4436,7 @@ export function RoomBoard({
   const boxMenuActions = (box: BoardThreadBox): ReadonlyArray<CardAction> => {
     const { from, artifact, code, pullRequest, conversation } = boxActions(box);
     return [
-      ...(artifact
-        ? [{ label: "New artifact", run: () => addBeside(from, "artifact", "from") }]
-        : []),
+      ...(artifact ? [{ label: "New artifact", run: () => addBoxArtifact(from) }] : []),
       ...(code ? [{ label: "New code window", run: () => addBeside(from, "code", "from") }] : []),
       ...(pullRequest === null
         ? []
@@ -4341,6 +4463,14 @@ export function RoomBoard({
             context.artifact === null
               ? null
               : { id: context.artifact.id, title: context.artifact.text }
+          }
+          artifacts={context.artifacts.map((artifact) => ({
+            id: artifact.id,
+            title: artifact.text,
+            updatedAt: artifact.artifact?.updatedAt,
+          }))}
+          onPickArtifact={(artifactId) =>
+            setReplyCards((current) => keepReplyCards({ ...current, [box.id]: artifactId }))
           }
           label={box.title === "" ? "Prompt this thread" : `Prompt ${box.title}`}
           placeholder={box.guestId === undefined ? "Ask your agent" : guestBoxPlaceholder}
@@ -4388,7 +4518,7 @@ export function RoomBoard({
                 size="micro"
                 variant="outline"
                 onPointerDown={stopPointer}
-                onClick={() => addBeside(actions.from, "artifact", "from")}
+                onClick={() => addBoxArtifact(actions.from)}
               >
                 <AppWindowIcon />
                 New artifact
@@ -4529,6 +4659,19 @@ export function RoomBoard({
         : [{ id: edge.id, fromRef: edge.from, toRef: edge.to, from, to }];
     }),
   );
+  // What an elbow line goes around: every card but the sections and comment pins it may cross.
+  const lineObstacles: ReadonlyArray<BoardLineObstacle> = edges.some(
+    (edge) => edge.shape === "elbow",
+  )
+    ? shown.notes
+        .filter((note) => note.section !== true && note.kind !== "comment")
+        .map((note) => noteRef(note.id))
+        .concat(Object.keys(positions).map(cardRef))
+        .flatMap((ref) => {
+          const box = boxes.get(ref);
+          return box === undefined ? [] : [{ ref, ...box }];
+        })
+    : [];
   // Marker ids land in `url(#…)`, which takes no colons.
   // The person colour of whoever owns the card a line starts from: the agent that rewrites.
   const lineColor = (ref: string) =>
@@ -5825,6 +5968,8 @@ export function RoomBoard({
                         }
                         width={EDGE_STROKE_WIDTHS[state]}
                         dashed={state === "sent"}
+                        shape={edge.shape ?? "curve"}
+                        obstacles={edge.shape === "elbow" ? lineObstacles : undefined}
                         marker={
                           state === "artifact"
                             ? `url(#${markerId}-person-${BOARD_PERSON_COLORS.indexOf(lineColor(edge.from))})`
@@ -5840,7 +5985,13 @@ export function RoomBoard({
                     // Moved on the page as the pointer goes; see `drawLinkTo`.
                     <path
                       ref={linkPath}
-                      d={boardConnector(linking.box, { ...linking.to, width: 0, height: 0 }).path}
+                      d={
+                        boardLine(lastBoardLineShape(lineBoard), linking.box, {
+                          ...linking.to,
+                          width: 0,
+                          height: 0,
+                        }).path
+                      }
                       fill="none"
                       stroke="var(--color-primary)"
                       style={{ strokeWidth: boardStroke(2.5) }}
@@ -6095,6 +6246,11 @@ export function RoomBoard({
                           )
                         : null
                     }
+                    artifactVersionNote={
+                      note.kind === "artifact"
+                        ? boardArtifactVersionNote(shown, note, replyTargets.has(note.id))
+                        : null
+                    }
                     boxName={boxName}
                     onRestore={restoreOf(note)}
                     onAttachAgent={attachAgentOf(note)}
@@ -6106,6 +6262,7 @@ export function RoomBoard({
                         : undefined
                     }
                     onPickColor={pickColor}
+                    onFramePage={framePage}
                     onReact={reactTo}
                     changedLabel={catchUpLabels.get(note.id)}
                     agentWork={agentWorkOf(note.id)}
@@ -6156,15 +6313,40 @@ export function RoomBoard({
                 const from = boxes.get(edge.from);
                 const to = boxes.get(edge.to);
                 if (selectedEdge !== edge.id || from === undefined || to === undefined) return null;
-                const { middle } = boardConnector(from, to, undefined, {
-                  slots: lineSlots.get(edge.id),
-                });
+                const shape = edge.shape ?? "curve";
+                const { middle } = boardLine(
+                  shape,
+                  from,
+                  to,
+                  { slots: lineSlots.get(edge.id) },
+                  lineObstacles.filter((box) => box.ref !== edge.from && box.ref !== edge.to),
+                );
                 return (
                   <div
                     key={edge.id}
-                    className="absolute -translate-x-1/2 -translate-y-1/2"
+                    className="absolute flex -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-lg border border-border bg-popover p-1 shadow-sm"
                     style={{ left: middle.x, top: middle.y }}
+                    onPointerDown={stopPointer}
+                    // On the group, so the keys work from the shape buttons too.
+                    onKeyDown={(event) => {
+                      if (event.key === "Delete" || event.key === "Backspace") {
+                        event.stopPropagation();
+                        removeEdge(edge.id);
+                      }
+                      if (event.key === "Escape") setSelectedEdge(null);
+                    }}
                   >
+                    <ToggleGroup
+                      aria-label="Line shape"
+                      value={[shape]}
+                      onValueChange={(next) => {
+                        const picked = next[0];
+                        if (picked === "curve" || picked === "elbow") shapeEdge(edge, picked);
+                      }}
+                    >
+                      <Toggle value="curve">Curved</Toggle>
+                      <Toggle value="elbow">Elbow</Toggle>
+                    </ToggleGroup>
                     <Button
                       size="icon-xs"
                       variant="outline"
@@ -6174,13 +6356,6 @@ export function RoomBoard({
                       ref={focusInPlace}
                       onPointerDown={stopPointer}
                       onClick={() => removeEdge(edge.id)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Delete" || event.key === "Backspace") {
-                          event.stopPropagation();
-                          removeEdge(edge.id);
-                        }
-                        if (event.key === "Escape") setSelectedEdge(null);
-                      }}
                     >
                       <Trash2Icon />
                     </Button>
@@ -6793,12 +6968,14 @@ function BoardNote({
   onGive,
   artifactAuthor,
   artifactWriting,
+  artifactVersionNote,
   boxName,
   onRestore,
   onAttachAgent,
   onWrite,
   onAsk,
   onPickColor,
+  onFramePage,
   onReact,
   box,
   codeWindow,
@@ -6871,6 +7048,8 @@ function BoardNote({
   readonly artifactAuthor: string | undefined;
   /** Who is writing the artifact now, from a guest's machine or an older server, or null. */
   readonly artifactWriting: string | null;
+  /** What tells this artifact from another of the same box, or null. */
+  readonly artifactVersionNote: string | null;
   readonly boxName: (boxId: string) => string;
   readonly onRestore: (() => Promise<boolean>) | undefined;
   /** Gives the viewer a thread box that rewrites this artifact, or shows the one they have. */
@@ -6883,6 +7062,8 @@ function BoardNote({
   readonly onWrite?: ((body: string) => Promise<boolean>) | undefined;
   /** Colours a plain note. Absent where notes are not coloured. */
   readonly onPickColor: ((note: RoomBoardNote, color: RoomBoardNoteColor) => void) | undefined;
+  /** Shows a link card's own page in it, or hides it. Absent where the viewer may not. */
+  readonly onFramePage: ((note: RoomBoardNote, framed: boolean) => void) | undefined;
   /** Toggles the viewer's own reaction. Absent where they cannot react. */
   readonly onReact: ((note: RoomBoardNote, emoji: RoomBoardReactionEmoji) => void) | undefined;
   /** A thread box's agent, conversation and prompt box. */
@@ -7324,6 +7505,7 @@ function BoardNote({
             artifact={note.artifact}
             author={artifactAuthor}
             writingFallback={artifactWriting}
+            versionNote={artifactVersionNote}
             boxName={boxName}
             onRestore={onRestore}
             onWrite={onWrite}
@@ -7338,6 +7520,8 @@ function BoardNote({
             live={embed?.live === true}
             active={embed?.active === true}
             onRelease={() => embed?.onRelease()}
+            framed={note.framed === true}
+            onFrame={onFramePage === undefined ? undefined : (framed) => onFramePage(note, framed)}
             addedBy={
               <AddedBy name={author} color={boardCursorColor(people.guests, note.guestId)} named />
             }

@@ -53,6 +53,8 @@ import {
   boardAgentCode,
   boardAgents,
   boardArtifactAuthor,
+  boardArtifactCopySource,
+  boardArtifactVersionNote,
   boardCommentAgentAuthor,
   boardCommentAskBoxes,
   boardCommentPromptCard,
@@ -113,6 +115,7 @@ import {
   boardItemRects,
   boardMessages,
   boardNewNoteSize,
+  boardNoteSize,
   boardNewestReplyAt,
   boardNoteBox,
   boardOwnBoxFor,
@@ -716,6 +719,19 @@ describe("resolveBoard", () => {
     expect(settleBoardEdits(stored, coloured)).toBe(coloured);
     expect(resolveBoard(stored, coloured).notes).toEqual([green]);
     expect(boardChangeOf(target, green)).toMatchObject({ type: "note.put", color: "green" });
+    expect(boardChangeOf(target, green)).not.toHaveProperty("framed");
+    // A link card's page shows until the room's copy has it too, at a size a page is usable at,
+    // and hiding it or undoing either says so, which only a link card's change does.
+    const link = { id: "n", text: "", x: 0, y: 0, kind: "link" as const, url: "https://a.dev" };
+    const linked: RoomBoard = { positions: {}, notes: [link] };
+    const page = { ...link, framed: true as const };
+    const framed = putBoardEdit(linked, NO_BOARD_EDITS, target, page, false);
+    expect(settleBoardEdits(linked, framed)).toBe(framed);
+    expect(settleBoardEdits({ ...linked, notes: [page] }, framed)).toEqual(NO_BOARD_EDITS);
+    expect(boardChangeOf(target, page)).toMatchObject({ framed: true });
+    expect(boardChangeOf(target, link)).toMatchObject({ framed: false });
+    expect(boardNoteSize(page)?.w).toBeGreaterThan(boardNoteSize(link)?.w ?? 0);
+    expect(boardNoteSize({ ...page, size: { w: 300, h: 200 } })).toEqual({ w: 300, h: 200 });
   });
 
   it("draws an arrow at once, and a note taken off takes its arrows", () => {
@@ -746,6 +762,24 @@ describe("resolveBoard", () => {
     const gone = putBoardEdit(linked, drawn, { kind: "note", id: "n" }, null, false);
     expect(resolveBoard(linked, gone).edges).toEqual([]);
     expect(boardChangeOf(arrow, null)).toEqual({ type: "edge.remove", edgeId: "e" });
+
+    // A new line can start as an elbow; one already there only changes its shape.
+    const elbow = { ...value, shape: "elbow" as const };
+    expect(boardChangeOf(arrow, elbow, null)).toMatchObject({ type: "edge.put", shape: "elbow" });
+    expect(boardChangeOf(arrow, elbow, value)).toEqual({
+      type: "edge.shape",
+      edgeId: "e",
+      shape: "elbow",
+    });
+    expect(boardChangeOf(arrow, value, elbow)).toMatchObject({ shape: "curve" });
+    // The new shape shows until the room's copy has it, and undo puts the old one back.
+    const bent = putBoardEdit(linked, NO_BOARD_EDITS, arrow, elbow, false);
+    expect(resolveBoard(linked, bent).edges).toEqual([elbow]);
+    const taken: RoomBoard = { ...stored, edges: [elbow] };
+    expect(settleBoardEdits(taken, bent)).toEqual({});
+    expect(
+      boardHistoryChanges(taken, [{ target: arrow, before: value, after: elbow }], "undo"),
+    ).toEqual([{ target: arrow, value }]);
   });
 
   it("never shows an edit again once the room's copy moved past it and came back", () => {
@@ -981,13 +1015,18 @@ describe("boardConnector", () => {
   it.each([
     // Its tip stops just short of the note, so the note never covers the arrowhead.
     ["right of it", { x: 500, y: 40 }, ["right", "left"], "M320 120 ", " 496 112"],
-    ["left of it", { x: -400, y: 300 }, ["left", "right"], "M0 120 ", " -204 372"],
+    ["left of it", { x: -400, y: 100 }, ["left", "right"], "M0 120 ", " -204 172"],
     ["below it", { x: 60, y: 400 }, ["bottom", "top"], "M160 240 ", " 156 396"],
     ["above it", { x: 100, y: -300 }, ["top", "bottom"], "M160 0 ", " 196 -152"],
     // Further across than down: the wider gap decides, so the line never cuts a card.
     ["below and far right", { x: 700, y: 300 }, ["right", "left"], "M320 120 ", " 696 372"],
     ["right and far below", { x: 400, y: 600 }, ["bottom", "top"], "M160 240 ", " 496 596"],
-  ] as const)("joins the facing side midpoints of a note %s", (_, at, sides, start, end) => {
+    // Off both ways and too steep for an S: one turn, out of the higher box's side into the
+    // lower one's top.
+    ["below and left", { x: -400, y: 300 }, ["left", "top"], "M0 120 ", " -304 296"],
+    ["above and right", { x: 500, y: -300 }, ["top", "left"], "M160 0 ", " 496 -228"],
+    ["close below and right", { x: 330, y: 340 }, ["right", "top"], "M320 120 ", " 426 336"],
+  ] as const)("joins the sides that suit a note %s", (_, at, sides, start, end) => {
     const note = boardNoteBox(at);
     expect(boardConnectorSides(card, note)).toEqual(sides);
     const { path } = boardConnector(card, note);
@@ -1005,16 +1044,23 @@ describe("boardConnector", () => {
     expect(ahead.path).toBe("M320 120 C408 120, 408 120, 496 120");
     // A short gap bends no further than it reaches, so the line does not loop back.
     expect(boardConnector(card, boardCardBox({ x: 340, y: 0 })).path).toBe(
-      "M320 120 C336 120, 320 120, 336 120",
+      "M320 120 C328 120, 328 120, 336 120",
     );
-    // A long line leaves square but heads straight across, with no wide swing.
+    // A long line bends in proportion: an even S, not two small hooks on a straight run.
     expect(boardConnector(card, boardNoteBox({ x: 2_000, y: 900 })).path).toBe(
-      "M320 120 C440 120, 1876 972, 1996 972",
+      "M320 120 C1158 120, 1158 972, 1996 972",
     );
-    // One whose end is behind its start, on the sides it keeps, only hooks a little.
+    // Far off to the side of a narrow gap, the S stands upright in the gap and never leaves it.
+    const tall = boardCardBox({ x: 380, y: 80 }, { w: 380, h: 600 });
+    expect(boardConnector(card, tall).path).toBe("M320 120 C376 120, 320 380, 376 380");
+    // A turn is one quarter curve, each end pulled along its own leg.
+    expect(boardConnector(card, boardNoteBox({ x: 520, y: 620 })).path).toBe(
+      "M320 120 C497.6 120, 616 318.4, 616 616",
+    );
+    // One whose end is behind its start, on the sides it keeps, hooks round to it.
     const behind = boardNoteBox({ x: 300, y: 400 });
     expect(boardConnector(card, behind, undefined, { sides: ["right", "left"] }).path).toBe(
-      "M320 120 C340 120, 276 472, 296 472",
+      "M320 120 C414 120, 202 472, 296 472",
     );
   });
 
@@ -1042,8 +1088,8 @@ describe("boardConnector", () => {
   });
 
   it("spreads lines leaving one side along it, in the order of their far ends", () => {
-    const high = boardNoteBox({ x: 500, y: -200 });
-    const low = boardNoteBox({ x: 500, y: 300 });
+    const high = boardNoteBox({ x: 600, y: -120 });
+    const low = boardNoteBox({ x: 600, y: 200 });
     const alone = boardNoteBox({ x: 0, y: 600 });
     const slots = boardLineSlots([
       { id: "low", fromRef: "card:c", toRef: "note:low", from: card, to: low },
@@ -1065,11 +1111,16 @@ describe("boardConnector", () => {
     const beside = boardNoteBox({ x: 400, y: 200 });
     const sides = boardConnectorSides(card, beside);
     expect(sides).toEqual(["right", "left"]);
-    const corner = boardNoteBox({ x: 340, y: 270 });
-    expect(boardConnectorSides(card, corner)).toEqual(["bottom", "top"]);
+    const corner = boardNoteBox({ x: 340, y: 244 });
+    expect(boardConnectorSides(card, corner)).toEqual(["right", "top"]);
     expect(boardConnectorSides(card, corner, sides)).toBe(sides);
-    // Well past it, it turns.
-    expect(boardConnectorSides(card, boardNoteBox({ x: 330, y: 400 }), sides)).toEqual([
+    // Clear of the corner, it turns down into the note's top, and keeps that a little way back.
+    const turned = boardConnectorSides(card, boardNoteBox({ x: 340, y: 270 }), sides);
+    expect(turned).toEqual(["right", "top"]);
+    expect(boardConnectorSides(card, boardNoteBox({ x: 340, y: 236 }), turned)).toBe(turned);
+    expect(boardConnectorSides(card, boardNoteBox({ x: 340, y: 200 }), turned)).toEqual(sides);
+    // Under the card, where no turn fits, it leaves by the bottom.
+    expect(boardConnectorSides(card, boardNoteBox({ x: 200, y: 500 }), sides)).toEqual([
       "bottom",
       "top",
     ]);
@@ -1651,7 +1702,7 @@ describe("boardPromptContext", () => {
       named.cards.map(({ label, sharedLabel, excerpt }) => [label, sharedLabel, excerpt]),
     ).toEqual([["Note from You", "Note from Alex", "Ship it"]]);
     expect(context.artifact?.id).toBe("empty");
-    expect(context.artifactEdgeId).toBe("card:thread>note:empty");
+    expect(context.artifactEdgeIds[0]).toBe("card:thread>note:empty");
   });
 
   it("marks the line from the box a code window shows, and sums its changes", () => {
@@ -1778,14 +1829,80 @@ describe("boardPromptContext", () => {
     ]);
     // The first artifact the box has a line to is the one its replies rewrite.
     expect(sams.artifact?.id).toBe("art");
-    expect(sams.artifactEdgeId).toBe("note:box>note:art");
+    expect(sams.artifacts.map((artifact) => artifact.id)).toEqual(["art", "other"]);
+    expect(sams.artifactEdgeIds).toEqual(["note:box>note:art", "note:box>note:other"]);
     expect([...sams.edgeIds]).toEqual(["note:a>note:art", "note:b>note:a", "note:dark>note:box"]);
+    // Picking the other one rewrites it instead, and the first goes as a card like any other.
+    const picked = boardPromptContext(shared, people, [], "box", "other");
+    expect(picked.artifact?.id).toBe("other");
+    expect(picked.artifacts).toEqual(sams.artifacts);
+    expect(picked.cards.map((card) => card.ref)).toEqual([
+      "note:dark",
+      "note:art",
+      "note:a",
+      "note:b",
+    ]);
+    // One the box has no line to, or that is gone, is no pick: the first stays.
+    expect(boardPromptContext(shared, people, [], "box", "gone").artifact?.id).toBe("art");
+    expect(boardPromptContext(shared, people, [], "box2", "art").artifact).toBeNull();
     // The room thread's own card rewrites the same artifact and carries the cards into it.
     const room = boardPromptContext(shared, people);
     expect(room.cards.map((card) => card.ref)).toEqual(["note:a", "note:b"]);
-    expect(room.artifactEdgeId).toBe("card:thread>note:art");
+    expect(room.artifactEdgeIds).toEqual(["card:thread>note:art"]);
     // A box with no line to an artifact rewrites nothing.
     expect(boardPromptContext(shared, people, [], "box2").artifact).toBeNull();
+  });
+
+  it("shows a version in the empty artifact a new line ends on, and says which cards share one", () => {
+    const version = (turnId: string) => ({ body: "# Plan", turnId, updatedAt: "2026-11-12" });
+    const shared = board(
+      [
+        note("one", { text: "First", kind: "artifact", artifact: version("run:1") }),
+        note("two", { text: "", kind: "artifact", artifact: version("run:2") }),
+        note("copy", { text: "Copy", kind: "artifact", artifact: version("run:1") }),
+        note("empty", { text: "Empty", kind: "artifact" }),
+        note("blank", { text: "Blank", kind: "artifact" }),
+        note("plain"),
+        note("box", { text: "Box", kind: "thread" }),
+        note("bare", { text: "Bare", kind: "thread" }),
+      ],
+      [
+        arrow("note:box", "note:blank"),
+        arrow("note:box", "note:one"),
+        arrow("note:box", "note:two"),
+        arrow("note:box", "note:empty"),
+      ],
+    );
+    const rows: ReadonlyArray<readonly [string, string, string | undefined, string | null]> = [
+      // From a filled artifact: that one.
+      ["note:two", "note:empty", undefined, "two"],
+      // From a box: the one it rewrites when that is filled, else the first filled it has.
+      ["note:box", "note:empty", undefined, "one"],
+      ["note:box", "note:empty", "two", "two"],
+      ["note:box", "note:empty", "blank", "one"],
+      // Nothing to show, or nowhere empty to show it.
+      ["note:bare", "note:empty", undefined, null],
+      ["note:blank", "note:empty", undefined, null],
+      ["note:plain", "note:empty", undefined, null],
+      ["note:one", "note:two", undefined, null],
+      ["note:one", "note:plain", undefined, null],
+      ["note:one", "card:thread", undefined, null],
+      ["note:empty", "note:empty", undefined, null],
+    ];
+    for (const [from, to, picked, source] of rows) {
+      expect([from, to, picked, boardArtifactCopySource(shared, from, to, picked)]).toEqual([
+        from,
+        to,
+        picked,
+        source,
+      ]);
+    }
+    const [one, two, , empty] = shared.notes;
+    expect(boardArtifactVersionNote(shared, one!, true)).toBe(
+      'Same version as "Copy" · Next reply goes here',
+    );
+    expect(boardArtifactVersionNote(shared, two!, false)).toBeNull();
+    expect(boardArtifactVersionNote(shared, empty!, true)).toBe("Next reply goes here");
   });
 
   it("sends a card once, again once it changed, always when pinned, and new on an old board", () => {

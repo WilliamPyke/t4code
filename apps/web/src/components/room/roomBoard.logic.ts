@@ -43,6 +43,8 @@ import {
   ROOM_BOARD_SECTION_SIZE,
   ROOM_BOARD_TASK_SIZE,
   roomBoardCardChangedAt,
+  roomBoardNoteOfRef,
+  roomBoxIdOfRef,
   roomLinkLabel,
   roomLinkPromptText,
   roomPullRequestLabel,
@@ -799,6 +801,8 @@ const BOARD_PULL_REQUEST_SIZE: RoomBoardSize = { w: 360, h: 300 };
 /** A link card whose source frames its page, and one that shows only its title and address. */
 const BOARD_EMBED_SIZE: RoomBoardSize = { w: 480, h: 360 };
 const BOARD_LINK_SIZE: RoomBoardSize = { w: 288, h: 132 };
+/** A link card someone chose to show its page in: wide enough for a site's own layout. */
+const BOARD_PAGE_SIZE: RoomBoardSize = { w: 640, h: 480 };
 
 const embeds = new Map<string, ReturnType<typeof roomEmbedOf>>();
 /** `roomEmbedOf`, read once per address, as sizes and lines ask for it on every frame. */
@@ -836,7 +840,7 @@ export function resizeBoardFromLeft(
 
 /** The size a note shows at, or undefined for one that grows with its text. */
 export const boardNoteSize = (
-  note: Pick<RoomBoardNote, "kind" | "size" | "url" | "section">,
+  note: Pick<RoomBoardNote, "kind" | "size" | "url" | "section" | "framed">,
 ): RoomBoardSize | undefined =>
   note.size ??
   (note.section === true
@@ -852,7 +856,9 @@ export const boardNoteSize = (
             : note.kind === "link"
               ? note.url !== undefined && boardEmbedOf(note.url)?.embedUrl !== undefined
                 ? BOARD_EMBED_SIZE
-                : BOARD_LINK_SIZE
+                : note.framed === true
+                  ? BOARD_PAGE_SIZE
+                  : BOARD_LINK_SIZE
               : undefined);
 
 /** A card's box: at its given size, else its width and `drawnHeight`, or a row's height. */
@@ -955,14 +961,18 @@ export function boardSidePoint(box: BoardBox, side: BoardSide, slot = 0.5): Boar
   };
 }
 
-// How much clearer the other pair of sides must be before a line moves to it.
+// How much clearer another choice of sides must be before a line moves to it.
 const SIDE_HYSTERESIS = 32;
+// A line turns a corner only with this much room to run before and after it.
+const TURN_LEG = 40;
+
+const isAcross = (side: BoardSide) => SIDE_OUT[side].y === 0;
 
 /**
- * The sides a line between two boxes leaves and arrives by: the facing pair across the wider gap
- * between them, left and right on a tie, so a line never cuts through either box. Given the
- * sides it uses now (`previous`), it keeps them, the same tuple, until the other choice is
- * clearly better, so a line does not jump between sides as a card is dragged past the turn.
+ * The sides a line between two boxes leaves and arrives by, so it never cuts through either box.
+ * Boxes apart both ways, with the far one too steeply off for an S, get one turn: the higher box
+ * by its side, the lower by its top. Else the facing pair across the wider gap. Given the sides
+ * it uses now (`previous`), it keeps them, the same tuple, until another choice is clearly better.
  */
 export function boardConnectorSides(
   from: BoardBox,
@@ -973,9 +983,26 @@ export function boardConnectorSides(
   const gapY = Math.max(to.y - (from.y + from.height), from.y - (to.y + to.height));
   const dx = to.x + to.width / 2 - (from.x + from.width / 2);
   const dy = to.y + to.height / 2 - (from.y + from.height / 2);
-  const wasAcross = previous !== undefined && SIDE_OUT[previous[0]].y === 0;
+  const [upper, lower] = dy >= 0 ? [from, to] : [to, from];
+  const wasTurn = previous !== undefined && isAcross(previous[0]) !== isAcross(previous[1]);
+  const ease = previous === undefined ? 0 : wasTurn ? SIDE_HYSTERESIS : -SIDE_HYSTERESIS;
+  const turns =
+    Math.min(gapX, gapY) >= -ease / 4 &&
+    Math.min(Math.abs(dx) - upper.width / 2, Math.abs(dy) - lower.height / 2) >=
+      TURN_LEG - ease / 4 &&
+    Math.abs(dy) > gapX - ease &&
+    Math.abs(dx) > gapY - ease;
+  if (turns) {
+    const turn: readonly [BoardSide, BoardSide] =
+      dy >= 0 ? [dx >= 0 ? "right" : "left", "top"] : ["top", dx >= 0 ? "left" : "right"];
+    return previous !== undefined && previous[0] === turn[0] && previous[1] === turn[1]
+      ? previous
+      : turn;
+  }
+  const facing = wasTurn ? undefined : previous;
+  const wasAcross = facing !== undefined && isAcross(facing[0]);
   const across =
-    previous === undefined
+    facing === undefined
       ? gapX >= gapY
       : wasAcross
         ? gapY <= gapX + SIDE_HYSTERESIS
@@ -987,11 +1014,11 @@ export function boardConnectorSides(
     : dy >= 0
       ? ["bottom", "top"]
       : ["top", "bottom"];
-  if (previous === undefined) return next;
-  if (previous[0] === next[0]) return previous;
+  if (facing === undefined) return next;
+  if (facing[0] === next[0]) return facing;
   // Facing the other way only once the centres have clearly passed each other.
   const kept = across === wasAcross && Math.abs(across ? dx : dy) < SIDE_HYSTERESIS;
-  return kept ? previous : next;
+  return kept ? facing : next;
 }
 
 /** Where along each end's side a line attaches; 0.5 is the middle. */
@@ -1038,43 +1065,61 @@ export function boardLineSlots(
   return slots;
 }
 
-const MIN_BEND = 40;
-// However long the line, its ends leave this far at most before it heads straight across.
-const MAX_BEND = 120;
+// A line whose end is behind its start hooks round by this much, more the further off it is.
+const MIN_HOOK = 24;
+const MAX_HOOK = 96;
+// How far along each leg of a turn its curve is pulled: a little squarer than a quarter circle.
+const TURN_BEND = 0.6;
 // Room between an arrowhead's tip and the card it points at, so the card never covers it.
 const ARROW_GAP = 4;
 
+/** Which sides a line uses and where along them it attaches; see `boardLineSlots`. */
+export interface BoardLineEnds {
+  readonly sides?: readonly [BoardSide, BoardSide] | undefined;
+  readonly slots?: BoardLineSlots | undefined;
+}
+
 /**
- * A curve from one box's side to another's, leaving and arriving square to the sides
- * `boardConnectorSides` picks (or `ends.sides`), at `ends.slots` along them, its tip just short of
- * the far box, and the point halfway along it. `sway` pulls its belly off its resting course while
- * it springs back.
+ * Where a line starts and where its tip stops, just short of the far box, with the ways it leaves
+ * (`out`) and the far side faces (`into`): by the sides `boardConnectorSides` picks or `ends.sides`.
+ */
+export function boardLineEnds(from: BoardBox, to: BoardBox, ends?: BoardLineEnds) {
+  const [fromSide, toSide] = ends?.sides ?? boardConnectorSides(from, to);
+  const start = boardSidePoint(from, fromSide, ends?.slots?.from);
+  const tip = boardSidePoint(to, toSide, ends?.slots?.to);
+  const out = SIDE_OUT[fromSide];
+  const into = SIDE_OUT[toSide];
+  const end = { x: tip.x + into.x * ARROW_GAP, y: tip.y + into.y * ARROW_GAP };
+  return { start, end, out, into };
+}
+
+const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
+
+/**
+ * A curve from one box's side to another's, leaving and arriving square to its sides, and the
+ * point halfway along it. Facing sides make an S whose bend grows with how far off to the side
+ * the end is, never past the gap; a turn makes one quarter curve. `sway` pulls its belly off its
+ * resting course while it springs back.
  */
 export function boardConnector(
   from: BoardBox,
   to: BoardBox,
   sway?: BoardPoint,
-  ends?: {
-    readonly sides?: readonly [BoardSide, BoardSide] | undefined;
-    readonly slots?: BoardLineSlots | undefined;
-  },
+  ends?: BoardLineEnds,
 ): { readonly path: string; readonly middle: BoardPoint } {
-  const [fromSide, toSide] = ends?.sides ?? boardConnectorSides(from, to);
-  const start = boardSidePoint(from, fromSide, ends?.slots?.from);
-  const tip = boardSidePoint(to, toSide, ends?.slots?.to);
-  const end = {
-    x: tip.x + SIDE_OUT[toSide].x * ARROW_GAP,
-    y: tip.y + SIDE_OUT[toSide].y * ARROW_GAP,
+  const { start, end, out, into } = boardLineEnds(from, to, ends);
+  const turning = out.x * into.x + out.y * into.y === 0;
+  // How far each end's control point sits from it, the way that end faces.
+  const bend = (way: BoardPoint, sign: number) => {
+    const ahead = ((end.x - start.x) * way.x + (end.y - start.y) * way.y) * sign;
+    const aside = Math.abs((end.x - start.x) * way.y) + Math.abs((end.y - start.y) * way.x);
+    if (ahead <= 0) return clamp((aside - ahead) / 4, MIN_HOOK, MAX_HOOK);
+    return turning ? ahead * TURN_BEND : clamp(aside / 2, ahead / 2, ahead);
   };
-  const out = SIDE_OUT[fromSide];
-  // How far the end is the way the line leaves; below 0 when it is behind the start.
-  const ahead = out.x === 0 ? (end.y - start.y) * out.y : (end.x - start.x) * out.x;
-  // Each end leaves its box square to its side: a short line no further than it reaches, a long
-  // one no further than MAX_BEND, so it runs straight between; one turning back only hooks.
-  const bend =
-    ahead <= 0 ? MIN_BEND / 2 : Math.min(MAX_BEND, Math.max(Math.min(MIN_BEND, ahead), ahead / 2));
-  const c1 = { x: start.x + SIDE_OUT[fromSide].x * bend, y: start.y + SIDE_OUT[fromSide].y * bend };
-  const c2 = { x: end.x + SIDE_OUT[toSide].x * bend, y: end.y + SIDE_OUT[toSide].y * bend };
+  const leave = bend(out, 1);
+  const arrive = bend(into, -1);
+  const c1 = { x: start.x + out.x * leave, y: start.y + out.y * leave };
+  const c2 = { x: end.x + into.x * arrive, y: end.y + into.y * arrive };
   const middle = {
     x: (start.x + 3 * c1.x + 3 * c2.x + end.x) / 8,
     y: (start.y + 3 * c1.y + 3 * c2.y + end.y) / 8,
@@ -1136,7 +1181,7 @@ const roomCopy = (board: RoomBoard, target: BoardTarget): BoardValue | undefined
 /** What the room's copy and an edit are compared on, in whatever order the server wrote it. */
 const valueKey = (value: BoardValue | undefined): string => {
   if (value === undefined || value === null) return String(value);
-  if ("from" in value) return `${value.from}>${value.to}`;
+  if ("from" in value) return `${value.from}>${value.to}${value.shape === "elbow" ? "|elbow" : ""}`;
   if ("w" in value) return `${value.w}x${value.h}`;
   if (!("text" in value)) return `${value.x},${value.y}`;
   return JSON.stringify([
@@ -1151,6 +1196,7 @@ const valueKey = (value: BoardValue | undefined): string => {
     value.due ?? null,
     value.order ?? null,
     value.priority ?? null,
+    value.framed === true,
   ]);
 };
 
@@ -1341,8 +1387,15 @@ export const settleBoardValue = <Value extends BoardValue>(value: Value): Value 
   return "size" in at && at.size !== undefined ? { ...at, size: clampBoardSize(at.size) } : at;
 };
 
-/** The change that makes the room's copy of a card, note or arrow this value. */
-export function boardChangeOf(target: BoardTarget, value: BoardValue): RoomBoardChange {
+/**
+ * The change that makes the room's copy of a card, note or arrow this value. A line that is
+ * already there (`before`) only changes its shape.
+ */
+export function boardChangeOf(
+  target: BoardTarget,
+  value: BoardValue,
+  before?: BoardValue,
+): RoomBoardChange {
   if (target.kind === "card") {
     const at = value !== null && "x" in value ? value : { x: 0, y: 0 };
     return { type: "card.move", cardId: target.id, x: at.x, y: at.y };
@@ -1352,9 +1405,17 @@ export function boardChangeOf(target: BoardTarget, value: BoardValue): RoomBoard
     return { type: "card.resize", cardId: target.id, ...size };
   }
   if (target.kind === "edge") {
-    return value === null || !("from" in value)
-      ? { type: "edge.remove", edgeId: target.id }
-      : { type: "edge.put", edgeId: target.id, from: value.from, to: value.to };
+    if (value === null || !("from" in value)) return { type: "edge.remove", edgeId: target.id };
+    if (before !== undefined && before !== null && "from" in before) {
+      return { type: "edge.shape", edgeId: target.id, shape: value.shape ?? "curve" };
+    }
+    return {
+      type: "edge.put",
+      edgeId: target.id,
+      from: value.from,
+      to: value.to,
+      ...(value.shape === undefined ? {} : { shape: value.shape }),
+    };
   }
   if (value === null || !("text" in value)) return { type: "note.remove", noteId: target.id };
   return {
@@ -1369,6 +1430,8 @@ export function boardChangeOf(target: BoardTarget, value: BoardValue): RoomBoard
     ...(value.quote === undefined ? {} : { quote: value.quote }),
     ...(value.size === undefined ? {} : { size: value.size }),
     ...(value.color === undefined ? {} : { color: value.color }),
+    // Said either way, so hiding a page and undoing either clear it; only link cards say it.
+    ...(value.kind === "link" ? { framed: value.framed === true } : {}),
     ...(value.section === true ? { section: true } : {}),
     ...(value.mentions === undefined ? {} : { mentions: value.mentions }),
     ...(value.kind === "task"
@@ -2015,9 +2078,12 @@ export interface BoardPromptContext {
   readonly edgeIds: ReadonlySet<string>;
   /** What the card each of those lines carries does with the next prompt. */
   readonly edgeStatus: ReadonlyMap<string, BoardPromptCardStatus>;
-  /** The first artifact the box has a line to, which its replies rewrite, and that line. */
+  /** Every artifact the box has a line to, in the order the lines were drawn. */
+  readonly artifacts: ReadonlyArray<RoomBoardNote>;
+  /** The one its next reply rewrites: the one picked, else the first, as the server picks it. */
   readonly artifact: RoomBoardNote | null;
-  readonly artifactEdgeId: string | null;
+  /** The box's lines to its artifacts, each of which a reply went along or can. */
+  readonly artifactEdgeIds: ReadonlyArray<string>;
 }
 
 const isComment = (note: RoomBoardNote) => note.kind === undefined && note.pinnedTo !== undefined;
@@ -2237,22 +2303,25 @@ export const boardBoxRef = (boxId: string): string =>
 
 /**
  * The cards a prompt from a thread box carries: each note with a line into the box, or into the
- * artifact it rewrites (the first it has a line to), and into those, once each, nearest first;
- * a section's line carries each card in it now. Thread boxes are never carried; the artifact goes
- * as its own record.
+ * artifact it rewrites (`picked`, else the first it has a line to), and into those, once each,
+ * nearest first; a section's line carries each card in it now. Thread boxes are never carried;
+ * the artifact goes as its own record.
  */
 export function boardPromptContext(
   board: RoomBoard,
   people: BoardPeople,
   messages: ReadonlyArray<BoardMessage> = [],
   boxId: string = ROOM_BOARD_ROOM_BOX,
+  picked?: string,
 ): BoardPromptContext {
   const target = boardBoxRef(boxId);
   const notes = new Map(board.notes.map((note) => [roomBoardNoteRef(note.id), note]));
   const edges = board.edges ?? [];
-  const artifactEdge = edges.find(
+  const artifactEdges = edges.filter(
     (edge) => edge.from === target && notes.get(edge.to)?.kind === "artifact",
   );
+  const artifactEdge =
+    artifactEdges.find((edge) => notes.get(edge.to)?.id === picked) ?? artifactEdges[0];
   const roots = artifactEdge === undefined ? [target] : [target, artifactEdge.to];
   // A line into another card can carry it to several boxes, so its marks are each box's own.
   const marked = (edge: RoomBoardEdge): Pick<RoomBoardEdge, "sentAt" | "pinned"> => {
@@ -2364,9 +2433,35 @@ export function boardPromptContext(
     cards,
     edgeIds: new Set(lines.map((edge) => edge.id)),
     edgeStatus,
+    artifacts: artifactEdges.flatMap((edge) => notes.get(edge.to) ?? []),
     artifact: artifactEdge === undefined ? null : (notes.get(artifactEdge.to) ?? null),
-    artifactEdgeId: artifactEdge?.id ?? null,
+    artifactEdgeIds: artifactEdges.map((edge) => edge.id),
   };
+}
+
+/**
+ * The artifact whose version a new line from `from` shows in the empty artifact it ends on: `from`
+ * itself when it is a filled artifact, or when it is a thread box the filled one it has a line to,
+ * `picked` before the first. Null when the line ends anywhere else or nothing is there to show.
+ */
+export function boardArtifactCopySource(
+  board: RoomBoard,
+  from: string,
+  to: string,
+  picked?: string,
+): string | null {
+  const filled = (note: RoomBoardNote | undefined) =>
+    note?.kind === "artifact" && note.artifact !== undefined;
+  const target = roomBoardNoteOfRef(board, to);
+  if (target?.kind !== "artifact" || target.artifact !== undefined || from === to) return null;
+  const source = roomBoardNoteOfRef(board, from);
+  if (filled(source)) return source?.id ?? null;
+  if (roomBoxIdOfRef(board, from) === undefined) return null;
+  const shown = (board.edges ?? [])
+    .filter((edge) => edge.from === from && edge.to !== to)
+    .map((edge) => roomBoardNoteOfRef(board, edge.to))
+    .filter(filled);
+  return (shown.find((note) => note?.id === picked) ?? shown[0])?.id ?? null;
 }
 
 const STATUS_RANK: Readonly<Record<BoardPromptCardStatus, number>> = {
@@ -2600,6 +2695,32 @@ export function boardArtifactAuthor(
   if (askedBy === undefined || askedBy === artifact.guestId) return sentenceStart(agent);
   const asker = askedBy === people.viewer ? "you" : boardPersonName(people, askedBy);
   return sentenceStart(`${agent}, asked by ${asker}`);
+}
+
+/**
+ * What tells an artifact card from another one of the same box, said quietly under its author:
+ * the card whose version it shows too, and that the viewer's next reply lands here (`receives`).
+ */
+export function boardArtifactVersionNote(
+  board: RoomBoard,
+  note: RoomBoardNote,
+  receives: boolean,
+): string | null {
+  const shown = note.artifact;
+  const twin =
+    shown === undefined
+      ? undefined
+      : board.notes.find(
+          (other) =>
+            other.id !== note.id &&
+            other.artifact?.turnId === shown.turnId &&
+            other.artifact.updatedAt === shown.updatedAt,
+        );
+  const parts = [
+    ...(twin === undefined ? [] : [`Same version as "${twin.text.trim() || "Untitled artifact"}"`]),
+    ...(receives ? ["Next reply goes here"] : []),
+  ];
+  return parts.length === 0 ? null : parts.join(" · ");
 }
 
 /**
@@ -2849,6 +2970,7 @@ export function boardDuplicates(
           ...(note.url === undefined ? {} : { url: note.url }),
           ...(note.size === undefined ? {} : { size: note.size }),
           ...(note.color === undefined ? {} : { color: note.color }),
+          ...(note.framed === true ? { framed: true as const } : {}),
         },
       },
     ];

@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 
 import { useStableCallback } from "~/hooks/useStableCallback";
 
+import { type BoardLineShape, boardLine, boardLineObstaclesNear } from "./boardLineRoute.logic";
 import {
   type BoardBox,
   type BoardLineSlots,
@@ -30,6 +31,19 @@ export const boardStroke = (width: number) => `calc(${width}px * var(--board-lin
 
 const sameBox = (a: BoardBox, b: BoardBox) =>
   a === b || (a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height);
+
+/** A card an elbow line goes around, named as a line names its ends. */
+export interface BoardLineObstacle extends BoardBox {
+  readonly ref: string;
+}
+
+// The shape this person last gave a line on each board, which their next line there takes.
+const lastShapes = new Map<string, BoardLineShape>();
+export const lastBoardLineShape = (board: string): BoardLineShape =>
+  lastShapes.get(board) ?? "curve";
+export const rememberBoardLineShape = (board: string, shape: BoardLineShape) => {
+  lastShapes.set(board, shape);
+};
 
 // An underdamped spring: a line's belly trails its cards, swings past once and settles in about
 // 600 ms.
@@ -74,6 +88,9 @@ interface BoardEdgeLineProps {
   readonly width: number;
   readonly marker: string;
   readonly dashed?: boolean;
+  readonly shape: BoardLineShape;
+  /** For an elbow line: every card it might go around. It minds only those near it. */
+  readonly obstacles?: ReadonlyArray<BoardLineObstacle> | undefined;
   /** Whether a press on it selects it, for whoever may edit the board. */
   readonly selectable: boolean;
   /** Stable across renders: a line given a new one would draw again. */
@@ -172,6 +189,8 @@ export const BoardEdgeLine = memo(function BoardEdgeLine({
   width,
   marker,
   dashed = false,
+  shape,
+  obstacles,
   selectable,
   onSelect,
   over,
@@ -183,7 +202,11 @@ export const BoardEdgeLine = memo(function BoardEdgeLine({
   const sides = boardConnectorSides(start, end, held);
   if (sides !== held) setHeld(sides);
   const slots = { from: fromSlot, to: toSlot };
-  const { path, middle } = boardConnector(start, end, undefined, { sides, slots });
+  const elbow = shape === "elbow";
+  const around = elbow
+    ? obstacles?.filter((other) => other.ref !== fromRef && other.ref !== toRef)
+    : undefined;
+  const { path, middle } = boardLine(shape, start, end, { sides, slots }, around);
   const group = useRef<SVGGElement>(null);
   const ghost = useRef<SVGPathElement>(null);
   const sway = useRef<Sway | null>(null);
@@ -248,6 +271,8 @@ export const BoardEdgeLine = memo(function BoardEdgeLine({
       state.frame = requestAnimationFrame(step);
     };
     state.drawn = path;
+    // An elbow line keeps its corners square: it follows its cards and never springs.
+    if (elbow) return stop();
     if (dx !== 0 || dy !== 0) {
       if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false) return;
       // A line longer than the screen, or one of a great many moving at once, just follows.
@@ -344,7 +369,28 @@ function sameEdgeProps(before: BoardEdgeLineProps, after: BoardEdgeLineProps): b
   for (const key of Object.keys(after) as Array<keyof BoardEdgeLineProps>) {
     if (key === "from" || key === "to") {
       if (!sameBox(before[key], after[key])) return false;
+    } else if (key === "obstacles") {
+      if (!sameObstacles(before.obstacles, after.obstacles, after)) return false;
     } else if (before[key] !== after[key]) return false;
   }
   return true;
+}
+
+// A card moved far from an elbow line is no reason to draw the line again.
+function sameObstacles(
+  before: BoardEdgeLineProps["obstacles"],
+  after: BoardEdgeLineProps["obstacles"],
+  line: BoardEdgeLineProps,
+): boolean {
+  if (before === after) return true;
+  if (before === undefined || after === undefined) return false;
+  const was = boardLineObstaclesNear(line.from, line.to, before);
+  const now = boardLineObstaclesNear(line.from, line.to, after);
+  return (
+    was.length === now.length &&
+    was.every((box, index) => {
+      const other = now[index];
+      return other !== undefined && box.ref === other.ref && sameBox(box, other);
+    })
+  );
 }

@@ -5,6 +5,7 @@ import {
   CLOUD_BOARD_ACCOUNT_ROUTE,
   CLOUD_BOARD_COPIES_ROUTE,
   CLOUD_BOARD_COPY_ROUTE,
+  CLOUD_BOARD_FRAME_CHECK_ROUTE,
   CloudBoardCopiesRequest,
   CloudBoardCopyRequest,
   type RoomBoard,
@@ -85,6 +86,7 @@ import {
   STREAM_ROUTE,
   checkAccess,
 } from "./access.ts";
+import { frameCheck } from "./frameCheck.ts";
 import {
   EMPTY_LIVE,
   FAR_EXPIRY,
@@ -387,9 +389,38 @@ async function accountRoute(request: Request, env: Env, url: URL): Promise<Respo
   return failureResponse(roomFailure("unavailable"));
 }
 
+/**
+ * Answers only a page on an allowed origin, and only with one of three words, so it is no way to
+ * read another site through this host. Kept by the browser for an hour.
+ */
+async function frameCheckRoute(request: Request, env: Env, url: URL): Promise<Response> {
+  const pageOrigin = allowedOrigin(request, env);
+  const address = url.searchParams.get("url");
+  if (pageOrigin === null || address === null || address.length > 2048) {
+    return failureResponse(roomFailure("bad_request"));
+  }
+  const frame = await frameCheck({
+    address,
+    pageOrigin,
+    ownHosts: [
+      url.hostname,
+      ...allowedOrigins(env).flatMap((origin) =>
+        URL.canParse(origin) ? [new URL(origin).hostname] : [],
+      ),
+    ],
+  });
+  return Response.json(
+    { frame },
+    { headers: { "cache-control": frame === "unknown" ? "no-store" : "private, max-age=3600" } },
+  );
+}
+
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
+  if (path === CLOUD_BOARD_FRAME_CHECK_ROUTE && request.method === "GET") {
+    return frameCheckRoute(request, env, url);
+  }
   if (path === CLOUD_BOARD_ACCOUNT_ROUTE || path.startsWith(`${CLOUD_BOARD_ACCOUNT_ROUTE}/`)) {
     return accountRoute(request, env, url);
   }
