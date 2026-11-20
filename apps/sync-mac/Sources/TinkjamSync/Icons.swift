@@ -25,56 +25,46 @@ enum Mark {
         NSBezierPath(ovalIn: NSRect(x: 16 - 5.2, y: 49 - 5.2, width: 10.4, height: 10.4))
     }
 
-    /// The menu bar icon: a template image, so macOS tints it for light and dark menu bars. The
-    /// bar and the dot are cut out of the stroke with a thin gap, so they read as separate shapes.
+    /// The menu bar icon: the single-colour glyph (the stroke and a crossbar line, no tile) as a
+    /// template image, so macOS tints it for light and dark menu bars and dims it when disabled.
     static func menuBarImage() -> NSImage {
         let size = NSSize(width: 18, height: 18)
         let image = NSImage(size: size, flipped: true) { _ in
             guard let context = NSGraphicsContext.current?.cgContext else { return false }
-            // The marks span x 10.8…52 and y 7.5…54.5 of the 64-unit box.
-            let scale: CGFloat = 17 / 47
-            context.translateBy(x: (18 - 41.2 * scale) / 2 - 10.8 * scale, y: (18 - 47 * scale) / 2 - 7.5 * scale)
+            // With round caps the glyph spans x 17.5…56.5 and y 7.5…53.5 of the 64-unit box.
+            let scale: CGFloat = 16 / 46
+            context.translateBy(x: (18 - 39 * scale) / 2 - 17.5 * scale, y: (18 - 46 * scale) / 2 - 7.5 * scale)
             context.scaleBy(x: scale, y: scale)
-            NSColor.black.set()
+            NSColor.black.setStroke()
             hook().stroke()
-            context.setBlendMode(.clear)
-            NSBezierPath(roundedRect: NSRect(x: 17.5, y: 17.5, width: 37, height: 15), xRadius: 7.5, yRadius: 7.5).fill()
-            NSBezierPath(ovalIn: NSRect(x: 16 - 7.7, y: 49 - 7.7, width: 15.4, height: 15.4)).fill()
-            context.setBlendMode(.normal)
-            NSColor.black.set()
-            bar().fill()
-            dot().fill()
+            let crossbar = NSBezierPath()
+            crossbar.move(to: NSPoint(x: 22, y: 24))
+            crossbar.line(to: NSPoint(x: 52, y: 24))
+            crossbar.lineWidth = 9
+            crossbar.lineCapStyle = .round
+            crossbar.stroke()
             return true
         }
         image.isTemplate = true
+        image.accessibilityDescription = "Tinkjam Sync"
         return image
     }
 
-    /// The full-colour mark on its jam-red rounded square, for windows and the app icon.
+    /// The full-colour mark on its cobalt rounded square, for windows.
     static func colourImage(size: CGFloat, inset: CGFloat = 0) -> NSImage {
         NSImage(size: NSSize(width: size, height: size), flipped: true) { _ in
             guard let context = NSGraphicsContext.current?.cgContext else { return false }
             let body = size - inset * 2
             context.translateBy(x: inset, y: inset)
             context.scaleBy(x: body / 64, y: body / 64)
-            NSColor(srgbRed: 0xDB / 255, green: 0x2D / 255, blue: 0x55 / 255, alpha: 1).setFill()
+            Palette.accent.setFill()
             NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: 64, height: 64), xRadius: 15, yRadius: 15).fill()
-            NSColor(srgbRed: 0xFF / 255, green: 0xF7 / 255, blue: 0xEC / 255, alpha: 1).setStroke()
+            Palette.rgb(0xFFF7EC).setStroke()
             hook().stroke()
-            NSColor(srgbRed: 0xFF / 255, green: 0xC8 / 255, blue: 0x3D / 255, alpha: 1).setFill()
+            Palette.rgb(0xFFC83D).setFill()
             bar().fill()
             dot().fill()
             return true
         }
-    }
-
-    /// A coloured status dot for the menu.
-    static func statusDot(_ color: NSColor) -> NSImage {
-        let image = NSImage(size: NSSize(width: 10, height: 10), flipped: false) { rect in
-            color.setFill()
-            NSBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1)).fill()
-            return true
-        }
-        return image
     }
 }

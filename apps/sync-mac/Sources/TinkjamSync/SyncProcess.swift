@@ -91,6 +91,14 @@ final class SyncChild {
         }
     }
 
+    /// The executables of what runs under Sync besides its tunnel helper, for naming the agent.
+    var agentExecutables: [String] {
+        watchQueue.sync {
+            recordDescendants()
+            return descendants.values.filter { !$0.hasSuffix("/cloudflared") }
+        }
+    }
+
     /// Lines arrive on a background queue; exit on the main queue.
     /// `onExit` gets a description such as "exit code 1" or "signal 9".
     func start(onLine: @escaping (String) -> Void, onExit: @escaping (Int32, String) -> Void) throws {

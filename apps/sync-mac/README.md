@@ -15,7 +15,9 @@ AppKit and SwiftPM only; no Xcode project.
   like `mac.json`, a signature by the release key (`scripts/sign-release.ts`). A
   newer app is downloaded, checked, and installed at the next launch or when no agent is running;
   the menu also offers "Restart to Update".
-- The menu follows `~/.tinkjam/userdata/sync-status.json`, which Sync rewrites every 30 seconds,
+- Clicking the menu bar icon opens a panel (status, the agents found on the login PATH, Open
+  Tinkjam, Settings, Quit, version and updates); every action the old menu had is there or under
+  Settings. The panel follows `~/.tinkjam/userdata/sync-status.json`, which Sync rewrites every 30 seconds,
   so "Connected" turns into "Reconnecting…" when boards cannot reach this Mac.
 - When it gives up (Sync keeps stopping, setup fails), it tries again every 15 minutes, on waking
   and when the network returns.
@@ -27,8 +29,15 @@ apps/sync-mac/scripts/build.sh
 ```
 
 Writes `apps/sync-mac/dist/`: `Tinkjam-Sync.dmg`, `Tinkjam-Sync-mac.zip`, their `.sha256`,
-`mac.json` and `install.sh`. Version comes from `VERSION`; the build number is the UTC time.
-Universal (arm64 + x86_64). Each file must stay under 25 MB, the static-file limit.
+`mac.json` and `install.sh`, plus the same zip and disk image as
+`tinkjam-sync-v<version>-macos-aarch64.app.zip` and `.dmg` with `checksums.txt`. Version comes from
+`VERSION`; the build number is the UTC time. Universal (arm64 + x86_64). Each file must stay under
+25 MB, the static-file limit.
+
+The disk image is laid out by Finder through AppleScript, so the terminal running the build needs
+permission to control Finder (System Settings > Privacy & Security > Automation), and no other
+"Tinkjam Sync" volume may be mounted. `TINKJAM_DMG_THEME=dark` uses the dark background.
+The pictures in `Resources/` (app icon set, disk image backgrounds, agent icons) are committed PNGs.
 
 Without a signing identity the app is signed ad hoc: `install.sh` (curl) installs it fine, but a
 copy downloaded in a browser is stopped by Gatekeeper. For browser downloads, with an Apple
@@ -61,15 +70,15 @@ Launch arguments (or `defaults write org.trellium.tinkjam-sync-app <key> <value>
 
 `open -a "<path to the app>" "tinkjam-sync://<action>"` runs an action in that copy: `connect`,
 `disconnect` (asks first), `check-for-updates` (never stops a working agent), `show` (the status
-window) and `menu`. Any web page can open these links, so none of them quits the app or changes a
+window) and `menu` (opens the panel for a few seconds). Any web page can open these links, so none of them quits the app or changes a
 setting; to quit a copy from a script, send it SIGTERM. Name the copy with `-a`; a bare
 `open tinkjam-sync://…` may start another copy against `~/.tinkjam`.
 
-Everything the app and Sync say goes to `~/.tinkjam/logs/sync.log` (menu: Show Log). The menu and
+Everything the app and Sync say goes to `~/.tinkjam/logs/sync.log` (panel: Settings > Show Log). The menu and
 the windows show plain sentences from `Sources/TinkjamSync/Words.swift`; the technical cause of a
 failure is only in the log.
 
 ## Uninstall
 
-To disconnect this Mac from the account, choose Disconnect this Mac… from the menu first. Then
-quit it from the menu and delete `/Applications/Tinkjam Sync.app`.
+To disconnect this Mac from the account, choose Settings > Disconnect this Mac… in its panel first.
+Then quit it from the panel and delete `/Applications/Tinkjam Sync.app`.

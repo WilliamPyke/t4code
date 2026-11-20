@@ -22,7 +22,7 @@ enum Phase: Equatable {
 private enum Defaults {
     private static let suffix = Paths.resolve().isDefault ? "" : "@" + Paths.resolve().base.path
     static let disconnected = "DisconnectedByPerson" + suffix
-    static let startAtLogin = "StartAtLogin"
+    static let startAtLogin = "StartAtLogin" + suffix
     static let lastSyncCheck = "LastSyncUpdateCheck" + suffix
     static let lastAppCheck = "LastAppUpdateCheck" + suffix
     /// The version a bundle swap was started for, and the one whose swap did not take.
@@ -37,14 +37,14 @@ private enum SyncUpdate {
     case notNow
 }
 
-/// Runs everything: setup, the one Sync, the menu, updates.
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+/// Runs everything: setup, the one Sync, the menu bar panel, updates.
+final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let showRequest = Notification.Name("org.trellium.tinkjam-sync-app.show")
 
     private let paths = Paths.resolve()
     private lazy var log = LogFile(url: paths.log)
     private var statusItem: NSStatusItem!
-    private let menu = NSMenu()
+    private lazy var panel = MenuPanel(delegate: self)
     private lazy var setupWindow = SetupWindow()
     private var lockFile: Int32 = -1
 
@@ -98,12 +98,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         noteLastSwap()
         if applyStagedAppAtLaunch() { return }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = Mark.menuBarImage()
-        statusItem.button?.setAccessibilityLabel("Tinkjam Sync")
-        menu.delegate = self
-        menu.autoenablesItems = false
-        statusItem.menu = menu
-        rebuildMenu()
+        if let button = statusItem.button {
+            button.image = Mark.menuBarImage()
+            button.setAccessibilityLabel("Tinkjam Sync")
+            button.target = self
+            button.action = #selector(statusItemClicked)
+            _ = button.sendAction(on: [.leftMouseDown, .rightMouseDown])
+        }
         UNUserNotificationCenter.current().delegate = self
 
         // `kill <pid>` (install.sh, an update) quits the same way as the menu, so Sync stops too.
@@ -359,7 +360,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: The one Sync
 
     private func startSync() {
-        guard child == nil else { return }
+        guard child == nil, !UserDefaults.standard.bool(forKey: Defaults.disconnected) else { return }
         disarmRetry()
         restartWork = nil
         approvedThisRun = false
@@ -570,7 +571,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if manual {
             manualCheckRunning = true
             updateNote = "Checking for updates…"
-            rebuildMenu()
+            refreshPanel()
         }
         var failed = false
         var waitingForAgent = false
@@ -616,7 +617,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             } else {
                 updateNote = nil
             }
-            rebuildMenu()
+            refreshPanel()
         }
         applyStagedAppIfIdle()
     }
@@ -777,11 +778,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// so it follows the app when it is moved or replaced. A copy outside Applications, or one
     /// running a test home, never registers itself.
     private func applyLoginItemPreference() {
+        guard paths.isDefault else { return }
         let service = SMAppService.mainApp
         do {
             if !wantsStartAtLogin {
                 if service.status == .enabled { try service.unregister() }
-            } else if paths.isDefault, isInApplications, service.status != .enabled, service.status != .requiresApproval {
+            } else if isInApplications, service.status != .enabled, service.status != .requiresApproval {
                 try service.register()
             }
             let names: [SMAppService.Status: String] = [.enabled: "enabled", .notRegistered: "notRegistered",
@@ -793,6 +795,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func toggleLoginItem() {
+        guard paths.isDefault else {
+            setStartAtLogin(!wantsStartAtLogin)
+            return
+        }
         if SMAppService.mainApp.status == .requiresApproval {
             SMAppService.openSystemSettingsLoginItems()
             return
@@ -803,11 +809,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func setStartAtLogin(_ on: Bool) {
         UserDefaults.standard.set(on, forKey: Defaults.startAtLogin)
         applyLoginItemPreference()
-        if on, SMAppService.mainApp.status != .enabled, !isInApplications {
+        if on, paths.isDefault, SMAppService.mainApp.status != .enabled, !isInApplications {
             alert("Tinkjam Sync can start at login once it is in Applications",
                   "Drag it to your Applications folder, open it from there, and it will start at login.")
         }
-        rebuildMenu()
+        refreshPanel()
     }
 
     /// Opened from the disk image or Downloads: offer to move into Applications first, as most
@@ -956,9 +962,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "show":
             presentSetupWindow(activate: true)
         case "menu":
-            // Opens the menu for a few seconds, for screenshots and for showing someone where it is.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { self.menu.cancelTracking() }
-            statusItem.button?.performClick(nil)
+            // Opens the panel for a few seconds, for screenshots and for showing someone where it is.
+            panel.open(from: statusItem.button)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { self.panel.close() }
         default:
             break
         }
@@ -988,7 +994,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func phaseChanged(from old: Phase) {
         if case .settingUp(let step, _) = phase, case .settingUp(let oldStep, _) = old, step == oldStep {
-            // Only the progress moved: the menu is rebuilt when it opens.
+            // Only the progress moved.
+            refreshPanel()
             updateSetupWindow()
             return
         }
@@ -999,7 +1006,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         phaseSince = Date()
         if case .connected = phase { restarts = restarts.filter { Date().timeIntervalSince($0) < 600 } }
         statusItem?.button?.appearsDisabled = phase != .connected
-        rebuildMenu()
+        refreshPanel()
         updateSetupWindow()
     }
 
@@ -1032,95 +1039,124 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    func menuNeedsUpdate(_ menu: NSMenu) { rebuildMenu() }
+    @objc private func statusItemClicked() { panel.toggle(from: statusItem.button) }
 
-    /// The answer to a check has been read once the menu closes; it would be stale the next day.
-    func menuDidClose(_ menu: NSMenu) {
-        if !manualCheckRunning { updateNote = nil }
+    private func refreshPanel() {
+        if panel.isVisible { panel.refresh() }
     }
 
-    private func rebuildMenu() {
-        menu.removeAllItems()
-        let (title, color, detail) = statusText()
-        let status = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        status.image = Mark.statusDot(color)
-        status.isEnabled = false
-        menu.addItem(status)
-        if let detail, !detail.isEmpty {
-            menu.addItem(note(detail))
+    /// The agents Sync can start here, and whether one is running under it now.
+    private func agentRows() -> ([PanelAgent], String?) {
+        let installed = AgentKind.installed(path: loginPath ?? LoginShell.fallback)
+        let running = child?.agentExecutables ?? []
+        var attributed = false
+        let rows = installed.map { kind -> PanelAgent in
+            if running.contains(where: { kind.matches(executable: $0) }) {
+                attributed = true
+                return PanelAgent(kind: kind, state: "In use", tone: .busy)
+            }
+            if case .connected = phase { return PanelAgent(kind: kind, state: "Ready", tone: .good) }
+            return PanelAgent(kind: kind, state: "Installed", tone: .idle)
         }
-        menu.addItem(note(computerName))
-        menu.addItem(.separator())
+        // An agent Node runs shows only as `node`, so it cannot be named.
+        let note = !running.isEmpty && !attributed ? "An agent is in use on this Mac." : nil
+        return (rows, note)
+    }
 
-        menu.addItem(item("Open Tinkjam", #selector(openTinkjam)))
+    private func shortStatus() -> (String, PanelTone) {
+        switch phase {
+        case .settingUp: return ("Setting up…", .busy)
+        case .working(let what): return (what, .busy)
+        case .connecting: return ("Connecting…", .busy)
+        case .awaitingApproval: return ("Waiting for approval", .busy)
+        case .connected: return ("Connected", .good)
+        case .reconnecting: return ("Reconnecting…", .busy)
+        case .notConnected: return ("Not connected", .idle)
+        case .stopped: return ("Can't connect", .bad)
+        }
+    }
+
+    private func updateStatusLine() -> String? {
+        if manualCheckRunning { return "Checking…" }
+        if stagedApp != nil || manualAppVersion != nil { return "Update available" }
+        if UserDefaults.standard.object(forKey: Defaults.lastAppCheck) != nil { return "Up to date" }
+        return nil
+    }
+}
+
+extension AppDelegate: MenuPanelDelegate {
+    func panelModel() -> PanelModel {
+        var model = PanelModel()
+        model.computer = computerName
+        (model.status, model.tone) = shortStatus()
         switch phase {
         case .awaitingApproval:
-            menu.addItem(item("Open the Approval Page Again", #selector(openApprovalAgain)))
+            model.detail = "Approve this Mac on the page that opened in your browser."
+            model.actionTitle = "Open the Approval Page Again"
+            model.actionCommand = .openApproval
         case .notConnected:
-            menu.addItem(item("Connect…", #selector(connect)))
+            model.detail = statusText().2
+            model.actionTitle = "Connect…"
+            model.actionCommand = .connect
         case .stopped:
-            menu.addItem(item("Retry", #selector(retry)))
+            model.detail = statusText().2
+            model.actionTitle = "Retry"
+            model.actionCommand = .retry
         case .connected, .connecting, .reconnecting:
-            menu.addItem(item("Disconnect this Mac…", #selector(disconnect)))
+            model.detail = statusText().2
+            model.canDisconnect = true
         case .settingUp, .working:
-            break
+            model.detail = statusText().2
         }
-        menu.addItem(.separator())
-
-        let login = item("Start at Login", #selector(toggleLoginItem))
-        switch SMAppService.mainApp.status {
-        case .enabled: login.state = .on
-        case .requiresApproval: login.title = "Start at Login (allow in System Settings)"; login.state = .mixed
-        default: login.state = .off
+        (model.agents, model.agentNote) = agentRows()
+        if paths.isDefault {
+            switch SMAppService.mainApp.status {
+            case .enabled: model.loginState = .on
+            case .requiresApproval:
+                model.loginTitle = "Start at Login (allow in System Settings)"
+                model.loginState = .mixed
+            default: model.loginState = .off
+            }
+        } else {
+            model.loginState = wantsStartAtLogin ? .on : .off
         }
-        menu.addItem(login)
-        menu.addItem(item("Show Log", #selector(showLog)))
-        menu.addItem(.separator())
-
-        menu.addItem(note("Version \(Machine.appVersion)"))
+        model.version = "Version \(Machine.appVersion)"
+        model.updateStatus = updateStatusLine()
         if let staged = stagedApp {
-            menu.addItem(item("Restart to Update (\(staged.version))", #selector(restartToUpdateClicked)))
+            model.updateTitle = "Restart to Update (\(staged.version))"
+            model.updateCommand = .restartToUpdate
         } else if let version = manualAppVersion {
-            menu.addItem(item("A new version is available (\(version)): Download", #selector(downloadUpdate)))
+            model.updateTitle = "Download Version \(version)"
+            model.updateCommand = .downloadUpdate
         }
-        if let updateNote { menu.addItem(note(updateNote)) }
-        menu.addItem(item("Check for Updates", #selector(checkForUpdatesClicked)))
-        menu.addItem(.separator())
-        menu.addItem(item("Quit Tinkjam Sync", #selector(quit), key: "q"))
+        // "Checking…" already says what the note would.
+        if !manualCheckRunning { model.updateNote = updateNote }
+        return model
     }
 
-    private func item(_ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
-        item.target = self
-        return item
-    }
-
-    private func note(_ text: String) -> NSMenuItem {
-        let item = NSMenuItem(title: text, action: nil, keyEquivalent: "")
-        item.isEnabled = false
-        item.indentationLevel = 1
-        if text.count > 60 {
-            // Long reasons wrap instead of stretching the menu across the screen.
-            let style = NSMutableParagraphStyle()
-            style.lineBreakMode = .byWordWrapping
-            item.attributedTitle = NSAttributedString(string: wrap(text, width: 56), attributes: [
-                .font: NSFont.menuFont(ofSize: 12), .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: style,
-            ])
+    func panelPerform(_ command: PanelCommand) {
+        switch command {
+        case .openTinkjam: openTinkjam()
+        case .openApproval: openApprovalAgain()
+        case .connect: connect()
+        case .retry: retry()
+        case .disconnect: disconnect()
+        case .toggleLogin: toggleLoginItem()
+        case .showLog: showLog()
+        case .checkForUpdates: checkForUpdatesClicked()
+        case .restartToUpdate: restartToUpdateClicked()
+        case .downloadUpdate: downloadUpdate()
+        case .quit: quit()
         }
-        return item
     }
 
-    private func wrap(_ text: String, width: Int) -> String {
-        var lines: [String] = []
-        var line = ""
-        for word in text.split(separator: " ") {
-            if line.count + word.count + 1 > width, !line.isEmpty { lines.append(line); line = "" }
-            line += (line.isEmpty ? "" : " ") + word
-        }
-        if !line.isEmpty { lines.append(line) }
-        return lines.joined(separator: "\n")
+    /// The answer to a check has been read once the panel closes; it would be stale the next day.
+    func panelDidClose() {
+        if !manualCheckRunning { updateNote = nil }
     }
+}
 
+extension AppDelegate {
     // MARK: Setup window
 
     /// The phase is often set before the window shows, so fill it in as it appears.
@@ -1129,36 +1165,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateSetupWindow()
     }
 
+    /// The three steps of the first-run window, each from the real state: what is installed, which
+    /// agents are on the login PATH, and the phase of the connection.
     private func updateSetupWindow() {
         guard setupWindow.isVisible else { return }
+        let installed = NodeRuntime.isInstalled(paths) && SyncPackage.isInstalled(paths)
+        let agents = AgentKind.installed(path: loginPath ?? LoginShell.fallback)
+        var model = SetupModel()
+        model.agents = agents
+        var install = SetupModel.Step(title: "Tinkjam Sync installed", state: .done)
+        var found = SetupModel.Step(title: "Find Claude and Codex", state: .waiting)
+        var account = SetupModel.Step(title: "Connect to your account", state: .waiting)
+        var action: (() -> Void)?
+
+        if !installed {
+            install.title = "Install Tinkjam Sync"
+            install.state = .active
+        } else if agents.isEmpty {
+            found.title = "No Claude or Codex found"
+            found.detail = "Install Claude Code or Codex on this Mac to use it from your boards."
+        } else {
+            found.title = "Found " + agents.map(\.name).joined(separator: " and ")
+            found.state = .done
+        }
+
         switch phase {
         case .settingUp(let step, let fraction):
-            setupWindow.show(title: "Setting up Tinkjam Sync",
-                             detail: "\(step)\nThis happens once and takes a minute or two.",
-                             progress: .some(fraction))
+            if installed {
+                account.state = .active
+                account.detail = step
+            } else {
+                install.detail = step
+                model.showsProgress = true
+                model.progress = fraction
+            }
         case .working(let what):
-            setupWindow.show(title: what, detail: "This takes a few seconds.", progress: .some(nil))
-        case .connecting(let reason):
-            setupWindow.show(title: "Connecting this Mac…", detail: reason ?? "This takes a few seconds.", progress: .some(nil))
+            account.state = .active
+            account.detail = what
+        case .connecting:
+            account.state = .active
+            account.detail = statusText().2
         case .awaitingApproval(let url):
-            setupWindow.show(title: "Approve this Mac in your browser",
-                             detail: "A Tinkjam page opened in your browser. Sign in there and press Connect. This window updates by itself.",
-                             button: "Open the Page Again") { NSWorkspace.shared.open(url) }
+            account.state = .active
+            model.buttonTitle = "Connect"
+            action = { NSWorkspace.shared.open(url) }
         case .connected:
-            // Only a login item that is really on is promised.
-            let atLogin = SMAppService.mainApp.status == .enabled
-                ? "It starts when you log in."
-                : "To have it start when you log in, choose Start at Login from its menu."
-            setupWindow.show(title: "This Mac is connected",
-                             detail: "Tinkjam Sync runs from the menu bar (the icon at the top right of your screen). \(atLogin) You can close this window.",
-                             button: "Done") { [weak self] in self?.setupWindow.close() }
+            model.title = "This Mac is connected"
+            account.title = "Connected to your account"
+            account.state = .done
+            account.detail = "Tinkjam Sync runs from the menu bar."
+            model.buttonTitle = "Done"
+            action = { [weak self] in self?.setupWindow.close() }
         case .reconnecting(let why):
-            setupWindow.show(title: "Reconnecting this Mac…", detail: why, progress: .some(nil))
+            account.state = .active
+            account.detail = why
         case .notConnected(let note):
-            setupWindow.show(title: "This Mac is not connected", detail: note ?? "", button: "Connect…") { [weak self] in self?.connect() }
+            account.state = .active
+            account.detail = note
+            model.buttonTitle = "Connect"
+            action = { [weak self] in self?.connect() }
         case .stopped(let message):
-            setupWindow.show(title: "Tinkjam Sync can't connect right now", detail: message, button: "Retry") { [weak self] in self?.retry() }
+            if installed { account.state = .failed } else { install.state = .failed }
+            model.error = message
+            model.buttonTitle = "Retry"
+            action = { [weak self] in self?.retry() }
         }
+        if !installed { install.state = install.state == .failed ? .failed : .active }
+        model.steps = [install, found, account]
+        setupWindow.show(model, action: action)
     }
 }
 

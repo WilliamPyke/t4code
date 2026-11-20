@@ -308,9 +308,13 @@ enum ProcessTree {
 /// The PATH a Terminal window would have. Sync starts the person's agents (claude, codex) by
 /// name, and an app opened from Finder or at log-in gets only /usr/bin:/bin:/usr/sbin:/sbin.
 enum LoginShell {
+    /// Where agents usually are, for before the login shell has been asked.
+    static var fallback: String {
+        ["/opt/homebrew/bin", "/usr/local/bin", "\(NSHomeDirectory())/.local/bin",
+         "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
+    }
+
     static func path() -> String {
-        let fallback = ["/opt/homebrew/bin", "/usr/local/bin", "\(NSHomeDirectory())/.local/bin",
-                        "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
         let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
         let marker = "__TINKJAM_PATH__"
         let result = runBlocking(URL(fileURLWithPath: shell),

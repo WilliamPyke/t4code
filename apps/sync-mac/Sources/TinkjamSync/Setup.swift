@@ -256,12 +256,13 @@ enum Legacy {
     /// LaunchAgents the package's own `--uninstall` would remove for this home: its own label, and
     /// leftovers that run Tinkjam Sync under another name (the package's `classifyLoginItem`).
     static func loginItems(_ paths: Paths) -> [URL] {
-        let ownLabel = paths.isDefault ? Config.legacyLaunchdLabel : nil
+        guard paths.isDefault else { return [] }
+        let ownLabel = Config.legacyLaunchdLabel
         let files = (try? FileManager.default.contentsOfDirectory(at: launchAgents, includingPropertiesForKeys: nil)) ?? []
         return files.filter { file in
             guard file.pathExtension == "plist" else { return false }
             let name = file.deletingPathExtension().lastPathComponent
-            if let ownLabel, name == ownLabel { return true }
+            if name == ownLabel { return true }
             if name.lowercased().hasPrefix("org.trellium.tinkjam-sync") { return false } // another home's
             guard let text = try? String(contentsOf: file, encoding: .utf8).lowercased() else { return false }
             return text.contains("trellium.org/sync.tgz") || text.contains("tinkjam.com/sync.tgz")
