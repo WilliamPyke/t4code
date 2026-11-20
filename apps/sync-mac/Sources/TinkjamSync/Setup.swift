@@ -178,10 +178,10 @@ enum SyncPackage {
             try? fm.removeItem(at: staging)
             throw SetupError(Plain.setupFailed, detail: problem)
         }
-        var install = await run(paths.node, NpmCommands.ci(paths.npmCLI.path, packageDir.path, npmCache.path),
+        var install = await run(paths.node, NpmCommands.ci(paths.npmCLI.path, npmCache.path),
                                 environment: environment, currentDirectory: packageDir, timeout: 900)
         if install.succeeded {
-            install = await run(paths.node, NpmCommands.rebuild(paths.npmCLI.path, packageDir.path, npmCache.path),
+            install = await run(paths.node, NpmCommands.rebuild(paths.npmCLI.path, npmCache.path),
                                 environment: environment, currentDirectory: packageDir, timeout: 300)
         }
         if !install.output.isEmpty { log.app("npm: \(install.tail(20))") }

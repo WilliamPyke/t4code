@@ -54,12 +54,12 @@ enum PackageArchive {
 
 /// npm installs exactly the package's npm-shrinkwrap.json, with no install scripts but the two native ones.
 enum NpmCommands {
-    static func ci(_ npmCLI: String, _ packageDir: String, _ cache: String) -> [String] {
-        [npmCLI, "ci", "--prefix", packageDir, "--omit=dev", "--ignore-scripts",
+    static func ci(_ npmCLI: String, _ cache: String) -> [String] {
+        [npmCLI, "ci", "--omit=dev", "--ignore-scripts",
          "--no-audit", "--no-fund", "--loglevel=error", "--cache", cache]
     }
 
-    static func rebuild(_ npmCLI: String, _ packageDir: String, _ cache: String) -> [String] {
-        [npmCLI, "rebuild", "koffi", "node-pty", "--prefix", packageDir, "--loglevel=error", "--cache", cache]
+    static func rebuild(_ npmCLI: String, _ cache: String) -> [String] {
+        [npmCLI, "rebuild", "koffi", "node-pty", "--loglevel=error", "--cache", cache]
     }
 }
