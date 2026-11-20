@@ -12,6 +12,15 @@ export interface WhatsNewEntry {
 /** Newest first. Shortcuts are written for Windows and Linux with the Mac key in brackets. */
 export const WHATS_NEW: ReadonlyArray<WhatsNewEntry> = [
   {
+    date: "2026-11-20",
+    title: "A new look, sign-in and Download page",
+    items: [
+      "Tinkjam has a new look in light and dark: cobalt blue, new headings, and new Settings, Share and Bring my agent screens. Pick a theme in Settings under Appearance, or make your own.",
+      "Signing in has its own page, and Connect a computer walks you through getting Tinkjam Sync and approving the computer.",
+      "tinkjam.com/download has Tinkjam Sync for Mac, Windows and Linux in one place.",
+    ],
+  },
+  {
     date: "2026-11-19",
     title: "Agents that tidy up, and notes that say when they are done",
     items: [

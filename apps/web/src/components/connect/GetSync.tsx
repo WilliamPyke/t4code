@@ -14,20 +14,29 @@ import { Button } from "../ui/button";
 export function SyncInstallAction({
   os,
   onChoose,
+  size = "pill",
 }: {
   readonly os: SyncOs;
   readonly onChoose: (os: SyncOs) => void;
+  /** `pill` is the full-page call to action; `default` sits inside a dialog's steps. */
+  readonly size?: "pill" | "default";
 }) {
   const install = SYNC_INSTALLS[os];
   const { copyToClipboard, isCopied } = useCopyToClipboard({ timeout: 2000, target: "command" });
   return (
-    <div className="flex flex-wrap items-center gap-x-4.5 gap-y-3" data-sync-downloads>
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-y-3",
+        size === "pill" ? "gap-x-4.5" : "gap-x-3.5 text-sm",
+      )}
+      data-sync-downloads
+    >
       {install.method === "file" ? (
         install.files.map((file, index) =>
           index === 0 ? (
             <Button
               key={file.href}
-              size="pill"
+              size={size}
               render={<a href={file.href} download />}
               data-sync-download
             >
@@ -42,7 +51,7 @@ export function SyncInstallAction({
         )
       ) : (
         <Button
-          size="pill"
+          size={size}
           onClick={() => copyToClipboard(install.command, undefined)}
           data-sync-copy-command
         >

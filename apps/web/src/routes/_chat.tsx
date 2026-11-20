@@ -4,7 +4,8 @@ import { useState } from "react";
 
 import { GuestThreadRoute } from "../components/guest/GuestThreadView";
 import { ThreadRouteView } from "../components/ThreadRouteView";
-import { isAppModalPage } from "../components/sidebar/mainAppLocation";
+import { BoardsHome } from "../components/boards/BoardsHome";
+import { appModalOpenedOverHome, isAppModalPage } from "../components/sidebar/mainAppLocation";
 import { SidebarInset } from "../components/ui/sidebar";
 import { resolveThreadRouteTarget, type ThreadRouteTarget } from "../threadRoutes";
 import { retainThreadFindForRoute } from "../components/chat/threadFindStore";
@@ -45,7 +46,12 @@ function ChatRouteLayout() {
       ) : shownTarget ? (
         <ThreadRouteView target={shownTarget} background={modalOpen} />
       ) : modalOpen ? (
-        <SidebarInset className="h-dvh" />
+        // A modal opened over the boards home keeps the home in sight behind it.
+        appModalOpenedOverHome() ? (
+          <BoardsHome />
+        ) : (
+          <SidebarInset className="h-dvh" />
+        )
       ) : (
         <Outlet />
       )}

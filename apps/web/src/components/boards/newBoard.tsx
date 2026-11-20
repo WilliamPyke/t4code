@@ -488,6 +488,24 @@ export function useStartNewBoard() {
   };
 }
 
+/**
+ * The templates New board would offer now, and where it would make them: the boards home's
+ * template row offers the same ones the template picker does.
+ */
+export function useOfferedTemplates(): {
+  readonly templates: ReadonlyArray<BoardTemplate>;
+  readonly place: NewBoardPlace;
+} {
+  const machines = useAtomValue(newBoardMachinesAtom);
+  const cloudOnly =
+    hasCloudBoards() && machines.operable.size === 0 && machines.connecting.size === 0;
+  const cloud = hasCloudBoards() && (cloudOnly || readPlace() !== "machine");
+  return {
+    templates: cloud ? BOARD_TEMPLATES.filter(fitsCloud) : BOARD_TEMPLATES,
+    place: cloud ? "cloud" : "machine",
+  };
+}
+
 /** Hosted once at the root, so every New board can ask which project when it has to. */
 export function NewBoardDialogHost() {
   const pending = useAtomValue(pickerOpenAtom);

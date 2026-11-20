@@ -1,4 +1,4 @@
-import { ArrowUpIcon, CheckIcon, LoaderIcon, PinIcon, RotateCcwIcon, SendIcon } from "lucide-react";
+import { PinIcon, RotateCcwIcon } from "lucide-react";
 import { type PointerEvent, useState } from "react";
 
 import { boardTimeLabel } from "../boards/boardsHome.logic";
@@ -52,27 +52,24 @@ export function NoteAgentChip({
           : `${boxName} finished with it${finished === null ? "" : ` · ${finished.toLowerCase()}`}`;
   return (
     <div
-      className="flex min-w-0 shrink-0 flex-wrap items-center gap-1 px-2 pb-1"
+      className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-1"
       role="status"
       data-note-agent={state}
     >
       <Tooltip>
         <TooltipTrigger render={<span className="flex min-w-0" />}>
+          {/* A small pill on the card's paper, its words in the state's tone. */}
           <BoardChip
-            tone={state === "done" ? "success" : state === "working" ? "primary" : "neutral"}
-            dashed={state === "sent"}
+            tone={
+              pinned || state === "going" || state === "working"
+                ? "primary"
+                : state === "done"
+                  ? "success"
+                  : "neutral"
+            }
+            className="bg-card dark:bg-card"
           >
-            {pinned ? (
-              <PinIcon aria-hidden className="size-3" />
-            ) : state === "going" ? (
-              <ArrowUpIcon aria-hidden className="size-3" />
-            ) : state === "working" ? (
-              <LoaderIcon aria-hidden className="size-3" />
-            ) : state === "sent" ? (
-              <SendIcon aria-hidden className="size-3" />
-            ) : (
-              <CheckIcon aria-hidden className="size-3" />
-            )}
+            {pinned ? <PinIcon aria-hidden className="size-3" /> : null}
             {label}
           </BoardChip>
         </TooltipTrigger>

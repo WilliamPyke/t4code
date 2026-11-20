@@ -8,16 +8,17 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 /**
  * The board's shared looks. Chrome is quiet (the theme's card, a hairline, a soft shadow) so the
- * colour on a board comes from its content: paints, people and states.
+ * colour on a board comes from its content: paints, people and states. Every colour and radius is
+ * a theme token, so a custom theme restyles the board with the rest of the app.
  */
 
 /** A window on the board: an agent box, an artifact, a code or pull request window. */
 export const BOARD_WINDOW_CLASS =
-  "rounded-board border border-board-hairline bg-card text-card-foreground shadow-board";
+  "rounded-2xl border border-board-hairline bg-card text-card-foreground shadow-board";
 
 /** A window's title bar: a leading mark, a semibold title, muted meta on the right. */
 export const BOARD_TITLE_BAR_CLASS =
-  "flex h-9 shrink-0 items-center gap-2 border-b border-board-hairline px-3 text-xs";
+  "flex min-h-11 shrink-0 items-center gap-2 border-b border-board-hairline px-3 py-1.5 text-ui-sm";
 
 /**
  * Chrome on a card that shows only while it is hovered, focused or has a menu open: its action
@@ -38,16 +39,33 @@ export const BOARD_SELECTED_CHROME_CLASS =
 export const BOARD_ICON_BUTTON_CLASS =
   "relative grid size-6 shrink-0 place-items-center rounded-md opacity-60 pointer-coarse:after:absolute pointer-coarse:after:-inset-x-0.5 pointer-coarse:after:-inset-y-1.5 transition-[opacity,background-color] hover:bg-current/10 hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset focus-visible:outline-none";
 
-/** Floating chrome over the canvas: the header pills, the toolbar, the zoom pill. */
+/** Floating chrome over the canvas: the tool rail, the zoom pill, passing notices. */
 export function BoardFloat({ className, ...props }: ComponentProps<"div">) {
   return (
     <div
       className={cn(
-        "flex items-center rounded-board border border-board-hairline bg-card text-card-foreground shadow-board",
+        "flex items-center rounded-xl border border-board-hairline bg-card text-card-foreground shadow-board",
         className,
       )}
       {...props}
     />
+  );
+}
+
+/**
+ * The chrome drawn along one edge of the board, inside `root`: the header at the top; the zoom
+ * corner and, while it lies along the bottom of a narrow board, the tool rail at the bottom. Beside
+ * the board, upright, the rail covers neither edge.
+ */
+export function boardChromeAt(root: ParentNode, edge: "top" | "bottom"): Array<HTMLElement> {
+  return [
+    ...root.querySelectorAll<HTMLElement>(
+      `[data-board-chrome="${edge}"], [data-board-chrome="rail"]`,
+    ),
+  ].filter(
+    (chrome) =>
+      chrome.dataset.boardChrome !== "rail" ||
+      (edge === "bottom" && chrome.offsetWidth > chrome.offsetHeight),
   );
 }
 
@@ -86,21 +104,31 @@ export function BoardScrollTail({ className, children }: ComponentProps<"div">) 
   );
 }
 
-export type BoardChipTone = "primary" | "success" | "warning" | "error" | "info" | "neutral";
+export type BoardChipTone =
+  | "primary"
+  | "success"
+  | "warning"
+  | "error"
+  | "info"
+  | "neutral"
+  | "live";
 
 const CHIP_TONES: Readonly<Record<BoardChipTone, string>> = {
+  // Accent as text: the theme's primary, lifted toward the text colour in dark for contrast.
   primary:
-    "bg-primary/12 text-primary dark:bg-primary/20 dark:text-[color-mix(in_srgb,var(--color-primary)_60%,var(--color-foreground))]",
+    "bg-primary/12 text-primary dark:bg-primary/22 dark:text-[color-mix(in_srgb,var(--color-primary)_60%,var(--color-foreground))]",
   success: "bg-success/12 text-success-foreground dark:bg-success/18",
-  warning: "bg-warning/14 text-warning-foreground dark:bg-warning/18",
+  warning: "bg-warning/16 text-warning-foreground dark:bg-warning/20",
   error: "bg-error/12 text-error-foreground dark:bg-error/18",
   info: "bg-info/12 text-info-foreground dark:bg-info/18",
   neutral: "bg-foreground/6 text-muted-foreground",
+  // A page that follows its agent: the brand's forest fill, the same in every theme.
+  live: "bg-brand-forest text-white",
 };
 
 /**
- * A small state label: a tinted rectangle with text in the deeper tone. The words carry the state,
- * so it never rests on colour alone. `dashed` is the quiet outline for something already done.
+ * A small state label: a tinted pill with text in the deeper tone. The words carry the state, so
+ * it never rests on colour alone. `dashed` is the quiet outline for something already done.
  */
 export function BoardChip({
   tone = "neutral",
@@ -116,7 +144,7 @@ export function BoardChip({
   return (
     <span
       className={cn(
-        "inline-flex max-w-full shrink-0 items-center gap-1 truncate rounded-md px-1.5 py-0.5 text-2xs leading-4 font-medium",
+        "inline-flex max-w-full shrink-0 items-center gap-1 truncate rounded-full px-2 py-0.5 text-2xs leading-4 font-semibold",
         dashed
           ? "border border-dashed border-foreground/20 text-muted-foreground"
           : CHIP_TONES[tone],

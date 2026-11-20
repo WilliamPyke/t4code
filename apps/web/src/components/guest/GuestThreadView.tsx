@@ -370,9 +370,11 @@ export function GuestNotice({
   readonly children?: ReactNode;
 }) {
   return (
-    <div className="m-auto flex max-w-sm flex-col gap-1 rounded-board border border-board-hairline bg-card p-6 text-center text-card-foreground shadow-board">
-      <p className="text-sm font-semibold">{title}</p>
-      {detail ? <p className="text-xs text-muted-foreground">{detail}</p> : null}
+    <div className="m-auto flex w-full max-w-sm flex-col items-center gap-2 rounded-dialog border bg-raised px-6 py-7 text-center text-card-foreground shadow-board">
+      <p className="font-heading text-xl leading-tight font-semibold tracking-brand text-balance">
+        {title}
+      </p>
+      {detail ? <p className="text-sm text-pretty text-muted-foreground">{detail}</p> : null}
       {children ? <div className="mt-3 flex justify-center">{children}</div> : null}
     </div>
   );

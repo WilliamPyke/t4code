@@ -9,15 +9,22 @@ import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { Avatar } from "../ui/avatar";
+import { SidebarMenuButton } from "../ui/sidebar";
 
 /**
  * Sign in, so a person's cloud boards follow them to every device; signed in, who they are and
  * the way out. Absent where this build has no sign-in or no cloud boards.
  */
-export function BoardsAccount() {
+export function BoardsAccount({
+  presentation = "button",
+}: {
+  /** A toolbar button, or the account row at the foot of the sidebar. */
+  readonly presentation?: "button" | "sidebar";
+} = {}) {
   // The desktop app's sign-in is for Tinkjam Connect; its boards stay on this computer for now.
   if (!boardAccountsEnabled()) return null;
-  return <ConfiguredBoardsAccount />;
+  return <ConfiguredBoardsAccount sidebar={presentation === "sidebar"} />;
 }
 
 /**
@@ -39,9 +46,17 @@ function ConfiguredAccountCorner() {
   );
 }
 
-function ConfiguredBoardsAccount() {
+function ConfiguredBoardsAccount({ sidebar }: { readonly sidebar: boolean }) {
   const account = useBoardAccount();
   const { openAuthPrompt } = useT3ConnectAuthPrompt();
+  if (account.status === "signed-out" && sidebar) {
+    return (
+      <SidebarMenuButton size="nav" variant="nav" onClick={openAuthPrompt} data-boards-sign-in>
+        <LogInIcon />
+        <span className="min-w-0 flex-1 truncate">Sign in</span>
+      </SidebarMenuButton>
+    );
+  }
   if (account.status === "signed-out") {
     return (
       <Tooltip>
@@ -56,14 +71,20 @@ function ConfiguredBoardsAccount() {
     );
   }
   if (account.status !== "signed-in") return null;
-  return <AccountMenu name={account.name} />;
+  return <AccountMenu name={account.name} sidebar={sidebar} />;
 }
 
 /**
  * The person's name and avatar, opening a menu that says who they are (their name first, their
  * email under it, which only they see), their account page, and the way out.
  */
-function AccountMenu({ name }: { readonly name: string | null }) {
+function AccountMenu({
+  name,
+  sidebar = false,
+}: {
+  readonly name: string | null;
+  readonly sidebar?: boolean;
+}) {
   const navigate = useNavigate();
   const clerk = useClerk();
   const { user } = useUser();
@@ -73,10 +94,36 @@ function AccountMenu({ name }: { readonly name: string | null }) {
   return (
     <Menu>
       <MenuTrigger
-        render={<Button variant="ghost" aria-label="Your account" data-boards-account />}
+        render={
+          sidebar ? (
+            <SidebarMenuButton
+              size="nav"
+              variant="nav"
+              aria-label="Your account"
+              data-boards-account
+            />
+          ) : (
+            <Button variant="ghost" aria-label="Your account" data-boards-account />
+          )
+        }
       >
-        {name === null ? null : <span className="max-w-40 truncate">{name}</span>}
-        {user?.hasImage === true ? (
+        {sidebar ? (
+          <>
+            {user?.hasImage === true ? (
+              <img
+                src={user.imageUrl}
+                alt=""
+                referrerPolicy="no-referrer"
+                className="size-6 shrink-0 rounded-full object-cover"
+              />
+            ) : (
+              <Avatar name={name ?? email ?? "?"} size="sm" tone="claude" aria-hidden />
+            )}
+            <span className="min-w-0 flex-1 truncate">{name ?? email ?? "Your account"}</span>
+          </>
+        ) : null}
+        {sidebar || name === null ? null : <span className="max-w-40 truncate">{name}</span>}
+        {sidebar ? null : user?.hasImage === true ? (
           <img
             src={user.imageUrl}
             alt=""
@@ -92,7 +139,7 @@ function AccountMenu({ name }: { readonly name: string | null }) {
           </span>
         )}
       </MenuTrigger>
-      <MenuPopup align="end">
+      <MenuPopup align={sidebar ? "start" : "end"} side={sidebar ? "top" : "bottom"}>
         <div className="flex max-w-64 flex-col px-2 py-1.5" data-account-identity>
           <span className="text-sm font-medium wrap-anywhere">{name ?? "No name yet"}</span>
           {email === null ? null : (

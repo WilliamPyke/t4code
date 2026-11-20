@@ -785,7 +785,8 @@ describe("RoomBoard selection bar", () => {
     await using screen = await board.screen;
     const note = screen.container.querySelector('[data-board-item="note:b"]');
     if (note === null || note.firstElementChild === null) throw new Error("No note b");
-    await userEvent.click(note.firstElementChild);
+    // Its start: the header's middle holds the note's hover buttons at this board's fit zoom.
+    await userEvent.click(note.firstElementChild, { position: { x: 24, y: 11 } });
     const status = screen.getByRole("status");
     await expect.element(status).toHaveTextContent("1 selected");
     const bar = status.element().closest<HTMLElement>("[data-board-overlay]");
@@ -1220,9 +1221,10 @@ describe("RoomBoard lines", () => {
           messages: [],
           board: {
             positions: {},
+            // Clear of the room thread's card, whose spot the notes' height reaches from y 0.
             notes: [
-              { id: "a", text: "First", x: 0, y: 0 },
-              { id: "b", text: "Second", x: 212, y: 0 },
+              { id: "a", text: "First", x: 0, y: -200 },
+              { id: "b", text: "Second", x: 212, y: -200 },
             ],
             edges: [{ id: "line", from: "note:a", to: "note:b" }],
           },

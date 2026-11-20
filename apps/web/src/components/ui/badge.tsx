@@ -19,6 +19,9 @@ const badgeVariants = cva(
           "h-5.5 min-w-5.5 px-[calc(--spacing(1)-1px)] text-sm sm:h-4.5 sm:min-w-4.5 sm:text-xs",
         lg: "h-6.5 min-w-6.5 px-[calc(--spacing(1.5)-1px)] text-base sm:h-5.5 sm:min-w-5.5 sm:text-sm",
         // Fractional leading rounds font metrics and raises fixed-height labels, especially under zoom.
+        // The design system's status pill: 22px, 11px semibold, fully round.
+        status:
+          "h-5.5 gap-1.5 rounded-full px-2.25 font-semibold text-2xs leading-none sm:h-5.5 sm:text-2xs",
         sm: "h-5 min-w-5 rounded-[.25rem] px-[calc(--spacing(1)-1px)] text-xs leading-none sm:h-4 sm:min-w-4 sm:text-[.625rem]",
       },
       variant: {
@@ -31,6 +34,13 @@ const badgeVariants = cva(
         secondary: "bg-secondary text-secondary-foreground [button&,a&]:hover:bg-secondary/90",
         success: "bg-success/8 text-success-foreground dark:bg-success/16",
         warning: "bg-warning/8 text-warning-foreground dark:bg-warning/16",
+        // Status tones from the design system: Idle, Working, Done, Needs you, Failed, Live.
+        neutral: "bg-panel text-body",
+        accent: "bg-accent-tint text-accent-text",
+        done: "bg-panel text-success-foreground",
+        "needs-you": "bg-warning-tint text-warning-foreground",
+        failed: "bg-danger-tint text-danger",
+        live: "bg-forest text-white",
         label:
           "bg-[color-mix(in_srgb,var(--label)_8%,transparent)] text-[color-mix(in_srgb,var(--label)_30%,var(--color-foreground))] dark:bg-[color-mix(in_srgb,var(--label)_12%,transparent)] dark:text-[color-mix(in_srgb,var(--label)_45%,var(--color-foreground))]",
       },

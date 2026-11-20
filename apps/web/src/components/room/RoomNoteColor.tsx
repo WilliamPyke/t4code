@@ -21,16 +21,16 @@ const NOTE_COLOR_CLASSES: Readonly<Record<RoomBoardNoteColor, string>> = {
 };
 
 /**
- * A section's background in each colour: a soft tint of the paint's deeper hue under a stronger
- * frame, so the cards over it still read. Grey is "None": the plain frame, as before any colour.
+ * A section's background in each colour: the notes' own paint, a little see-through so the board
+ * shows under it, behind a hairline frame. Grey is "None": the plain frame, as before any colour.
  */
 const SECTION_COLOR_CLASSES: Readonly<Record<RoomBoardNoteColor, string>> = {
-  yellow: "border-paint-yellow-deep/55 bg-paint-yellow-deep/12",
-  green: "border-paint-green-deep/55 bg-paint-green-deep/12",
-  blue: "border-paint-blue-deep/55 bg-paint-blue-deep/12",
-  pink: "border-paint-pink-deep/55 bg-paint-pink-deep/12",
-  purple: "border-paint-purple-deep/55 bg-paint-purple-deep/12",
-  grey: "border-paint-grey-deep/45 bg-paint-grey-deep/4",
+  yellow: "border-foreground/8 bg-paint-yellow/70",
+  green: "border-foreground/8 bg-paint-green/70",
+  blue: "border-foreground/8 bg-paint-blue/70",
+  pink: "border-foreground/8 bg-paint-pink/70",
+  purple: "border-foreground/8 bg-paint-purple/70",
+  grey: "border-foreground/18 bg-foreground/2",
 };
 
 /** A section's backgrounds as its menu lists them: none first, which a section starts with. */
@@ -42,18 +42,8 @@ const SECTION_COLORS: ReadonlyArray<RoomBoardNoteColor> = [
 export const sectionColorClassName = (color: RoomBoardNoteColor | undefined) =>
   SECTION_COLOR_CLASSES[color ?? "grey"];
 
-/** A section's label above its corner, in the deeper hue of its paint. */
-const SECTION_LABEL_CLASSES: Readonly<Record<RoomBoardNoteColor, string>> = {
-  yellow: "text-paint-yellow-deep",
-  green: "text-paint-green-deep",
-  blue: "text-paint-blue-deep",
-  pink: "text-paint-pink-deep",
-  purple: "text-paint-purple-deep",
-  grey: "text-paint-grey-deep",
-};
-
-export const sectionLabelClassName = (color: RoomBoardNoteColor | undefined) =>
-  SECTION_LABEL_CLASSES[color ?? "grey"];
+/** A section's title in its top corner, in the paper's ink so it reads on every paint and theme. */
+export const sectionLabelClassName = (_color: RoomBoardNoteColor | undefined) => "text-paint-ink";
 
 const SWATCH_CLASSES: Readonly<Record<RoomBoardNoteColor, string>> = {
   yellow: "bg-paint-yellow",

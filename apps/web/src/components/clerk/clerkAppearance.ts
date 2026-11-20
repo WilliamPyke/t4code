@@ -92,8 +92,23 @@ export const signInScreenAppearance = {
     dividerLine: "bg-border",
     dividerText: "text-[13px] text-muted-foreground",
     formFieldLabel: "text-[13px] font-semibold text-foreground",
-    formFieldInput:
-      "h-12 rounded-lg border-[1.5px] border-border bg-card px-3.5 text-base text-foreground shadow-none focus:border-ring focus:ring-0",
+    // A style object, not classes: Clerk applies it with its own specificity, so its input
+    // padding and line height can no longer shrink the field below the design's 48px.
+    formFieldInput: {
+      boxSizing: "border-box",
+      height: "3rem",
+      minHeight: "3rem",
+      paddingBlock: 0,
+      paddingInline: "0.875rem",
+      borderRadius: "var(--radius)",
+      border: "1.5px solid var(--contrast-border)",
+      backgroundColor: "var(--card)",
+      color: "var(--contrast-foreground)",
+      fontSize: "1rem",
+      lineHeight: 1.5,
+      boxShadow: "none",
+      "&:focus": { borderColor: "var(--ring)", boxShadow: "none" },
+    },
     otpCodeFieldInput: "border-[1.5px] border-border bg-card text-foreground",
     formButtonPrimary:
       "h-12 rounded-full border-primary bg-primary bg-none text-base font-semibold text-primary-foreground shadow-none hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",

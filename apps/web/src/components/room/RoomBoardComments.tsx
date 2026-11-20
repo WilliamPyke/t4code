@@ -172,7 +172,7 @@ export function CommentPin({
         aria-label={`Comment from ${author}${replies === 0 ? "" : `, ${replies} ${replies === 1 ? "reply" : "replies"}`}${unread ? ", new since you last looked" : ""}${note.resolved === true ? ", resolved" : ""}`}
         aria-expanded={open}
         className={cn(
-          "size-8 cursor-pointer touch-none overflow-hidden rounded-full rounded-bl-none border-2 border-white shadow-paint focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset focus-visible:outline-none",
+          "size-8 cursor-pointer touch-none overflow-hidden rounded-full rounded-bl-sm border-2 border-card shadow-paint focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset focus-visible:outline-none",
           note.resolved === true && "opacity-50",
           open && "ring-2 ring-primary",
         )}
@@ -468,7 +468,7 @@ export function CommentThreadPanel({
       data-board-overlay
       data-board-text
       className={cn(
-        "absolute z-30 flex w-72 cursor-default flex-col rounded-board border border-board-hairline bg-card text-card-foreground shadow-board",
+        "absolute z-30 flex w-72 cursor-default flex-col rounded-xl rounded-tl-sm border border-board-hairline bg-card text-card-foreground shadow-board",
         spot === null && "invisible",
       )}
       style={

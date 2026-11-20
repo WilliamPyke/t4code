@@ -6,7 +6,7 @@ import {
   type RoomBoardMark,
   type RoomBoxProgress,
 } from "@t3tools/contracts";
-import { RefreshCwIcon } from "lucide-react";
+import { CodeXmlIcon, PenLineIcon, RefreshCwIcon, RotateCcwIcon } from "lucide-react";
 import { type PointerEvent, type RefObject, useEffect, useRef, useState } from "react";
 
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -564,8 +564,7 @@ export function RoomArtifactLive({
   }
   return (
     <>
-      <RoomArtifactMeta
-        author={author}
+      <RoomArtifactToolbar
         artifact={artifact}
         onRestore={onRestore}
         onEdit={edit}
@@ -575,7 +574,6 @@ export function RoomArtifactLive({
             ? { on: markingUp, toggle: () => setMarkingUp((current) => !current) }
             : undefined
         }
-        people={people}
       />
       {versionNote === null && onKeep === undefined ? null : (
         <div className="flex min-w-0 shrink-0 items-center gap-1.5 px-3 pb-1.5">
@@ -614,6 +612,7 @@ export function RoomArtifactLive({
         marking={marking}
         links={links}
       />
+      <RoomArtifactMeta author={author} artifact={artifact} people={people} />
     </>
   );
 }
@@ -675,83 +674,80 @@ function RoomArtifactEditor({
 }
 
 /**
- * Who wrote an artifact's current version and when, what they asked and with which cards and
- * model, and the way to the version it replaced: back to it, or forward again.
+ * An artifact's actions, in a bar floating above the card while it is hovered, focused or
+ * selected: reload its page, mark it up, write it by hand, and go back to the version it replaced
+ * (or forward again). Out of sight it takes no presses, so the board above the card stays the
+ * board's.
  */
-function RoomArtifactMeta({
-  author,
+function RoomArtifactToolbar({
   artifact,
   onRestore,
   onEdit,
   onRefresh,
   markUp,
-  people,
 }: {
   /** Turns pointing at parts of a page on and off. Absent for text, and where no one may mark. */
   readonly markUp: { readonly on: boolean; readonly toggle: () => void } | undefined;
   /** Loads a page's frame afresh. Absent for text, which has nothing to reload. */
   readonly onRefresh: (() => void) | undefined;
-  /** Absent before anything was written. */
-  readonly author: string | undefined;
   readonly artifact: RoomArtifactContent | undefined;
   /** Swaps in the version it replaced. Absent when there is none, or the viewer may not. */
   readonly onRestore: (() => Promise<boolean>) | undefined;
   /** Opens the field to change its text by hand. */
   readonly onEdit: (() => void) | undefined;
-  readonly people: BoardPeople;
 }) {
   const [restoring, setRestoring] = useState(false);
-  // When the card was drawn: how long ago it was written is said in words, never a clock time.
-  const [now] = useState(() => Date.now());
   const restore = async () => {
     if (onRestore === undefined || restoring) return;
     setRestoring(true);
     await onRestore().catch(() => false);
     setRestoring(false);
   };
-  if (author === undefined || artifact === undefined) return null;
-  const cards = artifact.cards ?? [];
+  const restorable = onRestore !== undefined && artifact !== undefined;
+  if (onRefresh === undefined && markUp === undefined && onEdit === undefined && !restorable) {
+    return null;
+  }
   return (
-    <div className="flex shrink-0 flex-col gap-0.5 px-3 pb-1.5">
-      <div className="flex min-w-0 items-center gap-1.5">
-        <p className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">
-          {[author, artifact.model, boardTimeLabel(artifact.updatedAt, now)?.toLowerCase()]
-            .filter((part) => part !== undefined && part !== "")
-            .join(" · ")}
-        </p>
+    <div
+      data-artifact-toolbar
+      className={cn(
+        // Its gap is its own padding, so the pointer crosses from the card to it without leaving.
+        "pointer-events-none invisible absolute bottom-full left-1/2 z-20 flex -translate-x-1/2 pb-2.5",
+        "[@media(hover:hover)]:group-hover/item:pointer-events-auto [@media(hover:hover)]:group-hover/item:visible",
+        "group-focus-within/item:pointer-events-auto group-focus-within/item:visible",
+        "group-data-[board-selected]/item:pointer-events-auto group-data-[board-selected]/item:visible",
+        "has-[[data-popup-open]]:pointer-events-auto has-[[data-popup-open]]:visible",
+        markUp?.on === true && "pointer-events-auto visible",
+      )}
+      onPointerDown={stopPointer}
+    >
+      <div className="flex items-center gap-0.5 rounded-xl border border-board-hairline bg-card p-1 whitespace-nowrap text-card-foreground shadow-board">
         {onRefresh === undefined ? null : (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  size="icon-micro"
-                  variant="ghost-muted"
-                  aria-label="Refresh page"
-                  onPointerDown={stopPointer}
-                  onClick={onRefresh}
-                  data-artifact-refresh
-                />
-              }
-            >
-              <RefreshCwIcon />
-            </TooltipTrigger>
-            <TooltipPopup side="top">Refresh</TooltipPopup>
-          </Tooltip>
+          <Button
+            size="xs"
+            variant="ghost"
+            aria-label="Refresh page"
+            onClick={onRefresh}
+            data-artifact-refresh
+          >
+            <RefreshCwIcon />
+            Refresh
+          </Button>
         )}
         {markUp === undefined ? null : (
           <Tooltip>
             <TooltipTrigger
               render={
                 <Button
-                  size="micro"
-                  variant={markUp.on ? "outline" : "ghost-muted"}
+                  size="xs"
+                  variant={markUp.on ? "secondary" : "ghost"}
                   aria-pressed={markUp.on}
-                  onPointerDown={stopPointer}
                   onClick={markUp.toggle}
                   data-artifact-mark
                 />
               }
             >
+              <PenLineIcon />
               {markUp.on ? "Done marking" : "Mark up"}
             </TooltipTrigger>
             <TooltipPopup side="top">
@@ -762,32 +758,54 @@ function RoomArtifactMeta({
           </Tooltip>
         )}
         {onEdit === undefined ? null : (
-          <Button
-            size="micro"
-            variant="ghost-muted"
-            onPointerDown={stopPointer}
-            onClick={onEdit}
-            data-artifact-edit
-          >
+          <Button size="xs" variant="ghost" onClick={onEdit} data-artifact-edit>
+            <CodeXmlIcon />
             Edit
           </Button>
         )}
-        {onRestore === undefined ? null : (
-          <Button
-            size="micro"
-            variant="ghost-muted"
-            disabled={restoring}
-            onPointerDown={stopPointer}
-            onClick={() => void restore()}
-          >
-            {restoring
-              ? "Restoring..."
-              : artifact.previous === undefined
-                ? "Restore previous"
-                : boardRestoreLabel({ ...artifact, previous: artifact.previous })}
-          </Button>
+        {!restorable || artifact === undefined ? null : (
+          <>
+            <span aria-hidden className="mx-0.5 h-4.5 w-px shrink-0 bg-board-hairline" />
+            <Button size="xs" variant="ghost" disabled={restoring} onClick={() => void restore()}>
+              <RotateCcwIcon />
+              {restoring
+                ? "Restoring..."
+                : artifact.previous === undefined
+                  ? "Restore previous"
+                  : boardRestoreLabel({ ...artifact, previous: artifact.previous })}
+            </Button>
+          </>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Who wrote an artifact's current version and when, and what they asked with which cards and
+ * model, under what it shows.
+ */
+function RoomArtifactMeta({
+  author,
+  artifact,
+  people,
+}: {
+  /** Absent before anything was written. */
+  readonly author: string | undefined;
+  readonly artifact: RoomArtifactContent | undefined;
+  readonly people: BoardPeople;
+}) {
+  // When the card was drawn: how long ago it was written is said in words, never a clock time.
+  const [now] = useState(() => Date.now());
+  if (author === undefined || artifact === undefined) return null;
+  const cards = artifact.cards ?? [];
+  return (
+    <div className="flex shrink-0 flex-col gap-0.5 border-t border-board-hairline px-3 py-2">
+      <p className="min-w-0 truncate text-2xs text-muted-foreground">
+        {[author, artifact.model, boardTimeLabel(artifact.updatedAt, now)?.toLowerCase()]
+          .filter((part) => part !== undefined && part !== "")
+          .join(" · ")}
+      </p>
       {artifact.prompt === undefined || artifact.prompt.trim() === "" ? null : (
         <p className="line-clamp-2 border-s-2 border-foreground/15 ps-2 text-2xs [overflow-wrap:anywhere]">
           {artifact.prompt}

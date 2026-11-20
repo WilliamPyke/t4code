@@ -10,11 +10,13 @@ import {
   CopyIcon,
   EllipsisIcon,
   EyeIcon,
+  GlobeIcon,
   LinkIcon,
   LogOutIcon,
   RefreshCwIcon,
   Trash2Icon,
   UsersIcon,
+  XIcon,
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
@@ -56,7 +58,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "../ui/dialog";
-import { Input } from "../ui/input";
 import {
   Menu,
   MenuItem,
@@ -66,10 +67,11 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "../ui/menu";
-import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
+import { Popover, PopoverClose, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { Radio, RadioGroup } from "../ui/radio-group";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import {
   boardLinkSharing,
   boardPeopleSummary,
@@ -270,32 +272,41 @@ export function CloudBoardSharing({
   };
 
   const shareLabel = `Share this board. ${here.length <= 1 ? "Only you" : `${here.length} people`} here now.`;
-  // A narrow board keeps two faces and the word; the narrowest phones, the faces alone.
-  const shareMark: ReactNode = (
-    <>
-      <span aria-hidden className="flex items-center -space-x-1">
+  // Who is here, as overlapping faces beside Share. A narrow board keeps two; the narrowest none.
+  const faces: ReactNode =
+    here.length === 0 ? null : (
+      <span
+        aria-hidden
+        className="flex shrink-0 items-center -space-x-1.5 @max-[22rem]/board:hidden"
+        data-cloud-board-faces
+      >
         {here.slice(0, 4).map((guest, index) => (
           <PersonDot
             key={guest.id}
             color={boardCursorColor(guests, guest.id)}
             className={cn(
-              "size-5 text-2xs font-semibold ring-2 ring-card",
+              "size-7 text-xs font-semibold ring-2 ring-background",
               index > 1 && "@max-xl/board:hidden",
             )}
           >
             {initialOf(guest.name)}
           </PersonDot>
         ))}
+        {here.length > 4 ? (
+          <span className="inline-grid size-7 place-items-center rounded-full bg-muted text-2xs font-semibold text-muted-foreground ring-2 ring-background @max-xl/board:hidden">
+            +{here.length - 4}
+          </span>
+        ) : null}
       </span>
-      {here.length === 0 ? <UsersIcon /> : null}
-      {here.length > 4 ? (
-        <span className="text-xs @max-xl/board:hidden">+{here.length - 4}</span>
-      ) : null}
-      <span className="@max-[22rem]/board:sr-only">Share</span>
+    );
+  const shareMark: ReactNode = (
+    <>
+      {here.length === 0 ? <UsersIcon aria-hidden /> : null}
+      <span>Share</span>
     </>
   );
   const shareBody: ReactNode = (
-    <>
+    <div className="flex flex-col gap-5">
       <LinkSharingSetting
         sharing={linkSharing}
         manage={controls.changeLinks}
@@ -303,7 +314,7 @@ export function CloudBoardSharing({
         onChange={changeSharing}
       />
       {linkSharing === "off" ? null : (
-        <div className="mb-4 flex flex-col gap-4">
+        <div className="flex flex-col gap-4">
           {linkSharing === "edit" && links.edit !== undefined ? (
             <BoardLinkRow
               kind="edit"
@@ -323,9 +334,9 @@ export function CloudBoardSharing({
         </div>
       )}
       {controls.allowCopies ? (
-        <label className="mb-4 flex items-center justify-between gap-3">
+        <label className="flex items-center justify-between gap-3">
           <span className="flex min-w-0 flex-col">
-            <span className="text-sm font-medium">Allow copies</span>
+            <span className="text-sm font-semibold">Allow copies</span>
             <span className="text-xs text-muted-foreground">
               Anyone who can see the board can make their own copy of it.
             </span>
@@ -343,19 +354,26 @@ export function CloudBoardSharing({
           />
         </label>
       ) : null}
-      <p className="mb-2 text-xs font-medium text-muted-foreground" data-cloud-board-people-count>
-        {boardPeopleSummary({ joined: guests.length, here: here.length, viewing })}
-      </p>
-      <BoardPeople
-        guests={guests}
-        viewer={viewer}
-        maker={maker}
-        online={online}
-        viewers={viewers}
-        sharing={linkSharing}
-        manage={controls.changePeople && !busy ? { remove, setRole } : undefined}
-      />
-    </>
+      <div className="flex flex-col gap-3 border-t pt-4">
+        <p className="text-sm font-semibold" data-cloud-board-people-count>
+          {boardPeopleSummary({ joined: guests.length, here: here.length, viewing })}
+        </p>
+        <BoardPeople
+          guests={guests}
+          viewer={viewer}
+          maker={maker}
+          online={online}
+          viewers={viewers}
+          sharing={linkSharing}
+          manage={controls.changePeople && !busy ? { remove, setRole } : undefined}
+        />
+      </div>
+    </div>
+  );
+  const shareTitle = (
+    <span className="font-heading text-xl leading-tight font-semibold tracking-brand">
+      Share this board
+    </span>
   );
 
   return (
@@ -375,10 +393,23 @@ export function CloudBoardSharing({
           {viewingLabel(viewing)}
         </span>
       ) : null}
+      {editLink === null ? null : (
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => copyToClipboard(editLink)}
+          data-cloud-board-invite
+        >
+          {isCopied ? <CheckIcon /> : <LinkIcon />}
+          {/* Read out at every width; a narrow board shows the mark alone. */}
+          <span className="@max-xl/board:sr-only">{isCopied ? "Copied" : "Copy invite link"}</span>
+        </Button>
+      )}
+      {faces}
       {asSheet ? (
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger
-            render={<Button size="xs" variant="ghost-muted" data-cloud-board-people />}
+            render={<Button size="sm" data-cloud-board-people />}
             aria-label={shareLabel}
           >
             {shareMark}
@@ -387,31 +418,36 @@ export function CloudBoardSharing({
             <DialogHeader>
               <DialogTitle>Share this board</DialogTitle>
             </DialogHeader>
-            <DialogPanel>
-              <div>{shareBody}</div>
-            </DialogPanel>
+            <DialogPanel>{shareBody}</DialogPanel>
           </DialogPopup>
         </Dialog>
       ) : (
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger
-            render={<Button size="xs" variant="ghost-muted" data-cloud-board-people />}
+            render={<Button size="sm" data-cloud-board-people />}
             aria-label={shareLabel}
           >
             {shareMark}
           </PopoverTrigger>
-          <PopoverPopup width="md" align="end">
-            <PopoverTitle className="mb-3">Share this board</PopoverTitle>
-            {shareBody}
+          <PopoverPopup
+            padding="none"
+            align="end"
+            sideOffset={8}
+            className="w-[29rem] max-w-[calc(100vw-2rem)]"
+          >
+            <div className="flex max-h-[min(44rem,var(--available-height))] flex-col gap-5 overflow-y-auto p-6">
+              <div className="flex items-start justify-between gap-3">
+                <PopoverTitle>{shareTitle}</PopoverTitle>
+                <PopoverClose
+                  render={<Button size="icon-sm" variant="ghost-muted" aria-label="Close" />}
+                >
+                  <XIcon />
+                </PopoverClose>
+              </div>
+              {shareBody}
+            </div>
           </PopoverPopup>
         </Popover>
-      )}
-      {editLink === null ? null : (
-        <Button size="xs" onClick={() => copyToClipboard(editLink)} data-cloud-board-invite>
-          {isCopied ? <CheckIcon /> : <LinkIcon />}
-          {/* Read out at every width; a narrow board shows the mark alone. */}
-          <span className="@max-xl/board:sr-only">{isCopied ? "Copied" : "Copy invite link"}</span>
-        </Button>
       )}
       <Menu>
         <MenuTrigger
@@ -462,46 +498,40 @@ function LinkSharingSetting({
 }) {
   const words = SHARING_WORDS[sharing];
   return (
-    <section className="mb-4 flex flex-col gap-1.5" data-cloud-board-sharing={sharing}>
+    <section className="flex flex-col gap-2" data-cloud-board-sharing={sharing}>
       <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-medium">Link sharing</h3>
-        {manage ? (
-          <Menu>
-            <MenuTrigger
-              render={
-                <Button
-                  size="xs"
-                  variant="outline"
-                  disabled={busy}
-                  aria-label={`Link sharing: ${words.title}`}
-                  data-cloud-board-sharing-menu
-                />
-              }
-            >
-              {words.short}
-              <ChevronDownIcon />
-            </MenuTrigger>
-            <MenuPopup align="end">
-              <MenuRadioGroup
-                value={sharing}
-                onValueChange={(value) => {
-                  const next = SHARINGS.find((candidate) => candidate === value);
-                  if (next !== undefined && next !== sharing) onChange(next);
-                }}
-              >
-                {SHARINGS.map((option) => (
-                  <MenuRadioItem key={option} value={option} closeOnClick>
-                    {SHARING_WORDS[option].title}
-                  </MenuRadioItem>
-                ))}
-              </MenuRadioGroup>
-            </MenuPopup>
-          </Menu>
-        ) : (
-          <span className="shrink-0 text-xs text-muted-foreground">{words.short}</span>
+        <h3 className="text-sm font-semibold">Link sharing</h3>
+        {manage ? null : (
+          <span className="shrink-0 text-sm text-muted-foreground">{words.short}</span>
         )}
       </div>
-      <p className="text-xs text-muted-foreground">{words.hint}</p>
+      {manage ? (
+        <ToggleGroup
+          aria-label="Link sharing"
+          className="w-full"
+          disabled={busy}
+          value={[sharing]}
+          onValueChange={(value) => {
+            const next = SHARINGS.find((candidate) => candidate === value[0]);
+            if (next !== undefined && next !== sharing) onChange(next);
+          }}
+          data-cloud-board-sharing-menu
+        >
+          {SHARINGS.map((option) => (
+            <Toggle
+              key={option}
+              value={option}
+              className="flex-1"
+              aria-label={SHARING_WORDS[option].title}
+            >
+              {SHARING_WORDS[option].short}
+            </Toggle>
+          ))}
+        </ToggleGroup>
+      ) : null}
+      <p className="text-sm text-pretty text-muted-foreground">
+        <span className="text-foreground">{words.done}.</span> {words.hint}
+      </p>
     </section>
   );
 }
@@ -532,69 +562,64 @@ function BoardLinkRow({
       }),
   });
   return (
-    <section className="flex flex-col gap-1.5" data-cloud-board-link={kind}>
+    <section className="flex flex-col gap-2" data-cloud-board-link={kind}>
       <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-medium">{words.title}</h3>
+        <h3 className="text-sm font-semibold">{words.title}</h3>
         {manage && link !== null ? (
-          <Menu>
-            <MenuTrigger
-              render={
-                <Button
-                  size="icon-xs"
-                  variant="ghost-muted"
-                  aria-label={`${words.title} options`}
-                  disabled={busy}
-                />
-              }
-            >
-              <EllipsisIcon />
-            </MenuTrigger>
-            <MenuPopup align="end">
-              <MenuItem onClick={onNew} data-cloud-board-link-new>
-                <RefreshCwIcon />
-                New link
-              </MenuItem>
-            </MenuPopup>
-          </Menu>
-        ) : null}
-      </div>
-      <p className="text-xs text-muted-foreground">
-        {link === null ? `No ${words.title.toLowerCase()} yet.` : words.hint}
-      </p>
-      {link === null ? (
-        manage ? (
           <Button
-            size="sm"
-            variant="outline"
+            size="xs"
+            variant="ghost"
             disabled={busy}
             onClick={onNew}
-            data-cloud-board-link-on
+            aria-label={`New ${words.title.toLowerCase()}`}
+            data-cloud-board-link-new
           >
-            Make link
+            <RefreshCwIcon aria-hidden />
+            New link
           </Button>
-        ) : null
-      ) : (
-        <div className="flex items-center gap-1.5">
-          <Input
-            readOnly
-            size="sm"
-            value={link}
-            aria-label={words.title}
-            // Selected for a keyboard to copy; a finger would get the phone's selection handles.
-            onFocus={(event) => {
-              if (!window.matchMedia("(pointer: coarse)").matches) event.currentTarget.select();
-            }}
-            data-cloud-board-invite-link={kind === "edit" ? "" : undefined}
-          />
-          <Button
-            size="sm"
-            variant={kind === "edit" ? "default" : "outline"}
-            onClick={() => copyToClipboard(link)}
-          >
-            {isCopied ? <CheckIcon /> : <CopyIcon />}
-            {isCopied ? "Copied" : "Copy"}
-          </Button>
+        ) : null}
+      </div>
+      {link === null ? (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm text-muted-foreground">No {words.title.toLowerCase()} yet.</p>
+          {manage ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={onNew}
+              data-cloud-board-link-on
+            >
+              Make link
+            </Button>
+          ) : null}
         </div>
+      ) : (
+        <>
+          <div className="flex min-w-0 items-center gap-2.5 rounded-xl border bg-background py-1.5 ps-3.5 pe-1.5 focus-within:ring-2 focus-within:ring-ring focus-within:ring-inset">
+            <GlobeIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+            <input
+              readOnly
+              value={link}
+              aria-label={words.title}
+              className="h-8 min-w-0 flex-1 truncate bg-transparent text-sm text-foreground outline-none"
+              // Selected for a keyboard to copy; a finger would get the phone's selection handles.
+              onFocus={(event) => {
+                if (!window.matchMedia("(pointer: coarse)").matches) event.currentTarget.select();
+              }}
+              data-cloud-board-invite-link={kind === "edit" ? "" : undefined}
+            />
+            <Button
+              size="sm"
+              variant={kind === "edit" ? "default" : "outline"}
+              onClick={() => copyToClipboard(link)}
+            >
+              {isCopied ? <CheckIcon /> : <CopyIcon />}
+              {isCopied ? "Copied" : "Copy link"}
+            </Button>
+          </div>
+          <p className="text-xs text-pretty text-muted-foreground">{words.hint}</p>
+        </>
       )}
     </section>
   );
@@ -721,23 +746,31 @@ function BoardPeople({
   );
   const sameName = sharedNameIds(guests);
   return (
-    <ul className="flex flex-col gap-1.5" data-cloud-board-people-list>
+    <ul className="flex flex-col gap-3" data-cloud-board-people-list>
       {people.map((guest) => {
         const isHere = online.includes(guest.id);
         const role: CloudBoardRole = viewers.includes(guest.id) ? "view" : "edit";
         const changeable = manage !== undefined && guest.id !== viewer && guest.id !== maker;
         const note = linkAccessNote(role, sharing);
         return (
-          <li key={guest.id} className="flex min-w-0 items-center gap-2 text-sm">
-            <PersonDot
-              color={boardCursorColor(guests, guest.id)}
-              className={cn("size-5 text-2xs font-semibold", !isHere && "opacity-50")}
-            >
-              {initialOf(guest.name)}
-            </PersonDot>
+          <li key={guest.id} className="flex min-w-0 items-center gap-3 text-sm">
+            <span className="relative shrink-0">
+              <PersonDot
+                color={boardCursorColor(guests, guest.id)}
+                className={cn("size-8 text-sm font-semibold", !isHere && "opacity-50")}
+              >
+                {initialOf(guest.name)}
+              </PersonDot>
+              {isHere ? (
+                <span
+                  aria-hidden
+                  className="absolute -end-0.5 -bottom-0.5 size-3 rounded-full border-2 border-popover bg-success"
+                />
+              ) : null}
+            </span>
             <span className="min-w-0 flex-1">
               <span className="block truncate">
-                {guest.name}
+                <span className="font-semibold">{guest.name}</span>
                 {guest.id === viewer ? <span className="text-muted-foreground"> (you)</span> : null}
                 {guest.id === maker ? (
                   <span className="text-muted-foreground"> · made it</span>
@@ -751,7 +784,7 @@ function BoardPeople({
                 {!isHere ? <span className="text-muted-foreground"> · away</span> : null}
               </span>
               {note === null ? null : (
-                <span className="block text-muted-foreground" data-cloud-board-link-access>
+                <span className="block text-xs text-muted-foreground" data-cloud-board-link-access>
                   {note}
                 </span>
               )}
@@ -798,7 +831,7 @@ function BoardPeople({
                 </MenuPopup>
               </Menu>
             ) : (
-              <span className="shrink-0 text-xs text-muted-foreground">
+              <span className="shrink-0 px-2 text-sm text-muted-foreground">
                 {role === "view" ? "Can view" : "Can edit"}
               </span>
             )}

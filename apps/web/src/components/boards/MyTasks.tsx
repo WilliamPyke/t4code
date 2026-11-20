@@ -15,6 +15,7 @@ import {
 } from "../room/boardPlan.logic";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
+import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
 
 /** Tasks grouped by board, open ones first in each, boards in the order their first task came. */
@@ -44,6 +45,14 @@ function myTasksByBoard(tasks: ReadonlyArray<CloudMyTask>): ReadonlyArray<{
   }));
 }
 
+// The Plan's priority marks, as its task cards draw them.
+const PRIORITY_SWATCH: Readonly<Record<NonNullable<CloudMyTask["priority"]>, string>> = {
+  urgent: "bg-danger",
+  high: "bg-claude",
+  medium: "bg-sun",
+  low: "bg-brand-sky",
+};
+
 const myOpenTaskCount = (tasks: ReadonlyArray<CloudMyTask>) =>
   tasks.filter((task) => task.status !== "done").length;
 
@@ -52,8 +61,15 @@ const statusTitle = (task: CloudMyTask) =>
 const priorityTitle = (task: CloudMyTask) =>
   BOARD_PLAN_PRIORITIES.find((one) => one.priority === task.priority)?.title;
 
-/** "My tasks": every task given to the signed-in person, across their boards and workspaces. */
-export function MyTasks() {
+/**
+ * "My tasks": every task given to the signed-in person, across their boards and workspaces. A
+ * toolbar button, or a row of the sidebar's boards navigation.
+ */
+export function MyTasks({
+  presentation = "button",
+}: {
+  readonly presentation?: "button" | "sidebar";
+} = {}) {
   const account = useBoardAccount();
   const [open, setOpen] = useState(false);
   // The day the list was last opened on, which its due days are read against.
@@ -89,7 +105,9 @@ export function MyTasks() {
     }
     void navigate(target);
   };
-  return (
+  const sidebar = presentation === "sidebar";
+  const countLabel = openCount > 99 ? "99+" : String(openCount);
+  const popover = (
     <Popover
       open={open}
       onOpenChange={(next) => {
@@ -100,18 +118,37 @@ export function MyTasks() {
       }}
     >
       <PopoverTrigger
-        render={<Button variant="ghost-muted" data-my-tasks />}
+        render={
+          sidebar ? (
+            <SidebarMenuButton size="nav" variant="nav" data-my-tasks />
+          ) : (
+            <Button variant="ghost-muted" data-my-tasks />
+          )
+        }
         aria-label={openCount === 0 ? "My tasks" : `My tasks, ${openCount} open`}
       >
         <ListTodoIcon />
-        My tasks
+        {sidebar ? <span className="min-w-0 flex-1 truncate">My tasks</span> : "My tasks"}
         {openCount === 0 ? null : (
-          <span aria-hidden className="text-muted-foreground tabular-nums">
-            {openCount > 99 ? "99+" : openCount}
+          <span
+            aria-hidden
+            className={cn(
+              "tabular-nums",
+              sidebar
+                ? "ms-auto shrink-0 text-xs font-semibold text-sidebar-muted-foreground"
+                : "text-muted-foreground",
+            )}
+          >
+            {countLabel}
           </span>
         )}
       </PopoverTrigger>
-      <PopoverPopup width="lg" align="end" padding="compact">
+      <PopoverPopup
+        width="lg"
+        side={sidebar ? "right" : "bottom"}
+        align={sidebar ? "start" : "end"}
+        padding="compact"
+      >
         <PopoverTitle className="mb-2">My tasks</PopoverTitle>
         {tasks === null ? (
           <p className="py-6 text-center text-xs text-muted-foreground">Loading...</p>
@@ -123,37 +160,58 @@ export function MyTasks() {
           </p>
         ) : (
           <div
-            className="-mx-1 flex max-h-[28rem] flex-col gap-3 overflow-y-auto"
+            className="-mx-1 flex max-h-[28rem] flex-col gap-3 overflow-y-auto px-1 pb-1"
             data-my-tasks-list
           >
             {myTasksByBoard(tasks).map((board) => (
               <section key={board.shareId} className="flex flex-col">
-                <h3 className="truncate px-2 pb-1 text-xs font-medium text-muted-foreground">
+                <h3 className="truncate px-1 pb-1.5 text-2xs font-semibold tracking-caps text-quiet uppercase">
                   {board.title}
                 </h3>
-                <ul className="flex flex-col">
+                <ul className="flex flex-col gap-2">
                   {board.tasks.map((task) => (
                     <li key={task.noteId}>
                       <button
                         type="button"
-                        className="flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-start hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+                        className="flex w-full flex-col gap-2 rounded-xl border border-rule bg-raised px-3.5 py-3 text-start shadow-rest outline-none transition-colors hover:bg-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                         onClick={() => void openTask(task)}
+                        data-my-task
                       >
+                        {priorityTitle(task) === undefined ? null : (
+                          <span className="flex items-center gap-1.5 text-2xs font-semibold text-body">
+                            <span
+                              aria-hidden
+                              className={cn(
+                                "size-2 rounded-xs",
+                                task.priority === undefined
+                                  ? "bg-quiet"
+                                  : PRIORITY_SWATCH[task.priority],
+                              )}
+                            />
+                            {priorityTitle(task)}
+                          </span>
+                        )}
                         <span
                           className={cn(
-                            "line-clamp-2 text-sm",
-                            task.status === "done" && "text-muted-foreground line-through",
+                            "line-clamp-2 text-sm leading-snug font-medium text-foreground",
+                            task.status === "done" && "text-quiet line-through decoration-rule",
                           )}
                         >
                           {task.text.trim() === "" ? "Untitled task" : task.text}
                         </span>
-                        <span className="flex flex-wrap gap-x-2 text-2xs text-muted-foreground">
-                          <span>{statusTitle(task)}</span>
-                          {priorityTitle(task) === undefined ? null : (
-                            <span>{priorityTitle(task)}</span>
-                          )}
+                        <span className="flex flex-wrap items-center gap-x-2 text-xs text-quiet">
+                          <span className={cn(task.status === "done" && "text-success-foreground")}>
+                            {statusTitle(task)}
+                          </span>
                           {task.due === undefined ? null : (
-                            <span>{boardPlanDue(task.due, today).label}</span>
+                            <span
+                              className={cn(
+                                "ms-auto",
+                                boardPlanDue(task.due, today).overdue && "text-danger",
+                              )}
+                            >
+                              {boardPlanDue(task.due, today).label}
+                            </span>
                           )}
                         </span>
                       </button>
@@ -167,4 +225,5 @@ export function MyTasks() {
       </PopoverPopup>
     </Popover>
   );
+  return sidebar ? <SidebarMenuItem>{popover}</SidebarMenuItem> : popover;
 }

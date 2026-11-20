@@ -738,10 +738,17 @@ const sidebarMenuButtonVariants = cva(
         icon: "size-8 justify-center rounded-[var(--control-radius)] p-0 pointer-coarse:size-10",
         lg: "h-12 rounded-[var(--control-radius)] px-[var(--sidebar-row-content-inset)] py-2 text-sm group-data-[collapsible=icon]:p-0!",
         sm: "h-7 rounded-[var(--control-radius)] px-[var(--sidebar-row-content-inset)] py-2 text-xs pointer-coarse:h-10",
+        // The boards navigation's rows: 34px, 18px icons, as the design system draws them.
+        nav: "h-[34px] gap-2.5 rounded-[9px] px-2.5 text-sm pointer-coarse:h-10 [&>svg:not([class*='size-'])]:size-4.5",
       },
       variant: {
         default: "font-medium text-sidebar-muted-foreground/80",
         outline: "bg-sidebar-control-surface ring-1 ring-sidebar-border",
+        // A place to go: ink label; the current one raised on a hairline with an accent icon.
+        nav: "font-medium text-sidebar-foreground data-[active=true]:bg-card data-[active=true]:shadow-[0_0_0_1px_var(--color-sidebar-border)] data-[active=true]:[&>svg]:text-accent-text",
+        // One of several to pick between, such as a workspace: the chosen one on the accent tint.
+        selectable:
+          "font-medium text-sidebar-foreground data-[active=true]:bg-accent-tint data-[active=true]:font-semibold data-[active=true]:text-accent-text",
       },
     },
   },

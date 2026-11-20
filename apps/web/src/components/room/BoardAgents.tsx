@@ -25,7 +25,7 @@ import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { BoardChip, type BoardChipTone, BoardFloat, PersonDot } from "./BoardChrome";
+import { BoardChip, type BoardChipTone, PersonDot } from "./BoardChrome";
 import { BoxStopButton } from "./RoomBoardThreadBox";
 import {
   type BoardAgentEnd,
@@ -535,18 +535,17 @@ export function BoardAgents({
 
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
-      {/* A narrow board's two-row header has room for it; in between, More tools carries it. */}
-      <BoardFloat className="pointer-events-auto p-1 @max-xl/board:order-1 @xl/board:@max-2xl/board:hidden">
+      <span className="flex shrink-0">
         <Tooltip>
           <TooltipTrigger
             render={
               <PopoverTrigger
-                render={<Button ref={trigger} size="sm" variant="ghost" aria-label={label} />}
+                render={<Button ref={trigger} size="sm" variant="outline" aria-label={label} />}
               />
             }
           >
             <BotIcon />
-            <span className="sr-only @5xl/board:not-sr-only">Agents</span>
+            <span className="sr-only @3xl/board:not-sr-only">Agents</span>
             {working ? <span aria-hidden className="size-1.5 rounded-full bg-primary" /> : null}
             {needs === 0 ? null : (
               <Badge size="sm" variant="warning">
@@ -556,7 +555,7 @@ export function BoardAgents({
           </TooltipTrigger>
           <TooltipPopup side="bottom">Agents · {boardAgentsShortcut()}</TooltipPopup>
         </Tooltip>
-      </BoardFloat>
+      </span>
       <PopoverPopup
         anchor={anchor}
         side="bottom"

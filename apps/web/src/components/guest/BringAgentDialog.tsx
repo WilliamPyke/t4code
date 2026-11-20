@@ -22,7 +22,7 @@ import { SYNC_INSTALLS, detectSyncOs, type SyncOs } from "~/syncDownloads";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { SyncInstallAction } from "../connect/GetSync";
 import { Button } from "../ui/button";
-import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
+import { Collapsible, CollapsiblePanel } from "../ui/collapsible";
 import {
   Dialog,
   DialogClose,
@@ -97,6 +97,7 @@ export function BringAgentDialog({
   // Chosen as it opens and kept until it has closed, so nothing that happens inside resizes it:
   // short for someone whose computers are already known, tall when the steps show.
   const [size, setSize] = useState<"compact" | "tall" | null>(null);
+  const [anotherOpen, setAnotherOpen] = useState(false);
   if (open && size === null) setSize(computers.length > 0 ? "compact" : "tall");
 
   const changeOpen = (next: boolean) => {
@@ -196,6 +197,10 @@ export function BringAgentDialog({
   };
 
   const setup = <ConnectComputerRoutes withAccount={withAccount} signedIn={signedIn} />;
+  // The first computer whose agent can come now gets the filled button, as the one to press.
+  const firstBringable =
+    computers.find((computer) => computer.status === "ready" || computer.status === "online")
+      ?.environmentId ?? null;
   // On a phone nobody is about to press Connect, so nothing stands in for a computer to come.
   const waitingForFirst = withAccount && signedIn && !list.failed;
   const phone = onPhoneOrTablet();
@@ -207,6 +212,7 @@ export function BringAgentDialog({
       onOpenChangeComplete={(isOpen) => {
         if (isOpen) return;
         setSize(null);
+        setAnotherOpen(false);
         if (!brought) return;
         setBrought(false);
         onBrought();
@@ -214,7 +220,7 @@ export function BringAgentDialog({
     >
       {/* After an agent came, the caret goes to its box on the board, not back to a button. */}
       <DialogPopup
-        className={size === "compact" ? "h-104 max-w-2xl" : "h-180 max-w-2xl"}
+        className={size === "compact" ? "h-120 max-w-2xl" : "h-180 max-w-2xl"}
         finalFocus={brought ? false : undefined}
       >
         <DialogHeader>
@@ -228,7 +234,7 @@ export function BringAgentDialog({
           <div className="flex flex-col gap-5">
             {computers.length > 0 ? (
               <section className="flex flex-col gap-2" data-bring-agent-computers>
-                <h3 className="text-sm font-medium">Your computers</h3>
+                <h3 className="text-sm font-semibold">Your computers</h3>
                 <ul className="flex flex-col gap-2">
                   {computers.map((computer) => {
                     const waiting = pending?.environmentId === computer.environmentId;
@@ -237,6 +243,7 @@ export function BringAgentDialog({
                       <ComputerRow
                         key={computer.environmentId}
                         computer={computer}
+                        emphasis={firstBringable === computer.environmentId}
                         working={
                           bringing
                             ? "Bringing your agent…"
@@ -261,6 +268,7 @@ export function BringAgentDialog({
                       >
                         <BringControls
                           computer={computer}
+                          primary={firstBringable === computer.environmentId}
                           working={waiting || bringing}
                           disabled={busy !== null || pending !== null}
                           onBring={(project) => void choose(computer, project)}
@@ -273,7 +281,7 @@ export function BringAgentDialog({
               </section>
             ) : !phone && (list.loading || waitingForFirst) ? (
               <section className="flex flex-col gap-2">
-                <h3 className="text-sm font-medium">Your computers</h3>
+                <h3 className="text-sm font-semibold">Your computers</h3>
                 {list.loading ? (
                   <ComputersLoading />
                 ) : (
@@ -300,19 +308,32 @@ export function BringAgentDialog({
             {setupInline ? (
               setup
             ) : (
-              <Collapsible>
-                <CollapsibleTrigger render={<Button size="sm" variant="ghost" />}>
-                  Connect another computer
-                </CollapsibleTrigger>
+              <Collapsible open={anotherOpen} onOpenChange={setAnotherOpen}>
                 <CollapsiblePanel>
-                  <div className="pt-3">{setup}</div>
+                  <div id="bring-agent-another">{setup}</div>
                 </CollapsiblePanel>
               </Collapsible>
             )}
           </div>
         </DialogPanel>
         <DialogFooter variant="bare">
-          <DialogClose render={<Button variant="outline" />}>Not now</DialogClose>
+          <div className="flex w-full flex-wrap items-center justify-between gap-3 border-t pt-4">
+            {setupInline ? (
+              <span />
+            ) : (
+              <button
+                type="button"
+                aria-expanded={anotherOpen}
+                aria-controls="bring-agent-another"
+                onClick={() => setAnotherOpen((value) => !value)}
+                className="rounded-md text-sm font-semibold text-accent-text outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                data-bring-agent-another
+              >
+                Connect another computer
+              </button>
+            )}
+            <DialogClose render={<Button variant="ghost" />}>Not now</DialogClose>
+          </div>
         </DialogFooter>
       </DialogPopup>
     </Dialog>
@@ -349,12 +370,15 @@ const NO_PROJECT = "none";
 /** On a computer's row: the project its agent works in, Bring my agent, and Cancel while it waits. */
 function BringControls({
   computer,
+  primary,
   working,
   disabled,
   onBring,
   onCancel,
 }: {
   readonly computer: BringAgentComputer;
+  /** The one to press: a filled button, the others outlined. */
+  readonly primary: boolean;
   readonly working: boolean;
   readonly disabled: boolean;
   readonly onBring: (project: EnvironmentProject | null) => void;
@@ -407,6 +431,7 @@ function BringControls({
       {onCancel === null ? (
         <Button
           size="sm"
+          variant={primary ? "default" : "outline"}
           disabled={!canBring || disabled}
           onClick={() => onBring(projects.find((project) => project.id === projectId) ?? null)}
           data-bring-agent
@@ -438,7 +463,7 @@ export function ConnectComputerRoutes({
   const connect = "Your browser opens by itself. Sign in if it asks, then press Connect.";
   return (
     <div className="flex flex-col gap-3" data-bring-agent-steps>
-      <section className="flex flex-col gap-3 rounded-xl border border-border p-4">
+      <section className="flex flex-col gap-3 rounded-2xl border border-border bg-panel p-4">
         <div className="min-w-0">
           <h3 className="text-sm font-semibold">Install Tinkjam Sync</h3>
           <p className="text-xs text-muted-foreground">
@@ -455,7 +480,7 @@ export function ConnectComputerRoutes({
           </div>
         ) : (
           <>
-            <SyncInstallAction os={os} onChoose={setOs} />
+            <SyncInstallAction os={os} onChoose={setOs} size="default" />
             {os === "mac" ? (
               <>
                 <ol className="flex flex-col gap-2.5 text-sm">

@@ -14,8 +14,9 @@ import {
 } from "@t3tools/contracts";
 import { roomBoxExcerpt } from "@t3tools/shared/roomBoard";
 import { AppWindowIcon, SquareIcon } from "lucide-react";
-import { type PointerEvent, type ReactNode, useState } from "react";
+import { type PointerEvent, type ReactNode, use, useState, useSyncExternalStore } from "react";
 
+import { cn } from "~/lib/utils";
 import { useEnvironmentScope } from "~/state/session";
 import { environmentThreadDetails, threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -35,7 +36,7 @@ import {
   boardPersonName,
   isBoardHtmlArtifact,
 } from "./roomBoard.logic";
-import { useBoxProgress } from "./roomBoardLive";
+import { RoomLiveContext, useBoxProgress } from "./roomBoardLive";
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
 
@@ -199,6 +200,32 @@ export function BoxBoardWork({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * A box's edge while its agent runs: the accent while it works, the warning tone while it waits on
+ * someone's approval. Only what the run reports; a box at rest keeps its plain edge. Reads one word
+ * from the live store, so a run's tick renders nothing here until its state changes.
+ */
+export function BoxStateEdge({ boxId }: { readonly boxId: string }) {
+  const store = use(RoomLiveContext);
+  const state = useSyncExternalStore(store.subscribe, () => {
+    const progress = store.box(boxId);
+    return progress === undefined ? null : progress.phase === "approval" ? "needs-you" : "working";
+  });
+  if (state === null) return null;
+  return (
+    <span
+      aria-hidden
+      data-box-state={state}
+      className={cn(
+        "pointer-events-none absolute -inset-px z-0 rounded-[inherit] border",
+        state === "working"
+          ? "border-primary ring-3 ring-primary/15"
+          : "border-warning ring-3 ring-warning/20",
+      )}
+    />
   );
 }
 

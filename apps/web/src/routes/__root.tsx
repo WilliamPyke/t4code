@@ -144,7 +144,9 @@ function RootRouteNotFoundView() {
     <main className="flex min-h-0 min-w-0 flex-1 items-center justify-center p-6">
       <div className="flex max-w-sm flex-col items-center gap-4 text-center">
         <TinkjamMark aria-hidden className="size-10" />
-        <h1 className="text-lg font-medium text-foreground">Nothing here</h1>
+        <h1 className="font-heading text-2xl leading-tight font-semibold tracking-brand text-foreground">
+          Nothing here
+        </h1>
         <p className="text-sm text-muted-foreground">
           This link does not lead to anything in Tinkjam. The board may have been deleted, or the
           link may be cut short.

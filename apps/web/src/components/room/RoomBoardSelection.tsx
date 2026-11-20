@@ -15,6 +15,7 @@ import { cn } from "~/lib/utils";
 
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import { boardChromeAt } from "./BoardChrome";
 import { selectionBarSpot } from "./roomBoard.logic";
 import { holdPointer } from "./roomBoardPointer";
 
@@ -176,10 +177,13 @@ export function SelectionBar({
     if (hidden || bar === null || !(board instanceof HTMLElement)) return;
     const area = board.getBoundingClientRect();
     // How far the header, and the toolbar and zoom controls, float into the board.
-    const reach = (selector: string, edge: "top" | "bottom") =>
+    const reach = (edge: "top" | "bottom", corner = false) =>
       Math.max(
         0,
-        ...[...(board.parentElement?.querySelectorAll(selector) ?? [])].map((element) => {
+        ...[
+          ...(board.parentElement === null ? [] : boardChromeAt(board.parentElement, edge)),
+          ...(corner ? (board.parentElement?.querySelectorAll("[data-board-corner]") ?? []) : []),
+        ].map((element) => {
           const drawn = element.getBoundingClientRect();
           if (drawn.height === 0) return 0;
           return edge === "top" ? drawn.bottom - area.top : area.bottom - drawn.top;
@@ -187,7 +191,7 @@ export function SelectionBar({
       );
     if (docked) {
       // Above the zoom corner too, whose minimap hides while the bar is docked.
-      const cover = reach('[data-board-chrome="bottom"], [data-board-corner]', "bottom");
+      const cover = reach("bottom", true);
       bar.style.left = `${Math.max(DOCK_GAP, (board.clientWidth - bar.offsetWidth) / 2)}px`;
       bar.style.top = `${Math.max(DOCK_GAP, board.clientHeight - cover - DOCK_GAP - bar.offsetHeight)}px`;
       return;
@@ -217,8 +221,8 @@ export function SelectionBar({
       { width: bar.offsetWidth, height: bar.offsetHeight },
       { width: board.clientWidth, height: board.clientHeight },
       {
-        top: reach('[data-board-chrome="top"]', "top"),
-        bottom: reach('[data-board-chrome="bottom"]', "bottom"),
+        top: reach("top"),
+        bottom: reach("bottom"),
       },
       rects.map((rect) => ({
         x: rect.left - area.left,
@@ -238,7 +242,7 @@ export function SelectionBar({
       data-selection-bar
       data-selection-docked={docked ? "" : undefined}
       className={cn(
-        "absolute top-2 left-2 z-20 flex items-center gap-1 rounded-board border border-board-hairline bg-card py-1 ps-2.5 pe-1 text-xs text-card-foreground shadow-board",
+        "absolute top-2 left-2 z-20 flex items-center gap-1 rounded-xl border border-board-hairline bg-card py-1 ps-3 pe-1 text-xs text-card-foreground shadow-board",
         hidden && "invisible",
       )}
       onPointerDown={(event) => event.stopPropagation()}

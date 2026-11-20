@@ -14,13 +14,14 @@ import { sampleBoardHref } from "~/sampleBoard";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { BoardBackdrop } from "../room/BoardChrome";
 import { TinkjamWordmark } from "../TinkjamLogo";
-import { Button } from "../ui/button";
+import { Button, InlineButton } from "../ui/button";
 import { Input } from "../ui/input";
 import { Spinner } from "../ui/spinner";
 import { AccountCorner } from "./BoardsAccount";
 import { BoardThumbnail } from "./BoardThumbnail";
 import { type BoardTemplate, STARTER_BOARD_TEMPLATES, boardTemplateShapes } from "./boardTemplates";
 import { UNTITLED_BOARD } from "./boardsHome.logic";
+import { useFirstRunFocusOffered } from "./homeFocus";
 import { useNewBoardWaiting, useStartNewBoard } from "./newBoard";
 import { CreateWorkspaceButton } from "./Workspaces";
 
@@ -38,6 +39,7 @@ export function BoardsWelcome() {
   const cloud = cloudBoardsOrigin() !== null;
   const sample = cloud ? sampleBoardHref() : null;
   const helpId = useId();
+  const alone = useFirstRunFocusOffered();
   const [draft, setDraft] = useState(() => readWelcomeDraft(STARTER_IDS));
   // A name is asked for here, once, only of someone who has none. Its place then stays put.
   const [asked] = useState(() => cloud && knownBoardName() === null);
@@ -77,31 +79,27 @@ export function BoardsWelcome() {
   };
   return (
     <BoardBackdrop
-      className="relative flex min-h-full flex-1 flex-col px-4 pt-12 pb-8 motion-safe:animate-page-fade sm:pt-16 sm:pb-10"
+      className="relative flex min-h-full flex-1 flex-col px-4 pt-20 pb-8 motion-safe:animate-page-fade sm:pt-16 sm:pb-10"
       data-boards-welcome
     >
+      {/* Alone on the page, the welcome carries the name the sidebar otherwise shows. */}
+      {alone ? (
+        <TinkjamWordmark
+          className="absolute start-4 top-5 inline-flex items-center gap-2 sm:start-7 sm:top-6"
+          markClassName="size-6 shrink-0"
+          wordClassName="text-wordmark-sm"
+        />
+      ) : null}
       <AccountCorner />
       {/* Top-anchored on a phone, so the line under the card can change without moving the card. */}
-      <div className="mx-auto mb-auto flex w-full max-w-2xl flex-col gap-4 motion-safe:animate-page-rise sm:my-auto">
+      <div className="mx-auto mb-auto flex w-full max-w-[26.25rem] flex-col motion-safe:animate-page-rise sm:my-auto">
         <form
-          className="flex w-full flex-col gap-5 rounded-board border border-board-hairline bg-card p-5 text-card-foreground shadow-board sm:gap-7 sm:p-8"
+          className="flex w-full flex-col gap-5 rounded-dialog border border-rule bg-raised p-6 text-card-foreground shadow-modal sm:p-8"
           onSubmit={start}
         >
-          <div className="flex flex-col gap-3">
-            <TinkjamWordmark wordClassName="text-2xl" markClassName="size-7 shrink-0" />
-            <div className="flex flex-col gap-1.5">
-              <h1 className="text-xl leading-tight font-semibold tracking-tight text-balance sm:text-2xl">
-                Your team and your agents, on one board
-              </h1>
-              <p className="text-sm text-pretty text-muted-foreground">
-                Notes, links and tasks in one place, with your team and your agents working on them
-                together. Nothing to install.
-              </p>
-            </div>
-          </div>
           <fieldset className="flex min-w-0 flex-col">
-            <legend className="mb-2 text-sm font-medium">Start with</legend>
-            <ul className="grid grid-cols-3 gap-2 sm:gap-3" data-welcome-templates>
+            <legend className="sr-only">Start with</legend>
+            <ul className="grid grid-cols-3 gap-2" data-welcome-templates>
               {STARTER_BOARD_TEMPLATES.map((choice) => {
                 const selected = choice.id === template.id;
                 return (
@@ -110,100 +108,87 @@ export function BoardsWelcome() {
                       type="button"
                       aria-pressed={selected}
                       className={cn(
-                        "relative flex h-full w-full cursor-pointer flex-col overflow-hidden rounded-board border bg-card text-start outline-none transition-[border-color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+                        "relative flex h-full w-full cursor-pointer flex-col overflow-hidden rounded-xl border bg-raised text-start outline-none transition-[border-color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
                         selected
-                          ? "border-primary shadow-board ring-1 ring-primary"
-                          : "border-board-hairline shadow-paint hover:border-foreground/25",
+                          ? "border-primary ring-1 ring-primary"
+                          : "border-rule hover:border-quiet/60",
                       )}
                       data-welcome-template={choice.id}
                       onClick={() => change({ templateId: choice.id })}
                     >
-                      <span className="border-b border-board-hairline">
-                        <BoardThumbnail shapes={boardTemplateShapes(choice, cloud)} />
+                      <span className="border-b border-rule">
+                        <BoardThumbnail shapes={boardTemplateShapes(choice, cloud)} ratio="tile" />
                       </span>
                       {selected ? (
                         <span
                           aria-hidden
-                          className="absolute end-1.5 top-1.5 grid size-5 place-items-center rounded-full bg-primary text-primary-foreground"
+                          className="absolute end-1.5 top-1.5 grid size-4.5 place-items-center rounded-full bg-primary text-primary-foreground"
                         >
                           <CheckIcon className="size-3" />
                         </span>
                       ) : null}
-                      <span className="flex flex-col gap-0.5 px-2 py-1.5 sm:p-2.5">
-                        <span className="text-xs leading-tight font-semibold sm:text-sm">
-                          {choice.name}
-                        </span>
-                        <span className="hidden text-xs text-muted-foreground sm:block">
-                          {describe(choice)}
-                        </span>
+                      <span className="truncate px-2 py-1.5 text-xs font-semibold text-foreground">
+                        {choice.name}
                       </span>
                     </button>
                   </li>
                 );
               })}
             </ul>
-            {/* On a phone the cards are too narrow for their descriptions: the chosen one's is here. */}
-            <p className="mt-2 min-h-8 text-xs text-muted-foreground sm:hidden">
-              {describe(template)}
-            </p>
+            <p className="mt-2 text-xs text-quiet">{describe(template)}</p>
           </fieldset>
-          <div className="flex flex-col gap-2">
-            <div className="grid grid-cols-2 gap-3">
-              {typing ? (
-                <label className="flex min-w-0 flex-col gap-1.5 text-sm font-medium">
-                  Your name
-                  <Input
-                    size="lg"
-                    autoComplete="name"
-                    maxLength={GUEST_NAME_MAX_LENGTH}
-                    value={name}
-                    aria-describedby={helpId}
-                    onFocus={(event) => event.currentTarget.select()}
-                    onChange={(event) => change({ name: event.currentTarget.value })}
-                    data-welcome-name
-                  />
-                </label>
-              ) : null}
-              {named ? (
-                <div className="flex min-w-0 flex-col gap-1.5 text-sm font-medium">
-                  Your name
-                  <span
-                    className="flex h-10 items-center truncate font-normal sm:h-9"
-                    data-welcome-account-name
-                  >
-                    {accountName}
-                  </span>
-                </div>
-              ) : null}
-              <label
-                className={cn(
-                  "flex min-w-0 flex-col gap-1.5 text-sm font-medium",
-                  asked ? null : "col-span-2",
-                )}
-              >
-                Board name
+          <h1 className="font-heading text-heading-sm font-semibold tracking-heading text-balance text-foreground">
+            Your team and your agents, on one board
+          </h1>
+          <div className="flex flex-col gap-3.5">
+            {typing ? (
+              <label className="flex min-w-0 flex-col gap-1.5 text-ui-sm font-semibold text-foreground">
+                Your name
                 <Input
                   size="lg"
-                  maxLength={CLOUD_BOARD_TITLE_MAX_LENGTH}
-                  placeholder={UNTITLED_BOARD}
-                  value={draft.title}
-                  aria-describedby={helpId}
-                  onChange={(event) => change({ title: event.currentTarget.value })}
-                  data-welcome-title
+                  autoComplete="name"
+                  maxLength={GUEST_NAME_MAX_LENGTH}
+                  value={name}
+                  aria-invalid={needsName || undefined}
+                  aria-describedby={needsName ? helpId : undefined}
+                  onFocus={(event) => event.currentTarget.select()}
+                  onChange={(event) => change({ name: event.currentTarget.value })}
+                  data-welcome-name
                 />
               </label>
-            </div>
-            <p id={helpId} className="text-xs text-pretty text-muted-foreground">
-              {needsName ? "Add your name to start a board. " : ""}
-              {typing
-                ? "People you invite see your name. Naming the board is optional, and you can rename it later."
-                : "Naming the board is optional, and you can rename it later."}
-            </p>
+            ) : null}
+            {named ? (
+              <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm font-semibold text-foreground">
+                Your name
+                <span
+                  className="flex h-10 items-center truncate text-sm font-normal sm:h-9"
+                  data-welcome-account-name
+                >
+                  {accountName}
+                </span>
+              </div>
+            ) : null}
+            <label className="flex min-w-0 flex-col gap-1.5 text-ui-sm font-semibold text-foreground">
+              Board name
+              <Input
+                size="lg"
+                maxLength={CLOUD_BOARD_TITLE_MAX_LENGTH}
+                placeholder={UNTITLED_BOARD}
+                value={draft.title}
+                onChange={(event) => change({ title: event.currentTarget.value })}
+                data-welcome-title
+              />
+            </label>
+            {needsName ? (
+              <p id={helpId} className="text-xs text-danger" role="alert">
+                Add your name to start a board.
+              </p>
+            ) : null}
           </div>
-          <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:items-center sm:gap-3">
+          <div>
             <Button
               type="submit"
-              size="lg"
+              size="pill"
               disabled={busy || needsName}
               aria-busy={busy || undefined}
               data-welcome-start
@@ -211,46 +196,37 @@ export function BoardsWelcome() {
               {busy ? <Spinner aria-hidden /> : null}
               Start a board
             </Button>
-            {sample === null ? null : (
-              <Button
-                variant="outline"
-                size="lg"
-                render={<a href={sample} />}
-                data-welcome-sample-board
-              >
-                Look around a sample board
-              </Button>
-            )}
           </div>
+          {sample === null && !boardAccountsEnabled() ? null : (
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-rule pt-4">
+              {sample === null ? (
+                <span />
+              ) : (
+                <InlineButton tone="accent" render={<a href={sample} />} data-welcome-sample-board>
+                  Look around a sample board
+                </InlineButton>
+              )}
+              {boardAccountsEnabled() ? (
+                account.status === "signed-out" ? (
+                  <WelcomeSignIn />
+                ) : account.status === "signed-in" ? (
+                  <CreateWorkspaceButton />
+                ) : null
+              ) : null}
+            </div>
+          )}
         </form>
-        {/* Outside the form: a dialog's own form would otherwise submit this one too. Its height is
-            kept whoever is signed in, so the card above never moves. */}
-        {boardAccountsEnabled() ? (
-          <div className="flex min-h-9 flex-wrap items-center justify-center gap-x-2 gap-y-1 text-center text-sm text-muted-foreground">
-            {account.status === "signed-out" ? (
-              <WelcomeSignIn />
-            ) : account.status === "signed-in" ? (
-              <>
-                Working with a team?
-                <CreateWorkspaceButton />
-              </>
-            ) : null}
-          </div>
-        ) : null}
       </div>
     </BoardBackdrop>
   );
 }
 
-/** The way to an account, said for someone who has none yet: optional, and why it is worth it. */
+/** The way to an account; optional, and the boards made before it stay. */
 function WelcomeSignIn() {
   const { openAuthPrompt } = useT3ConnectAuthPrompt();
   return (
-    <p className="flex flex-wrap items-center justify-center">
-      <Button type="button" variant="link" size="sm" onClick={openAuthPrompt} data-welcome-sign-in>
-        Sign in or create an account
-      </Button>
-      so your boards follow you to every device.
-    </p>
+    <InlineButton tone="accent" onClick={openAuthPrompt} data-welcome-sign-in>
+      Sign in
+    </InlineButton>
   );
 }

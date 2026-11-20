@@ -21,6 +21,7 @@ import { cn } from "~/lib/utils";
 import { formatRecentTimestamp } from "../../timestampFormat";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
+import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
 
 /** What an item says happened, in a few words. */
@@ -60,13 +61,27 @@ const requestStatus = (item: CloudInboxItem) =>
  * The signed-in person's inbox: a bell with how many are unread, and the list. `nudge` changes
  * when the open board put something in it, which reads the count again at once.
  */
-export function InboxBell({ nudge }: { readonly nudge?: string | undefined }) {
+export function InboxBell({
+  nudge,
+  presentation = "icon",
+}: {
+  readonly nudge?: string | undefined;
+  /** A bell icon, or a row of the sidebar's boards navigation. */
+  readonly presentation?: "icon" | "sidebar";
+}) {
   const account = useBoardAccount();
   if (account.status !== "signed-in") return null;
-  return <SignedInBell nudge={nudge} />;
+  return <SignedInBell nudge={nudge} presentation={presentation} />;
 }
 
-function SignedInBell({ nudge }: { readonly nudge: string | undefined }) {
+function SignedInBell({
+  nudge,
+  presentation,
+}: {
+  readonly nudge: string | undefined;
+  readonly presentation: "icon" | "sidebar";
+}) {
+  const sidebar = presentation === "sidebar";
   const count = useInboxCount();
   const inbox = useInbox();
   const [open, setOpen] = useState(false);
@@ -108,7 +123,7 @@ function SignedInBell({ nudge }: { readonly nudge: string | undefined }) {
       toastManager.add({ type: "error", title: "Could not answer", description: failed });
     }
   };
-  return (
+  const popover = (
     <Popover
       open={open}
       onOpenChange={(next) => {
@@ -117,22 +132,48 @@ function SignedInBell({ nudge }: { readonly nudge: string | undefined }) {
       }}
     >
       <PopoverTrigger
-        render={<Button size="icon-sm" variant="ghost-muted" data-inbox-bell />}
+        render={
+          sidebar ? (
+            <SidebarMenuButton size="nav" variant="nav" data-inbox-bell />
+          ) : (
+            <Button size="icon-sm" variant="ghost-muted" data-inbox-bell />
+          )
+        }
         aria-label={unread === 0 ? "Inbox" : `Inbox, ${unread} unread`}
       >
-        <span className="relative">
-          <BellIcon />
-          {unread === 0 ? null : (
-            <span
-              aria-hidden
-              className="absolute -top-1.5 -right-2 grid h-3.5 min-w-3.5 place-items-center rounded-full bg-primary px-1 text-3xs leading-none font-semibold text-primary-foreground tabular-nums"
-            >
-              {unread > 99 ? "99+" : unread}
-            </span>
-          )}
-        </span>
+        {sidebar ? (
+          <>
+            <BellIcon />
+            <span className="min-w-0 flex-1 truncate">Inbox</span>
+            {unread === 0 ? null : (
+              <span
+                aria-hidden
+                className="ms-auto grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-primary px-1.5 text-xs leading-none font-semibold text-primary-foreground tabular-nums"
+              >
+                {unread > 99 ? "99+" : unread}
+              </span>
+            )}
+          </>
+        ) : (
+          <span className="relative">
+            <BellIcon />
+            {unread === 0 ? null : (
+              <span
+                aria-hidden
+                className="absolute -top-1.5 -right-2 grid h-3.5 min-w-3.5 place-items-center rounded-full bg-primary px-1 text-3xs leading-none font-semibold text-primary-foreground tabular-nums"
+              >
+                {unread > 99 ? "99+" : unread}
+              </span>
+            )}
+          </span>
+        )}
       </PopoverTrigger>
-      <PopoverPopup width="md" align="end" padding="compact">
+      <PopoverPopup
+        width="md"
+        side={sidebar ? "right" : "bottom"}
+        align={sidebar ? "start" : "end"}
+        padding="compact"
+      >
         <div className="mb-2 flex items-center gap-2">
           <PopoverTitle className="flex-1">Inbox</PopoverTitle>
           {unread === 0 ? null : (
@@ -151,35 +192,37 @@ function SignedInBell({ nudge }: { readonly nudge: string | undefined }) {
         ) : (
           <ul className="-mx-1 flex max-h-96 flex-col overflow-y-auto" data-inbox-list>
             {inbox.items.map((item) => (
-              <li key={item.id} className="relative">
+              <li key={item.id} className="relative border-b border-rule last:border-b-0">
                 <button
                   type="button"
-                  className="flex w-full flex-col gap-0.5 rounded-md px-2 py-2 text-start hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+                  className="flex w-full flex-col gap-0.5 rounded-lg px-2 py-2.5 text-start hover:bg-hover focus-visible:bg-hover focus-visible:outline-none"
                   onClick={() => void openItem(item)}
                 >
                   <span className="flex items-center gap-1.5 text-sm">
                     <span
                       aria-hidden
                       className={cn(
-                        "size-1.5 shrink-0 rounded-full",
+                        "size-1.75 shrink-0 rounded-full",
                         item.read === true ? "bg-transparent" : "bg-primary",
                       )}
                     />
-                    <span className={cn("min-w-0 truncate", item.read !== true && "font-medium")}>
+                    <span
+                      className={cn(
+                        "min-w-0 truncate text-foreground",
+                        item.read !== true && "font-semibold",
+                      )}
+                    >
                       {inboxItemHeadline(item)}
                     </span>
-                    <time
-                      dateTime={item.at}
-                      className="ms-auto shrink-0 text-2xs text-muted-foreground"
-                    >
+                    <time dateTime={item.at} className="ms-auto shrink-0 text-2xs text-quiet">
                       {formatRecentTimestamp(item.at, "locale", nowMs)}
                     </time>
                   </span>
-                  <span className="truncate ps-3 text-xs text-muted-foreground">
+                  <span className="truncate ps-3.25 text-xs text-quiet">
                     {item.shareId === undefined ? "in" : "on"} {item.title}
                   </span>
                   {item.excerpt === undefined ? null : (
-                    <span className="line-clamp-2 ps-3 text-xs">{item.excerpt}</span>
+                    <span className="line-clamp-2 ps-3.25 text-xs text-body">{item.excerpt}</span>
                   )}
                 </button>
                 {item.kind !== "access-request" ? null : requestStatus(item) === null ? (
@@ -212,4 +255,5 @@ function SignedInBell({ nudge }: { readonly nudge: string | undefined }) {
       </PopoverPopup>
     </Popover>
   );
+  return sidebar ? <SidebarMenuItem>{popover}</SidebarMenuItem> : popover;
 }

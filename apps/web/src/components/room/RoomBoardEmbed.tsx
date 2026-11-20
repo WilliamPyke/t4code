@@ -78,10 +78,10 @@ export function BoardEmbedIcon({ source }: { readonly source: RoomEmbedSource })
   return (
     <span
       aria-hidden
-      className="grid size-4 shrink-0 place-items-center rounded-sm"
+      className="grid size-5.5 shrink-0 place-items-center rounded-md"
       style={{ backgroundColor: tile, color: ink }}
     >
-      <Icon className="size-2.5" strokeWidth={2.5} />
+      <Icon className="size-3.5" strokeWidth={2.25} />
     </span>
   );
 }

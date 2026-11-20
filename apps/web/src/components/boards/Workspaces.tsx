@@ -7,14 +7,11 @@ import {
 } from "@t3tools/contracts";
 import {
   CheckIcon,
-  ChevronDownIcon,
   CopyIcon,
   EllipsisIcon,
-  LayoutGridIcon,
   LogOutIcon,
   PlusIcon,
   Trash2Icon,
-  UserIcon,
   UsersIcon,
 } from "lucide-react";
 import { type FormEvent, useState } from "react";
@@ -22,7 +19,6 @@ import { type FormEvent, useState } from "react";
 import { sharedNameIds } from "~/guest/boardAccount.logic";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import {
-  type WorkspaceScope,
   createWorkspace,
   deleteWorkspace,
   endWorkspaceInvite,
@@ -37,7 +33,9 @@ import {
 import { cn } from "~/lib/utils";
 import { ensureLocalApi } from "~/localApi";
 
+import { BOARD_PERSON_COLORS } from "../room/roomBoard.logic";
 import { paintSwatchClassName } from "../room/RoomNoteColor";
+import { AvatarStack } from "../ui/avatar";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -49,16 +47,9 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
-import {
-  Menu,
-  MenuItem,
-  MenuPopup,
-  MenuRadioGroup,
-  MenuRadioItem,
-  MenuSeparator,
-  MenuTrigger,
-} from "../ui/menu";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 /** A workspace's mark: its first letter on its colour. */
 export function WorkspaceMark({
@@ -91,72 +82,6 @@ const memberColor = (memberId: string): RoomBoardNoteColor => {
   return ROOM_BOARD_NOTE_COLORS[hash % ROOM_BOARD_NOTE_COLORS.length]!;
 };
 
-const scopeLabel = (scope: WorkspaceScope, workspaces: ReadonlyArray<CloudWorkspace>) =>
-  scope === "all"
-    ? "All boards"
-    : scope === "personal"
-      ? "My boards"
-      : (workspaces.find((workspace) => workspace.id === scope)?.name ?? "All boards");
-
-/** Picks which boards the home and sidebar show, and starts a workspace. */
-export function WorkspaceSwitcher({
-  scope,
-  workspaces,
-}: {
-  readonly scope: WorkspaceScope;
-  readonly workspaces: ReadonlyArray<CloudWorkspace>;
-}) {
-  const [creating, setCreating] = useState(false);
-  const current = workspaces.find((workspace) => workspace.id === scope);
-  return (
-    <>
-      <Menu>
-        <MenuTrigger
-          render={<Button variant="outline" aria-label="Show boards from" />}
-          data-workspace-switcher
-        >
-          {current === undefined ? (
-            scope === "personal" ? (
-              <UserIcon />
-            ) : (
-              <LayoutGridIcon />
-            )
-          ) : (
-            <WorkspaceMark name={current.name} color={current.color} />
-          )}
-          <span className="max-w-48 truncate">{scopeLabel(scope, workspaces)}</span>
-          <ChevronDownIcon />
-        </MenuTrigger>
-        <MenuPopup align="start">
-          <MenuRadioGroup value={scope} onValueChange={(value) => setWorkspaceScope(value)}>
-            <MenuRadioItem value="all" closeOnClick>
-              <LayoutGridIcon />
-              All boards
-            </MenuRadioItem>
-            <MenuRadioItem value="personal" closeOnClick>
-              <UserIcon />
-              My boards
-            </MenuRadioItem>
-            {workspaces.length > 0 ? <MenuSeparator /> : null}
-            {workspaces.map((workspace) => (
-              <MenuRadioItem key={workspace.id} value={workspace.id} closeOnClick>
-                <WorkspaceMark name={workspace.name} color={workspace.color} />
-                <span className="min-w-0 truncate">{workspace.name}</span>
-              </MenuRadioItem>
-            ))}
-          </MenuRadioGroup>
-          <MenuSeparator />
-          <MenuItem onClick={() => setCreating(true)} data-new-workspace>
-            <PlusIcon />
-            New workspace
-          </MenuItem>
-        </MenuPopup>
-      </Menu>
-      {creating ? <NewWorkspaceDialog onClose={() => setCreating(false)} /> : null}
-    </>
-  );
-}
-
 /** Starts a workspace from a screen with no switcher yet, such as the welcome. */
 export function CreateWorkspaceButton() {
   const [creating, setCreating] = useState(false);
@@ -166,6 +91,32 @@ export function CreateWorkspaceButton() {
         <UsersIcon />
         Create a workspace for your team
       </Button>
+      {creating ? <NewWorkspaceDialog onClose={() => setCreating(false)} /> : null}
+    </>
+  );
+}
+
+/** The + beside the sidebar's Workspaces label. */
+export function NewWorkspaceButton() {
+  const [creating, setCreating] = useState(false);
+  return (
+    <>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              size="icon-xs"
+              variant="ghost-muted"
+              aria-label="New workspace"
+              onClick={() => setCreating(true)}
+              data-sidebar-new-workspace
+            />
+          }
+        >
+          <PlusIcon />
+        </TooltipTrigger>
+        <TooltipPopup side="right">New workspace</TooltipPopup>
+      </Tooltip>
       {creating ? <NewWorkspaceDialog onClose={() => setCreating(false)} /> : null}
     </>
   );
@@ -302,13 +253,13 @@ export function WorkspaceInvite({ workspace }: { readonly workspace: CloudWorksp
   return (
     // Stacked on a phone: beside a wide button the words have no room.
     <div
-      className="flex flex-col gap-3 rounded-board border border-dashed border-foreground/20 p-4 sm:flex-row sm:items-center"
+      className="flex flex-col gap-3 rounded-tile border border-dashed border-rule p-4 sm:flex-row sm:items-center"
       data-workspace-invite
     >
       <div className="flex min-w-0 flex-1 items-start gap-3 sm:items-center">
         <WorkspaceMark name={workspace.name} color={workspace.color} size="md" />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <p className="text-sm font-semibold">
+          <p className="text-ui-md font-semibold text-foreground">
             {alone ? `Invite your team to ${workspace.name}` : `No boards in ${workspace.name} yet`}
           </p>
           <p className="text-sm text-muted-foreground">
@@ -328,15 +279,34 @@ export function WorkspaceInvite({ workspace }: { readonly workspace: CloudWorksp
   );
 }
 
-/** The people button beside the switcher, with the invite link and the members list. */
+/**
+ * The workspace's people beside its name, and Invite: both open the members list with the invite
+ * link.
+ */
 export function WorkspacePeople({ workspace }: { readonly workspace: CloudWorkspace }) {
   const [open, setOpen] = useState(false);
+  const count = workspace.members.length;
   return (
     <>
-      <Button variant="outline" onClick={() => setOpen(true)} data-workspace-people>
-        <UsersIcon />
-        People
-        <span className="text-muted-foreground">{workspace.members.length}</span>
+      <button
+        type="button"
+        className="hidden rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset sm:flex"
+        aria-label={`People in ${workspace.name}: ${count}`}
+        onClick={() => setOpen(true)}
+        data-workspace-people
+      >
+        <AvatarStack
+          label={`People in ${workspace.name}`}
+          max={5}
+          people={workspace.members.map((member, index) => ({
+            key: member.memberId,
+            name: member.name,
+            color: BOARD_PERSON_COLORS[index % BOARD_PERSON_COLORS.length]!,
+          }))}
+        />
+      </button>
+      <Button variant="outline" size="md" onClick={() => setOpen(true)} data-workspace-invite-open>
+        Invite
       </Button>
       {open ? <WorkspacePeopleDialog workspace={workspace} onClose={() => setOpen(false)} /> : null}
     </>

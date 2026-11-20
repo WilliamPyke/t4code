@@ -26,21 +26,28 @@ export function ConnectComputerNudge() {
   if (hasComputer || dismissed) return null;
   return (
     <section
-      className="flex flex-col gap-3 rounded-xl border border-info/32 bg-info/4 px-3.5 py-3 text-sm sm:flex-row sm:items-center"
+      className="flex flex-col gap-3 rounded-tile border border-rule bg-raised p-4 text-sm sm:flex-row sm:items-center"
       data-connect-computer-nudge
     >
-      <div className="flex min-w-0 flex-1 gap-2.5">
-        <BotIcon className="mt-0.5 size-4 shrink-0 text-info" aria-hidden />
+      <div className="flex min-w-0 flex-1 items-start gap-3 sm:items-center">
+        <span
+          aria-hidden
+          className="grid size-10 shrink-0 place-items-center rounded-xl bg-accent-tint text-accent-text"
+        >
+          <BotIcon className="size-4.5" />
+        </span>
         <div className="flex min-w-0 flex-col gap-0.5">
-          <h2 className="font-medium">Bring your AI agents onto your boards</h2>
-          <p className="text-muted-foreground">
+          <h2 className="text-ui-md font-semibold text-foreground">
+            Bring your AI agents onto your boards
+          </h2>
+          <p className="text-body">
             Get Tinkjam Sync for your computer and press Connect. Your boards can then use Claude
             Code or Codex on it.
           </p>
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
-        <Button size="sm" onClick={openConnectComputer}>
+        <Button size="md" onClick={openConnectComputer}>
           <DownloadIcon />
           Get Tinkjam Sync
         </Button>

@@ -25,7 +25,7 @@ import {
 } from "./roomBoard.logic";
 import { useBoardPointers } from "./roomBoardLive";
 
-const MINIMAP_SIZE: BoardSize = { width: 192, height: 128 };
+const MINIMAP_SIZE: BoardSize = { width: 168, height: 104 };
 /** Below this window width the minimap starts hidden, until someone shows it. */
 const MINIMAP_MIN_WINDOW_WIDTH = 900;
 
@@ -182,7 +182,7 @@ export function BoardMinimap({
         role="img"
         width={MINIMAP_SIZE.width}
         height={MINIMAP_SIZE.height}
-        className="block cursor-pointer touch-none bg-board-canvas"
+        className="block cursor-pointer touch-none bg-card"
         onPointerDown={(event) => {
           if (event.button !== 0) return;
           event.currentTarget.setPointerCapture(event.pointerId);
@@ -217,11 +217,11 @@ export function BoardMinimap({
           y={viewRect.y}
           width={viewRect.width}
           height={viewRect.height}
-          rx={2}
+          rx={4}
           fill="var(--color-primary)"
           fillOpacity={0.06}
           stroke="var(--color-primary)"
-          strokeWidth={1}
+          strokeWidth={1.5}
         />
         <g transform={worldTransform}>
           <MinimapPointers scale={frame.scale} />

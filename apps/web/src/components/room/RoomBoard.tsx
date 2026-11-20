@@ -447,10 +447,17 @@ import {
   BoardChip,
   type BoardChipTone,
   BoardFloat,
+  boardChromeAt,
   BoardScrollTail,
   PersonDot,
 } from "./BoardChrome";
-import { BoxBoardWork, BoxProgress, BoxRequests, BoxTurns } from "./RoomBoardThreadBox";
+import {
+  BoxBoardWork,
+  BoxProgress,
+  BoxRequests,
+  BoxStateEdge,
+  BoxTurns,
+} from "./RoomBoardThreadBox";
 import {
   type BoardAgentEntry,
   type BoardAgentRecent,
@@ -617,7 +624,7 @@ function withFlag(flag: { current: boolean }, run: () => void) {
   }
 }
 
-/** A tool on the board's toolbar: an icon, named on hover and to screen readers. */
+/** A tool on the board's rail: an icon, named on hover and to screen readers. */
 function BoardTool({
   label,
   hint,
@@ -633,7 +640,7 @@ function BoardTool({
       >
         {children}
       </TooltipTrigger>
-      <TooltipPopup side="top">{hint ?? label}</TooltipPopup>
+      <TooltipPopup side="right">{hint ?? label}</TooltipPopup>
     </Tooltip>
   );
 }
@@ -653,9 +660,9 @@ function BoardToolHint({
   return (
     <p
       {...props}
-      className="pointer-events-none absolute inset-x-0 bottom-28 z-30 flex justify-center px-4 @4xl/board:bottom-20"
+      className="pointer-events-none absolute inset-x-0 bottom-28 z-30 flex justify-center px-4 @xl/board:bottom-5"
     >
-      <span className="flex items-center gap-1 rounded-board border border-board-hairline bg-card py-1 ps-3 pe-1 text-center text-xs text-muted-foreground shadow-board">
+      <span className="flex items-center gap-1 rounded-full border border-board-hairline bg-card py-1 ps-3.5 pe-1 text-center text-xs text-muted-foreground shadow-board">
         <span className="py-0.5 pe-2">
           {children}
           {touch ? null : " Esc to stop."}
@@ -672,9 +679,13 @@ function BoardToolHint({
   );
 }
 
-// A phone's toolbar has no room for them: without, its last tool stays inside it.
+// Across the rail, or upright in the narrow board's bottom bar. A phone's bar has no room for
+// them: without, its last tool stays inside it.
 const BoardToolDivider = () => (
-  <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-board-hairline @max-md/board:hidden" />
+  <span
+    aria-hidden
+    className="my-1 h-px w-5.5 shrink-0 bg-board-hairline @max-xl/board:mx-1 @max-xl/board:my-0 @max-xl/board:h-5 @max-xl/board:w-px @max-md/board:hidden"
+  />
 );
 
 /** A toolbar button's words, read out but not shown while the board is too narrow for them. */
@@ -682,12 +693,12 @@ const ToolLabel = ({ children }: { readonly children: ReactNode }) => (
   <span className="sr-only @5xl/board:not-sr-only">{children}</span>
 );
 
-// One text, read the same at every width: a narrow board shows only the number.
+// One text, read the same everywhere; the rail shows only the number.
 const ResolvedCount = ({ count }: { readonly count: number }) => (
   <span className="tabular-nums">
-    <span className="sr-only @5xl/board:not-sr-only">Resolved (</span>
+    <span className="sr-only">Resolved (</span>
     {count}
-    <span className="sr-only @5xl/board:not-sr-only">)</span>
+    <span className="sr-only">)</span>
   </span>
 );
 
@@ -895,7 +906,7 @@ const chromeCoverOf = (surface: HTMLElement | null) => {
   const reach = (edge: "top" | "bottom") =>
     Math.max(
       0,
-      ...[...root.querySelectorAll<HTMLElement>(`[data-board-chrome="${edge}"]`)].map((chrome) => {
+      ...boardChromeAt(root, edge).map((chrome) => {
         const drawn = chrome.getBoundingClientRect();
         return edge === "top" ? drawn.bottom - area.top : area.top + area.height - drawn.top;
       }),
@@ -5361,48 +5372,47 @@ export function RoomBoard({
 
   return (
     <div className="@container/board flex min-h-0 min-w-0 flex-1 flex-col overflow-clip overscroll-none">
-      {/* The board fills this; its chrome floats over the canvas. */}
+      {/* The board fills this below its header; the tools, zoom and minimap float over the canvas. */}
       <div
         className={cn(
           "group/room relative flex min-h-0 flex-1 flex-col",
-          planShown && "bg-board-canvas",
+          planShown && "bg-background",
         )}
       >
         {power.overlay}
-        {/* Over the canvas on the board; above the columns in the Plan, which has no canvas. */}
+        {/* One bar above the canvas and the Plan alike: the board's name, its views, its people. */}
         <header
           data-board-chrome="top"
           className={cn(
-            // One row where it fits: the title gives way first, then sharing folds. A narrow board
-            // gets two: the title and Agents, then the views and sharing.
-            "pointer-events-none z-30 flex items-start gap-2 @max-xl/board:flex-wrap",
-            planShown ? "relative mx-3 mt-3 mb-2" : "absolute inset-x-3 top-3",
+            // One row where it fits; a narrow board puts the views on a row of their own.
+            "relative z-30 flex h-14 shrink-0 items-center gap-3 border-b border-board-hairline bg-background pr-3 pl-4 @3xl/board:pr-4 @3xl/board:pl-5",
+            "@max-xl/board:h-auto @max-xl/board:flex-wrap @max-xl/board:gap-x-2 @max-xl/board:gap-y-2 @max-xl/board:py-2 @max-xl/board:pl-2",
             COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
           )}
         >
-          <BoardFloat className="pointer-events-auto min-w-0 gap-0.5 p-1 pe-3 @max-xl/board:grow @max-xl/board:basis-[70%]">
+          <div className="flex min-w-0 flex-1 basis-0 items-center gap-1">
             <Button size="sm" variant="ghost" onClick={onBack ?? onOpenThread}>
               <ArrowLeftIcon />
               <ToolLabel>{backLabel}</ToolLabel>
             </Button>
             <span aria-hidden className="me-1.5 h-4 w-px shrink-0 bg-board-hairline" />
-            <h1 className="min-w-0 truncate text-sm font-semibold @max-xl/board:flex-1">
+            <h1 className="min-w-0 truncate text-ui-md font-semibold text-foreground">
               {titleEditor ?? title}
               {sharing === undefined ? (
-                <span className="ms-2 font-normal text-muted-foreground">
+                <span className="ms-2 text-ui-sm font-normal text-muted-foreground">
                   {room === null ? "Not shared" : (summary ?? roomSummary(room, online.length))}
                 </span>
               ) : null}
             </h1>
             {power.menu}
-          </BoardFloat>
+          </div>
           {plannable ? (
-            <BoardFloat className="pointer-events-auto shrink-0 p-1 @max-xl/board:order-2">
+            <div className="flex shrink-0 justify-center @max-xl/board:order-last @max-xl/board:basis-full">
               <BoardViewSwitch view={planShown ? pickedView : "board"} onView={switchView} />
-            </BoardFloat>
+            </div>
           ) : null}
           {/* Passing states sit under the header's right end, never squeezing the title. */}
-          <div className="pointer-events-auto absolute end-0 top-full mt-2 flex flex-col items-end gap-2">
+          <div className="absolute end-3 top-full mt-3 flex flex-col items-end gap-2">
             {firstView === null || view !== firstView || planShown ? null : (
               <BoardFloat className="gap-2 py-1 ps-3 pe-1 text-xs" data-board-first-view>
                 Showing where to start
@@ -5432,8 +5442,7 @@ export function RoomBoard({
             )}
           </div>
           <div
-            // On a narrow board its floats are the header's own, placed across its two rows.
-            className="pointer-events-auto ms-auto flex shrink-0 items-center gap-2 @max-xl/board:contents"
+            className="flex min-w-0 flex-1 basis-0 items-center justify-end gap-2 @max-xl/board:flex-none"
             // Copying the invite link, from here or from the guide, is the guide's invite step.
             onClickCapture={(event) => {
               if (
@@ -5482,15 +5491,13 @@ export function RoomBoard({
               />
             )}
             {sharing === undefined ? null : sharingFolds ? (
-              <BoardFloat className="pointer-events-auto min-w-0 gap-1.5 p-1 ps-2 @max-xl/board:order-3 @max-xl/board:ms-auto @max-xl/board:gap-1 @max-xl/board:ps-1">
-                {sharing}
-              </BoardFloat>
+              <div className="flex min-w-0 items-center gap-2 @max-xl/board:gap-1">{sharing}</div>
             ) : (
               <>
-                <BoardFloat className="min-w-0 gap-1.5 p-1 ps-2 @max-xl/board:hidden">
+                <div className="flex min-w-0 items-center gap-2 @max-xl/board:hidden">
                   {sharing}
-                </BoardFloat>
-                <BoardFloat className="pointer-events-auto p-1 @max-xl/board:order-3 @max-xl/board:ms-auto @xl/board:hidden">
+                </div>
+                <div className="flex @xl/board:hidden">
                   <Popover>
                     <PopoverTrigger
                       render={
@@ -5508,7 +5515,7 @@ export function RoomBoard({
                       <div className="flex flex-wrap items-center gap-1.5">{sharing}</div>
                     </PopoverPopup>
                   </Popover>
-                </BoardFloat>
+                </div>
               </>
             )}
           </div>
@@ -5516,15 +5523,23 @@ export function RoomBoard({
         {/* Someone who can only look gets no tools at all, not hidden ones. */}
         {viewOnly ? null : (
           <div
-            data-board-chrome="bottom"
+            data-board-chrome="rail"
             inert={planShown}
             className={cn(
-              "pointer-events-none absolute inset-x-3 bottom-3 z-30 flex justify-center",
+              // A rail down the board's left, centred between the header and the zoom corner. A
+              // narrow board lays it along the bottom instead, as a phone's thumb expects.
+              "pointer-events-none absolute top-[4.375rem] bottom-[8.75rem] left-3.5 z-30 flex items-center",
+              "@max-xl/board:inset-x-3 @max-xl/board:top-auto @max-xl/board:bottom-3 @max-xl/board:justify-center",
               planShown && "invisible",
             )}
           >
             {/* Tighter on the narrowest phones, so the last tool stays inside it. */}
-            <BoardFloat className="pointer-events-auto max-w-full gap-0.5 overflow-x-auto rounded-xl p-1 @max-sm/board:gap-0 @max-sm/board:px-0.5">
+            <BoardFloat
+              className={cn(
+                "pointer-events-auto max-h-full max-w-full gap-0.5 overflow-y-auto rounded-2xl p-1.5 @max-xl/board:flex-row @max-xl/board:overflow-x-auto @max-xl/board:overflow-y-visible @max-sm/board:gap-0 @max-sm/board:px-0.5",
+                linkDraft === null && "flex-col",
+              )}
+            >
               {linkDraft === null ? (
                 <>
                   <WhyNot reason={cannotAdd}>
@@ -5557,7 +5572,7 @@ export function RoomBoard({
                     </BoardTool>
                   </WhyNot>
                   {cards === undefined ? (
-                    <span className="contents @max-2xl/board:hidden">
+                    <span className="contents @max-xl/board:hidden">
                       <WhyNot reason={cannotAdd}>
                         <BoardTool
                           label="Section"
@@ -5571,7 +5586,7 @@ export function RoomBoard({
                       </WhyNot>
                     </span>
                   ) : null}
-                  <span className="contents @max-2xl/board:hidden">
+                  <span className="contents @max-xl/board:hidden">
                     <WhyNot reason={cannotAdd}>
                       <BoardTool
                         label="Link"
@@ -5604,14 +5619,14 @@ export function RoomBoard({
                             render={
                               <MenuTrigger
                                 disabled={cannotAddThread !== null}
-                                render={<Button size="sm" variant="ghost" aria-label="Thread" />}
+                                render={<Button size="icon" variant="ghost" aria-label="Thread" />}
                               />
                             }
                           >
                             <BotIcon />
-                            <ChevronDownIcon className="-ms-1.5 size-3 opacity-60" />
+                            <ChevronDownIcon className="absolute end-0.5 bottom-0.5 size-2.5 opacity-60" />
                           </TooltipTrigger>
-                          <TooltipPopup side="top">
+                          <TooltipPopup side="right">
                             Thread box: an agent the room can prompt
                           </TooltipPopup>
                         </Tooltip>
@@ -5649,7 +5664,7 @@ export function RoomBoard({
                     </WhyNot>
                   ) : null}
                   {machineToolsShown ? (
-                    <span className="contents @max-2xl/board:hidden">
+                    <span className="contents @max-xl/board:hidden">
                       <WhyNot reason={cannotAddCode}>
                         <BoardTool
                           label="Code"
@@ -5663,7 +5678,7 @@ export function RoomBoard({
                     </span>
                   ) : null}
                   {machineToolsShown ? (
-                    <span className="contents @max-2xl/board:hidden">
+                    <span className="contents @max-xl/board:hidden">
                       <WhyNot reason={cannotAddPullRequest}>
                         <BoardTool
                           label="Pull request"
@@ -5704,7 +5719,7 @@ export function RoomBoard({
                   ) : null}
                   {cards === undefined && resolvedComments > 0 ? (
                     // Only while something is resolved; a narrow board keeps it in More.
-                    <span className="flex @max-2xl/board:hidden">
+                    <span className="flex @max-xl/board:hidden">
                       <Button
                         size="sm"
                         variant={showResolved ? "secondary" : "ghost"}
@@ -5716,7 +5731,7 @@ export function RoomBoard({
                       </Button>
                     </span>
                   ) : null}
-                  <span className="contents @2xl/board:hidden">
+                  <span className="contents @xl/board:hidden">
                     <Menu>
                       <MenuTrigger
                         render={<BoardAgentsMoreButton entries={agentEntries} viewer={viewer} />}
@@ -5826,6 +5841,7 @@ export function RoomBoard({
               )}
               <BoardToolDivider />
               <BoardHistoryButtons
+                side="right"
                 canUndo={
                   canEdit &&
                   (history.undo.length > 0 ||
@@ -5842,25 +5858,13 @@ export function RoomBoard({
           data-board-corner
           inert={planShown}
           className={cn(
-            "absolute bottom-16 left-3 z-30 flex flex-col items-start gap-2 @4xl/board:bottom-3",
+            // Below the rail; above the bottom bar of a narrow board, and in its corner when the
+            // board has no tools to lay along the bottom.
+            "absolute bottom-3.5 left-3.5 z-30 flex flex-col items-start gap-2",
+            !viewOnly && "@max-xl/board:bottom-16 @max-xl/board:left-3",
             planShown && "invisible",
           )}
         >
-          {minimapShown ? (
-            // A selection docked above the toolbar would sit under it.
-            <div className="group-has-[[data-selection-docked]]/room:hidden">
-              <BoardMinimap
-                board={shown}
-                cardIds={cardIds}
-                view={view}
-                surfaceRef={surfaceRef}
-                onView={(next) => {
-                  setFollowing(null);
-                  setView(next);
-                }}
-              />
-            </div>
-          ) : null}
           {catchUp.away.length === 0 ? null : (
             <CatchUpPill
               changes={catchUp.changes}
@@ -5870,62 +5874,79 @@ export function RoomBoard({
               onDismiss={catchUp.dismiss}
             />
           )}
-          <BoardFloat data-board-chrome="bottom" className="gap-0.5 p-1">
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label="Zoom out"
-              onClick={() => thenBoard(() => zoomBy(1 / 1.2))}
-            >
-              <MinusIcon />
-            </Button>
-            <span className="w-10 text-center text-xs text-muted-foreground tabular-nums">
-              {Math.round(view.zoom * 100)}%
-            </span>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label="Zoom in"
-              onClick={() => thenBoard(() => zoomBy(1.2))}
-            >
-              <PlusIcon />
-            </Button>
-            <BoardToolDivider />
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    aria-label="Fit"
-                    onClick={() => thenBoard(fitAll)}
-                  />
-                }
+          <div className="flex items-end gap-2.5">
+            {minimapShown ? (
+              // A selection docked above the toolbar would sit under it.
+              <div className="group-has-[[data-selection-docked]]/room:hidden">
+                <BoardMinimap
+                  board={shown}
+                  cardIds={cardIds}
+                  view={view}
+                  surfaceRef={surfaceRef}
+                  onView={(next) => {
+                    setFollowing(null);
+                    setView(next);
+                  }}
+                />
+              </div>
+            ) : null}
+            <BoardFloat data-board-chrome="bottom" className="h-9 gap-0.5 rounded-full px-1">
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                aria-label="Zoom out"
+                onClick={() => thenBoard(() => zoomBy(1 / 1.2))}
               >
-                <ScanIcon />
-              </TooltipTrigger>
-              <TooltipPopup side="top">Fit everything in view</TooltipPopup>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    size="icon-sm"
-                    variant={minimapShown ? "secondary" : "ghost"}
-                    aria-label="Minimap"
-                    aria-pressed={minimapShown}
-                    onClick={() => thenBoard(toggleMinimap)}
-                  />
-                }
+                <MinusIcon />
+              </Button>
+              <span className="w-10 text-center text-xs font-semibold text-foreground tabular-nums">
+                {Math.round(view.zoom * 100)}%
+              </span>
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                aria-label="Zoom in"
+                onClick={() => thenBoard(() => zoomBy(1.2))}
               >
-                <MapIcon />
-              </TooltipTrigger>
-              <TooltipPopup side="top">
-                {minimapShown ? "Hide minimap" : "Show minimap"}
-              </TooltipPopup>
-            </Tooltip>
-            {cards === undefined && room !== null ? <LineLegend /> : null}
-          </BoardFloat>
+                <PlusIcon />
+              </Button>
+              <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-board-hairline" />
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label="Fit"
+                      onClick={() => thenBoard(fitAll)}
+                    />
+                  }
+                >
+                  <ScanIcon />
+                </TooltipTrigger>
+                <TooltipPopup side="top">Fit everything in view</TooltipPopup>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="icon-xs"
+                      variant={minimapShown ? "secondary" : "ghost"}
+                      aria-label="Minimap"
+                      aria-pressed={minimapShown}
+                      onClick={() => thenBoard(toggleMinimap)}
+                    />
+                  }
+                >
+                  <MapIcon />
+                </TooltipTrigger>
+                <TooltipPopup side="top">
+                  {minimapShown ? "Hide minimap" : "Show minimap"}
+                </TooltipPopup>
+              </Tooltip>
+              {cards === undefined && room !== null ? <LineLegend /> : null}
+            </BoardFloat>
+          </div>
         </div>
         <BoardGuide
           canEdit={canEdit && !viewOnly}
@@ -5961,7 +5982,7 @@ export function RoomBoard({
             "data-[board-resting]:select-none data-[board-resting]:[-webkit-touch-callout:none] [&_[data-board-lifted]]:shadow-lg [&_[data-board-lifted]]:outline-2 [&_[data-board-lifted]]:-outline-offset-2 [&_[data-board-lifted]]:outline-primary/60",
             following !== null && "transition-[background-position,background-size] duration-200",
             // Laid out still under the Plan, so Show on board finds each card where it is.
-            planShown && "absolute inset-0 invisible",
+            planShown && "absolute inset-x-0 top-14 bottom-0 invisible",
           )}
           inert={planShown}
           style={boardGridStyle(view)}
@@ -7167,7 +7188,7 @@ export function RoomBoard({
           {commentPanel()}
           {room === null ? (
             <p className="pointer-events-none absolute inset-x-0 bottom-20 flex justify-center px-4">
-              <span className="rounded-board border border-board-hairline bg-card px-3 py-1.5 text-center text-xs text-muted-foreground shadow-board">
+              <span className="rounded-full border border-board-hairline bg-card px-3 py-1.5 text-center text-xs text-muted-foreground shadow-board">
                 Share this thread with guests and each person who joins gets a card here.
               </span>
             </p>
@@ -7376,7 +7397,7 @@ function LineLegend() {
             <PopoverTrigger
               render={
                 <Button
-                  size="icon-sm"
+                  size="icon-xs"
                   variant="ghost"
                   aria-label="What the lines mean"
                   onPointerDown={stopPointer}
@@ -7789,12 +7810,12 @@ function BoardNote({
           ),
         paper
           ? cn(
-              "rounded-xs text-paint-ink shadow-paint",
+              "rounded-md text-paint-ink shadow-paint",
               noteColorClassName(note.kind === "task" ? (note.color ?? "green") : note.color),
             )
           : titled
-            ? BOARD_WINDOW_CLASS
-            : "rounded-board border border-board-hairline bg-card text-card-foreground shadow-paint",
+            ? cn(BOARD_WINDOW_CLASS, linked !== null && "rounded-xl")
+            : "rounded-xl border border-board-hairline bg-card text-card-foreground shadow-paint",
       )}
       style={{
         left: note.x,
@@ -7826,6 +7847,7 @@ function BoardNote({
       {agentWork === undefined ? null : (
         <AgentWorkMark key={agentWork.stamp} name={agentWork.name} color={agentWork.color} />
       )}
+      {box === undefined ? null : <BoxStateEdge boxId={note.id} />}
       <div
         className={cn(
           "flex cursor-grab items-center gap-1 active:cursor-grabbing",
@@ -7899,6 +7921,7 @@ function BoardNote({
                           : author
                         : `${author} on a reply`}
         </span>
+        {artifact && note.viewOf !== undefined ? <BoardChip tone="live">Live</BoardChip> : null}
         {box === undefined && titled && linked === null && !thread ? (
           <AddedBy name={author} color={boardCursorColor(people.guests, note.guestId)} />
         ) : null}
@@ -8032,7 +8055,9 @@ function BoardNote({
             }
             className={cn(
               "resize-none bg-transparent px-3 pb-3 text-sm leading-snug outline-none placeholder:text-placeholder",
-              paper && "pt-1 pb-1 placeholder:text-paint-ink-muted",
+              // Paper reads like the designs' sticky notes: larger, medium-weight words.
+              paper &&
+                "px-4 pt-0.5 pb-1 text-ui-md leading-snug font-medium placeholder:text-paint-ink-muted",
               note.kind === "task" && note.done === true && "text-paint-ink-muted line-through",
               // Finished with, so it reads quieter; its words stay as they were written.
               agentDone === true && "text-paint-ink-muted",
@@ -8088,7 +8113,11 @@ function BoardNote({
           <TaskProgress note={note} people={people} worker={worker} boxName={boxName} />
         ) : null}
         {note.kind === "task" ? taskRun : null}
-        {agentStatus}
+        {/* Paper says where it stands with its agent beside who wrote it, in its footer. */}
+        {paper && note.pinnedTo === undefined ? null : agentStatus === undefined ||
+          agentStatus === null ? null : (
+          <div className="px-3 pb-1.5">{agentStatus}</div>
+        )}
         {note.kind === "task" &&
         (note.priority !== undefined || note.due !== undefined || note.assignee !== undefined) ? (
           <div className="flex min-w-0 flex-wrap items-center gap-1 px-3 pb-2">
@@ -8120,9 +8149,10 @@ function BoardNote({
           </div>
         )}
         {paper && note.pinnedTo === undefined ? (
-          <p className="shrink-0 truncate px-3 pt-1 pb-2.5 text-2xs text-paint-ink-muted">
-            {author}
-          </p>
+          <div className="mt-auto flex shrink-0 items-center justify-between gap-2 px-4 pt-1.5 pb-3">
+            <p className="min-w-0 truncate text-xs font-semibold text-paint-ink-muted">{author}</p>
+            {agentStatus}
+          </div>
         ) : null}
         {artifact && (onAttachAgent !== undefined || onAsk !== undefined) ? (
           <div className="flex shrink-0 flex-wrap gap-1 px-3 pb-1.5">
@@ -8205,7 +8235,7 @@ function BoardNote({
         onReact={onReact === undefined ? undefined : (emoji) => onReact(note, emoji)}
         // A window's body (a page, a diff, a prompt box) runs to its edges, so its chips get a
         // band of their own with the card's inset; paper has its text's inset already above.
-        className={titled ? "border-t border-board-hairline px-3 py-2" : "px-3 pb-2.5"}
+        className={titled ? "border-t border-board-hairline px-3 py-2" : "px-4 pb-3"}
       />
       <ItemHandles
         from={noteRef(note.id)}
@@ -8401,8 +8431,9 @@ function BoardCard({
         () => onDrop(target),
       )}
     >
+      {steadyFor === undefined ? null : <BoxStateEdge boxId={steadyFor.boxId} />}
       {dropLabel === undefined ? null : (
-        <span className="pointer-events-none absolute -top-8 left-0 rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground shadow-board">
+        <span className="pointer-events-none absolute -top-8 left-0 rounded-full bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground shadow-board">
           {dropLabel}
         </span>
       )}
@@ -8650,7 +8681,7 @@ export function RoomCursors({
                 type="button"
                 aria-pressed={following === person}
                 aria-label={following === person ? `Stop following ${name}` : `Follow ${name}`}
-                className="pointer-events-auto -ms-0.5 mt-3.5 max-w-36 cursor-pointer truncate rounded-md px-1.5 py-0.5 text-xs leading-4 font-medium text-white shadow-paint focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset focus-visible:outline-none"
+                className="pointer-events-auto -ms-0.5 mt-3.5 max-w-36 cursor-pointer truncate rounded-full px-2.5 py-0.5 text-2xs leading-4 font-semibold text-white shadow-paint focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset focus-visible:outline-none"
                 style={{ backgroundColor: color }}
                 onPointerDown={stopPointer}
                 onClick={() => onFollow(person)}

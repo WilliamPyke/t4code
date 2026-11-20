@@ -193,7 +193,7 @@ export function BoardPromptBox({
       <li
         key={section.ref}
         data-card-status={pinned ? "pinned" : "new"}
-        className="flex max-w-full min-w-0 items-center gap-0.5 rounded-md bg-primary/10 ps-1.5 text-2xs font-medium dark:bg-primary/18"
+        className="flex max-w-full min-w-0 items-center gap-0.5 rounded-full bg-primary/10 ps-2 text-2xs font-medium dark:bg-primary/18"
       >
         <Tooltip>
           <TooltipTrigger render={<span className="flex min-w-0 items-center gap-1" />}>
@@ -270,7 +270,7 @@ export function BoardPromptBox({
                 <li
                   key={card.ref}
                   data-card-status={card.status ?? "new"}
-                  className="flex max-w-full min-w-0 items-center gap-0.5 rounded-md bg-primary/10 ps-1.5 text-2xs font-medium dark:bg-primary/18"
+                  className="flex max-w-full min-w-0 items-center gap-0.5 rounded-full bg-primary/10 ps-2 text-2xs font-medium dark:bg-primary/18"
                 >
                   <Tooltip>
                     <TooltipTrigger render={<span className="flex min-w-0 items-center gap-1" />}>

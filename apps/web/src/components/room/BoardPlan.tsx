@@ -98,6 +98,7 @@ import {
   boardPersonName,
 } from "./roomBoard.logic";
 import { useBoxProgress } from "./roomBoardLive";
+import { BoxStateEdge } from "./RoomBoardThreadBox";
 
 /**
  * Which view a board shows, kept in the URL: as the host keeps it when it hands one down, else in
@@ -646,9 +647,9 @@ export function BoardPlan({
     const rows = listRows;
     return (
       <PlanFrame toolbar={toolbar}>
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 pb-3 scrollbar-gutter-both">
-          <div className="mx-auto flex w-full max-w-4xl flex-col rounded-board border border-board-hairline bg-card">
-            <div className="flex items-center gap-2 border-b border-board-hairline px-3 py-1.5 text-2xs font-medium text-muted-foreground">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 pb-3 scrollbar-gutter-both @3xl/board:px-7 @3xl/board:pb-6">
+          <div className="mx-auto flex w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-board-hairline bg-card shadow-xs">
+            <div className="flex items-center gap-2 border-b border-board-hairline bg-muted/60 px-4 py-2 text-2xs font-semibold tracking-wide text-muted-foreground uppercase">
               <span className="min-w-0 flex-1">Task</span>
               <span className="hidden w-28 sm:block">For</span>
               <span className="w-20">Priority</span>
@@ -670,7 +671,7 @@ export function BoardPlan({
               ))}
             </ol>
             {rows.length === 0 ? (
-              <p className="px-3 py-6 text-center text-sm text-muted-foreground">
+              <p className="px-4 py-8 text-center text-sm text-muted-foreground">
                 No task matches. Clear the filters to see every task.
               </p>
             ) : null}
@@ -697,7 +698,7 @@ export function BoardPlan({
     <PlanFrame toolbar={toolbar}>
       <div
         ref={scrollerRef}
-        className="flex min-h-0 flex-1 snap-x snap-mandatory gap-3 overflow-x-auto px-3 pb-3 sm:snap-none"
+        className="flex min-h-0 flex-1 snap-x snap-mandatory gap-3 overflow-x-auto px-3 pb-3 sm:snap-none @3xl/board:gap-4 @3xl/board:px-7 @3xl/board:pb-6"
       >
         {BOARD_PLAN_COLUMNS.map(({ status, title }) => {
           const tasks = shownColumns[status];
@@ -712,13 +713,14 @@ export function BoardPlan({
               aria-label={title}
               data-plan-column={status}
               className={cn(
-                "flex max-h-full w-[min(20rem,calc(100vw-3rem))] shrink-0 snap-center flex-col rounded-board border border-board-hairline bg-card/60",
+                // Side by side across a wide board; a narrow one scrolls them, one at a time.
+                "flex max-h-full w-[min(20rem,calc(100vw-3rem))] shrink-0 snap-center flex-col rounded-2xl border border-transparent bg-muted/70 @3xl/board:w-auto @3xl/board:min-w-64 @3xl/board:flex-1 @3xl/board:shrink",
                 dropHere !== null && "border-primary/50",
               )}
             >
-              <header className="flex items-center gap-2 px-3 pt-2 pb-1">
+              <header className="flex items-center gap-2 px-4 pt-3.5 pb-2">
                 <PlanStatusMark status={status} />
-                <h2 className="text-sm font-semibold">{title}</h2>
+                <h2 className="text-ui-md font-semibold text-foreground">{title}</h2>
                 <span className="text-xs text-muted-foreground tabular-nums">
                   {tasks.length === column.length
                     ? column.length
@@ -732,7 +734,10 @@ export function BoardPlan({
                   />
                 </span>
               </header>
-              <ol data-plan-list className="flex min-h-0 flex-col gap-2 overflow-y-auto px-2 pb-1">
+              <ol
+                data-plan-list
+                className="flex min-h-0 flex-col gap-2.5 overflow-y-auto px-3 pb-1"
+              >
                 {tasks.map((task) => {
                   const placeholder = lifted?.id === task.id;
                   const before = !placeholder && lineAt === shownAt;
@@ -870,7 +875,7 @@ function PlanToolbar({
         ? "No one"
         : boardPersonName(people, value === OWNER ? undefined : value);
   return (
-    <div className="flex flex-wrap items-center gap-2 px-3 pt-1 pb-2">
+    <div className="flex flex-wrap items-center gap-2 px-3 pt-3 pb-3 @3xl/board:gap-2.5 @3xl/board:px-7 @3xl/board:pt-5 @3xl/board:pb-4">
       {picked.size > 0 ? (
         <div className="flex flex-wrap items-center gap-2">
           <span role="status" className="text-xs font-medium">
@@ -1267,12 +1272,12 @@ function PlanCard({
         type="button"
         aria-label={`Task: ${label}`}
         aria-pressed={picked}
-        className="absolute inset-0 cursor-pointer rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+        className="absolute inset-0 cursor-pointer rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
         onClick={onOpen}
       />
       <div
         data-plan-no-drag
-        className="absolute top-1.5 right-1.5 opacity-100 transition-opacity [@media(hover:hover)]:opacity-0 group-hover/plan:opacity-100 group-focus-within/plan:opacity-100 has-[[data-popup-open]]:opacity-100"
+        className="absolute top-2 right-2 opacity-100 transition-opacity [@media(hover:hover)]:opacity-0 group-hover/plan:opacity-100 group-focus-within/plan:opacity-100 has-[[data-popup-open]]:opacity-100"
       >
         <PlanCardMenu
           label={label}
@@ -1318,7 +1323,7 @@ function PlanListRow({
   return (
     <li
       className={cn(
-        "group/plan relative flex min-h-10 items-center gap-2 border-b border-board-hairline px-3 py-1.5 last:border-b-0 hover:bg-accent/40",
+        "group/plan relative flex min-h-12 items-center gap-2.5 border-b border-board-hairline px-4 py-2 last:border-b-0 hover:bg-accent/40",
         picked && "bg-primary/8",
       )}
       onContextMenu={(event) => {
@@ -1330,7 +1335,7 @@ function PlanListRow({
       <PlanStatusMark status={status} />
       <span
         className={cn(
-          "min-w-0 flex-1 truncate text-sm",
+          "min-w-0 flex-1 truncate text-sm font-medium",
           done && "text-muted-foreground line-through",
           task.text.trim() === "" && "text-muted-foreground italic",
         )}
@@ -1431,15 +1436,23 @@ function PlanCardBody({
   return (
     <div
       className={cn(
-        "flex flex-col gap-2 rounded-lg border border-board-hairline bg-card p-3 text-card-foreground shadow-xs",
+        "relative flex flex-col gap-2 rounded-xl border border-board-hairline bg-card p-3.5 text-card-foreground shadow-xs",
         lifted && "shadow-board ring-2 ring-primary/40",
         picked && "ring-2 ring-primary",
       )}
     >
+      {/* The box running it, while its run is live: the edge the board gives an agent at work. */}
+      {task.run === undefined || done ? null : <BoxStateEdge boxId={task.run.boxId} />}
+      {task.priority === undefined ? null : (
+        <div className="flex min-w-0 pe-6">
+          <TaskPriorityMark priority={task.priority} />
+        </div>
+      )}
       <p
         className={cn(
-          "line-clamp-3 pe-6 text-sm leading-snug [overflow-wrap:anywhere]",
-          done && "text-muted-foreground",
+          "line-clamp-3 pe-6 text-ui-md leading-snug font-medium [overflow-wrap:anywhere]",
+          task.priority !== undefined && "pe-0",
+          done && "text-muted-foreground line-through",
           task.text.trim() === "" && "text-muted-foreground italic",
         )}
       >
@@ -1457,7 +1470,6 @@ function PlanCardBody({
         </p>
       )}
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-muted-foreground">
-        {task.priority === undefined ? null : <TaskPriorityMark priority={task.priority} />}
         {task.due === undefined ? null : <TaskDueChip due={task.due} today={today} done={done} />}
         {line === "" ? null : (
           <span className="flex items-center gap-1">

@@ -16,6 +16,7 @@ import {
 import { Popover, PopoverPopup } from "../ui/popover";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Textarea } from "../ui/textarea";
+import { boardChromeAt } from "./BoardChrome";
 import {
   BOARD_AGENT_WORK_MS,
   BOARD_ASK_NEW_BOX,
@@ -291,7 +292,7 @@ export function useBoardAskBounds(
       if (surface === null || root === null || root === undefined) return;
       const area = surface.getBoundingClientRect();
       const chrome = (edge: "top" | "bottom") =>
-        [...root.querySelectorAll(`[data-board-chrome="${edge}"]`)]
+        boardChromeAt(root, edge)
           .map((element) => element.getBoundingClientRect())
           .filter((rect) => rect.height > 0);
       const top = Math.max(area.top, ...chrome("top").map((rect) => rect.bottom));

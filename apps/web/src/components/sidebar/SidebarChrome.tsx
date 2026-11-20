@@ -1,3 +1,4 @@
+import { isGuestEnvironment } from "@t3tools/client-runtime/environment";
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
@@ -5,6 +6,7 @@ import {
   LaptopIcon,
   MegaphoneIcon,
   SettingsIcon,
+  SlidersHorizontalIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo } from "react";
@@ -21,7 +23,15 @@ import {
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { cn } from "../../lib/utils";
 import { useShellMode } from "../../shellMode";
-import { useHasComputer, usePullRequestsSupported } from "../../state/environments";
+import {
+  useEnvironments,
+  useHasComputer,
+  usePrimaryEnvironment,
+  usePullRequestsSupported,
+} from "../../state/environments";
+import { boardAccountsEnabled } from "../../guest/boardAccount";
+import { BoardsAccount } from "../boards/BoardsAccount";
+import { connectionPhaseDotClassName } from "../ConnectionStatusDot";
 import { useBeforeFirstBoard } from "../boards/homeFocus";
 import { openConnectComputer } from "../ConnectComputerDialog";
 import { TinkjamMark, TinkjamWord } from "../TinkjamLogo";
@@ -190,50 +200,48 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
 
 function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
   return (
-    <span className="inline-flex min-w-0 items-center gap-1.5">
-      <TinkjamMark aria-hidden className="size-5 shrink-0" />
+    <span className="inline-flex min-w-0 items-center gap-2">
+      <TinkjamMark aria-hidden className="size-6 shrink-0" />
       <TinkjamWord
         aria-hidden
-        className={cn("text-lg", onBackdrop ? "text-white" : "text-foreground")}
+        className={cn("text-wordmark-sm", onBackdrop ? "text-white" : "text-foreground")}
       />
     </span>
   );
 }
 
-function SidebarUtilityItem({
+/** A row of the sidebar's foot: an icon, a label, and a dot when there is something new. */
+function SidebarFootRow({
   icon,
   label,
   onClick,
   marked = false,
+  trailing,
+  ...props
 }: {
   icon: ReactNode;
   label: string;
   onClick: () => void;
   /** Shows a dot: there is something here this browser has not seen. */
   marked?: boolean;
-}) {
+  trailing?: ReactNode;
+} & Record<`data-${string}`, string | boolean | undefined>) {
   return (
-    <SidebarMenuItem className="shrink-0">
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <SidebarMenuButton
-              aria-label={marked ? `${label} (new)` : label}
-              onClick={onClick}
-              size="icon"
-            >
-              {icon}
-            </SidebarMenuButton>
-          }
-        />
-        <TooltipPopup side="top">{label}</TooltipPopup>
-      </Tooltip>
-      {marked ? (
-        <span
-          aria-hidden
-          className="pointer-events-none absolute top-1 right-1 size-1.5 rounded-full bg-primary"
-        />
-      ) : null}
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        size="nav"
+        variant="nav"
+        aria-label={marked ? `${label} (new)` : label}
+        onClick={onClick}
+        {...props}
+      >
+        {icon}
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        {trailing}
+        {marked ? (
+          <span aria-hidden className="ms-auto size-2 shrink-0 rounded-full bg-primary" />
+        ) : null}
+      </SidebarMenuButton>
     </SidebarMenuItem>
   );
 }
@@ -253,115 +261,180 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
       setOpenMobile(false);
     }
   };
-  const handlePullRequestsClick = () => {
+  const go = (to: "/whats-new" | "/usage") => () => {
     closeMobileSidebar();
-    void navigate({
-      to: "/pull-requests",
-      search: readPullRequestListPreferences(),
-    });
-  };
-  const handleSettingsClick = () => {
-    closeMobileSidebar();
-    void navigate({ to: "/settings" });
-  };
-
-  const handleUsageClick = () => {
-    if (isMobile) {
-      setOpenMobile(false);
-    }
-    void navigate({ to: "/usage" });
+    void navigate({ to });
   };
   const whatsNew = useWhatsNewSeen();
   const beforeFirstBoard = useBeforeFirstBoard();
-  const handleWhatsNewClick = () => {
-    closeMobileSidebar();
-    void navigate({ to: "/whats-new" });
-  };
-
-  const handleBackClick = () => {
-    closeMobileSidebar();
-    void navigateToMainApp();
-  };
 
   return (
-    <SidebarMenu className="flex-row items-center">
+    <SidebarMenu>
       {isOnUtilityPage ? (
-        <SidebarMenuItem className="min-w-0 flex-1">
-          <SidebarMenuButton onClick={handleBackClick}>
-            <ArrowLeftIcon />
-            <span>Back</span>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
+        <SidebarFootRow
+          icon={<ArrowLeftIcon />}
+          label="Back"
+          onClick={() => {
+            closeMobileSidebar();
+            void navigateToMainApp();
+          }}
+        />
       ) : (
         <>
-          <SidebarUtilityItem
-            icon={<SettingsIcon />}
-            label="Settings"
-            onClick={handleSettingsClick}
-          />
           {pullRequestsSupported && (advanced || hasComputer) ? (
-            <SidebarUtilityItem
+            <SidebarFootRow
               icon={<PullRequestGlyph.pullRequest />}
               label="Pull requests"
-              onClick={handlePullRequestsClick}
+              onClick={() => {
+                closeMobileSidebar();
+                void navigate({ to: "/pull-requests", search: readPullRequestListPreferences() });
+              }}
             />
           ) : null}
           {advanced ? (
-            <SidebarUtilityItem
-              icon={<ChartNoAxesColumnIcon />}
-              label="Usage"
-              onClick={handleUsageClick}
-            />
+            <SidebarFootRow icon={<ChartNoAxesColumnIcon />} label="Usage" onClick={go("/usage")} />
           ) : null}
-          <SidebarUtilityItem
+          <SidebarFootRow
             icon={<MegaphoneIcon />}
             label="What's new"
-            onClick={handleWhatsNewClick}
+            onClick={go("/whats-new")}
             marked={whatsNew.unseen && !beforeFirstBoard}
+            data-sidebar-whats-new
           />
         </>
       )}
-      <SidebarThreadUndoNotice />
-      <SidebarUpdatePill />
+      <div className="flex min-w-0 items-center empty:hidden">
+        <SidebarThreadUndoNotice />
+        <SidebarUpdatePill />
+      </div>
+      <SidebarAccountRow onNavigate={closeMobileSidebar} />
     </SidebarMenu>
   );
 });
 
-/** The way to a person's own agents, in both modes, until they have a computer here. */
+/** Who is signed in, opening their account menu, and the way to Settings beside it. */
+function SidebarAccountRow({ onNavigate }: { onNavigate: () => void }) {
+  const navigate = useNavigate();
+  const openSettings = () => {
+    onNavigate();
+    void navigate({ to: "/settings" });
+  };
+  // Without sign-in in this build, Settings takes the account's row.
+  if (!boardAccountsEnabled()) {
+    return (
+      <SidebarMenuItem>
+        <SidebarMenuButton size="nav" variant="nav" onClick={openSettings} data-sidebar-settings>
+          <SettingsIcon />
+          <span className="min-w-0 flex-1 truncate">Settings</span>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    );
+  }
+  return (
+    <SidebarMenuItem>
+      <div className="flex items-center gap-1">
+        <BoardsAccount presentation="sidebar" />
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                size="icon-sm"
+                variant="ghost-muted"
+                aria-label="Settings"
+                onClick={openSettings}
+                data-sidebar-settings
+              />
+            }
+          >
+            <SlidersHorizontalIcon />
+          </TooltipTrigger>
+          <TooltipPopup side="top">Settings</TooltipPopup>
+        </Tooltip>
+      </div>
+    </SidebarMenuItem>
+  );
+}
+
+/** The person's computer and whether it is connected; until they have one, the way to connect. */
 function SidebarConnectComputer() {
   const { isMobile, setOpenMobile } = useSidebar();
+  const navigate = useNavigate();
   const hasComputer = useHasComputer();
   const beforeFirstBoard = useBeforeFirstBoard();
+  const computer = useOwnComputer();
+  const shellMode = useShellMode();
+  const closeMobile = () => {
+    if (isMobile) setOpenMobile(false);
+  };
+  if (hasComputer && computer !== null) {
+    const phase = computer.connection.phase;
+    const status =
+      phase === "connected"
+        ? "Connected"
+        : phase === "connecting" || phase === "reconnecting"
+          ? "Connecting"
+          : "Not connected";
+    return (
+      <SidebarMenu>
+        <SidebarFootRow
+          icon={<LaptopIcon />}
+          label={computer.label}
+          onClick={() => {
+            closeMobile();
+            void navigate({
+              to: shellMode === "simple" ? "/settings" : "/settings/connections",
+            });
+          }}
+          trailing={
+            <span
+              role="img"
+              aria-label={status}
+              className={cn(
+                "ms-auto size-2 shrink-0 rounded-full",
+                connectionPhaseDotClassName(phase),
+              )}
+            />
+          }
+          data-sidebar-computer
+        />
+      </SidebarMenu>
+    );
+  }
   if (hasComputer) return null;
   return (
     <SidebarMenu>
-      <SidebarMenuItem>
-        <SidebarMenuButton
-          onClick={() => {
-            if (isMobile) setOpenMobile(false);
-            openConnectComputer();
-          }}
-          data-sidebar-connect-computer
-        >
-          <LaptopIcon />
-          <span className="font-medium text-foreground">Connect a computer</span>
-          {beforeFirstBoard ? null : (
-            <span aria-hidden className="ms-auto size-2 shrink-0 rounded-full bg-primary" />
-          )}
-        </SidebarMenuButton>
-      </SidebarMenuItem>
+      <SidebarFootRow
+        icon={<LaptopIcon />}
+        label="Connect a computer"
+        onClick={() => {
+          closeMobile();
+          openConnectComputer();
+        }}
+        marked={!beforeFirstBoard}
+        data-sidebar-connect-computer
+      />
     </SidebarMenu>
   );
+}
+
+/** The first of the person's own computers here, not a board host someone shared. */
+function useOwnComputer() {
+  const primary = usePrimaryEnvironment();
+  const { environments } = useEnvironments();
+  if (primary !== null && !isGuestEnvironment(primary.environmentId)) return primary;
+  return environments.find((environment) => !isGuestEnvironment(environment.environmentId)) ?? null;
 }
 
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const simple = useShellMode() === "simple";
   return (
     <SidebarFooter>
-      <SidebarConnectComputer />
       {simple ? null : <SidebarProviderUpdatePill />}
       <SidebarUpdateArchitectureWarning />
-      <SidebarUtilityMenu />
+      <div className="flex flex-col gap-px border-t border-sidebar-border pt-2.5">
+        <SidebarConnectComputer />
+        <SidebarUtilityMenu />
+      </div>
     </SidebarFooter>
   );
 });

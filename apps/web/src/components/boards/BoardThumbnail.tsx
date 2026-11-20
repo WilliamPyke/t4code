@@ -1,11 +1,19 @@
 import type { RoomBoardSummaryShape } from "@t3tools/contracts";
 import { useId } from "react";
 
+import { cn } from "~/lib/utils";
+
 import { boardThumbnail } from "./boardsHome.logic";
 
 const WIDTH = 240;
-const HEIGHT = 135;
 const PADDING = 10;
+// 16:9 in pickers, the boards home's 16:10 tiles, and the wide strip of its template row.
+const HEIGHTS = { video: 135, tile: 150, strip: 116 } as const;
+const RATIO_CLASS = {
+  video: "aspect-video",
+  tile: "aspect-[16/10]",
+  strip: "aspect-[240/116]",
+} as const;
 
 // The board's own look in miniature: notes in their paints, windows as small cards, all from the
 // board's tokens so every theme reads well.
@@ -74,12 +82,15 @@ export function BoardThumbnail({
   shapes,
   paint = "yellow",
   seed = "",
+  ratio = "video",
 }: {
   readonly shapes: ReadonlyArray<RoomBoardSummaryShape> | undefined;
   readonly paint?: NonNullable<RoomBoardSummaryShape["color"]>;
   readonly seed?: string;
+  readonly ratio?: keyof typeof HEIGHTS;
 }) {
   const dots = useId();
+  const HEIGHT = HEIGHTS[ratio];
   const rects =
     shapes === undefined
       ? []
@@ -87,7 +98,7 @@ export function BoardThumbnail({
   return (
     <svg
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-      className="block aspect-video w-full bg-board-canvas"
+      className={cn("block w-full bg-board-canvas", RATIO_CLASS[ratio])}
       aria-hidden
       data-board-thumbnail
       data-board-thumbnail-pattern={rects.length === 0 || undefined}

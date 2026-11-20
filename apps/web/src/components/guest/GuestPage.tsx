@@ -366,12 +366,15 @@ function NameForm({
   };
   return (
     <form
-      className="m-auto flex w-full max-w-sm flex-col gap-4 rounded-board border border-board-hairline bg-card p-6 text-card-foreground shadow-board"
+      className="m-auto flex w-full max-w-md flex-col gap-5 rounded-dialog border bg-raised p-6 text-card-foreground shadow-board sm:p-8"
       onSubmit={submit}
     >
       <TinkjamWordmark />
-      <div className="flex flex-col gap-1">
-        <h1 className="text-lg font-semibold tracking-tight wrap-break-word" data-guest-invite>
+      <div className="flex flex-col gap-2">
+        <h1
+          className="font-heading text-2xl leading-tight font-semibold tracking-brand wrap-break-word"
+          data-guest-invite
+        >
           {inviteHeading(invite)}
         </h1>
         <p className="text-sm text-muted-foreground">
@@ -390,7 +393,7 @@ function NameForm({
           )}
         </p>
       </div>
-      <label className="flex flex-col gap-1.5 text-sm font-medium" htmlFor="guest-name">
+      <label className="flex flex-col gap-2 text-sm font-semibold" htmlFor="guest-name">
         Your name
         <Input
           id="guest-name"
@@ -406,7 +409,7 @@ function NameForm({
           {error}
         </p>
       ) : null}
-      <Button type="submit" disabled={submitting || name.trim() === ""} data-guest-join>
+      <Button type="submit" size="lg" disabled={submitting || name.trim() === ""} data-guest-join>
         Join the board
       </Button>
       {cloud && boardAccountsEnabled() ? <SignInInstead credential={credential} /> : null}

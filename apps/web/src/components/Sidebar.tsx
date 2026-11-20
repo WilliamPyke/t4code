@@ -3041,7 +3041,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             <BoardsSection canStart={!guestOnly || cloudBoardsOrigin() !== null} />
             {boardsOnly ? null : (
               <>
-                <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">Threads</p>
+                <p className="ps-2.5 pt-3 pb-1.5 text-2xs font-semibold tracking-caps text-sidebar-muted-foreground uppercase">
+                  Threads
+                </p>
                 <SidebarThreadHeader
                   hasProjects={projectGroups.length > 0}
                   projectScope={

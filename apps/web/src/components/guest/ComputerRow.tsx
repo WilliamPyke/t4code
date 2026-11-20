@@ -1,3 +1,4 @@
+import { LaptopIcon } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -16,6 +17,7 @@ export function ComputerRow({
   computer,
   working = null,
   thisComputer = false,
+  emphasis = false,
   disabled = false,
   children,
   onRetry,
@@ -26,6 +28,8 @@ export function ComputerRow({
   /** What is happening to it right now, shown instead of its status. */
   readonly working?: string | null;
   readonly thisComputer?: boolean;
+  /** The row to act on first: drawn in the accent. */
+  readonly emphasis?: boolean;
   /** Something else in the list is under way. */
   readonly disabled?: boolean;
   readonly children?: ReactNode;
@@ -49,17 +53,38 @@ export function ComputerRow({
   const status = computerStatusLine(computer);
   return (
     <li
-      className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-border px-3 py-2.5"
+      className={cn(
+        "flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl border px-3.5 py-3",
+        emphasis
+          ? "border-primary bg-accent-tint ring-1 ring-primary ring-inset"
+          : computer.status === "ready" || computer.status === "online"
+            ? "bg-raised"
+            : "bg-panel",
+      )}
       data-computer={computer.status}
     >
       <span
         aria-hidden
-        className={cn("size-2 shrink-0 rounded-full", COMPUTER_STATUS_DOT[computer.status])}
-      />
-      <span className="min-w-48 flex-1">
-        <span className="block text-sm font-medium wrap-anywhere">{computer.name}</span>
-        <span className="block text-xs text-muted-foreground" role="status">
-          {working ?? (thisComputer ? `This computer · ${status}` : status)}
+        className={cn(
+          "grid size-9 shrink-0 place-items-center rounded-lg",
+          emphasis ? "bg-raised text-accent-text" : "bg-panel text-muted-foreground",
+        )}
+      >
+        <LaptopIcon className="size-4.5" />
+      </span>
+      <span className="min-w-40 flex-1">
+        <span className="block text-sm font-semibold wrap-anywhere">{computer.name}</span>
+        <span className="flex items-baseline gap-1.5 text-xs text-muted-foreground" role="status">
+          <span
+            aria-hidden
+            className={cn(
+              "size-1.5 shrink-0 -translate-y-px rounded-full",
+              COMPUTER_STATUS_DOT[computer.status],
+            )}
+          />
+          <span className="min-w-0 text-pretty">
+            {working ?? (thisComputer ? `This computer · ${status}` : status)}
+          </span>
         </span>
       </span>
       {children}
@@ -81,7 +106,7 @@ export function ComputerRow({
       {onRemove === null ? null : (
         <Button
           size="sm"
-          variant="ghost-muted"
+          variant="ghost-destructive"
           disabled={working !== null || removal !== null}
           onClick={() => setRemoval({ phase: "confirming", error: null })}
           aria-label={`Remove ${computer.name}`}
@@ -134,12 +159,12 @@ export function ComputersLoading({ framed = true }: { readonly framed?: boolean 
     <div
       className={cn(
         "flex items-center gap-3",
-        framed && "rounded-lg border border-border px-3 py-2.5",
+        framed && "rounded-2xl border border-border px-3.5 py-3",
       )}
       role="status"
       aria-label="Looking for your computers"
     >
-      <Skeleton shape="pill" className="size-2" />
+      <Skeleton className="size-9" />
       <div className="min-w-0 flex-1 space-y-2">
         <Skeleton shape="pill" className="h-4 w-32" />
         <Skeleton shape="pill" className="h-3 w-20" />

@@ -22,7 +22,7 @@ import { NoteColorPicker, sectionColorClassName, sectionLabelClassName } from ".
 
 const stopPointer = (event: PointerEvent) => event.stopPropagation();
 
-const SECTION_TITLE_SIZE = "calc(18px * min(var(--board-line-scale, 1), 2.5))";
+const SECTION_TITLE_SIZE = "calc(17px * min(var(--board-line-scale, 1), 2.5))";
 
 // A band along each edge that the section is moved by, thicker as the board zooms out. The top
 // one reaches little into the title bar, and the sides start under it, clear of its buttons.
@@ -90,7 +90,7 @@ export function BoardSection({
     <div
       className={cn(
         // Its title, edges and grips take the pointer; pressing inside pans or selects the board.
-        "group/item pointer-events-none absolute flex flex-col rounded-xl border",
+        "group/item pointer-events-none absolute flex flex-col rounded-2xl border",
         sectionColorClassName(note.color),
         selected &&
           cn(
@@ -104,7 +104,7 @@ export function BoardSection({
         width: live?.w ?? size.w,
         height: live?.h ?? size.h,
         // Its frame thickens as the board zooms out, as lines do, so it still reads as a region.
-        borderWidth: boardStroke(1.5),
+        borderWidth: boardStroke(1),
         ...boardLiveStyle(note, live),
       }}
       data-board-item={ref}
@@ -173,8 +173,8 @@ export function BoardSection({
         maxLength={ROOM_BOARD_NOTE_MAX_LENGTH}
         placeholder={canRename ? "Name this section" : "Untitled section"}
         className={cn(
-          // Above the frame's corner, as wide as its title, so it never covers or clips a card.
-          "pointer-events-auto absolute bottom-full -left-1 mb-[calc(2px+1.5px*var(--board-line-scale,1))] field-sizing-content h-[1.6em] min-w-0 max-w-full truncate rounded-sm bg-transparent px-1 font-bold tracking-tight outline-none placeholder:font-semibold placeholder:text-placeholder focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+          // In the frame's top corner, as wide as its title and no wider than the frame's bar.
+          "pointer-events-auto absolute top-1.5 left-3 field-sizing-content h-[1.6em] max-w-[calc(100%-6rem)] min-w-0 truncate rounded-sm bg-transparent px-1 font-heading font-semibold tracking-tight outline-none placeholder:font-semibold placeholder:text-paint-ink-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
           sectionLabelClassName(note.color),
           grab !== undefined ? "cursor-move focus:cursor-text" : "cursor-default",
         )}

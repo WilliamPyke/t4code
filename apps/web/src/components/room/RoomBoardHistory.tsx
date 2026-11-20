@@ -13,7 +13,10 @@ export function BoardHistoryButtons({
   canRedo,
   onUndo,
   onRedo,
+  side = "bottom",
 }: {
+  /** Where their names show: beside the board's tool rail, below the Plan's header. */
+  readonly side?: "bottom" | "right";
   readonly canUndo: boolean;
   readonly canRedo: boolean;
   readonly onUndo: () => void;
@@ -54,7 +57,7 @@ export function BoardHistoryButtons({
       >
         {icon}
       </TooltipTrigger>
-      <TooltipPopup side="bottom">
+      <TooltipPopup side={side}>
         {label} ({shortcut})
       </TooltipPopup>
     </Tooltip>
