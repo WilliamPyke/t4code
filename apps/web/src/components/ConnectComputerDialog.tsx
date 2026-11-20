@@ -6,7 +6,7 @@ import {
 import type { EnvironmentId } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { BotIcon, XIcon } from "lucide-react";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react";
 import { create } from "zustand";
 
 import { environmentCatalog } from "~/connection/catalog";
@@ -59,7 +59,17 @@ export function ConnectComputerDialogHost() {
           className="fixed inset-0 z-50 overflow-y-auto outline-none"
           data-connect-computer
         >
-          {open ? <ConnectComputerScreen /> : null}
+          {open ? (
+            <ConnectComputerFlow
+              corner={<CloseCorner />}
+              onSkip={closeConnectComputer}
+              done={
+                <Button size="pill" render={<Link to="/" onClick={closeConnectComputer} />}>
+                  Go to my boards
+                </Button>
+              }
+            />
+          ) : null}
         </DialogPrimitive.Popup>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
@@ -94,6 +104,8 @@ function useAddComputersComingOnline(computers: ReadonlyArray<BringAgentComputer
   }, [newlyOnlineKey]);
 }
 
+const NO_COMPUTERS: ReadonlySet<EnvironmentId> = new Set();
+
 const readyIds = (computers: ReadonlyArray<BringAgentComputer>) =>
   new Set(
     computers
@@ -101,12 +113,27 @@ const readyIds = (computers: ReadonlyArray<BringAgentComputer>) =>
       .map((computer) => computer.environmentId),
   );
 
-function ConnectComputerScreen() {
+interface ConnectComputerFlowProps {
+  /** Top right of the page, such as a way to close it. */
+  readonly corner: ReactNode;
+  /** A line above the heading, such as which step of a first run this is. */
+  readonly eyebrow?: string;
+  readonly onSkip: () => void;
+  /** What to do next once a computer is connected. */
+  readonly done: ReactNode;
+  /** A computer connected before this opened counts as the one set up. */
+  readonly countConnected?: boolean;
+}
+
+/** Getting Tinkjam Sync, then the computer it connected and its agents, as a full page. */
+export function ConnectComputerFlow(props: ConnectComputerFlowProps) {
   const list = useYourComputers({ active: true, pollEveryMs: DISCOVERY_REFRESH_MS });
   useAddComputersComingOnline(list.computers);
   // The computers already connected when this opened, once the account has said: a computer
   // that connects after that is the one just set up.
-  const [before, setBefore] = useState<ReadonlySet<EnvironmentId> | null>(null);
+  const [before, setBefore] = useState<ReadonlySet<EnvironmentId> | null>(
+    props.countConnected === true ? NO_COMPUTERS : null,
+  );
   if (before === null && !list.loading) setBefore(readyIds(list.computers));
   const connected =
     before === null
@@ -115,9 +142,13 @@ function ConnectComputerScreen() {
           (computer) => computer.status === "ready" && !before.has(computer.environmentId),
         );
   return connected === undefined ? (
-    <GetSyncScreen list={list} />
+    <GetSyncScreen list={list} flow={props} />
   ) : (
-    <ConnectedScreen computer={connected} onAnother={() => setBefore(readyIds(list.computers))} />
+    <ConnectedScreen
+      computer={connected}
+      flow={props}
+      onAnother={() => setBefore(readyIds(list.computers))}
+    />
   );
 }
 
@@ -127,16 +158,22 @@ const CloseCorner = () => (
   </DialogPrimitive.Close>
 );
 
-function GetSyncScreen({ list }: { readonly list: ReturnType<typeof useYourComputers> }) {
+function GetSyncScreen({
+  list,
+  flow,
+}: {
+  readonly list: ReturnType<typeof useYourComputers>;
+  readonly flow: ConnectComputerFlowProps;
+}) {
   const [os, setOs] = useState(detectSyncOs);
   const removeComputer = useRemoveComputer();
   const { openAuthPrompt } = useT3ConnectAuthPrompt();
   const { computers, withAccount, signedIn } = list;
   return (
     <SplitScreen
-      corner={<CloseCorner />}
+      corner={flow.corner}
       footer={
-        <button type="button" className={splitLinkClassName} onClick={closeConnectComputer}>
+        <button type="button" className={splitLinkClassName} onClick={flow.onSkip}>
           Skip for now
         </button>
       }
@@ -150,6 +187,7 @@ function GetSyncScreen({ list }: { readonly list: ReturnType<typeof useYourCompu
         </BrandArtPanel>
       }
     >
+      <StepEyebrow>{flow.eyebrow}</StepEyebrow>
       <SplitHeading>Connect your computer</SplitHeading>
       <p className="mt-3 text-base text-muted-foreground">
         Tinkjam Sync lets your own agent work on the board.
@@ -175,7 +213,7 @@ function GetSyncScreen({ list }: { readonly list: ReturnType<typeof useYourCompu
               <div>
                 <Button
                   variant="outline"
-                  render={<Link to="/settings/connections" onClick={closeConnectComputer} />}
+                  render={<Link to="/settings/connections" onClick={flow.onSkip} />}
                 >
                   Add my computer
                 </Button>
@@ -233,9 +271,11 @@ const AGENT_STATE_TEXT: Record<AgentState, string> = {
 
 function ConnectedScreen({
   computer,
+  flow,
   onAnother,
 }: {
   readonly computer: BringAgentComputer;
+  readonly flow: ConnectComputerFlowProps;
   readonly onAnother: () => void;
 }) {
   const providers = useEnvironmentProviders().get(computer.environmentId) ?? [];
@@ -247,7 +287,7 @@ function ConnectedScreen({
   const firstReady = agents.find((agent) => agent.state === "ready");
   return (
     <SplitScreen
-      corner={<CloseCorner />}
+      corner={flow.corner}
       footer={<Copyright />}
       art={
         <BrandArtPanel
@@ -322,14 +362,19 @@ function ConnectedScreen({
         </ul>
       )}
       <div className="mt-7.5 flex flex-wrap items-center gap-x-4.5 gap-y-3">
-        <Button size="pill" render={<Link to="/" onClick={closeConnectComputer} />}>
-          Go to my boards
-        </Button>
+        {flow.done}
         <button type="button" className={splitLinkClassName} onClick={onAnother}>
           Connect another computer
         </button>
       </div>
     </SplitScreen>
+  );
+}
+
+/** Which step of a first run a page is, above its heading. */
+export function StepEyebrow({ children }: { readonly children: string | undefined }) {
+  return children === undefined ? null : (
+    <p className="mb-3 text-ui-sm font-semibold text-muted-foreground">{children}</p>
   );
 }
 

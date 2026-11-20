@@ -58,6 +58,7 @@ import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { BoardsWelcome } from "./BoardsWelcome";
+import { FirstRun, useFirstRunSteps } from "./FirstRun";
 import { ConnectComputerNudge } from "./ConnectComputerNudge";
 import { ViewedBoards } from "./ViewedBoards";
 import { SignInNudge } from "./SignInNudge";
@@ -199,6 +200,7 @@ export function BoardsHome() {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- tells the app shell, which draws the sidebar around this page, whether the home has boards to list
   useLayoutEffect(() => noteHomeShown(content), [content]);
   const alone = useFirstRunFocusOffered() && content !== "boards";
+  const firstRunSteps = useFirstRunSteps();
   // One summary request per machine, for its most recent boards; every tile there shares it.
   const threadIdsByEnvironment = new Map<string, Array<ThreadId>>();
   for (const board of all) {
@@ -245,7 +247,11 @@ export function BoardsHome() {
         <WorkspacePageHeader className="md:hidden" />
       )}
       {content === "welcome" ? (
-        <BoardsWelcome />
+        firstRunSteps ? (
+          <FirstRun />
+        ) : (
+          <BoardsWelcome />
+        )
       ) : content === "loading" ? (
         alone ? (
           <TinkjamLoading label="Loading your boards" />

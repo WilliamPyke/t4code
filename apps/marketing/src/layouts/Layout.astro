@@ -1,6 +1,6 @@
 ---
 import Logo from "../components/Logo.astro";
-import { APP_URL, SITE_NAME } from "../lib/site";
+import { APP_URL, SIGN_IN_URL, SITE_NAME } from "../lib/site";
 import "../styles/site.css";
 
 interface Props {
@@ -73,7 +73,7 @@ const year = new Date().getFullYear();
       <nav class="nav__links" aria-label="Main">
         <a class="navlink navlink--wide" href="/changelog">What's new</a>
         <a class="navlink navlink--wide" href="/download">Download</a>
-        <a class="navlink" href={APP_URL}>Sign in</a>
+        <a class="navlink" href={SIGN_IN_URL}>Sign in</a>
         <a class="btn btn--dark" href={APP_URL}>Start a board</a>
       </nav>
     </header>
@@ -89,7 +89,7 @@ const year = new Date().getFullYear();
         <a class="navlink" href="/changelog">What's new</a>
         <a class="navlink" href="/download">Download</a>
         <a class="navlink" href="/legal">Privacy and terms</a>
-        <a class="navlink" href={APP_URL}>Sign in</a>
+        <a class="navlink" href={SIGN_IN_URL}>Sign in</a>
       </nav>
     </footer>
   </body>

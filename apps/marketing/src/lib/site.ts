@@ -1,5 +1,6 @@
 export const SITE_NAME = "Tinkjam";
 export const APP_URL = "https://app.tinkjam.com/";
+export const SIGN_IN_URL = `${APP_URL}sign-in`;
 // The public sample board's view link, as infra/boards/scripts/sample-board.mjs prints it. Empty
 // hides "See a sample board". Keep it the same as SAMPLE_BOARD_URL in apps/web/src/sampleBoard.ts.
 export const SAMPLE_BOARD_URL: string =

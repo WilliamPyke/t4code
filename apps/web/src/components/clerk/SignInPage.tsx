@@ -86,7 +86,7 @@ export function SignInPage() {
 }
 
 /** The frame's illustration: a teammate's note, a board card and a cursor. Not product state. */
-function SignInArtCards() {
+export function SignInArtCards() {
   return (
     <>
       <ArtCard className="bottom-37.5 left-13 w-53.5 -rotate-4 bg-brand-sun-tint p-4 text-ui-md font-medium">
