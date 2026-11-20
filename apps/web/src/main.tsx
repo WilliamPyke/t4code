@@ -1,6 +1,3 @@
-// First, so the move between our domains happens before anything reads storage or the link.
-import "./domainMove";
-
 import React from "react";
 import ReactDOM from "react-dom/client";
 

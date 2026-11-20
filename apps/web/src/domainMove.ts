@@ -30,11 +30,12 @@ const asked = () => {
 /**
  * Runs before anything reads this browser's storage or the link: the older address leaves for the
  * current one with what it holds, and the current one takes that in. See `domainMove.logic.ts`.
+ * True when the page is leaving or loading again, so the app should not start on it.
  */
-function moveBetweenOurDomains() {
+function moveBetweenOurDomains(): boolean {
   const origins = builtHostedAppOrigins();
   const current = origins[0];
-  if (current === undefined) return;
+  if (current === undefined) return false;
   const { location } = window;
   const step = moveStep({
     origin: location.origin,
@@ -52,15 +53,15 @@ function moveBetweenOurDomains() {
     read,
     cookie: document.cookie,
   });
-  if (step.kind === "stay") return;
+  if (step.kind === "stay") return false;
   if (step.kind === "go") {
     try {
       if (step.asking) window.sessionStorage.setItem(ASKED_KEY, "1");
     } catch {
-      return;
+      return false;
     }
     location.replace(step.href);
-    return;
+    return true;
   }
   window.history.replaceState(window.history.state, "", step.href);
   try {
@@ -73,7 +74,12 @@ function moveBetweenOurDomains() {
     if (step.done) window.localStorage.setItem(MOVED_KEY, new Date().toISOString());
   } catch {
     // Blocked storage keeps nothing; the page still opens.
+    return false;
   }
+  if (step.payload === null) return false;
+  // Loaded again so everything that reads storage as the page starts, the theme first, sees it.
+  location.reload();
+  return true;
 }
 
-if (typeof window !== "undefined") moveBetweenOurDomains();
+export const leavingForOurOtherDomain = typeof window !== "undefined" && moveBetweenOurDomains();
