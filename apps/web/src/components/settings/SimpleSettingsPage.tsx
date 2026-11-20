@@ -1,10 +1,11 @@
-import type { ClientSettings, EnvironmentId } from "@t3tools/contracts";
+import type { BoardToolsPlacement, ClientSettings, EnvironmentId } from "@t3tools/contracts";
 import { EMBER_THEME, GROVE_THEME, IRIS_THEME, OCEAN_THEME } from "@t3tools/shared/themePalettes";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
   CheckIcon,
   ChevronRightIcon,
   LaptopIcon,
+  PanelBottomIcon,
   MonitorIcon,
   MoonIcon,
   PlusIcon,
@@ -63,10 +64,11 @@ import {
 } from "./ThemePreviewCircles";
 import { ThemeWireframe } from "./ThemeWireframe";
 
-type SectionId = "appearance" | "computers" | "account" | "advanced";
+type SectionId = "appearance" | "board" | "computers" | "account" | "advanced";
 
 const NAV: ReadonlyArray<{ readonly id: SectionId; readonly label: string; icon: LucideIcon }> = [
   { id: "appearance", label: "Appearance", icon: SunIcon },
+  { id: "board", label: "Boards", icon: PanelBottomIcon },
   { id: "computers", label: "Your computers", icon: LaptopIcon },
   { id: "account", label: "Account", icon: UserRoundIcon },
   { id: "advanced", label: "Advanced", icon: SlidersHorizontalIcon },
@@ -82,12 +84,8 @@ export function SimpleSettingsPage() {
   const accounts = boardAccountsEnabled();
   const [current, setCurrent] = useState<SectionId>("appearance");
   const nav = NAV.filter((item) => accounts || item.id !== "account");
-  const jump = (id: SectionId) => {
-    setCurrent(id);
-    document
-      .getElementById(sectionDomId(id))
-      ?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
+  // Beside the tabs one section shows at a time; without them (a narrow window) all are listed.
+  const shown = (id: SectionId) => (current === id ? undefined : "md:hidden");
   return (
     <div className="flex min-h-0 flex-1" data-simple-settings>
       <aside className="hidden w-60 shrink-0 flex-col gap-6 border-e bg-panel px-3 pt-7 pb-4 md:flex">
@@ -98,7 +96,7 @@ export function SimpleSettingsPage() {
               key={item.id}
               type="button"
               aria-current={current === item.id ? "true" : undefined}
-              onClick={() => jump(item.id)}
+              onClick={() => setCurrent(item.id)}
               className={cn(
                 "flex h-9 items-center gap-2.5 rounded-lg border border-transparent px-2.5 text-start text-sm font-medium text-foreground outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
                 current === item.id && "border-border bg-card",
@@ -124,13 +122,22 @@ export function SimpleSettingsPage() {
           </div>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain scrollbar-gutter-both">
-          <div className="mx-auto grid w-full max-w-6xl items-start gap-5 px-4 py-5 pb-safe sm:px-6 md:py-9 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] lg:px-10">
-            <div className="flex min-w-0 flex-col gap-5">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-4 py-5 pb-safe sm:px-6 md:py-9 lg:px-10">
+            <div className={shown("appearance")}>
               <AppearanceSection />
             </div>
-            <div className="flex min-w-0 flex-col gap-5">
+            <div className={shown("board")}>
+              <BoardSection />
+            </div>
+            <div className={shown("computers")}>
               <ComputersSection />
-              {accounts ? <AccountSection /> : null}
+            </div>
+            {accounts ? (
+              <div className={shown("account")}>
+                <AccountSection />
+              </div>
+            ) : null}
+            <div className={shown("advanced")}>
               <AdvancedSection />
             </div>
           </div>
@@ -389,6 +396,42 @@ const selectFontSizes = (settings: ClientSettings) => ({
   fontSizeCode: settings.fontSizeCode,
   fontSizeTerminal: settings.fontSizeTerminal,
 });
+
+const BOARD_TOOLS: ReadonlyArray<{ readonly value: BoardToolsPlacement; readonly label: string }> =
+  [
+    { value: "left", label: "Left" },
+    { value: "bottom", label: "Bottom" },
+  ];
+
+function BoardSection() {
+  const placement = useClientSettings((settings) => settings.boardToolsPlacement);
+  return (
+    <Card id="board" title="Boards">
+      <div className="flex flex-col gap-3">
+        <FieldLabel>Tools</FieldLabel>
+        <div>
+          <ToggleGroup
+            aria-label="Where a board's tools sit"
+            value={[placement]}
+            onValueChange={(next) => {
+              const picked = BOARD_TOOLS.find((option) => option.value === next[0]);
+              if (picked !== undefined) {
+                void updateClientSettings({ boardToolsPlacement: picked.value });
+              }
+            }}
+            data-board-tools-placement
+          >
+            {BOARD_TOOLS.map((option) => (
+              <Toggle key={option.value} value={option.value}>
+                {option.label}
+              </Toggle>
+            ))}
+          </ToggleGroup>
+        </div>
+      </div>
+    </Card>
+  );
+}
 
 function TextSizeRow() {
   const preset = textSizePresetOf(useClientSettings(selectFontSizes));

@@ -16,7 +16,7 @@ export function BoardHistoryButtons({
   side = "bottom",
 }: {
   /** Where their names show: beside the board's tool rail, below the Plan's header. */
-  readonly side?: "bottom" | "right";
+  readonly side?: "bottom" | "right" | "top";
   readonly canUndo: boolean;
   readonly canRedo: boolean;
   readonly onUndo: () => void;

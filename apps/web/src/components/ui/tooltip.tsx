@@ -142,7 +142,7 @@ function TooltipPopup({
             variant === "glass"
               ? "dropdown-glass shadow-xl shadow-black/25 before:hidden"
               : // Ink in light mode, as the design system draws it; muted text inside stays readable on it.
-                "border bg-popover shadow-md/5 not-dark:border-transparent not-dark:bg-foreground not-dark:text-background not-dark:[--contrast-muted-foreground:color-mix(in_srgb,var(--background)_70%,transparent)] not-dark:[--contrast-foreground:var(--background)] not-dark:before:hidden",
+                "border bg-popover shadow-md/5 not-dark:border-transparent not-dark:bg-foreground not-dark:text-background not-dark:before:hidden",
             variant === "code"
               ? "max-w-120 wrap-anywhere text-left font-mono text-[11px] leading-relaxed"
               : "max-w-80 wrap-anywhere whitespace-normal leading-snug",
@@ -151,7 +151,11 @@ function TooltipPopup({
           data-slot="tooltip-popup"
           {...props}
         >
-          <div className="min-w-0 px-2 py-1" data-slot="tooltip-viewport">
+          {/* Set here, not on the popup: its ink background reads the foreground it would change. */}
+          <div
+            className="min-w-0 px-2 py-1 not-dark:[--contrast-muted-foreground:color-mix(in_srgb,var(--background)_70%,transparent)] not-dark:[--contrast-foreground:var(--background)]"
+            data-slot="tooltip-viewport"
+          >
             {children}
           </div>
         </TooltipPrimitive.Popup>

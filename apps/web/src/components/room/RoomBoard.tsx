@@ -108,6 +108,7 @@ import {
   useCopyToClipboard,
   writeTextToClipboard,
 } from "~/hooks/useCopyToClipboard";
+import { useClientSettings } from "~/hooks/useSettings";
 import { observeResize } from "~/lib/observeResize";
 import { useStableCallback } from "~/hooks/useStableCallback";
 
@@ -630,6 +631,10 @@ function withFlag(flag: { current: boolean }, run: () => void) {
   }
 }
 
+/** Whether the person keeps the board's tools along the bottom, whatever the board's width. */
+const useToolsAlongBottom = () =>
+  useClientSettings((settings) => settings.boardToolsPlacement === "bottom");
+
 /** A tool on the board's rail: an icon, named on hover and to screen readers. */
 function BoardTool({
   label,
@@ -646,7 +651,7 @@ function BoardTool({
       >
         {children}
       </TooltipTrigger>
-      <TooltipPopup side="right">{hint ?? label}</TooltipPopup>
+      <TooltipPopup side={useToolsAlongBottom() ? "top" : "right"}>{hint ?? label}</TooltipPopup>
     </Tooltip>
   );
 }
@@ -663,10 +668,14 @@ function BoardToolHint({
   ...props
 }: ComponentProps<"p"> & { readonly onCancel: () => void }) {
   const touch = touchFirst();
+  const alongBottom = useToolsAlongBottom();
   return (
     <p
       {...props}
-      className="pointer-events-none absolute inset-x-0 bottom-28 z-30 flex justify-center px-4 @xl/board:bottom-5"
+      className={cn(
+        "pointer-events-none absolute inset-x-0 bottom-28 z-30 flex justify-center px-4",
+        !alongBottom && "@xl/board:bottom-5",
+      )}
     >
       <span className="flex items-center gap-1 rounded-full border border-board-hairline bg-card py-1 ps-3.5 pe-1 text-center text-xs text-muted-foreground shadow-board">
         <span className="py-0.5 pe-2">
@@ -690,7 +699,10 @@ function BoardToolHint({
 const BoardToolDivider = () => (
   <span
     aria-hidden
-    className="my-1 h-px w-5.5 shrink-0 bg-board-hairline @max-xl/board:mx-1 @max-xl/board:my-0 @max-xl/board:h-5 @max-xl/board:w-px @max-md/board:hidden"
+    className={cn(
+      "my-1 h-px w-5.5 shrink-0 bg-board-hairline @max-xl/board:mx-1 @max-xl/board:my-0 @max-xl/board:h-5 @max-xl/board:w-px @max-md/board:hidden",
+      useToolsAlongBottom() && "mx-1 my-0 h-5 w-px",
+    )}
   />
 );
 
@@ -5213,6 +5225,7 @@ export function RoomBoard({
   // The Plan is the same tasks as the board's: a team's relay may not keep their status yet.
   const plannable = cards === undefined && room !== null;
   const planShown = plannable && pickedView !== "board";
+  const toolsAlongBottom = useToolsAlongBottom();
   // A selection belongs to the view it was made in: switching views lets go of it.
   const switchView = (next: BoardViewMode) => {
     setSelection(NO_SELECTION);
@@ -5609,6 +5622,7 @@ export function RoomBoard({
               // narrow board lays it along the bottom instead, as a phone's thumb expects.
               "pointer-events-none absolute top-[4.375rem] bottom-[8.75rem] left-3.5 z-30 flex items-center",
               "@max-xl/board:inset-x-3 @max-xl/board:top-auto @max-xl/board:bottom-3 @max-xl/board:justify-center",
+              toolsAlongBottom && "inset-x-3 top-auto bottom-3 justify-center",
               planShown && "invisible",
             )}
           >
@@ -5617,6 +5631,7 @@ export function RoomBoard({
               className={cn(
                 "pointer-events-auto max-h-full max-w-full gap-0.5 overflow-y-auto rounded-2xl p-1.5 @max-xl/board:flex-row @max-xl/board:overflow-x-auto @max-xl/board:overflow-y-visible @max-sm/board:gap-0 @max-sm/board:px-0.5",
                 linkDraft === null && "flex-col",
+                toolsAlongBottom && "flex-row overflow-x-auto overflow-y-visible",
               )}
             >
               {linkDraft === null ? (
@@ -5705,7 +5720,7 @@ export function RoomBoard({
                             <BotIcon />
                             <ChevronDownIcon className="absolute end-0.5 bottom-0.5 size-2.5 opacity-60" />
                           </TooltipTrigger>
-                          <TooltipPopup side="right">
+                          <TooltipPopup side={toolsAlongBottom ? "top" : "right"}>
                             Thread box: an agent the room can prompt
                           </TooltipPopup>
                         </Tooltip>
@@ -5920,7 +5935,7 @@ export function RoomBoard({
               )}
               <BoardToolDivider />
               <BoardHistoryButtons
-                side="right"
+                side={toolsAlongBottom ? "top" : "right"}
                 canUndo={
                   canEdit &&
                   (history.undo.length > 0 ||
@@ -5941,6 +5956,7 @@ export function RoomBoard({
             // board has no tools to lay along the bottom.
             "absolute bottom-3.5 left-3.5 z-30 flex flex-col items-start gap-2",
             !viewOnly && "@max-xl/board:bottom-16 @max-xl/board:left-3",
+            !viewOnly && toolsAlongBottom && "bottom-16",
             planShown && "invisible",
           )}
         >
