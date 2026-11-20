@@ -8,6 +8,7 @@ import * as EnvironmentRegistry from "../connection/registry.ts";
 import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
 import { AVAILABLE_CONNECTION_STATE } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
+import { isGuestEnvironment } from "../environment/guest.ts";
 import {
   PullRequestRoutingPermissions,
   type PullRequestRoutingPermission,
@@ -35,6 +36,18 @@ export function* enabledEnvironmentIds(
   }
 }
 
+/**
+ * A thread someone shared with this client is registered so it can connect, but it is not one
+ * of the client's environments: nothing that lists environments, their projects or their
+ * threads sees it. Its thread is read by its own id.
+ */
+function withoutGuestEnvironments(
+  entries: ReadonlyMap<EnvironmentIdType, ConnectionCatalogEntry>,
+): ReadonlyMap<EnvironmentIdType, ConnectionCatalogEntry> {
+  if (![...entries.keys()].some(isGuestEnvironment)) return entries;
+  return new Map([...entries].filter(([environmentId]) => !isGuestEnvironment(environmentId)));
+}
+
 const EMPTY_ENVIRONMENT_CATALOG_STATE: EnvironmentCatalogState = Object.freeze({
   isReady: false,
   entries: new Map(),
@@ -52,7 +65,7 @@ export function createEnvironmentCatalogAtoms<R, E>(
           SubscriptionRef.changes(registry.entries).pipe(
             Stream.map((entries) => ({
               isReady: true,
-              entries,
+              entries: withoutGuestEnvironments(entries),
             })),
           ),
         ),

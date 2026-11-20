@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { guestHostImageType, repliesShowImage } from "./guestAttachments.ts";
+import { guestHostImageType, shownImageHostPath } from "./guestAttachments.ts";
 
 describe("guest host images", () => {
   it.each([
@@ -37,7 +37,8 @@ describe("guest host images", () => {
     ["![a](/w/a.svg)", "/w/a.svg", null],
     ["![a](/w/a.constructor)", "/w/a.constructor", null],
   ])("%j serves %j as %j", (text, path, type) => {
-    const served = guestHostImageType(path) !== null && repliesShowImage(path, [{ text }]);
+    const served =
+      guestHostImageType(path) !== null && shownImageHostPath(path, [{ text }]) !== null;
     expect(served ? guestHostImageType(path) : null).toBe(type);
   });
 });

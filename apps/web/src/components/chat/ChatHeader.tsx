@@ -41,7 +41,7 @@ import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
 import { useClientSettings } from "../../hooks/useSettings";
-import { GuestShareIndicator } from "./GuestShareControls";
+import { GuestShareIndicator, RoomLinkIndicator } from "./GuestShareControls";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -430,6 +430,13 @@ export const ChatHeader = memo(function ChatHeader({
           ) : null}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      {isServerThread ? (
+        // Keyed so the catch-up status belongs to the thread it was fetched for.
+        <RoomLinkIndicator
+          key={`${activeThreadRef.environmentId}:${activeThreadRef.threadId}`}
+          threadRef={activeThreadRef}
+        />
+      ) : null}
       {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
     </div>
   );

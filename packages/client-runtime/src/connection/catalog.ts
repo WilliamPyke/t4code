@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 
 import {
   BearerConnectionTarget,
+  GuestConnectionTarget,
   PrimaryConnectionTarget,
   RelayConnectionTarget,
   SshConnectionTarget,
@@ -107,6 +108,14 @@ export const ConnectionRegistration = Schema.Union([
 ]);
 export type ConnectionRegistration = typeof ConnectionRegistration.Type;
 
+/** A shared thread this client joined as a guest. The platform keeps the list and the tokens. */
+export class GuestConnectionRegistration extends Schema.TaggedClass<GuestConnectionRegistration>()(
+  "GuestConnectionRegistration",
+  {
+    target: GuestConnectionTarget,
+  },
+) {}
+
 /**
  * The primary stays on same-origin cookie auth
  * (`PrimaryConnectionRegistration`); secondary local backends live on a
@@ -116,15 +125,17 @@ export type ConnectionRegistration = typeof ConnectionRegistration.Type;
 export const PlatformConnectionRegistration = Schema.Union([
   PrimaryConnectionRegistration,
   BearerConnectionRegistration,
+  GuestConnectionRegistration,
 ]);
 export type PlatformConnectionRegistration = typeof PlatformConnectionRegistration.Type;
 
 export function connectionRegistrationCatalogEntry(
-  registration: ConnectionRegistration | PrimaryConnectionRegistration,
+  registration: ConnectionRegistration | PlatformConnectionRegistration,
 ): ConnectionCatalogEntry {
   switch (registration._tag) {
     case "PrimaryConnectionRegistration":
     case "RelayConnectionRegistration":
+    case "GuestConnectionRegistration":
       return {
         target: registration.target,
         profile: Option.none(),

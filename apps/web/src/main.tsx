@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 import "@fontsource-variable/inter";
+import "@fontsource-variable/outfit";
 import "./index.css";
 
 import { hasCloudPublicConfig } from "./cloud/publicConfig";
@@ -25,6 +26,7 @@ window.addEventListener("vite:preloadError", (event) => {
 });
 
 const app = <AppRoot router={router} />;
+const navigateInApp = (to: string, replace: boolean) => router.navigate({ href: to, replace });
 
 // Split by runtime to keep Clerk out of local startup and clerk-js out of browser builds.
 const managedAuthShellModule =
@@ -45,7 +47,9 @@ export const startup = Promise.all([
     ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <React.StrictMode>
         {ManagedAuthShell && clerkPublishableKey ? (
-          <ManagedAuthShell publishableKey={clerkPublishableKey}>{app}</ManagedAuthShell>
+          <ManagedAuthShell publishableKey={clerkPublishableKey} navigate={navigateInApp}>
+            {app}
+          </ManagedAuthShell>
         ) : (
           app
         )}

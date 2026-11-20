@@ -24,6 +24,7 @@ import { environmentProjects } from "../../state/projects";
 import { primaryServerConfigAtom, primaryServerWelcomeAtom } from "../../state/server";
 import { environmentShell } from "../../state/shell";
 import { environmentThreadShells } from "../../state/threads";
+import { TinkjamLoading } from "../TinkjamLoading";
 import { Button } from "../ui/button";
 
 /** Pending blocks all rendering, including EventRouter welcome navigation. */
@@ -175,7 +176,11 @@ export function FirstRunGate({
     return children;
   }
   if (decision !== "app") {
-    return stalled ? <FirstRunRecovery reason="connection" /> : null;
+    return stalled ? (
+      <FirstRunRecovery reason="connection" />
+    ) : (
+      <TinkjamLoading label="Opening Tinkjam" />
+    );
   }
   return children;
 }
@@ -197,7 +202,7 @@ function FirstRunRecovery({
         <p className="mt-2 text-sm text-muted-foreground">
           {settingsReadFailed
             ? "Your saved settings could not be loaded."
-            : "T3 Code could not confirm this workspace."}
+            : "Tinkjam could not confirm this workspace."}
         </p>
         <Button
           className="mt-5"

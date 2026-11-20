@@ -284,6 +284,20 @@ export function formatRelativeTimeLabel(isoDate: string, nowMs: number = Date.no
   return relative.suffix ? `${relative.value} ${relative.suffix}` : relative.value;
 }
 
+/** "just now", "5m ago" or "3h ago" for today, and the day and time before that. */
+export function formatRecentTimestamp(
+  isoDate: string,
+  timestampFormat: TimestampFormat,
+  nowMs: number = Date.now(),
+  timeZone?: string,
+): string {
+  const date = parseTimestampDate(isoDate);
+  if (!date) return "";
+  return calendarDay(date, timeZone).index >= calendarDay(new Date(nowMs), timeZone).index
+    ? formatRelativeTimeLabel(isoDate, nowMs)
+    : formatDayAwareTimestamp(isoDate, timestampFormat, nowMs, timeZone);
+}
+
 export function formatElapsedDurationLabel(isoDate: string, nowMs: number = Date.now()): string {
   const date = parseTimestampDate(isoDate);
   if (!date) return "";

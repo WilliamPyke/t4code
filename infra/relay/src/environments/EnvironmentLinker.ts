@@ -18,6 +18,7 @@ import * as Schema from "effect/Schema";
 
 import * as DpopProofs from "../auth/DpopProofs.ts";
 import * as RelayTokens from "../auth/RelayTokens.ts";
+import * as ComputerApprovals from "./ComputerApprovals.ts";
 import * as EnvironmentCredentials from "./EnvironmentCredentials.ts";
 import * as EnvironmentLinks from "./EnvironmentLinks.ts";
 import * as ManagedEndpointProvider from "./ManagedEndpointProvider.ts";
@@ -63,8 +64,23 @@ export class EnvironmentLinkProofInvalid extends Schema.TaggedError<EnvironmentL
   }
 }
 
+export class EnvironmentLinkRemoved extends Schema.TaggedError<EnvironmentLinkRemoved>()(
+  "EnvironmentLinkRemoved",
+  {
+    userId: Schema.String,
+    environmentId: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Environment '${this.environmentId}' is not linked to this account and needs a fresh approval`;
+  }
+}
+
 export type EnvironmentLinkError =
   | EnvironmentLinkProofExpired
+  | EnvironmentLinkRemoved
+  | EnvironmentLinks.EnvironmentLinkLookupPersistenceError
+  | ComputerApprovals.ComputerApprovalPersistenceError
   | EnvironmentLinkProofInvalid
   | DpopProofs.DpopProofReplayPersistenceError
   | EnvironmentLinks.EnvironmentLinkUpsertPersistenceError
@@ -77,14 +93,23 @@ export class EnvironmentLinker extends Context.Service<
     readonly link: (input: {
       readonly userId: string;
       readonly request: RelayEnvironmentLinkRequest;
+      /**
+       * A computer's own account-wide sign-in: it may only renew its active link with the same key,
+       * or redeem an approval the person just gave in the browser.
+       */
+      readonly asComputer: boolean;
     }) => Effect.Effect<
       {
         readonly environmentId: RelayEnvironmentLinkProofPayload["environmentId"];
+        readonly environmentPublicKey: string;
         readonly endpoint: RelayEnvironmentLinkProofPayload["endpoint"];
         readonly endpointRuntime:
           | ManagedEndpointProvider.ManagedEndpointProvisioningResult["runtime"]
           | null;
         readonly environmentCredential: string;
+        readonly machineId: string | null;
+        /** Made by the person, in the app or by a redeemed approval; only then may it replace other links. */
+        readonly freshlyApproved: boolean;
       },
       EnvironmentLinkError
     >;
@@ -144,6 +169,7 @@ const make = Effect.gen(function* () {
   const relayTokens = yield* RelayTokens.RelayTokens;
   const config = yield* RelayConfiguration.RelayConfiguration;
   const signature = yield* Signature.Signature;
+  const approvals = yield* ComputerApprovals.ComputerApprovals;
 
   return EnvironmentLinker.of({
     link: Effect.fn("relay.environment_linker.link")(function* (input) {
@@ -288,6 +314,28 @@ const make = Effect.gen(function* () {
           stage: "validate_origin",
         });
       }
+      const verifier = input.asComputer ? input.request.approvalVerifier : undefined;
+      const approval =
+        verifier === undefined
+          ? null
+          : yield* approvals.redeem({
+              userId: input.userId,
+              verifier,
+              environmentPublicKey: verified.environmentPublicKey,
+            });
+      // Removal must stick: the account-wide sign-in alone renews only a link that is still active.
+      if (input.asComputer && approval === null) {
+        const active = yield* links.getForUser({
+          userId: input.userId,
+          environmentId: verified.environmentId,
+        });
+        if (active === null || active.environmentPublicKey !== verified.environmentPublicKey) {
+          return yield* new EnvironmentLinkRemoved({
+            userId: input.userId,
+            environmentId: verified.environmentId,
+          });
+        }
+      }
       // Non-tunnel links must release provisioned tunnel/DNS resources; best-effort deprovision is idempotent.
       if (!input.request.managedTunnelsEnabled) {
         yield* managedEndpointProvider
@@ -327,11 +375,17 @@ const make = Effect.gen(function* () {
         environmentId: verified.environmentId,
         environmentPublicKey: verified.environmentPublicKey,
       });
+      if (approval !== null) {
+        yield* approvals.finish({ userId: input.userId, codeChallenge: approval });
+      }
       return {
         environmentId: verified.environmentId,
+        environmentPublicKey: verified.environmentPublicKey,
         endpoint,
         endpointRuntime: provisioned?.runtime ?? null,
         environmentCredential,
+        machineId: verified.machineId ?? null,
+        freshlyApproved: !input.asComputer || approval !== null,
       };
     }),
   });

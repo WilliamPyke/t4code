@@ -49,6 +49,7 @@ import {
   registerEnvironmentTunnelRecovery,
   relayDpopFailureReason,
   traceRelayHttpRequestWith,
+  supersedeSameComputerLinks,
   unlinkEnvironmentRecord,
   verifyRelayClientBearerToken,
   verifyEnvironmentTunnelRecoveryProof,
@@ -57,7 +58,10 @@ import {
 import * as RelayHttpApi from "./Api.ts";
 import * as RelayConfiguration from "../Config.ts";
 import * as RelayDb from "../db.ts";
+import * as ComputerApprovals from "../environments/ComputerApprovals.ts";
 import * as EnvironmentCredentials from "../environments/EnvironmentCredentials.ts";
+import * as GuestLinks from "../guestLinks/GuestLinks.ts";
+import * as Teams from "../teams/Teams.ts";
 import * as HeldHooks from "../hooks/HeldHooks.ts";
 import * as HookInbox from "../hooks/HookInbox.ts";
 import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
@@ -106,6 +110,7 @@ describe("managed endpoint provisioning errors", () => {
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
           Layer.mock(RelayDb.RelayTransactions, {}),
           Layer.mock(HookInbox.HookInbox, {}),
+          Layer.mock(Teams.Teams, {}),
         ),
       ),
       Layer.provide(
@@ -131,6 +136,7 @@ describe("managed endpoint provisioning errors", () => {
           Layer.mock(Devices.Devices, {}),
           Layer.mock(T3ChatAccounts.T3ChatAccounts, { available: false }),
           Layer.mock(ManagedTunnelLimits.ManagedTunnelLimits, {}),
+          Layer.mock(ComputerApprovals.ComputerApprovals, {}),
         ),
       ),
       Layer.provideMerge(
@@ -185,7 +191,7 @@ describe("managed endpoint provisioning errors", () => {
       });
       const error = yield* decodeLinkUnavailableError(body);
       expect(relayProtectedErrorMessage(error)).toBe(
-        "Relay cannot provision the managed endpoint (managed_endpoint_provisioning_failed). Failed stage: ensure-tunnel.",
+        "Tinkjam could not set up this computer's connection (managed_endpoint_provisioning_failed, at ensure-tunnel). Try again in a minute.",
       );
     }).pipe(Effect.scoped);
   });
@@ -225,6 +231,7 @@ describe("device listing compatibility", () => {
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
           Layer.mock(RelayDb.RelayTransactions, {}),
           Layer.mock(HookInbox.HookInbox, {}),
+          Layer.mock(Teams.Teams, {}),
         ),
       ),
       Layer.provide(
@@ -243,6 +250,7 @@ describe("device listing compatibility", () => {
           }),
           Layer.mock(T3ChatAccounts.T3ChatAccounts, { available: false }),
           Layer.mock(ManagedTunnelLimits.ManagedTunnelLimits, {}),
+          Layer.mock(ComputerApprovals.ComputerApprovals, {}),
         ),
       ),
       Layer.provideMerge(
@@ -312,6 +320,7 @@ describe("Cloudflare rate-limit retry hint", () => {
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
           Layer.mock(RelayDb.RelayTransactions, {}),
           Layer.mock(HookInbox.HookInbox, {}),
+          Layer.mock(Teams.Teams, {}),
         ),
       ),
       Layer.provide(
@@ -325,6 +334,7 @@ describe("Cloudflare rate-limit retry hint", () => {
           Layer.mock(Devices.Devices, {}),
           Layer.mock(T3ChatAccounts.T3ChatAccounts, { available: false }),
           Layer.mock(ManagedTunnelLimits.ManagedTunnelLimits, {}),
+          Layer.mock(ComputerApprovals.ComputerApprovals, {}),
         ),
       ),
       Layer.provideMerge(
@@ -439,6 +449,145 @@ describe("relay client authentication", () => {
       ),
     ),
   );
+
+  it.effect(
+    "lets a computer's sign-in reach only its own link, and refuses it once removed",
+    () => {
+      const approved: Array<string> = [];
+      const released: Array<string> = [];
+      vi.mocked(verifyToken).mockImplementation(async (token) => {
+        if (token !== "session-token") throw new Error("not a session JWT");
+        return { sub: "user-1", aud: relaySettings.clerkJwtAudience } as never;
+      });
+      vi.mocked(createClerkClient).mockReturnValue({
+        authenticateRequest: vi.fn().mockResolvedValue({
+          isAuthenticated: true,
+          toAuth: () => ({ userId: "user-1" }),
+        }),
+      } as never);
+      const handlers = RelayHttpApi.layerClientApi.pipe(
+        HttpRouter.provideRequest(
+          Layer.mergeAll(
+            Layer.mock(EnvironmentCredentials.EnvironmentCredentials, {}),
+            Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
+            Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
+            Layer.mock(RelayDb.RelayTransactions, {}),
+            Layer.mock(HookInbox.HookInbox, {}),
+            Layer.mock(Teams.Teams, {}),
+          ),
+        ),
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(RelayConfiguration.RelayConfiguration, relaySettings),
+            NodeCryptoLayer.layer,
+            Layer.mock(RelayTokens.RelayTokens, { resolveDpopAccessTokenScopes: () => null }),
+            Layer.mock(EnvironmentLinker.EnvironmentLinker, {}),
+            Layer.mock(EnvironmentLinks.EnvironmentLinks, {
+              listForUser: () => Effect.succeed([]),
+              getForUser: ({ environmentId }) =>
+                Effect.succeed(environmentId === "environment-1" ? linkedEnvironmentRecord : null),
+            }),
+            Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {
+              release: ({ environmentId }) =>
+                Effect.sync(() => {
+                  released.push(environmentId);
+                  return true;
+                }),
+            }),
+            Layer.mock(Devices.Devices, { listForUser: () => Effect.succeed([]) }),
+            Layer.mock(T3ChatAccounts.T3ChatAccounts, { available: false }),
+            Layer.mock(ManagedTunnelLimits.ManagedTunnelLimits, {}),
+            Layer.mock(ComputerApprovals.ComputerApprovals, {
+              create: ({ codeChallenge }) =>
+                Effect.sync(() => {
+                  approved.push(codeChallenge);
+                  return { expiresAt: "2026-11-19T12:30:00.000Z" };
+                }),
+            }),
+          ),
+        ),
+        Layer.provideMerge(
+          RelayHttpApi.layerClientAuth.pipe(
+            Layer.provide(Layer.succeed(RelayConfiguration.RelayConfiguration, relaySettings)),
+          ),
+        ),
+      );
+      return Effect.gen(function* () {
+        const app = yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            HttpRouter.toWebHandler(
+              HttpApiBuilder.layer(HttpApi.make("RelayApi").add(RelayApi.groups.client)).pipe(
+                Layer.provide(handlers),
+                Layer.provide(HttpServer.layerServices),
+              ),
+              { disableLogger: true },
+            ),
+          ),
+          (app) => Effect.promise(() => app.dispose()),
+        );
+        const call = (token: string, method: string, path: string, body?: unknown) =>
+          Effect.promise(async () => {
+            const response = await app.handler(
+              new Request(`https://relay.example.test${path}`, {
+                method,
+                headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+                ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+              }),
+            );
+            return { status: response.status, body: await response.json() };
+          });
+        const approval = { codeChallenge: "challenge-1" };
+
+        // The account-wide sign-in a computer holds reads and approves nothing.
+        for (const [method, path, body] of [
+          ["GET", "/v1/environments", undefined],
+          ["GET", "/v2/client/devices", undefined],
+          ["GET", "/v1/client/t3chat-link", undefined],
+          ["POST", "/v1/client/computer-approvals", approval],
+        ] as const) {
+          const refused = yield* call("oauth-token", method, path, body);
+          expect(refused.status, path).toBe(401);
+          expect(refused.body).toMatchObject({ code: "auth_invalid", reason: "not_authorized" });
+        }
+        expect(approved).toEqual([]);
+
+        // A removed computer cannot touch its tunnel; one still on the account can.
+        const removed = yield* call(
+          "oauth-token",
+          "DELETE",
+          "/v1/client/environment-links/environment-2/tunnel",
+        );
+        expect(removed.status).toBe(403);
+        expect(removed.body).toMatchObject({ code: "environment_link_removed" });
+        const active = yield* call(
+          "oauth-token",
+          "DELETE",
+          "/v1/client/environment-links/environment-1/tunnel",
+        );
+        expect(active).toEqual({ status: 200, body: { ok: true } });
+        expect(released).toEqual(["environment-1"]);
+
+        // The person's own session still reads, and is the only one that approves a computer.
+        expect((yield* call("session-token", "GET", "/v1/environments")).status).toBe(200);
+        const created = yield* call(
+          "session-token",
+          "POST",
+          "/v1/client/computer-approvals",
+          approval,
+        );
+        expect(created).toEqual({ status: 200, body: { expiresAt: "2026-11-19T12:30:00.000Z" } });
+        expect(approved).toEqual(["challenge-1"]);
+      }).pipe(
+        Effect.scoped,
+        Effect.ensuring(
+          Effect.sync(() => {
+            vi.mocked(verifyToken).mockReset();
+            vi.mocked(createClerkClient).mockReset();
+          }),
+        ),
+      );
+    },
+  );
 });
 
 describe("relay DPoP failure mapping", () => {
@@ -519,11 +668,13 @@ function layerRelayUnlinkTest(input?: {
   readonly reconcileOrigin?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["reconcileOrigin"];
   readonly release?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["release"];
   readonly clearInbox?: HookInbox.HookInbox["Service"]["clear"];
+  readonly listOtherEnvironmentsForMachine?: EnvironmentLinks.EnvironmentLinks["Service"]["listOtherEnvironmentsForMachine"];
 }) {
   return Layer.mergeAll(
     Layer.mock(HookInbox.HookInbox, {
       clear: input?.clearInbox ?? (() => Effect.void),
     }),
+    Layer.mock(Teams.Teams, { unlistEnvironment: () => Effect.void }),
     Layer.succeed(
       RelayDb.RelayTransactions,
       RelayDb.RelayTransactions.of({
@@ -540,6 +691,10 @@ function layerRelayUnlinkTest(input?: {
         findActiveManagedForEnvironment: () => Effect.die("unused findActiveManagedForEnvironment"),
         setHoldWebhooksWhileOffline: () => Effect.die("unused setHoldWebhooksWhileOffline"),
         revokeForUser: input?.revokeForUser ?? (() => Effect.succeed(false)),
+        listOtherUsersForEnvironmentKey: () => Effect.die("unused listOtherUsersForEnvironmentKey"),
+        listOtherEnvironmentsForMachine:
+          input?.listOtherEnvironmentsForMachine ??
+          (() => Effect.die("unused listOtherEnvironmentsForMachine")),
       }),
     ),
     Layer.succeed(
@@ -1126,6 +1281,56 @@ describe("relay environment unlink", () => {
     });
   });
 
+  it.effect("removes a reinstalled computer's earlier entry only on a fresh approval", () => {
+    const revoked: Array<string> = [];
+    const revokedKeys: Array<string> = [];
+    const lookups: Array<string> = [];
+    const machineId = "a".repeat(64);
+    const relink = (input: { machineId: string | null; freshlyApproved: boolean }) =>
+      supersedeSameComputerLinks({
+        userId: "user-1",
+        environmentId: "environment-new",
+        ...input,
+      }).pipe(
+        Effect.provide(
+          layerRelayUnlinkTest({
+            listOtherEnvironmentsForMachine: (query) =>
+              Effect.sync(() => {
+                lookups.push(`${query.userId}:${query.machineId}:${query.environmentId}`);
+                return ["environment-1"];
+              }),
+            getForUser: (query) =>
+              Effect.succeed(
+                query.userId === "user-1" && query.environmentId === "environment-1"
+                  ? linkedEnvironmentRecord
+                  : null,
+              ),
+            revokeForUser: (query) =>
+              Effect.sync(() => {
+                revoked.push(`${query.userId}:${query.environmentId}`);
+                return true;
+              }),
+            revokeCredential: (query) =>
+              Effect.sync(() => {
+                revokedKeys.push(`${query.environmentId}:${query.environmentPublicKey}`);
+                return true;
+              }),
+          }),
+        ),
+      );
+    return Effect.gen(function* () {
+      yield* relink({ machineId, freshlyApproved: false });
+      yield* relink({ machineId: null, freshlyApproved: true });
+      expect(lookups).toEqual([]);
+      expect(revoked).toEqual([]);
+
+      yield* relink({ machineId, freshlyApproved: true });
+      expect(lookups).toEqual([`user-1:${machineId}:environment-new`]);
+      expect(revoked).toEqual(["user-1:environment-1"]);
+      expect(revokedKeys).toEqual(["environment-1:public-key"]);
+    });
+  });
+
   it.effect("commits database revocation before deprovisioning the managed endpoint", () => {
     const calls: Array<string> = [];
     const deprovisionTarget = {
@@ -1243,6 +1448,31 @@ describe("relay environment unlink", () => {
       ),
     );
   });
+
+  it.effect("reports the computer removed when only its tunnel cleanup fails", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* unlinkEnvironmentRecord({ userId: "user-1", environmentId: "environment-1" }),
+      ).toBe(true);
+    }).pipe(
+      Effect.provide(
+        layerRelayUnlinkTest({
+          getForUser: () => Effect.succeed(linkedEnvironmentRecord),
+          revokeForUser: () => Effect.succeed(true),
+          revokeCredential: () => Effect.succeed(true),
+          deprovision: () =>
+            Effect.fail(
+              new ManagedEndpointProvider.ManagedEndpointDeprovisioningFailed({
+                userId: "user-1",
+                environmentId: "environment-1",
+                stage: "delete-tunnel",
+                cause: "cloudflare unavailable",
+              }),
+            ),
+        }),
+      ),
+    ),
+  );
 
   it.effect("retries deprovisioning after the link is already revoked", () => {
     const calls: Array<string> = [];
@@ -1421,7 +1651,14 @@ describe("relay routing fallback", () => {
                 Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
               ),
             ),
-            Layer.provide([layerPublisher, layerSignatures, Layer.mock(HeldHooks.HeldHooks, {})]),
+            Layer.provide([
+              layerPublisher,
+              layerSignatures,
+              Layer.mock(HeldHooks.HeldHooks, {}),
+              Layer.mock(GuestLinks.GuestLinks, {}),
+              Layer.mock(Teams.Teams, {}),
+              Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
+            ]),
           ),
         ),
         Layer.provide(layerAuth),

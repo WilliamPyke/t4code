@@ -98,6 +98,8 @@ function makeEnvironmentLinks(
     findActiveManagedForEnvironment: () => Effect.succeed([]),
     setHoldWebhooksWhileOffline: () => Effect.void,
     revokeForUser: () => Effect.succeed(false),
+    listOtherUsersForEnvironmentKey: () => Effect.succeed([]),
+    listOtherEnvironmentsForMachine: () => Effect.succeed([]),
     ...overrides,
   };
 }

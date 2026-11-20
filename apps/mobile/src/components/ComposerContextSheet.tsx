@@ -324,6 +324,11 @@ export function ComposerContextSheet(props: {
                 ) : null}
               </View>
             ) : null}
+            {record.kind === "room-updates" ? (
+              <Text selectable className="text-sm text-foreground">
+                {record.text}
+              </Text>
+            ) : null}
             {record.kind === "environment" ? (
               <ContextField label="Machine" value={record.label} />
             ) : null}

@@ -306,7 +306,7 @@ export const buildInitialPiProviderSnapshot = Effect.fn(
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Pi is disabled in T3 Code settings.",
+        message: "Pi is turned off in Tinkjam settings.",
       },
     });
   }
@@ -344,7 +344,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Pi is disabled in T3 Code settings.",
+        message: "Pi is turned off in Tinkjam settings.",
       },
     });
   }
@@ -368,7 +368,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
         status: "error",
         auth: { status: "unknown" },
         message: isCommandMissingCause(error)
-          ? "Pi CLI (`pi`) is not installed or not on PATH. Install with `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`."
+          ? "Pi is not installed on this computer, or Tinkjam cannot find the `pi` command. Install with `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`."
           : "Failed to execute Pi CLI health check.",
       },
     });
@@ -419,7 +419,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
         version: null,
         status: "error",
         auth: { status: "unknown" },
-        message: `T3 Code could not determine the Pi version. Pi ${MINIMUM_PI_VERSION} or newer is required.`,
+        message: `Tinkjam could not tell which version of Pi is installed. Pi ${MINIMUM_PI_VERSION} or newer is required.`,
       },
     });
   }
@@ -478,7 +478,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
         status: "ready",
         auth: { status: "unknown" },
         message:
-          "Pi is available, but T3 Code could not refresh its models and commands. The live session will retry startup.",
+          "Pi is available, but Tinkjam could not refresh its models and commands. The live session will retry startup.",
       },
     });
   }

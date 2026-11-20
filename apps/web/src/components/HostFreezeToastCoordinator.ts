@@ -1,4 +1,5 @@
 import { hostFreezeNotice } from "@t3tools/client-runtime/connection";
+import { isGuestEnvironment } from "@t3tools/client-runtime/environment";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentSummaries } from "../state/presentation";
@@ -13,7 +14,8 @@ export function startHostFreezeToasts(): () => void {
     (configs) => {
       for (const [environmentId, config] of configs) {
         const stall = config.lastEventLoopStall;
-        if (stall === undefined) continue;
+        // It names the machine, which a guest of someone else's board is never told.
+        if (stall === undefined || isGuestEnvironment(environmentId)) continue;
         const key = `${environmentId}:${stall.detectedAt}`;
         if (shown.has(key)) continue;
         shown.add(key);

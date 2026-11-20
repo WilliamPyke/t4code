@@ -615,6 +615,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
           }),
           Effect.ignoreCause({ log: true }),
         );
+        // Tinkjam Sync ("sync") prints no access details; it says when its link is up instead.
         if (serverConfig.startupPresentation === "headless") {
           yield* Effect.logDebug("startup phase: headless access info");
           const accessInfo = yield* issueHeadlessServeAccessInfo();
@@ -622,7 +623,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
             "headless.output",
             Console.log(formatHeadlessServeOutput(accessInfo)),
           );
-        } else {
+        } else if (serverConfig.startupPresentation === "browser") {
           yield* Effect.logDebug("startup phase: browser open check");
           const startupBrowserTarget = yield* resolveStartupBrowserTarget;
           if (serverConfig.mode !== "desktop") {

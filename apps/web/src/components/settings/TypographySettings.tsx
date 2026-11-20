@@ -27,6 +27,7 @@ import {
   TYPOGRAPHY_ADVANCED_STORAGE_KEY,
 } from "../../appearanceFonts";
 import { AdvancedSettings } from "./AdvancedSettings";
+import { TEXT_SIZE_OPTIONS, TEXT_SIZE_PRESETS, textSizePresetOf } from "./SettingsPanels.logic";
 import { CodeFontPreview, PromptFontPreview, TerminalFontPreview } from "./SettingsFontPreviews";
 import { discoverInstalledFonts, FontFamilyPicker, useFontEnumeration } from "./FontFamilyPicker";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -63,6 +64,53 @@ function useFontDefaultFamilies() {
     code: defaults.code,
     interfaceFamily: settings.fontFamilySans.trim() || defaults.sans,
   };
+}
+
+function TextSizeRow() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  const preset = textSizePresetOf(settings);
+  return (
+    <SettingsRow
+      {...searchableSetting("text-size")}
+      description="Sets every font size below together. Medium is the standard size."
+      resetAction={
+        preset === "medium" ? null : (
+          <SettingResetButton
+            label="text size"
+            onClick={() => updateSettings(TEXT_SIZE_PRESETS.medium)}
+          />
+        )
+      }
+      control={
+        <Select
+          value={preset ?? "custom"}
+          onValueChange={(next) => {
+            const picked = TEXT_SIZE_OPTIONS.find((option) => option.preset === next);
+            if (picked !== undefined) updateSettings(TEXT_SIZE_PRESETS[picked.preset]);
+          }}
+        >
+          <SelectTrigger size="sm" className="w-28 shrink-0" aria-label="Text size">
+            <SelectValue>
+              {TEXT_SIZE_OPTIONS.find((option) => option.preset === preset)?.label ?? "Custom"}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectPopup align="end" alignItemWithTrigger={false}>
+            {TEXT_SIZE_OPTIONS.map((option) => (
+              <SelectItem hideIndicator key={option.preset} value={option.preset}>
+                {option.label}
+              </SelectItem>
+            ))}
+            {preset === null ? (
+              <SelectItem hideIndicator disabled value="custom">
+                Custom
+              </SelectItem>
+            ) : null}
+          </SelectPopup>
+        </Select>
+      }
+    />
+  );
 }
 
 function InterfaceFontRow({ preview }: { preview?: ReactNode }) {
@@ -345,6 +393,7 @@ export function TypographySection() {
     advanced || (searchTargetId !== null && isAdvancedTypographyTarget(searchTargetId));
   return (
     <SettingsSection id="typography" title="Typography">
+      <TextSizeRow />
       {showAdvanced ? <FontSettingsGroup /> : <SimpleFontRows />}
       <WordWrapRow />
       <AdvancedSettings

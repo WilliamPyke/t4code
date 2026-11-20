@@ -15,6 +15,7 @@ import * as Base64Url from "effect/encoding/Base64Url";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Terminal from "effect/Terminal";
@@ -30,12 +31,17 @@ import { buildConnectAuthorizeRequestUrl } from "@t3tools/shared/connectAuth";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ExternalLauncher from "../process/externalLauncher.ts";
+import { CLOUD_LINK_FRESH_APPROVAL } from "./config.ts";
 import {
   cloudCliOAuthConfig,
   hostedAppUrlConfig,
   type CloudCliOAuthConfig,
 } from "./publicConfig.ts";
-import { renderLoopbackAuthorizationCompleteHtml } from "./cliAuthHtml.ts";
+import {
+  renderLoopbackAuthorizationCompleteHtml,
+  renderLoopbackAuthorizationFailedHtml,
+  renderLoopbackAuthorizationStartHtml,
+} from "./cliAuthHtml.ts";
 
 const CLOUD_CLI_OAUTH_TOKEN_SECRET = "cloud-cli-oauth-token";
 const CLOUD_CLI_OAUTH_CALLBACK_TIMEOUT = Duration.minutes(10);
@@ -468,6 +474,184 @@ export const deviceAuthorizationLogin = Effect.fn("cloud.cli_token.device_author
   },
 );
 
+/**
+ * Serves the loopback OAuth callback for this sign-in until the scope closes. With `start`, the
+ * bare address is a short local page saying what connecting does, which continues there.
+ */
+const serveLoopbackCallback = Effect.fn("cloud.cli_token.serve_loopback_callback")(
+  function* (input: {
+    readonly metadata: CloudCliOAuthConfig;
+    readonly state: string;
+    readonly start?: { readonly url: string; readonly computerName: string };
+    readonly boardsUrl: string;
+  }) {
+    const { metadata, state, boardsUrl } = input;
+    const callback = yield* Deferred.make<string>();
+    const layerCallbackRoute = HttpRouter.add(
+      "GET",
+      "/callback",
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        const url = new URL(request.originalUrl, metadata.redirectUri);
+        const code = url.searchParams.get("code");
+        if (url.searchParams.get("state") !== state || !code) {
+          return HttpServerResponse.text(renderLoopbackAuthorizationFailedHtml({ boardsUrl }), {
+            status: 400,
+            contentType: "text/html; charset=utf-8",
+          });
+        }
+        yield* Deferred.succeed(callback, code);
+        return HttpServerResponse.html(
+          renderLoopbackAuthorizationCompleteHtml({
+            boardsUrl,
+            ...(input.start === undefined ? {} : { computerName: input.start.computerName }),
+          }),
+        );
+      }),
+    );
+    const layerRoutes =
+      input.start === undefined
+        ? layerCallbackRoute
+        : Layer.merge(
+            layerCallbackRoute,
+            HttpRouter.add(
+              "GET",
+              "/",
+              Effect.succeed(
+                HttpServerResponse.html(
+                  renderLoopbackAuthorizationStartHtml({
+                    computerName: input.start.computerName,
+                    continueUrl: input.start.url,
+                  }),
+                ),
+              ),
+            ),
+          );
+    yield* HttpRouter.serve(layerRoutes, {
+      disableListenLog: true,
+      disableLogger: true,
+    }).pipe(
+      Layer.provide(
+        NodeHttpServer.layer(NodeHttp.createServer, {
+          host: "127.0.0.1",
+          port: metadata.loopbackPort,
+          disablePreemptiveShutdown: true,
+        }),
+      ),
+      Layer.build,
+    );
+    return callback;
+  },
+);
+
+// Long enough to sign up for an account on the approval page first.
+const COMPUTER_APPROVAL_TIMEOUT = Duration.minutes(30);
+const PENDING_APPROVAL_SECRET = "cloud-cli-pending-approval";
+const PendingApproval = Schema.fromJsonString(
+  Schema.Struct({
+    verifier: Schema.String,
+    challenge: Schema.String,
+    state: Schema.String,
+    createdAt: Schema.Number,
+  }),
+);
+const decodePendingApproval = Schema.decodeOption(PendingApproval);
+const encodePendingApproval = Schema.encodeEffect(PendingApproval);
+
+/**
+ * The sign-in request this computer is waiting on. A Sync that restarts while the person is still
+ * on the approval page reuses it, so the page's return to this computer still connects it.
+ */
+export const pendingApprovalRequest = Effect.fn("cloud.cli_token.pending_approval_request")(
+  function* () {
+    const secrets = yield* ServerSecretStore.ServerSecretStore;
+    const now = yield* Clock.currentTimeMillis;
+    const stored = yield* secrets.get(PENDING_APPROVAL_SECRET).pipe(
+      Effect.map(Option.flatMap((bytes) => decodePendingApproval(bytesToString(bytes)))),
+      Effect.orElseSucceed(() => Option.none()),
+    );
+    if (
+      Option.isSome(stored) &&
+      now - stored.value.createdAt < Duration.toMillis(COMPUTER_APPROVAL_TIMEOUT)
+    ) {
+      return stored.value;
+    }
+    const fresh = { ...(yield* makePkceRequest), createdAt: now };
+    const encoded = yield* encodePendingApproval(fresh).pipe(Effect.option);
+    if (Option.isSome(encoded)) {
+      yield* secrets.set(PENDING_APPROVAL_SECRET, stringToBytes(encoded.value)).pipe(Effect.ignore);
+    }
+    return fresh;
+  },
+);
+
+/**
+ * Tinkjam Sync's sign-in: the loopback grant `t3 connect` uses, opened from a short local address
+ * that forwards to the hosted page asking to connect this computer. Reads nothing from a terminal.
+ */
+export const approveComputerLogin = Effect.fn("cloud.cli_token.approve_computer_login")(function* <
+  E,
+  R,
+>(input: {
+  readonly computerName: string;
+  readonly present: (localUrl: string) => Effect.Effect<void, E, R>;
+}) {
+  const metadata = yield* cloudCliOAuthConfig;
+  const hostedAppUrl = yield* hostedAppUrlConfig;
+  const { verifier, challenge, state } = yield* pendingApprovalRequest();
+  const callback = yield* serveLoopbackCallback({
+    metadata,
+    state,
+    boardsUrl: hostedAppUrl,
+    start: {
+      url: buildConnectAuthorizeRequestUrl({
+        hostedAppUrl,
+        state,
+        challenge,
+        loopbackPort: metadata.loopbackPort,
+        computerName: input.computerName,
+      }),
+      computerName: input.computerName,
+    },
+  });
+  yield* input.present(`http://127.0.0.1:${metadata.loopbackPort}`);
+  const code = yield* Deferred.await(callback).pipe(
+    Effect.timeout(COMPUTER_APPROVAL_TIMEOUT),
+    Effect.catchTags({
+      TimeoutError: (cause) => Effect.fail(new CloudCliAuthorizationTimeoutError({ cause })),
+    }),
+  );
+  // A code works once: whatever the exchange says, the next sign-in starts afresh.
+  const secrets = yield* ServerSecretStore.ServerSecretStore;
+  return yield* exchangeToken(metadata, {
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: metadata.redirectUri,
+    client_id: metadata.clientId,
+    code_verifier: verifier,
+  }).pipe(
+    // The person has already pressed Connect; a dropped connection must not cost the approval.
+    Effect.retry({
+      times: 3,
+      schedule: Schedule.spaced("2 seconds"),
+      while: (error) => isTransportError(error) || error._tag === "TimeoutError",
+    }),
+    Effect.tap(() => rememberApproval(verifier)),
+    Effect.ensuring(secrets.remove(PENDING_APPROVAL_SECRET).pipe(Effect.ignore)),
+  );
+}, Effect.scoped);
+
+/**
+ * Pressing Connect left an approval on the relay for this sign-in; the next link redeems it with
+ * the sign-in's verifier, which only this computer holds.
+ */
+const rememberApproval = Effect.fn("cloud.cli_token.remember_approval")(function* (
+  verifier: string,
+) {
+  const secrets = yield* ServerSecretStore.ServerSecretStore;
+  yield* secrets.set(CLOUD_LINK_FRESH_APPROVAL, stringToBytes(verifier)).pipe(Effect.ignore);
+});
+
 /** @public */
 export const make = Effect.gen(function* () {
   const random = yield* SecureRandom.SecureRandom;
@@ -513,36 +697,7 @@ export const make = Effect.gen(function* () {
     const metadata = yield* cloudCliOAuthConfig;
     const hostedAppUrl = yield* hostedAppUrlConfig;
     const { verifier, challenge, state } = yield* makePkceRequest;
-    const callback = yield* Deferred.make<string>();
-    const layerCallbackRoute = HttpRouter.add(
-      "GET",
-      "/callback",
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        const url = new URL(request.originalUrl, metadata.redirectUri);
-        const code = url.searchParams.get("code");
-        if (url.searchParams.get("state") !== state || !code) {
-          return HttpServerResponse.text("Invalid T3 Connect authorization callback.", {
-            status: 400,
-          });
-        }
-        yield* Deferred.succeed(callback, code);
-        return HttpServerResponse.html(renderLoopbackAuthorizationCompleteHtml());
-      }),
-    );
-    yield* HttpRouter.serve(layerCallbackRoute, {
-      disableListenLog: true,
-      disableLogger: true,
-    }).pipe(
-      Layer.provide(
-        NodeHttpServer.layer(NodeHttp.createServer, {
-          host: "127.0.0.1",
-          port: metadata.loopbackPort,
-          disablePreemptiveShutdown: true,
-        }),
-      ),
-      Layer.build,
-    );
+    const callback = yield* serveLoopbackCallback({ metadata, state, boardsUrl: hostedAppUrl });
     // /connect establishes a Clerk session first; /oauth/authorize loses parameters across sign-in.
     const authorizationUrl = buildConnectAuthorizeRequestUrl({
       hostedAppUrl,
@@ -572,6 +727,9 @@ export const make = Effect.gen(function* () {
       client_id: metadata.clientId,
       code_verifier: verifier,
     });
+    yield* rememberApproval(verifier).pipe(
+      Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
+    );
     return { _tag: "Authorized", token } as const;
   });
 

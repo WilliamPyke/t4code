@@ -58,7 +58,7 @@ function ConfiguredT3ConnectSidebarSignIn() {
       <SidebarMenuItem>
         <SidebarMenuButton onClick={openAuthPrompt}>
           <LogInIcon />
-          <span>Sign in to T3 Connect</span>
+          <span>Sign in to Tinkjam</span>
         </SidebarMenuButton>
       </SidebarMenuItem>
     </SidebarMenu>

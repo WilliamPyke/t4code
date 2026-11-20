@@ -118,6 +118,35 @@ const knownRecords: Record<(typeof COMPOSER_CONTEXT_KINDS)[number], Record<strin
     label: "vps",
     environmentId: "environment-vps",
   },
+  "room-updates": {
+    ...base,
+    kind: "room-updates",
+    label: "Room updates · 1 message",
+    messageCount: 1,
+    truncated: false,
+    text: "Room owner:\n  Ship it today.",
+  },
+  "room-cards": {
+    ...base,
+    kind: "room-cards",
+    label: "Board · 1 card",
+    cards: [{ label: "Note from Sam", author: "guest", name: "Sam", text: "Use the old cache." }],
+  },
+  "room-artifact": {
+    ...base,
+    kind: "room-artifact",
+    label: 'Artifact "Plan"',
+    shareId: "share-1",
+    noteId: "note-1",
+    title: "Plan",
+  },
+  "room-comment": {
+    ...base,
+    kind: "room-comment",
+    label: "Reply in the comment thread",
+    shareId: "share-1",
+    noteId: "note-1",
+  },
 };
 
 describe("ComposerContextRecord", () => {

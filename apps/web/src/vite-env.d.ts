@@ -7,6 +7,10 @@ interface ImportMetaEnv {
   readonly VITE_WS_URL: string;
   readonly VITE_HOSTED_APP_URL: string;
   readonly VITE_HOSTED_APP_CHANNEL: string;
+  /** The DNS zone this deployment's tunnels live in, which guest links may name hosts in. */
+  readonly VITE_GUEST_HOST_ZONE: string;
+  /** The cloud board host's origin; without it, `boards.` in the guest host zone. */
+  readonly VITE_CLOUD_BOARDS_URL: string;
   readonly VITE_RELEASE_CHANNEL: string;
   readonly VITE_CLERK_PUBLISHABLE_KEY: string;
   readonly VITE_CLERK_JWT_TEMPLATE: string;

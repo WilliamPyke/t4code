@@ -141,7 +141,7 @@ const terminalState = (installation: CodexInstallation.CodexInstallation["Servic
     Effect.map(Option.getOrThrow),
   );
 
-it.effect.each(["0.156.0", "0.156.1", "0.156.2", "0.157.0"])(
+it.effect.each(["0.156.0", "0.156.1", "0.156.2", "0.157.0", "0.169.0-alpha.11.1"])(
   "reuses installed Codex %s without downloading or taking ownership of it",
   (version) =>
     Effect.gen(function* () {
@@ -351,7 +351,7 @@ it.effect("requires an update before running an older activated managed installa
     );
     const restarted = yield* makeHarness({ baseDir: first.baseDir });
     expect((yield* Effect.flip(restarted.installation.resolve())).detail).toContain(
-      "outside the supported range",
+      "not supported by this version of Tinkjam",
     );
     yield* restarted.installation.start;
     expect((yield* terminalState(restarted.installation)).phase).toBe("succeeded");

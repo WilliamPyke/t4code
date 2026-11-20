@@ -5,6 +5,8 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import {
   CLOUD_ENDPOINT_CONFIRMED_ORIGIN,
   CLOUD_ENDPOINT_RUNTIME_CONFIG,
+  CLOUD_LINK_FAILURE,
+  CLOUD_LINK_FRESH_APPROVAL,
   CLOUD_LINK_REVOKED,
   CLOUD_LINKED_USER_ID,
   CLOUD_MINT_PUBLIC_KEY,
@@ -52,11 +54,12 @@ export const setCliDesiredCloudLink = Effect.fn("cloud.cli_state.set_desired")(f
   }
 });
 
-export const dropRevokedCloudLink = Effect.gen(function* () {
+/**
+ * Forgets which account this computer was linked to, so the next link is made for whoever just
+ * approved it. A link kept for another account would refuse the new one.
+ */
+export const forgetLinkedAccount = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
-  if (Option.isNone(yield* secrets.get(CLOUD_LINK_REVOKED))) {
-    return false;
-  }
   yield* Effect.all(
     [
       secrets.remove(CLOUD_LINKED_USER_ID),
@@ -64,11 +67,20 @@ export const dropRevokedCloudLink = Effect.gen(function* () {
       secrets.remove(CLOUD_MINT_PUBLIC_KEY),
       secrets.remove(CLOUD_ENDPOINT_RUNTIME_CONFIG),
       secrets.remove(CLOUD_ENDPOINT_CONFIRMED_ORIGIN),
+      secrets.remove(CLOUD_LINK_FAILURE),
     ],
     { concurrency: "unbounded" },
   );
   // Last, so a failed removal above leaves the mark for the next attempt.
   yield* secrets.remove(CLOUD_LINK_REVOKED);
+});
+
+export const dropRevokedCloudLink = Effect.gen(function* () {
+  const secrets = yield* ServerSecretStore.ServerSecretStore;
+  if (Option.isNone(yield* secrets.get(CLOUD_LINK_REVOKED))) {
+    return false;
+  }
+  yield* forgetLinkedAccount;
   return true;
 });
 
@@ -86,6 +98,8 @@ export const clearPersistedCloudLink = Effect.gen(function* () {
       secrets.remove(CLOUD_ENDPOINT_CONFIRMED_ORIGIN),
       secrets.remove(PUBLISH_AGENT_ACTIVITY_SECRET),
       secrets.remove(CLOUD_LINK_REVOKED),
+      secrets.remove(CLOUD_LINK_FAILURE),
+      secrets.remove(CLOUD_LINK_FRESH_APPROVAL),
     ],
     { concurrency: "unbounded" },
   );

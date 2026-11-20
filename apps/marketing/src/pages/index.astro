@@ -1,0 +1,252 @@
+---
+import Layout from "../layouts/Layout.astro";
+import { APP_URL, SAMPLE_BOARD_URL } from "../lib/site";
+
+// The only place these four names appear regardless of what a person has installed.
+const agents = [
+  { name: "Claude", icon: "/agents/claude-icon.svg", mono: false },
+  { name: "Codex", icon: "/agents/openai-icon.svg", mono: true },
+  { name: "Grok", icon: "/agents/grok-icon.svg", mono: true },
+  { name: "Cursor", icon: "/agents/cursor-icon.svg", mono: true },
+];
+const faces = [
+  { initial: "P", color: "var(--forest)" },
+  { initial: "S", color: "var(--raspberry)" },
+  { initial: "M", color: "var(--claude)" },
+  { initial: "+4", color: "var(--sun)", ink: "#17141C" },
+];
+const arrow = "M2 2l5.5 13 2-5.5 5.5-2z";
+---
+
+<Layout navOver>
+  <section class="hero">
+    <div class="hero__stage">
+      <h1 class="headline" data-headline>
+        <span class="sr-only">build beautiful things with your AI agent and your teammates</span>
+        <span aria-hidden="true">
+          <span class="headline__line">build beautiful</span>
+          <span class="headline__line"
+            >things with
+            <span class="agent-box" data-agent-box>
+              <span class="agent-stack">
+                {
+                  agents.map((agent, index) => (
+                    <span class:list={["agent", { "is-on": index === 0 }]} data-agent>
+                      <img
+                        class:list={{ "mono-icon": agent.mono }}
+                        src={agent.icon}
+                        width="100"
+                        height="100"
+                        alt=""
+                      />
+                      {agent.name}
+                    </span>
+                  ))
+                }
+              </span>
+              <i class="handle handle--tl"></i><i class="handle handle--tr"></i><i
+                class="handle handle--bl"></i><i class="handle handle--br"></i>
+              <span class="cursor">
+                <svg viewBox="0 0 18 18"
+                  ><path d={arrow} fill="var(--accent)" stroke="var(--page)" stroke-width="1.2"
+                  ></path></svg
+                >
+                <span style="background:var(--btn)">You</span>
+              </span>
+            </span>
+          </span>
+          <span class="headline__line"
+            >and
+            <span class="mates" data-mates>
+              <span class="faces is-on">
+                {
+                  faces.map((face) => (
+                    <span class="face" style={`background:${face.color};color:${face.ink ?? "#fff"}`}>
+                      <span>{face.initial}</span>
+                    </span>
+                  ))
+                }
+              </span>
+              <span>your teammates</span>
+            </span>
+          </span>
+        </span>
+      </h1>
+
+      <div class="board" aria-hidden="true">
+        <svg
+          class="board__lines"
+          width="1440"
+          height="900"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M1236 286v196"></path><path d="M1229 474l7 8 7-8"></path>
+          <path d="M930 640h112"></path><path d="M1034 633l8 7-8 7"></path>
+          <path d="M730 772v-62"></path><path d="M723 718l7-8 7 8"></path>
+        </svg>
+
+        <div class="bcard note">
+          Bigger photos on the landing page, and lose the carousel.
+          <div class="note__by">Priya</div>
+        </div>
+        <div class="cursor drift cursor--priya">
+          <svg viewBox="0 0 18 18"
+            ><path d={arrow} fill="var(--forest)" stroke="var(--page)" stroke-width="1.2"></path></svg
+          >
+          <span style="background:var(--forest)">Priya</span>
+        </div>
+
+        <div class="bcard codex">
+          <div class="bcard__head">
+            <img class="mono-icon" src="/agents/openai-icon.svg" width="16" height="16" alt="" />Codex<span
+              class="bcard__sub">Sam's agent</span
+            ><span class="chip chip--working">Working</span>
+          </div>
+          <div class="codex__body">
+            <div class="codex__chips">
+              <span class="chip chip--quiet">1 note</span><span class="chip chip--quiet">1 link</span>
+            </div>
+            <p>Rebuilding the landing page with bigger photos from the Figma file.</p>
+          </div>
+        </div>
+        <div class="bcard figma">
+          <div class="bcard__head">
+            <img src="/agents/figma.svg" width="11" height="16" alt="" />Spring photos
+          </div>
+        </div>
+        <div class="cursor drift cursor--maya">
+          <svg viewBox="0 0 18 18"
+            ><path d={arrow} fill="var(--claude)" stroke="var(--page)" stroke-width="1.2"></path></svg
+          >
+          <span style="background:var(--claude)">Maya</span>
+        </div>
+
+        <div class="bcard landing">
+          <div class="bcard__head">Landing page<span class="chip chip--live">Live</span></div>
+          <div class="landing__body">
+            <div class="landing__art"></div>
+            <div class="landing__title">Spring collection</div>
+            <div class="landing__tiles"><span></span><span></span><span></span></div>
+          </div>
+        </div>
+        <div class="bcard comment">
+          <span class="comment__face">M</span>Much better. Can we try it in blue?
+        </div>
+        <div class="cursor drift cursor--sam">
+          <svg viewBox="0 0 18 18"
+            ><path d={arrow} fill="var(--raspberry)" stroke="var(--page)" stroke-width="1.2"
+            ></path></svg
+          >
+          <span style="background:var(--raspberry)">Sam</span>
+        </div>
+      </div>
+
+      <div class="intro">
+        <p class="intro__lede">
+          Tinkjam is a shared board for your team. Everyone brings their own AI agent, and everyone
+          sees what it makes.
+        </p>
+        <div class="intro__ctas">
+          <a class="btn btn--lg" href={APP_URL}>Start a board</a>
+          {
+            SAMPLE_BOARD_URL === "" ? null : (
+              <a class="navlink intro__sample" href={SAMPLE_BOARD_URL}>
+                See a sample board
+              </a>
+            )
+          }
+        </div>
+        <p class="intro__fine">Free while in beta. No account needed.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panels">
+    <div class="panel panel--blue">
+      <div aria-hidden="true">
+        <div class="cursor drift cursor--a">
+          <svg viewBox="0 0 18 18"
+            ><path d={arrow} fill="var(--sun)" stroke="#2F5BEA" stroke-width="1"></path></svg
+          >
+          <span style="background:var(--sun)">Priya</span>
+        </div>
+        <div class="cursor drift cursor--b">
+          <svg viewBox="0 0 18 18"
+            ><path d={arrow} fill="#FFFFFF" stroke="#2F5BEA" stroke-width="1"></path></svg
+          >
+          <span style="background:#FFFFFF">Sam</span>
+        </div>
+        <div class="cursor drift cursor--c">
+          <svg viewBox="0 0 18 18"
+            ><path d={arrow} fill="var(--claude)" stroke="#2F5BEA" stroke-width="1"></path></svg
+          >
+          <span style="background:var(--claude)">Maya's Claude</span>
+        </div>
+      </div>
+      <h2>one board, everyone on it</h2>
+      <p>
+        Notes, links, pages and prototypes in one place. You see your teammates and their agents
+        work as it happens.
+      </p>
+    </div>
+    <div class="panel">
+      <div class="tiles" aria-hidden="true">
+        {
+          agents.map((agent) => (
+            <span class="tile">
+              <img
+                class:list={{ "mono-icon": agent.mono }}
+                src={agent.icon}
+                width="48"
+                height="48"
+                alt=""
+              />
+            </span>
+          ))
+        }
+      </div>
+      <h2>bring your own agent</h2>
+      <p>
+        Connect Claude, Codex, Grok or Cursor from your own computer, on your own account. Nothing
+        goes to it until you send it.
+      </p>
+    </div>
+  </section>
+</Layout>
+
+<script>
+  // The headline's agent is dragged off toward the board and the next one is brought in from above.
+  const headline = document.querySelector<HTMLElement>("[data-headline]");
+  const box = headline?.querySelector<HTMLElement>("[data-agent-box]");
+  const mates = headline?.querySelector<HTMLElement>("[data-mates]");
+  if (headline && box && mates && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    const agents = [...box.querySelectorAll<HTMLElement>("[data-agent]")];
+    const mateStates = [...mates.children] as HTMLElement[];
+    let agent = 0;
+    let mate = 0;
+    setInterval(() => {
+      box.classList.add("is-leaving");
+      setTimeout(() => {
+        agents[agent]?.classList.remove("is-on");
+        agent = (agent + 1) % agents.length;
+        agents[agent]?.classList.add("is-on");
+        box.classList.replace("is-leaving", "is-arriving");
+        void box.offsetWidth;
+        box.classList.remove("is-arriving");
+      }, 650);
+    }, 3200);
+    setInterval(() => {
+      mates.classList.add("is-fading");
+      setTimeout(() => {
+        mateStates[mate]?.classList.remove("is-on");
+        mate = (mate + 1) % mateStates.length;
+        mateStates[mate]?.classList.add("is-on");
+        mates.classList.remove("is-fading");
+      }, 250);
+    }, 5200);
+  }
+</script>

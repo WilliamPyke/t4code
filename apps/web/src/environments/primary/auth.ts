@@ -139,12 +139,17 @@ let explicitPairingRequested = false;
 const AUTH_SESSION_ESTABLISH_TIMEOUT_MS = 2_000;
 const AUTH_SESSION_ESTABLISH_STEP_MS = 100;
 
+// A shared-thread join link (`/join?host=…&token=…`) carries the room's token, not a pairing one.
+const isJoinPage = (url: URL) => url.pathname === "/join";
+
 export function peekPairingTokenFromUrl(): string | null {
-  return getPairingTokenFromUrl(new URL(window.location.href));
+  const url = new URL(window.location.href);
+  return isJoinPage(url) ? null : getPairingTokenFromUrl(url);
 }
 
 export function stripPairingTokenFromUrl() {
   const url = new URL(window.location.href);
+  if (isJoinPage(url)) return;
   const next = stripPairingTokenUrl(url);
   if (next.toString() === url.toString()) {
     return;

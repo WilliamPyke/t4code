@@ -21,6 +21,7 @@ export type ThreadActionMenuId =
   | "regenerate-title"
   | "mark-unread"
   | "share-guest"
+  | "open-board"
   | "copy"
   | "copy-path"
   | "copy-branch"
@@ -105,6 +106,7 @@ export function threadActionRequiresOperate(action: ThreadActionMenuId): boolean
     "project-settings",
     "mark-unread",
     "share-guest",
+    "open-board",
     "copy",
     "copy-path",
     "copy-branch",
@@ -179,8 +181,10 @@ export function buildThreadActionMenuItems(
       : []),
     { id: "mark-unread", label: "Mark unread", icon: "mail-open" },
     ...(state.canShareWithGuest
-      ? [{ id: "share-guest" as const, label: "Share with guest", icon: "user-plus" }]
+      ? [{ id: "share-guest" as const, label: "Share with guests", icon: "user-plus" }]
       : []),
+    // Any thread has a board: one never shared starts empty, for its owner alone.
+    { id: "open-board" as const, label: "Open board", icon: "panels-top-left" },
     ...(state.projectFilter
       ? [
           {

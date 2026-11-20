@@ -211,6 +211,38 @@
       "types": "./src/relayJwt.ts",
       "import": "./src/relayJwt.ts"
     },
+    "./roomBoard": {
+      "types": "./src/roomBoard.ts",
+      "import": "./src/roomBoard.ts"
+    },
+    "./roomEmbed": {
+      "types": "./src/roomEmbed.ts",
+      "import": "./src/roomEmbed.ts"
+    },
+    "./guestRoom": {
+      "types": "./src/guestRoom.ts",
+      "import": "./src/guestRoom.ts"
+    },
+    "./roomUpdates": {
+      "types": "./src/roomUpdates.ts",
+      "import": "./src/roomUpdates.ts"
+    },
+    "./roomBoardAgent": {
+      "types": "./src/roomBoardAgent.ts",
+      "import": "./src/roomBoardAgent.ts"
+    },
+    "./boardPreview": {
+      "types": "./src/boardPreview.ts",
+      "import": "./src/boardPreview.ts"
+    },
+    "./boardLayout": {
+      "types": "./src/boardLayout.ts",
+      "import": "./src/boardLayout.ts"
+    },
+    "./boardOutline": {
+      "types": "./src/boardOutline.ts",
+      "import": "./src/boardOutline.ts"
+    },
     "./oauthScope": {
       "types": "./src/oauthScope.ts",
       "import": "./src/oauthScope.ts"
@@ -226,6 +258,10 @@
     "./cliArgs": {
       "types": "./src/cliArgs.ts",
       "import": "./src/cliArgs.ts"
+    },
+    "./ownDomains": {
+      "types": "./src/ownDomains.ts",
+      "import": "./src/ownDomains.ts"
     },
     "./connectAuth": {
       "types": "./src/connectAuth.ts",
@@ -282,6 +318,10 @@
     "./threadLinks": {
       "types": "./src/threadLinks.ts",
       "import": "./src/threadLinks.ts"
+    },
+    "./guestLinks": {
+      "types": "./src/guestLinks.ts",
+      "import": "./src/guestLinks.ts"
     },
     "./composerContextReferences": {
       "types": "./src/composerContextReferences.ts",

@@ -31,7 +31,6 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "../settings/itemRows";
-import { Checkbox } from "../ui/checkbox";
 import { Button } from "../ui/button";
 import { Skeleton } from "../ui/skeleton";
 import { toastManager } from "../ui/toast";
@@ -74,7 +73,6 @@ export function CloudEnvironmentConnectRows({
   showSavedEnvironments = false,
   refreshWhileEmpty = false,
   empty = null,
-  selection,
   onDiscoveryReady,
 }: {
   readonly primaryEnvironmentId: EnvironmentId | null;
@@ -83,11 +81,6 @@ export function CloudEnvironmentConnectRows({
   readonly refreshWhileEmpty?: boolean;
   readonly empty?: ReactNode;
   readonly onDiscoveryReady?: () => void;
-  readonly selection?: {
-    readonly autoSelectedComputers?: Set<EnvironmentId>;
-    readonly selectedIds: ReadonlySet<EnvironmentId>;
-    readonly onChange: (environmentId: EnvironmentId, selected: boolean) => void;
-  };
 }) {
   const environmentsState = useRelayEnvironmentDiscovery();
   const registerEnvironment = useAtomCommand(environmentCatalog.register, {
@@ -154,11 +147,11 @@ export function CloudEnvironmentConnectRows({
       toastManager.add({
         type: "success",
         title: savedWithoutRelay.has(environment.environmentId)
-          ? "T3 Connect route added"
-          : "Environment added",
+          ? "Tinkjam Sync added as a way to reach it"
+          : "Computer added",
         description: savedWithoutRelay.has(environment.environmentId)
-          ? `${environment.label} falls back to T3 Connect when its other routes are unreachable.`
-          : `Connecting to ${environment.label} through T3 Connect.`,
+          ? `${environment.label} is reached through Tinkjam Sync when its other addresses do not answer.`
+          : `Connecting to ${environment.label}.`,
       });
       return true;
     }
@@ -166,18 +159,17 @@ export function CloudEnvironmentConnectRows({
       return false;
     }
     const cause = squashAtomCommandFailure(result);
-    const message =
-      cause instanceof Error ? cause.message : "Could not connect the T3 Connect environment.";
+    const message = cause instanceof Error ? cause.message : null;
     const traceId = findErrorTraceId(cause);
-    console.error("[t3-connect] Could not connect environment", { message, traceId, cause });
+    console.error("[connect-computer] Could not connect", { message, traceId, cause });
     toastManager.add({
       type: "error",
-      title: "Could not connect environment",
-      description: message,
+      title: `Could not connect to ${environment.label}`,
+      description: "Check that Tinkjam Sync is running on it, then try again.",
       data: traceId
         ? {
             secondaryActionProps: {
-              children: "Copy trace ID",
+              children: "Copy error code",
               onClick: () => void navigator.clipboard?.writeText(traceId),
             },
           }
@@ -186,47 +178,12 @@ export function CloudEnvironmentConnectRows({
     return false;
   };
 
-  // Omit machines saved over other routes; onboarding selection must not add a T3 Connect route.
   const isVisibleEnvironment = (environmentId: EnvironmentId) =>
     environmentId !== primaryEnvironmentId &&
-    (showSavedEnvironments || !savedById.has(environmentId)) &&
-    !(selection && savedWithoutRelay.has(environmentId));
+    (showSavedEnvironments || !savedById.has(environmentId));
   const visibleEnvironments = [...environmentsState.environments.values()].filter(
     ({ environment }) => isVisibleEnvironment(environment.environmentId),
   );
-  const selectNewComputers = useEffectEvent(
-    (environments: typeof environmentsState.environments) => {
-      const seen = selection?.autoSelectedComputers;
-      if (!selection || !seen) return;
-      for (const { environment, status, availability } of environments.values()) {
-        if (!isVisibleEnvironment(environment.environmentId)) continue;
-        const id = environment.environmentId;
-        if (availability === "checking") continue;
-        if (
-          discoveredCompatibilityError(status) !== null ||
-          savedById.get(id)?.connection.phase === "unsupported"
-        ) {
-          seen.add(id);
-          if (selection.selectedIds.has(id)) selection.onChange(id, false);
-          continue;
-        }
-        if (seen.has(id)) continue;
-        seen.add(id);
-        selection.onChange(id, true);
-        if (!savedById.has(id)) {
-          void connectEnvironment(environment).then((connected) => {
-            if (!connected) selection.onChange(id, false);
-          });
-        }
-      }
-    },
-  );
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- auto-selects newly discovered machines from the discovery store and starts their relay connections
-  useEffect(() => {
-    // oxlint-disable-next-line react/set-state-in-effect -- Discovery results arrive from an external store and auto-selection starts relay connections, which mark themselves connecting.
-    selectNewComputers(environmentsState.environments);
-  }, [environmentsState.environments]);
-
   // Discovery clears its list on refresh, so poll only until a machine appears.
   const shouldRefreshWhileEmpty =
     refreshWhileEmpty && visibleEnvironments.length === 0 && !environmentsState.offline;
@@ -288,9 +245,7 @@ export function CloudEnvironmentConnectRows({
     if (discoveryProblem !== null && !environmentsState.refreshing) {
       return (
         <div className={ITEM_ROW_CLASSNAME}>
-          <p className="text-sm font-medium text-destructive">
-            Could not load T3 Connect environments
-          </p>
+          <p className="text-sm font-medium text-destructive">Could not load your computers</p>
           <p className="mt-1 text-xs text-muted-foreground">{discoveryProblem}</p>
           <Button
             size="sm"
@@ -348,78 +303,22 @@ export function CloudEnvironmentConnectRows({
             ? "bg-warning"
             : "bg-muted-foreground/35";
     const notAdded = savedWithoutRelay.has(environment.environmentId)
-      ? "Saved without T3 Connect"
+      ? "Saved without Tinkjam Sync"
       : "Not added";
     const statusText =
       unsupported && !savedEnvironment
-        ? `T3 Connect · ${notAdded} · Client not supported`
+        ? `${notAdded} · Out of date`
         : offlineReason !== null
           ? offlineReason
           : savedConnection
             ? savedConnection.statusText
             : availability === "online"
-              ? `T3 Connect · ${notAdded} · Relay online`
+              ? `${notAdded} · Online`
               : availability === "offline"
-                ? `T3 Connect · ${notAdded} · Relay offline`
+                ? `${notAdded} · Offline`
                 : availability === "checking"
-                  ? `T3 Connect · ${notAdded} · Checking relay status…`
-                  : (Option.getOrNull(error)?.message ??
-                    `T3 Connect · ${notAdded} · Relay status unavailable`);
-    if (selection) {
-      return (
-        <label
-          key={environment.environmentId}
-          className="flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5 has-disabled:cursor-default"
-        >
-          <Checkbox
-            checked={!unsupported && selection.selectedIds.has(environment.environmentId)}
-            disabled={unsupported || connectingEnvironmentIds.has(environment.environmentId)}
-            onCheckedChange={async (checked) => {
-              if (unsupported) return;
-              selection.onChange(environment.environmentId, checked);
-              if (checked && !savedEnvironment) {
-                const connected = await connectEnvironment(environment);
-                if (!connected) selection.onChange(environment.environmentId, false);
-              }
-            }}
-          />
-          <EnvironmentMachineIcon
-            aria-hidden
-            kind={machineKind}
-            className="size-4 shrink-0 text-muted-foreground"
-          />
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-medium">{environment.label}</span>
-            {unsupportedDetail !== null ? (
-              <span className="mt-0.5 block text-xs text-muted-foreground">
-                {unsupportedDetail}
-              </span>
-            ) : null}
-          </span>
-          <Tooltip>
-            <TooltipTrigger
-              render={<span tabIndex={0} />}
-              className={cn(
-                "max-w-[45%] shrink-0 truncate text-xs",
-                savedConnection?.tone === "error" ? "text-destructive" : "text-muted-foreground",
-              )}
-            >
-              {connectingEnvironmentIds.has(environment.environmentId)
-                ? "Connecting…"
-                : (savedConnection?.buttonLabel ??
-                  (availability === "online"
-                    ? "Available"
-                    : availability === "offline"
-                      ? "Offline"
-                      : availability === "error"
-                        ? "Unavailable"
-                        : "Checking…"))}
-            </TooltipTrigger>
-            <TooltipPopup>{unsupportedDetail ?? statusText}</TooltipPopup>
-          </Tooltip>
-        </label>
-      );
-    }
+                  ? `${notAdded} · Checking…`
+                  : (Option.getOrNull(error)?.message ?? `${notAdded} · Could not check`);
     return (
       <div key={environment.environmentId} className={ITEM_ROW_CLASSNAME}>
         <div className={ITEM_ROW_INNER_CLASSNAME}>
@@ -441,12 +340,12 @@ export function CloudEnvironmentConnectRows({
                       : savedConnection
                         ? savedConnection.statusText
                         : availability === "online"
-                          ? "Relay online"
+                          ? "Online"
                           : availability === "offline"
-                            ? "Relay offline"
+                            ? "Offline"
                             : availability === "checking"
-                              ? "Checking relay status"
-                              : (Option.getOrNull(error)?.message ?? "Relay status unavailable")
+                              ? "Checking…"
+                              : (Option.getOrNull(error)?.message ?? "Could not check")
                 }
               />
               <EnvironmentMachineIcon
@@ -476,7 +375,7 @@ export function CloudEnvironmentConnectRows({
                   Add
                 </Button>
               </TooltipTrigger>
-              <TooltipPopup>{unsupportedDetail ?? "Client not supported"}</TooltipPopup>
+              <TooltipPopup>{unsupportedDetail ?? "Out of date"}</TooltipPopup>
             </Tooltip>
           ) : savedConnection ? (
             <Button size="sm" variant="outline" disabled>

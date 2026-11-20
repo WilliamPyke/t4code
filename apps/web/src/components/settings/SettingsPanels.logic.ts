@@ -105,6 +105,49 @@ export function getChangedTypographySettingLabels(settings: TypographySettings):
   ];
 }
 
+type FontSizeSettings = Pick<
+  UnifiedSettings,
+  "fontSizeInterface" | "fontSizePrompt" | "fontSizeCode" | "fontSizeTerminal"
+>;
+
+type TextSizePreset = "small" | "medium" | "large";
+
+/** One plain choice that moves every font size together; Medium is the defaults. */
+export const TEXT_SIZE_PRESETS: Readonly<Record<TextSizePreset, FontSizeSettings>> = {
+  small: { fontSizeInterface: 14, fontSizePrompt: 12, fontSizeCode: 11, fontSizeTerminal: 11 },
+  medium: {
+    fontSizeInterface: DEFAULT_UNIFIED_SETTINGS.fontSizeInterface,
+    fontSizePrompt: DEFAULT_UNIFIED_SETTINGS.fontSizePrompt,
+    fontSizeCode: DEFAULT_UNIFIED_SETTINGS.fontSizeCode,
+    fontSizeTerminal: DEFAULT_UNIFIED_SETTINGS.fontSizeTerminal,
+  },
+  large: { fontSizeInterface: 18, fontSizePrompt: 16, fontSizeCode: 15, fontSizeTerminal: 14 },
+};
+
+export const TEXT_SIZE_OPTIONS: ReadonlyArray<{
+  readonly preset: TextSizePreset;
+  readonly label: string;
+}> = [
+  { preset: "small", label: "Small" },
+  { preset: "medium", label: "Medium" },
+  { preset: "large", label: "Large" },
+];
+
+/** The preset the four sizes add up to, or null once any was set by hand to something else. */
+export function textSizePresetOf(settings: FontSizeSettings): TextSizePreset | null {
+  return (
+    TEXT_SIZE_OPTIONS.find(({ preset }) => {
+      const sizes = TEXT_SIZE_PRESETS[preset];
+      return (
+        sizes.fontSizeInterface === settings.fontSizeInterface &&
+        sizes.fontSizePrompt === settings.fontSizePrompt &&
+        sizes.fontSizeCode === settings.fontSizeCode &&
+        sizes.fontSizeTerminal === settings.fontSizeTerminal
+      );
+    })?.preset ?? null
+  );
+}
+
 export type BrowserDefaultSettings = Pick<
   UnifiedSettings,
   | "browserDefaultViewport"
@@ -163,7 +206,7 @@ export function getChangedBrowserSettingLabels(settings: BrowserDefaultSettings)
       ? ["Floating preview"]
       : []),
     ...(settings.pullRequestLinksOpenInApp !== DEFAULT_UNIFIED_SETTINGS.pullRequestLinksOpenInApp
-      ? ["Open pull requests in T3 Code"]
+      ? ["Open pull requests in Tinkjam"]
       : []),
   ];
 }

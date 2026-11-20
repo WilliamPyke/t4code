@@ -2,7 +2,7 @@ import { doctorCommand } from "./cli/doctor.ts";
 import { policyCommand } from "./cli/policy.ts";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "./process/nodeServices.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { Argument, Command } from "effect/cli";
@@ -40,6 +40,7 @@ import { themeCommand } from "./cli/theme.ts";
 import { traceCommand } from "./cli/trace.ts";
 import { triageCommand } from "./cli/triage.ts";
 import { connectCommand, statusCommand, upCommand } from "./cli/up.ts";
+import { syncCommand } from "./cli/sync.ts";
 
 const layerCliRuntime = Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer);
 
@@ -114,6 +115,7 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       policyCommand,
       triageCommand,
       cloudEnabled ? connectCommand : connectUnavailableCommand,
+      syncCommand,
     ]),
   );
 

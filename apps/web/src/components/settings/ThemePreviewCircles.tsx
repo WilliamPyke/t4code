@@ -1,9 +1,6 @@
 import { MoonIcon, SunIcon } from "lucide-react";
 import type { CSSProperties } from "react";
-import {
-  STANDARD_THEME_PREVIEW_COLORS as SHARED_STANDARD_THEME_PREVIEW_COLORS,
-  THEME_PREVIEW_RENDER_SPECS,
-} from "@t3tools/shared/themePreview";
+import { THEME_PREVIEW_RENDER_SPECS } from "@t3tools/shared/themePreview";
 import { cn } from "../../lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -35,30 +32,35 @@ export type ThemeCardDefinition = {
 export type ThemeMode = ThemeAppearance | "system";
 export type ThemeCardPreviewColors = ThemeCardPreview["colors"];
 
+// The Tinkjam theme's preview. The shared preview colours are mobile's T3 Code default.
 const STANDARD_THEME_PREVIEW_COLORS: Record<
   ThemeAppearance,
   Readonly<Record<ThemePreviewRole, string>>
 > = {
   light: {
-    sidebar: "#fafafa",
+    sidebar: "#f6f5f2",
+    canvas: "#fdfcfb",
     surface: "#ffffff",
-    accentSurface: "#f4f4f5",
-    messageSurface: "#e4e4e7",
-    ...SHARED_STANDARD_THEME_PREVIEW_COLORS.light,
+    accentSurface: "#f1efeb",
+    accent: "#2f5bea",
+    messageSurface: "#e9eefe",
+    messageAction: "#2f5bea",
   },
   dark: {
-    sidebar: "#0f0f10",
-    surface: "#121212",
-    accentSurface: "#27272a",
-    messageSurface: "#27272a",
-    ...SHARED_STANDARD_THEME_PREVIEW_COLORS.dark,
+    sidebar: "#1b1820",
+    canvas: "#121016",
+    surface: "#1b1820",
+    accentSurface: "#2a2630",
+    accent: "#5b7dff",
+    messageSurface: "#1c2550",
+    messageAction: "#2f5bea",
   },
 };
 
 export const STANDARD_THEME_CARDS: ReadonlyArray<ThemeCardDefinition> = [
   {
     id: "default",
-    label: "T3 Code",
+    label: "Tinkjam",
     previews: (["light", "dark"] as const).map((mode) => ({
       mode,
       colors: STANDARD_THEME_PREVIEW_COLORS[mode],

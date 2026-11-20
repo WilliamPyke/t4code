@@ -9,6 +9,7 @@ import { overlayModeForCommand } from "../components/CommandPalette.logic";
 import { APPEARANCE_OPTIONS, notifyThemeSaveFailure } from "../components/CommandPaletteThemeItems";
 import { toggleThemeEditorForTheme } from "../components/settings/themeEditorStore";
 import { toastManager } from "../components/ui/toast";
+import { isSimpleShell } from "../shellMode";
 import { getThemeSnapshot, setAppearanceMode } from "../hooks/useTheme";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { type CommandHandler, type CommandScopeOptions, registerCommands } from "./dispatcher";
@@ -28,6 +29,12 @@ const toggleOverlay =
     consume(event);
     dispatchCommandPalette({ _tag: "ToggleMode", mode });
   };
+
+// Simple mode has no files or projects to search; the keys fall through.
+const unlessSimple =
+  (handler: CommandHandler): CommandHandler =>
+  (event) =>
+    isSimpleShell() ? false : handler(event);
 
 /**
  * Palette, theme and usage shortcuts. They read the route, panels and theme
@@ -88,13 +95,14 @@ export function installCommandPaletteCommands(
         toggleThemeEditorForTheme({ theme, themeHalves, initialAppearance: resolvedTheme });
       },
       "usage.open": (event) => {
+        if (isSimpleShell()) return false;
         consume(event);
         dispatchCommandPalette({ _tag: "SetOpen", open: false });
         void router.navigate({ to: "/usage" });
       },
       "commandPalette.toggle": toggleOverlay("commandPalette.toggle"),
-      "filePicker.toggle": toggleOverlay("filePicker.toggle"),
-      "projectSearch.toggle": toggleOverlay("projectSearch.toggle"),
+      "filePicker.toggle": unlessSimple(toggleOverlay("filePicker.toggle")),
+      "projectSearch.toggle": unlessSimple(toggleOverlay("projectSearch.toggle")),
     },
     {
       ...options,

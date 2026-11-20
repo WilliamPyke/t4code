@@ -41,7 +41,7 @@
       // The `t3` npm package's files: copied into the package, never imported.
       // knip-schemas.test.ts writes a throwaway project to .knip-test-*, which a
       // knip run beside it in check:changed must not report.
-      "ignore": ["npm-launcher/**", ".knip-test-*/**"],
+      "ignore": ["npm-launcher/**", ".knip-test-*/**", "sync-package/**"],
     },
     "apps/server": {
       // Vite+ pack entries and the launcher used by installed background services.
@@ -143,6 +143,13 @@
         "src/nativeRunHook.js",
         "src/preload.mjs",
       ],
+    },
+    "infra/boards": {
+      // Wrangler loads src/worker.ts as the Worker entry and reads its default and class exports.
+      // The sample board's script is run by hand.
+      "entry": ["src/worker.ts!", "scripts/sample-board.mjs"],
+      // Named in tsconfig.json's `types`, never imported.
+      "ignoreDependencies": ["@cloudflare/workers-types"],
     },
     "infra/relay": {
       // Alchemy loads src/worker.ts as the Worker entry and reads its default export.

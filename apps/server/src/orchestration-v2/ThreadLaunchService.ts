@@ -8,6 +8,7 @@ import {
   type MessageId,
   type ModelSelection,
   type OrchestrationV2Actor,
+  type OrchestrationV2Command,
   type OrchestrationV2CreationSource,
   type OrchestrationV2DelegatedFrom,
   type OrchestrationV2LinkOrigin,
@@ -103,6 +104,11 @@ export interface ThreadLaunchInput {
   readonly linkOrigin?: OrchestrationV2LinkOrigin;
   /** The parent there, when that environment's agent delegated this as a task. */
   readonly delegatedFrom?: OrchestrationV2DelegatedFrom;
+  /** A conversation from elsewhere that the new thread starts with. */
+  readonly importedHistory?: Extract<
+    OrchestrationV2Command,
+    { readonly type: "thread.create" }
+  >["importedHistory"];
 }
 
 type PreparationInput = Pick<
@@ -948,6 +954,9 @@ const make = Effect.gen(function* () {
                 ...(input.delegatedFrom === undefined
                   ? {}
                   : { delegatedFrom: input.delegatedFrom }),
+                ...(input.importedHistory === undefined
+                  ? {}
+                  : { importedHistory: input.importedHistory }),
                 createdBy: input.createdBy,
                 creationSource: input.creationSource,
               });

@@ -63,6 +63,7 @@ import * as ApnsDeliveryQueue from "./agentActivity/ApnsDeliveryQueue.ts";
 import * as ApnsDeliveries from "./agentActivity/ApnsDeliveries.ts";
 import * as CloudflareApiPause from "./environments/CloudflareApiPause.ts";
 import * as EnvironmentConnector from "./environments/EnvironmentConnector.ts";
+import * as ComputerApprovals from "./environments/ComputerApprovals.ts";
 import * as EnvironmentLinker from "./environments/EnvironmentLinker.ts";
 import * as EnvironmentPublishSignatures from "./environments/EnvironmentPublishSignatures.ts";
 import * as ManagedEndpointProvider from "./environments/ManagedEndpointProvider.ts";
@@ -71,6 +72,9 @@ import * as ManagedTunnelLimits from "./environments/ManagedTunnelLimits.ts";
 import * as T3ChatAccounts from "./t3chat/T3ChatAccounts.ts";
 import * as MobileRegistrations from "./agentActivity/MobileRegistrations.ts";
 import * as HookForwarder from "./hooks/HookForwarder.ts";
+import * as GuestLinks from "./guestLinks/GuestLinks.ts";
+import * as TeamProfiles from "./teams/TeamProfiles.ts";
+import * as Teams from "./teams/Teams.ts";
 import * as HeldHooks from "./hooks/HeldHooks.ts";
 import * as HookInbox from "./hooks/HookInbox.ts";
 import * as HookInboxObject from "./hooks/HookInboxObject.ts";
@@ -104,6 +108,8 @@ const layerRelayApi = Layer.mergeAll(
   RelayHttpApi.layerTokenApi,
   RelayHttpApi.layerDpopClientApi,
   RelayHttpApi.layerServerApi,
+  RelayHttpApi.layerGuestLinksApi,
+  RelayHttpApi.layerTeamsApi,
 );
 
 const CloudMintKeyPair = Alchemy.KeyPair("CloudMintKeyPair");
@@ -216,6 +222,41 @@ export const layer = Api.make(
         period: MobileTelemetry.MOBILE_TELEMETRY_RATE_LIMIT.periodSeconds,
       },
     });
+    const guestLinkRateLimit = yield* Cloudflare.RateLimit("GUEST_LINK_RATE_LIMIT", {
+      namespaceId: 1004,
+      simple: {
+        limit: GuestLinks.GUEST_LINK_RESOLVE_RATE_LIMIT.limit,
+        period: GuestLinks.GUEST_LINK_RESOLVE_RATE_LIMIT.periodSeconds,
+      },
+    });
+    const guestLinkGlobalRateLimit = yield* Cloudflare.RateLimit("GUEST_LINK_GLOBAL_RATE_LIMIT", {
+      namespaceId: 1008,
+      simple: {
+        limit: GuestLinks.GUEST_LINK_GLOBAL_RESOLVE_RATE_LIMIT.limit,
+        period: GuestLinks.GUEST_LINK_GLOBAL_RESOLVE_RATE_LIMIT.periodSeconds,
+      },
+    });
+    const teamRateLimit = yield* Cloudflare.RateLimit("TEAM_RATE_LIMIT", {
+      namespaceId: 1005,
+      simple: {
+        limit: Teams.TEAM_RATE_LIMIT.limit,
+        period: Teams.TEAM_RATE_LIMIT.periodSeconds,
+      },
+    });
+    const teamBoardRateLimit = yield* Cloudflare.RateLimit("TEAM_BOARD_RATE_LIMIT", {
+      namespaceId: 1006,
+      simple: {
+        limit: Teams.TEAM_BOARD_RATE_LIMIT.limit,
+        period: Teams.TEAM_BOARD_RATE_LIMIT.periodSeconds,
+      },
+    });
+    const teamBoardReadRateLimit = yield* Cloudflare.RateLimit("TEAM_BOARD_READ_RATE_LIMIT", {
+      namespaceId: 1007,
+      simple: {
+        limit: Teams.TEAM_BOARD_READ_RATE_LIMIT.limit,
+        period: Teams.TEAM_BOARD_READ_RATE_LIMIT.periodSeconds,
+      },
+    });
     const mobileSourceMaps = yield* Cloudflare.R2.ReadBucket(observability.mobileSourceMaps);
     const mobileTelemetryToken = yield* observability.mobileTelemetryIngestToken.token;
     const mobileTracesUrl = yield* observability.traces.otelTracesEndpoint;
@@ -292,6 +333,10 @@ export const layer = Api.make(
           EnvironmentPublishSignatures.layer,
           ManagedEndpointReaper.layer,
           HeldHooks.layer,
+          GuestLinks.layer,
+          ComputerApprovals.layer,
+          Teams.layer,
+          TeamProfiles.layer,
         ),
       ),
       Layer.provideMerge(
@@ -368,6 +413,16 @@ export const layer = Api.make(
             ),
           ),
         );
+    const allowOrRefuse =
+      (limiter: typeof hookRateLimit, failedClosedAttribute?: string) =>
+      (key: string): Effect.Effect<boolean> =>
+        GuestLinks.refuseWhenUncounted(
+          limiter.limit({ key }).pipe(
+            Effect.map((result) => result.success),
+            Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+          ),
+          failedClosedAttribute,
+        );
     const layerHookRateLimiter = Layer.succeed(HookForwarder.HookRateLimiter, {
       allowHook: allowWith(hookRateLimit),
       allowEndpoint: allowWith(hookEndpointRateLimit),
@@ -425,7 +480,29 @@ export const layer = Api.make(
     );
 
     const layerApp = Layer.mergeAll(
-      layerRelayApi,
+      layerRelayApi.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(GuestLinks.GuestLinkRateLimiter, {
+              allow: allowOrRefuse(guestLinkRateLimit),
+              allowGlobal: allowOrRefuse(guestLinkGlobalRateLimit)("all"),
+            }),
+            // Counts invite-name guesses, so like a guest link's it refuses when it cannot count.
+            Layer.succeed(Teams.TeamRateLimiter, {
+              allow: allowOrRefuse(teamRateLimit, "relay.teams.rate_limiter_failed_closed"),
+            }),
+            Layer.succeed(Teams.TeamBoardRateLimiter, {
+              allow: allowWith(teamBoardRateLimit, "relay.team_boards.rate_limiter_failed_open"),
+            }),
+            Layer.succeed(Teams.TeamBoardReadRateLimiter, {
+              allow: allowWith(
+                teamBoardReadRateLimit,
+                "relay.team_board_reads.rate_limiter_failed_open",
+              ),
+            }),
+          ),
+        ),
+      ),
       HookForwarder.layerApi.pipe(
         Layer.provide(HookForwarder.layer),
         Layer.provide(layerHookRateLimiter),

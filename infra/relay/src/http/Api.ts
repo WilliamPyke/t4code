@@ -46,7 +46,11 @@ import {
   RelayEnvironmentLinkProofInvalidError,
   RelayEnvironmentLinkUnavailableError,
   RelayEnvironmentLinkLimitExceededError,
+  RelayEnvironmentLinkRemovedError,
   RelayEnvironmentPrincipal,
+  RelayRateLimitedError,
+  RelayTeamRequestError,
+  type RelayTeamMemberAssertionPayload,
   type RelayEnvironmentConnectRequest,
   type RelayManagedEndpointOrigin,
   RelayManagedEndpointRecoveryProofPayload,
@@ -56,16 +60,20 @@ import {
 import {
   normalizeRelayIssuer,
   RELAY_MANAGED_TUNNEL_RECOVERY_TYP,
+  RELAY_TEAM_MEMBER_TYP,
   verifyRelayJwt,
 } from "@t3tools/shared/relayJwt";
 
 import * as DeliveryAttempts from "../agentActivity/DeliveryAttempts.ts";
 import * as AgentActivityRows from "../agentActivity/AgentActivityRows.ts";
 import * as Devices from "../agentActivity/Devices.ts";
+import * as CloudMintSigner from "../auth/CloudMintSigner.ts";
 import * as DpopProofs from "../auth/DpopProofs.ts";
 import * as RelayTokens from "../auth/RelayTokens.ts";
+import * as ComputerApprovals from "../environments/ComputerApprovals.ts";
 import * as EnvironmentCredentials from "../environments/EnvironmentCredentials.ts";
 import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
+import * as GuestLinks from "../guestLinks/GuestLinks.ts";
 import * as HeldHooks from "../hooks/HeldHooks.ts";
 import * as HookInbox from "../hooks/HookInbox.ts";
 import * as LiveActivities from "../agentActivity/LiveActivities.ts";
@@ -79,6 +87,8 @@ import * as ManagedEndpointAllocations from "../environments/ManagedEndpointAllo
 import * as EnvironmentPublishSignatures from "../environments/EnvironmentPublishSignatures.ts";
 import * as MobileRegistrations from "../agentActivity/MobileRegistrations.ts";
 import * as T3ChatAccounts from "../t3chat/T3ChatAccounts.ts";
+import * as TeamProfiles from "../teams/TeamProfiles.ts";
+import * as Teams from "../teams/Teams.ts";
 import { withSpanAttributes } from "../observability.ts";
 import { isRelayHookPath, redactRelayHookUrl } from "../hooks/HookForwarder.ts";
 import * as RelayDb from "../db.ts";
@@ -98,7 +108,7 @@ const appendRelayCredentialResponseHeaders = HttpEffect.appendPreResponseHandler
     ),
 );
 
-// T3 Code hosts never retry sooner than Retry-After, so during a Cloudflare
+// Tinkjam hosts never retry sooner than Retry-After, so during a Cloudflare
 // rate limit they wait out the pause instead of retrying into it.
 const appendCloudflareRetryAfter = (error: unknown) => {
   const retryAfterMillis = ManagedEndpointProvider.cloudflareRetryAfterMillis(error);
@@ -335,13 +345,14 @@ export const layerClientAuth = Layer.effect(
           "relay.auth.mode": verified.mode,
           "relay.auth.subject": verified.sub,
         });
+        const mode = verified.mode === "clerk_oauth_bearer" ? "computer" : "session";
+        if (mode === "computer" && !isComputerRoute(yield* HttpServerRequest.HttpServerRequest)) {
+          return yield* relayAuthInvalidError("not_authorized");
+        }
 
         return yield* httpEffect.pipe(
           withSpanAttributes({ "user.id": verified.sub }),
-          Effect.provideService(RelayClientPrincipal, {
-            userId: verified.sub,
-            token,
-          }),
+          Effect.provideService(RelayClientPrincipal, { userId: verified.sub, token, mode }),
         );
       }),
     };
@@ -415,6 +426,20 @@ export const layerDpopClientAuth = Layer.effect(
   }),
 );
 
+/**
+ * A computer's sign-in is account-wide and Clerk cannot revoke it per computer, so it reaches only
+ * the routes Tinkjam Sync calls for its own link; those check that the link was not removed.
+ */
+function isComputerRoute(request: HttpServerRequest.HttpServerRequest): boolean {
+  const url = HttpServerRequest.toURL(request);
+  if (url._tag === "None") return false;
+  const path = url.value.pathname;
+  return request.method === "POST"
+    ? path === "/v1/client/environment-link-challenges" || path === "/v1/client/environment-links"
+    : request.method === "DELETE" &&
+        /^\/v1\/client\/environment-links\/[^/]+(\/tunnel)?$/u.test(path);
+}
+
 function isDpopAuthorizationHeader(value: string | undefined): boolean {
   return /^DPoP +/iu.test(value ?? "");
 }
@@ -476,11 +501,236 @@ export const layerHealthApi = HttpApiBuilder.group(
   }),
 );
 
+export const layerGuestLinksApi = HttpApiBuilder.group(
+  RelayApi,
+  "guestLinks",
+  Effect.fnUntraced(function* (handlers) {
+    const guestLinks = yield* GuestLinks.GuestLinks;
+    const rateLimiter = yield* GuestLinks.GuestLinkRateLimiter;
+    return handlers.handle(
+      "resolve",
+      Effect.fn("relay.api.guestLinks.resolve")(
+        function* ({ params, request }) {
+          const allowed =
+            (yield* rateLimiter.allow(request.headers["cf-connecting-ip"] ?? "unknown")) &&
+            (yield* rateLimiter.allowGlobal);
+          if (!allowed) return yield* new RelayRateLimitedError({ code: "rate_limited" });
+          return { link: yield* guestLinks.resolve(params.name) };
+        },
+        Effect.catchTags({
+          GuestLinkPersistenceError: () => relayInternalErrorResponse("persistence_failed"),
+        }),
+      ),
+    );
+  }),
+);
+
+/** How long a member assertion opens a team share; joining uses it at once. */
+const TEAM_ASSERTION_LIFETIME_SECONDS = 5 * 60;
+const FALLBACK_TEAM_PROFILE = { name: "Tinkjam user", avatarUrl: null };
+
+const teamErrorCases = {
+  TeamRequestError: (error: Teams.TeamRequestError) =>
+    Effect.fail(new RelayTeamRequestError({ code: "team_request_failed", reason: error.reason })),
+  TeamPersistenceError: () => relayInternalErrorResponse("persistence_failed"),
+};
+
+export const layerTeamsApi = HttpApiBuilder.group(
+  RelayApi,
+  "teams",
+  Effect.fnUntraced(function* (handlers) {
+    const teams = yield* Teams.Teams;
+    const profiles = yield* TeamProfiles.TeamProfiles;
+    const rateLimiter = yield* Teams.TeamRateLimiter;
+    const boardRateLimiter = yield* Teams.TeamBoardRateLimiter;
+    const boardReadRateLimiter = yield* Teams.TeamBoardReadRateLimiter;
+    const mint = yield* CloudMintSigner.CloudMintSigner;
+    const config = yield* RelayConfiguration.RelayConfiguration;
+    const random = yield* SecureRandom.SecureRandom;
+    // Request instrumentation already owns the span; keep this helper in that context.
+    const limited = Effect.fnUntraced(function* (userId: string) {
+      if (!(yield* rateLimiter.allow(userId))) {
+        return yield* new RelayRateLimitedError({ code: "rate_limited" });
+      }
+    });
+    const profileOf = (userId: string) =>
+      Effect.map(
+        profiles.lookup(userId),
+        Option.getOrElse(() => FALLBACK_TEAM_PROFILE),
+      );
+    return handlers
+      .handle(
+        "listTeams",
+        Effect.fn("relay.api.teams.list")(
+          function* () {
+            const { userId } = yield* RelayClientPrincipal;
+            return { teams: yield* teams.list(userId) };
+          },
+          Effect.catchTags({ TeamPersistenceError: teamErrorCases.TeamPersistenceError }),
+        ),
+      )
+      .handle(
+        "createTeam",
+        Effect.fn("relay.api.teams.create")(function* ({ payload }) {
+          const { userId } = yield* RelayClientPrincipal;
+          yield* limited(userId);
+          return yield* teams.create({
+            userId,
+            name: payload.name,
+            profile: yield* profileOf(userId),
+          });
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "getTeam",
+        Effect.fn("relay.api.teams.get")(function* ({ params }) {
+          const { userId } = yield* RelayClientPrincipal;
+          return yield* teams.get({ userId, teamId: params.teamId });
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "renameTeam",
+        Effect.fn("relay.api.teams.rename")(function* ({ params, payload }) {
+          const { userId } = yield* RelayClientPrincipal;
+          yield* teams.rename({ userId, teamId: params.teamId, name: payload.name });
+          return { ok: true };
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "deleteTeam",
+        Effect.fn("relay.api.teams.delete")(function* ({ params }) {
+          const { userId } = yield* RelayClientPrincipal;
+          yield* teams.remove({ userId, teamId: params.teamId });
+          return { ok: true };
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "leaveTeam",
+        Effect.fn("relay.api.teams.leave")(function* ({ params }) {
+          const { userId } = yield* RelayClientPrincipal;
+          yield* teams.leave({ userId, teamId: params.teamId });
+          return { ok: true };
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "removeTeamMember",
+        Effect.fn("relay.api.teams.removeMember")(function* ({ params }) {
+          const { userId } = yield* RelayClientPrincipal;
+          yield* teams.removeMember({
+            userId,
+            teamId: params.teamId,
+            memberUserId: params.userId,
+          });
+          return { ok: true };
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "createTeamInvite",
+        Effect.fn("relay.api.teams.createInvite")(function* ({ params }) {
+          const { userId } = yield* RelayClientPrincipal;
+          yield* limited(userId);
+          return yield* teams.createInvite({ userId, teamId: params.teamId });
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "resetTeamInvite",
+        Effect.fn("relay.api.teams.resetInvite")(function* ({ params }) {
+          const { userId } = yield* RelayClientPrincipal;
+          yield* limited(userId);
+          return yield* teams.resetInvite({ userId, teamId: params.teamId });
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "allowTeamMemberBack",
+        Effect.fn("relay.api.teams.allowBack")(function* ({ params }) {
+          const { userId } = yield* RelayClientPrincipal;
+          yield* teams.allowBack({
+            userId,
+            teamId: params.teamId,
+            memberUserId: params.userId,
+          });
+          return { ok: true };
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "acceptTeamInvite",
+        Effect.fn("relay.api.teams.acceptInvite")(function* ({ params }) {
+          const { userId } = yield* RelayClientPrincipal;
+          yield* limited(userId);
+          const teamId = yield* teams.acceptInvite({
+            userId,
+            name: params.name,
+            profile: yield* profileOf(userId),
+          });
+          return { teamId };
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "createTeamAssertion",
+        Effect.fn("relay.api.teams.createAssertion")(function* ({ params, payload }) {
+          yield* appendRelayCredentialResponseHeaders;
+          const { userId } = yield* RelayClientPrincipal;
+          const member = yield* teams.memberForAssertion({
+            userId,
+            teamId: params.teamId,
+            environmentId: payload.environmentId,
+            profile: Option.getOrNull(yield* profiles.lookup(userId)),
+          });
+          const now = Math.floor((yield* DateTime.now).epochMilliseconds / 1_000);
+          const token = yield* mint
+            .sign({
+              typ: RELAY_TEAM_MEMBER_TYP,
+              payload: {
+                iss: normalizeRelayIssuer(config.relayIssuer),
+                aud: `t3-env:${payload.environmentId}`,
+                sub: userId,
+                jti: yield* random.uuidV4(),
+                iat: now,
+                exp: now + TEAM_ASSERTION_LIFETIME_SECONDS,
+                teamId: params.teamId,
+                userId,
+                name: member.name,
+                avatarUrl: member.avatarUrl,
+              } satisfies RelayTeamMemberAssertionPayload,
+            })
+            .pipe(Effect.catch(() => relayInternalErrorResponse("internal_error")));
+          return { token };
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "getTeamBoard",
+        Effect.fn("relay.api.teams.getBoard")(function* ({ params, query }) {
+          const { userId } = yield* RelayClientPrincipal;
+          if (!(yield* boardReadRateLimiter.allow(userId))) {
+            return yield* new RelayRateLimitedError({ code: "rate_limited" });
+          }
+          return yield* teams.board({ userId, teamId: params.teamId, since: query.since });
+        }, Effect.catchTags(teamErrorCases)),
+      )
+      .handle(
+        "changeTeamBoard",
+        Effect.fn("relay.api.teams.changeBoard")(function* ({ params, payload }) {
+          const { userId } = yield* RelayClientPrincipal;
+          if (!(yield* boardRateLimiter.allow(userId))) {
+            return yield* new RelayRateLimitedError({ code: "rate_limited" });
+          }
+          return yield* teams.changeBoard({
+            userId,
+            teamId: params.teamId,
+            change: payload.change,
+          });
+        }, Effect.catchTags(teamErrorCases)),
+      );
+  }),
+);
+
 const revokeEnvironmentLinkRecord = Effect.fn("relay.api.client.revokeEnvironmentLinkRecord")(
   function* (input: {
     readonly userId: string;
     readonly environmentId: string;
     readonly environmentPublicKey: string;
+    /** The same key just linked to another account, whose new credential must survive. */
+    readonly keepCredentials?: boolean;
   }) {
     const transactions = yield* RelayDb.RelayTransactions;
     const links = yield* EnvironmentLinks.EnvironmentLinks;
@@ -491,7 +741,7 @@ const revokeEnvironmentLinkRecord = Effect.fn("relay.api.client.revokeEnvironmen
           userId: input.userId,
           environmentId: input.environmentId,
         });
-        if (revoked) {
+        if (revoked && input.keepCredentials !== true) {
           yield* credentials.revokeForEnvironmentPublicKey({
             environmentId: input.environmentId,
             environmentPublicKey: input.environmentPublicKey,
@@ -508,6 +758,7 @@ export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnviron
     readonly userId: string;
     readonly environmentId: string;
     readonly managedEndpointNamespace?: string | undefined;
+    readonly keepCredentials?: boolean;
   }) {
     const links = yield* EnvironmentLinks.EnvironmentLinks;
     const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
@@ -526,13 +777,40 @@ export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnviron
             userId: input.userId,
             environmentId: link.environmentId,
             environmentPublicKey: link.environmentPublicKey,
+            ...(input.keepCredentials === true ? { keepCredentials: true } : {}),
           });
+    if (unlinked) {
+      // Its tunnel goes too, so the threads it listed on teams can no longer be opened.
+      const teams = yield* Teams.Teams;
+      yield* teams
+        .unlistEnvironment({ userId: input.userId, environmentId: input.environmentId })
+        .pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Could not unlist an unlinked machine's team threads", {
+              environmentId: input.environmentId,
+              errorTag: error._tag,
+            }),
+          ),
+        );
+    }
     // Deprovision after revocation commits; retry even if already revoked to finish failed Cloudflare cleanup.
-    const deprovisioned = yield* managedEndpointProvider.deprovision({
-      userId: input.userId,
-      environmentId: input.environmentId,
-      target: deprovisionTarget,
-    });
+    const deprovisioned = yield* managedEndpointProvider
+      .deprovision({
+        userId: input.userId,
+        environmentId: input.environmentId,
+        target: deprovisionTarget,
+      })
+      .pipe(
+        // The computer is already off the account; the tunnel sweep finishes what this left.
+        Effect.catchIf(
+          () => unlinked,
+          (error) =>
+            Effect.logWarning("Unlinked a machine but could not remove its tunnel yet", {
+              environmentId: input.environmentId,
+              errorTag: error._tag,
+            }).pipe(Effect.as(true)),
+        ),
+      );
     const endpointKey =
       deprovisionTarget && input.managedEndpointNamespace
         ? HeldHooks.endpointKeyForTunnelName(
@@ -560,6 +838,72 @@ export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnviron
     }
     return unlinked;
   },
+);
+
+/**
+ * A computer serves one account. When its key links to another, the earlier account's entry
+ * goes, so it is not left listing a computer it can no longer reach.
+ */
+const supersedeOtherAccountLinks = Effect.fn("relay.api.client.supersedeOtherAccountLinks")(
+  function* (input: {
+    readonly userId: string;
+    readonly environmentId: string;
+    readonly environmentPublicKey: string;
+    readonly managedEndpointNamespace?: string | undefined;
+  }) {
+    const links = yield* EnvironmentLinks.EnvironmentLinks;
+    const others = yield* links.listOtherUsersForEnvironmentKey(input);
+    yield* Effect.forEach(
+      others,
+      (otherUserId) =>
+        unlinkEnvironmentRecord({
+          userId: otherUserId,
+          environmentId: input.environmentId,
+          managedEndpointNamespace: input.managedEndpointNamespace,
+          keepCredentials: true,
+        }),
+      { discard: true },
+    );
+  },
+  Effect.catch((error) =>
+    Effect.logWarning("Could not remove a computer's link to its previous account", {
+      errorTag: error._tag,
+    }),
+  ),
+);
+
+/**
+ * A reinstalled computer links under a new id. Its earlier entry on the same account goes, so
+ * the account does not list one computer twice. Only an approval the relay issued may remove it.
+ */
+export const supersedeSameComputerLinks = Effect.fn("relay.api.client.supersedeSameComputerLinks")(
+  function* (input: {
+    readonly userId: string;
+    readonly environmentId: string;
+    readonly machineId: string | null;
+    readonly freshlyApproved: boolean;
+    readonly managedEndpointNamespace?: string | undefined;
+  }) {
+    const { machineId } = input;
+    if (machineId === null || !input.freshlyApproved) return;
+    const links = yield* EnvironmentLinks.EnvironmentLinks;
+    const earlier = yield* links.listOtherEnvironmentsForMachine({ ...input, machineId });
+    yield* Effect.forEach(
+      earlier,
+      (environmentId) =>
+        unlinkEnvironmentRecord({
+          userId: input.userId,
+          environmentId,
+          managedEndpointNamespace: input.managedEndpointNamespace,
+        }),
+      { discard: true },
+    );
+  },
+  Effect.catch((error) =>
+    Effect.logWarning("Could not remove a reinstalled computer's earlier entry", {
+      errorTag: error._tag,
+    }),
+  ),
 );
 
 type EnvironmentTunnelRecoveryProofInput = {
@@ -814,6 +1158,7 @@ export const layerClientApi = HttpApiBuilder.group(
     const devices = yield* Devices.Devices;
     const t3Chat = yield* T3ChatAccounts.T3ChatAccounts;
     const tunnelLimits = yield* ManagedTunnelLimits.ManagedTunnelLimits;
+    const approvals = yield* ComputerApprovals.ComputerApprovals;
     return handlers
       .handle(
         "listEnvironments",
@@ -852,8 +1197,25 @@ export const layerClientApi = HttpApiBuilder.group(
           function* (args) {
             const { payload } = args;
             yield* appendRelayCredentialResponseHeaders;
-            const { userId } = yield* RelayClientPrincipal;
-            const result = yield* linker.link({ userId, request: payload });
+            const { userId, mode } = yield* RelayClientPrincipal;
+            const result = yield* linker.link({
+              userId,
+              request: payload,
+              asComputer: mode === "computer",
+            });
+            yield* supersedeOtherAccountLinks({
+              userId,
+              environmentId: result.environmentId,
+              environmentPublicKey: result.environmentPublicKey,
+              managedEndpointNamespace: config.managedEndpointNamespace,
+            });
+            yield* supersedeSameComputerLinks({
+              userId,
+              environmentId: result.environmentId,
+              machineId: result.machineId,
+              freshlyApproved: result.freshlyApproved,
+              managedEndpointNamespace: config.managedEndpointNamespace,
+            });
             return {
               ok: true,
               cloudUserId: userId,
@@ -897,6 +1259,11 @@ export const layerClientApi = HttpApiBuilder.group(
                 reason: "origin_not_allowed",
                 traceId,
               }),
+            EnvironmentLinkRemoved: (_error, traceId) =>
+              new RelayEnvironmentLinkRemovedError({
+                code: "environment_link_removed",
+                traceId,
+              }),
             ManagedTunnelLimitExceeded: (limitError, traceId) =>
               new RelayEnvironmentLinkLimitExceededError({
                 code: "environment_link_limit_exceeded",
@@ -919,6 +1286,12 @@ export const layerClientApi = HttpApiBuilder.group(
               new RelayEnvironmentLinkFailedError({
                 code: "environment_link_failed",
                 reason: "replay_persistence_failed",
+                traceId,
+              }),
+            ComputerApprovalPersistenceError: (_error, traceId) =>
+              new RelayEnvironmentLinkFailedError({
+                code: "environment_link_failed",
+                reason: "link_persistence_failed",
                 traceId,
               }),
           }),
@@ -946,6 +1319,16 @@ export const layerClientApi = HttpApiBuilder.group(
         }, mapRelayCommonApiErrors("not_authorized")),
       )
       .handle(
+        "createComputerApproval",
+        Effect.fn("relay.api.client.createComputerApproval")(function* ({ payload }) {
+          yield* appendRelayCredentialResponseHeaders;
+          const { userId } = yield* RelayClientPrincipal;
+          return yield* approvals
+            .create({ userId, codeChallenge: payload.codeChallenge })
+            .pipe(Effect.catch(() => relayInternalErrorResponse("persistence_failed")));
+        }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
         "unlinkEnvironment",
         Effect.fn("relay.api.client.unlinkEnvironment")(function* (args) {
           const { params } = args;
@@ -968,7 +1351,16 @@ export const layerClientApi = HttpApiBuilder.group(
         "releaseEnvironmentTunnel",
         Effect.fn("relay.api.client.releaseEnvironmentTunnel")(function* (args) {
           const { params } = args;
-          const { userId } = yield* RelayClientPrincipal;
+          const { userId, mode } = yield* RelayClientPrincipal;
+          if (
+            mode === "computer" &&
+            (yield* links.getForUser({ userId, environmentId: params.environmentId })) === null
+          ) {
+            return yield* new RelayEnvironmentLinkRemovedError({
+              code: "environment_link_removed",
+              traceId: yield* currentTraceId,
+            });
+          }
           // False means concurrent provisioning retained the tunnel; the caller must keep its runtime config.
           const released = yield* managedEndpointProvider
             .release({
@@ -1199,6 +1591,9 @@ export const layerServerApi = HttpApiBuilder.group(
     const publisher = yield* AgentActivityPublisher.AgentActivityPublisher;
     const publishSignatures = yield* EnvironmentPublishSignatures.EnvironmentPublishSignatures;
     const heldHooks = yield* HeldHooks.HeldHooks;
+    const guestLinks = yield* GuestLinks.GuestLinks;
+    const teams = yield* Teams.Teams;
+    const environmentLinks = yield* EnvironmentLinks.EnvironmentLinks;
     const requireOwnEnvironment =
       /* Request instrumentation already owns the span; keep this helper in that context. */
       Effect.fnUntraced(function* (environmentId: string) {
@@ -1425,6 +1820,104 @@ export const layerServerApi = HttpApiBuilder.group(
           });
           return payload;
         }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
+        "registerGuestLink",
+        Effect.fn("relay.api.server.registerGuestLink")(
+          function* ({ params, payload }) {
+            yield* requireOwnEnvironment(params.environmentId);
+            const name = yield* guestLinks.register({
+              environmentId: params.environmentId,
+              ...payload,
+            });
+            return { name };
+          },
+          Effect.catchTags({
+            GuestLinkPersistenceError: () => relayInternalErrorResponse("persistence_failed"),
+          }),
+          mapRelayCommonApiErrors("not_authorized"),
+        ),
+      )
+      .handle(
+        "registerTeamThread",
+        Effect.fn("relay.api.server.registerTeamThread")(
+          function* ({ params, payload }) {
+            yield* requireOwnEnvironment(params.environmentId);
+            const principal = yield* RelayEnvironmentPrincipal;
+            // The machine shares as the accounts it is linked to, never as one it names.
+            const linked = yield* environmentLinks.findActiveManagedForEnvironment({
+              environmentId: params.environmentId,
+              environmentPublicKey: principal.environmentPublicKey,
+            });
+            return yield* teams.registerThread({
+              environmentId: params.environmentId,
+              linkedUserIds: linked.map((link) => link.userId),
+              request: payload,
+            });
+          },
+          Effect.catchTags(teamErrorCases),
+          mapRelayCommonApiErrors("not_authorized"),
+        ),
+      )
+      .handle(
+        "unregisterTeamThread",
+        Effect.fn("relay.api.server.unregisterTeamThread")(
+          function* ({ params }) {
+            yield* requireOwnEnvironment(params.environmentId);
+            yield* teams.unregisterThread(params);
+            return { ok: true };
+          },
+          Effect.catchTags({ TeamPersistenceError: teamErrorCases.TeamPersistenceError }),
+          mapRelayCommonApiErrors("not_authorized"),
+        ),
+      )
+      .handle(
+        "renameTeamThread",
+        Effect.fn("relay.api.server.renameTeamThread")(
+          function* ({ params, payload }) {
+            yield* requireOwnEnvironment(params.environmentId);
+            yield* teams.renameThread({ ...params, title: payload.title });
+            return { ok: true };
+          },
+          Effect.catchTags({ TeamPersistenceError: teamErrorCases.TeamPersistenceError }),
+          mapRelayCommonApiErrors("not_authorized"),
+        ),
+      )
+      .handle(
+        "setTeamThreadsListed",
+        Effect.fn("relay.api.server.setTeamThreadsListed")(
+          function* ({ params, payload }) {
+            yield* requireOwnEnvironment(params.environmentId);
+            yield* teams.setThreadsListed({
+              environmentId: params.environmentId,
+              listed: payload.listed,
+            });
+            return { ok: true };
+          },
+          Effect.catchTags({ TeamPersistenceError: teamErrorCases.TeamPersistenceError }),
+          mapRelayCommonApiErrors("not_authorized"),
+        ),
+      )
+      .handle(
+        "getTeamMemberIds",
+        Effect.fn("relay.api.server.getTeamMemberIds")(
+          function* ({ params }) {
+            yield* requireOwnEnvironment(params.environmentId);
+            const principal = yield* RelayEnvironmentPrincipal;
+            const linked = yield* environmentLinks.findActiveManagedForEnvironment({
+              environmentId: params.environmentId,
+              environmentPublicKey: principal.environmentPublicKey,
+            });
+            const userIds = yield* teams.memberIdsForEnvironment({
+              environmentId: params.environmentId,
+              teamId: params.teamId,
+              linkedUserIds: linked.map((link) => link.userId),
+            });
+            return { userIds };
+          },
+          Effect.catchTags(teamErrorCases),
+          mapRelayCommonApiErrors("not_authorized"),
+        ),
       )
       .handle(
         "wakeHeldHooks",

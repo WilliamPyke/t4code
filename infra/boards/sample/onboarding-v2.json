@@ -1,0 +1,634 @@
+{
+  "title": "Onboarding v2",
+  "maker": "maya",
+  "people": {
+    "maya": "Maya Chen",
+    "jonas": "Jonas Weber",
+    "priya": "Priya Raman",
+    "sam": "Sam Okafor"
+  },
+  "cards": [
+    {
+      "id": "goals",
+      "by": "maya",
+      "section": true,
+      "text": "Goals",
+      "x": 0,
+      "y": 0,
+      "size": {
+        "w": 888,
+        "h": 232
+      },
+      "color": "yellow"
+    },
+    {
+      "id": "research",
+      "by": "sam",
+      "section": true,
+      "text": "Research",
+      "x": 0,
+      "y": 272,
+      "size": {
+        "w": 888,
+        "h": 456
+      },
+      "color": "blue"
+    },
+    {
+      "id": "tasks",
+      "by": "maya",
+      "section": true,
+      "text": "Tasks",
+      "x": 0,
+      "y": 768,
+      "size": {
+        "w": 1104,
+        "h": 480
+      },
+      "color": "green"
+    },
+    {
+      "id": "decisions",
+      "by": "maya",
+      "section": true,
+      "text": "Decisions",
+      "x": 2758,
+      "y": 0,
+      "size": {
+        "w": 456,
+        "h": 400
+      },
+      "color": "purple"
+    },
+    {
+      "id": "g1",
+      "by": "maya",
+      "text": "New teams reach their first shared board in under 5 minutes",
+      "x": 24,
+      "y": 64
+    },
+    {
+      "id": "g2",
+      "by": "maya",
+      "text": "Week-1 invites: 40% → 55% of new workspaces invite a teammate",
+      "x": 240,
+      "y": 64
+    },
+    {
+      "id": "g3",
+      "by": "jonas",
+      "text": "Nobody needs a terminal to get value on day one",
+      "x": 456,
+      "y": 64,
+      "color": "pink"
+    },
+    {
+      "id": "g4",
+      "by": "priya",
+      "text": "Halve the drop-off at the 'Bring your agent' step",
+      "x": 672,
+      "y": 64,
+      "color": "green"
+    },
+    {
+      "id": "r1",
+      "by": "sam",
+      "text": "5 of 8 interviewees stopped at 'Bring your agent'. They thought it was required.",
+      "x": 24,
+      "y": 336,
+      "color": "blue"
+    },
+    {
+      "id": "r2",
+      "by": "sam",
+      "text": "PMs want a template that already looks like their sprint board",
+      "x": 240,
+      "y": 336,
+      "color": "blue"
+    },
+    {
+      "id": "r3",
+      "by": "jonas",
+      "text": "Designers open boards from Figma links far more often than from email",
+      "x": 456,
+      "y": 336,
+      "color": "pink"
+    },
+    {
+      "id": "r4",
+      "by": "sam",
+      "text": "\"I'd rather copy someone's good board than design one from nothing.\" 4 of 8 asked for an example board.",
+      "x": 672,
+      "y": 336
+    },
+    {
+      "id": "fig",
+      "by": "jonas",
+      "kind": "link",
+      "text": "Material 3 Design Kit: component reference for the new welcome screen",
+      "url": "https://www.figma.com/community/file/1035203688168086460/material-3-design-kit",
+      "x": 24,
+      "y": 504,
+      "size": {
+        "w": 264,
+        "h": 200
+      }
+    },
+    {
+      "id": "yt",
+      "by": "sam",
+      "kind": "link",
+      "text": "Krystal Higgins: User Onboarding for the Long Run",
+      "url": "https://www.youtube.com/watch?v=nl8Bpr3a8Lc",
+      "x": 600,
+      "y": 504,
+      "size": {
+        "w": 264,
+        "h": 200
+      }
+    },
+    {
+      "id": "maya-agent",
+      "by": "maya",
+      "kind": "thread",
+      "text": "Welcome copy",
+      "x": 968,
+      "y": 40,
+      "size": {
+        "w": 400,
+        "h": 300
+      }
+    },
+    {
+      "id": "gh",
+      "by": "priya",
+      "kind": "link",
+      "text": "Prior art: Excalidraw links a sample file for new users",
+      "url": "https://github.com/excalidraw/excalidraw-vscode/issues/50",
+      "x": 312,
+      "y": 504,
+      "size": {
+        "w": 264,
+        "h": 200
+      }
+    },
+    {
+      "id": "t2",
+      "by": "maya",
+      "kind": "task",
+      "text": "Make 'Bring your agent' skippable on step 2",
+      "x": 24,
+      "y": 832,
+      "status": "doing",
+      "priority": "urgent",
+      "dueInDays": 3,
+      "assignee": "priya",
+      "order": 1
+    },
+    {
+      "id": "t8",
+      "by": "maya",
+      "kind": "task",
+      "text": "Put a public sample board on the homepage",
+      "x": 240,
+      "y": 832,
+      "status": "doing",
+      "priority": "high",
+      "dueInDays": 4,
+      "assignee": "maya",
+      "order": 2
+    },
+    {
+      "id": "t1",
+      "by": "maya",
+      "kind": "task",
+      "text": "Write the welcome copy for the first board",
+      "x": 456,
+      "y": 832,
+      "status": "doing",
+      "priority": "high",
+      "dueInDays": 7,
+      "assignee": "maya",
+      "order": 3
+    },
+    {
+      "id": "t4",
+      "by": "priya",
+      "kind": "task",
+      "text": "Track the invite step: sent, opened, joined",
+      "x": 888,
+      "y": 832,
+      "status": "todo",
+      "priority": "high",
+      "dueInDays": 10,
+      "assignee": "priya",
+      "order": 1
+    },
+    {
+      "id": "t3",
+      "by": "jonas",
+      "kind": "task",
+      "text": "Starter templates: Sprint board, Design review, Research synthesis",
+      "x": 24,
+      "y": 1040,
+      "status": "todo",
+      "priority": "medium",
+      "dueInDays": 14,
+      "assignee": "jonas",
+      "order": 2
+    },
+    {
+      "id": "t9",
+      "by": "maya",
+      "kind": "task",
+      "text": "A/B test: template picker before or after naming the board",
+      "x": 240,
+      "y": 1040,
+      "status": "todo",
+      "priority": "medium",
+      "dueInDays": 17,
+      "assignee": "maya",
+      "order": 3
+    },
+    {
+      "id": "t7",
+      "by": "jonas",
+      "kind": "task",
+      "text": "Empty-state illustrations for Plan and List",
+      "x": 672,
+      "y": 832,
+      "status": "doing",
+      "priority": "low",
+      "dueInDays": 21,
+      "assignee": "jonas",
+      "order": 4
+    },
+    {
+      "id": "t6",
+      "by": "sam",
+      "kind": "task",
+      "text": "Synthesize round-1 interviews into three themes",
+      "x": 456,
+      "y": 1040,
+      "status": "done",
+      "priority": "high",
+      "assignee": "sam",
+      "order": 1
+    },
+    {
+      "id": "t5",
+      "by": "sam",
+      "kind": "task",
+      "text": "Recruit six more PMs for round-2 interviews",
+      "x": 672,
+      "y": 1040,
+      "status": "done",
+      "priority": "medium",
+      "assignee": "sam",
+      "order": 2
+    },
+    {
+      "id": "t10",
+      "by": "priya",
+      "kind": "task",
+      "text": "Fix: invite link copies with a trailing space in Safari",
+      "x": 888,
+      "y": 1040,
+      "status": "done",
+      "priority": "urgent",
+      "assignee": "priya",
+      "order": 3
+    },
+    {
+      "id": "linear",
+      "by": "priya",
+      "kind": "link",
+      "text": "ENG-142: agent step blocks the welcome flow",
+      "url": "https://linear.app/tinkjam-sample/issue/ENG-142/agent-step-blocks-the-welcome-flow",
+      "x": 2504,
+      "y": 908,
+      "size": {
+        "w": 334,
+        "h": 200
+      }
+    },
+    {
+      "id": "eng142",
+      "by": "sam",
+      "kind": "artifact",
+      "text": "ENG-142 snapshot",
+      "x": 2858,
+      "y": 768,
+      "size": {
+        "w": 356,
+        "h": 480
+      }
+    },
+    {
+      "id": "priya-agent",
+      "by": "priya",
+      "kind": "thread",
+      "text": "Friday update",
+      "x": 1184,
+      "y": 848,
+      "size": {
+        "w": 400,
+        "h": 320
+      }
+    },
+    {
+      "id": "update",
+      "by": "priya",
+      "kind": "artifact",
+      "text": "Onboarding v2: week 2 update",
+      "x": 1664,
+      "y": 768,
+      "size": {
+        "w": 760,
+        "h": 480
+      },
+      "body": "onboarding-v2/update.md"
+    },
+    {
+      "id": "d1",
+      "by": "maya",
+      "text": "Decided: the agent step is optional. People bring one later from the toolbar.",
+      "x": 2782,
+      "y": 64,
+      "color": "purple"
+    },
+    {
+      "id": "d2",
+      "by": "jonas",
+      "text": "Decided: templates open on the Board view. Plan is one click away.",
+      "x": 2998,
+      "y": 64,
+      "color": "purple"
+    },
+    {
+      "id": "d4",
+      "by": "maya",
+      "text": "Decided: a view-only sample board, one click from the homepage",
+      "x": 2782,
+      "y": 232,
+      "color": "purple"
+    },
+    {
+      "id": "c1",
+      "by": "sam",
+      "kind": "comment",
+      "text": "Do we ask for a name before or after the first card? Asking first feels heavy.",
+      "x": 3044,
+      "y": 270,
+      "replies": [
+        {
+          "id": "c1-r1",
+          "by": "jonas",
+          "text": "After. Let people touch the board first, then ask when they share it."
+        },
+        {
+          "id": "c1-r2",
+          "by": "priya",
+          "text": "Works for me. Guests are already named when they join, so asking late costs nothing."
+        },
+        {
+          "id": "c1-r3",
+          "by": "maya",
+          "text": "Let's test it in the A/B run. Adding it to the task."
+        }
+      ]
+    },
+    {
+      "id": "welcome",
+      "by": "jonas",
+      "kind": "artifact",
+      "text": "Welcome screen: desktop",
+      "body": "onboarding-v2/welcome.html",
+      "x": 1448,
+      "y": 0,
+      "size": {
+        "w": 760,
+        "h": 640
+      }
+    },
+    {
+      "id": "jonas-agent",
+      "by": "jonas",
+      "kind": "thread",
+      "text": "Phone version",
+      "x": 968,
+      "y": 388,
+      "size": {
+        "w": 400,
+        "h": 300
+      }
+    },
+    {
+      "id": "welcome-mobile",
+      "by": "jonas",
+      "kind": "artifact",
+      "text": "Welcome screen: phone",
+      "x": 2288,
+      "y": 0,
+      "size": {
+        "w": 390,
+        "h": 728
+      }
+    },
+    {
+      "id": "spec",
+      "by": "maya",
+      "kind": "artifact",
+      "text": "Onboarding v2: spec",
+      "body": "onboarding-v2/spec.md",
+      "x": 2758,
+      "y": 440,
+      "size": {
+        "w": 456,
+        "h": 288
+      }
+    }
+  ],
+  "lines": [
+    {
+      "id": "l-goals-maya",
+      "by": "maya",
+      "from": "goals",
+      "to": "maya-agent"
+    },
+    {
+      "id": "l-research-maya",
+      "by": "maya",
+      "from": "research",
+      "to": "maya-agent"
+    },
+    {
+      "id": "l-research-jonas",
+      "by": "jonas",
+      "from": "research",
+      "to": "jonas-agent"
+    },
+    {
+      "id": "l-maya-welcome",
+      "by": "maya",
+      "from": "maya-agent",
+      "to": "welcome"
+    },
+    {
+      "id": "l-jonas-welcome",
+      "by": "jonas",
+      "from": "jonas-agent",
+      "to": "welcome"
+    },
+    {
+      "id": "l-jonas-mobile",
+      "by": "jonas",
+      "from": "jonas-agent",
+      "to": "welcome-mobile"
+    },
+    {
+      "id": "l-decisions-spec",
+      "by": "maya",
+      "from": "decisions",
+      "to": "spec"
+    },
+    {
+      "id": "l-tasks-priya",
+      "by": "priya",
+      "from": "tasks",
+      "to": "priya-agent"
+    },
+    {
+      "id": "l-priya-update",
+      "by": "priya",
+      "from": "priya-agent",
+      "to": "update"
+    },
+    {
+      "id": "l-linear-eng142",
+      "by": "sam",
+      "from": "linear",
+      "to": "eng142"
+    }
+  ],
+  "reactions": [
+    {
+      "card": "d1",
+      "by": "jonas",
+      "emoji": "👍"
+    },
+    {
+      "card": "d1",
+      "by": "priya",
+      "emoji": "👍"
+    },
+    {
+      "card": "g1",
+      "by": "sam",
+      "emoji": "🎉"
+    },
+    {
+      "card": "t10",
+      "by": "maya",
+      "emoji": "✅"
+    },
+    {
+      "card": "r4",
+      "by": "jonas",
+      "emoji": "👀"
+    },
+    {
+      "card": "welcome-mobile",
+      "by": "maya",
+      "emoji": "🎉"
+    },
+    {
+      "card": "welcome",
+      "by": "priya",
+      "emoji": "👍"
+    }
+  ],
+  "start": "maya-agent",
+  "agentTurns": [
+    {
+      "id": "sample-maya-welcome-1",
+      "by": "maya",
+      "box": "maya-agent",
+      "model": "Claude Sonnet 5.5",
+      "prompt": "Write the first-run copy for the welcome screen. Short, friendly, no jargon, and make it clear that bringing an agent is optional.",
+      "context": ["g1", "g2", "g3", "g4", "r1", "r2", "r3", "r4", "fig", "gh", "yt"],
+      "reply": "Done: the welcome screen in the artifact now has a one-line promise, three first steps and a clear Skip on the agent step. It's under 60 words, so it reads at a glance. Following the talk, it shows value before asking for any setup, which is why the agent step comes last.",
+      "artifact": {
+        "card": "welcome",
+        "body": "onboarding-v2/welcome-v2.html"
+      }
+    },
+    {
+      "id": "sample-jonas-mobile-1",
+      "by": "jonas",
+      "box": "jonas-agent",
+      "model": "Claude Opus 5.5",
+      "prompt": "Make a phone version of the welcome screen. Same words, one column, buttons a thumb can reach.",
+      "context": ["r1", "r2", "r3", "r4", "fig", "gh", "yt"],
+      "reply": "The phone version is in the artifact on the right. Same three steps in one column, full-width buttons, and \"Tap +\" instead of \"Press N\" since there is no keyboard.",
+      "artifact": {
+        "card": "welcome-mobile",
+        "body": "onboarding-v2/welcome-mobile.html"
+      }
+    },
+    {
+      "id": "sample-jonas-desktop-1",
+      "by": "jonas",
+      "box": "jonas-agent",
+      "model": "Claude Opus 5.5",
+      "prompt": "Add one line to the desktop version saying it works on a phone too.",
+      "reply": "Added a single line under the buttons on the desktop version. Maya's copy above it is unchanged.",
+      "artifact": {
+        "card": "welcome",
+        "body": "onboarding-v2/welcome-v3.html"
+      }
+    },
+    {
+      "id": "sample-maya-comment-1",
+      "by": "maya",
+      "box": "maya-agent",
+      "model": "Claude Sonnet 5.5",
+      "prompt": "Answer Sam's question in the comment thread: name before or after the first card?",
+      "reply": "Answered in the thread.",
+      "comment": {
+        "card": "c1",
+        "text": "After, and the research backs it: 5 of 8 interviewees stopped at a step they thought was required before they had seen the board. Asking for a name when someone first shares costs nothing, because guests are already named when they join. I'd keep the A/B test Maya mentioned, with \"time to first card\" as the measure."
+      }
+    },
+    {
+      "id": "sample-jonas-empty-states-1",
+      "by": "jonas",
+      "task": "t7",
+      "prompt": "Draft empty-state illustrations for Plan and List, in the style of the welcome screen.",
+      "reply": "Drafted three empty states for Plan and three for List. Priya picked the second set for Plan; List is next, once the icon pass lands."
+    },
+    {
+      "id": "sample-sam-eng142-1",
+      "by": "sam",
+      "prompt": "Bring in ENG-142 so the board shows where it stands.",
+      "reply": "Read ENG-142 and put a snapshot of it on the board, next to the link.",
+      "artifact": {
+        "card": "eng142",
+        "body": "onboarding-v2/eng-142.md"
+      }
+    },
+    {
+      "id": "sample-priya-update-1",
+      "by": "priya",
+      "box": "priya-agent",
+      "model": "Claude Opus 5.5",
+      "prompt": "Write this week's update from the Tasks section: what shipped, what is in progress, what is at risk. Keep it short enough to paste into Slack.",
+      "context": ["t2", "t8", "t1", "t7", "t4", "t3", "t9", "t6", "t5", "t10"],
+      "reply": "Written to the artifact beside me. Three tasks shipped, four are in progress, and one is at risk: making the agent step skippable is due in three days and blocks ENG-142.",
+      "artifact": {
+        "card": "update",
+        "body": "onboarding-v2/update-v2.md"
+      }
+    }
+  ]
+}

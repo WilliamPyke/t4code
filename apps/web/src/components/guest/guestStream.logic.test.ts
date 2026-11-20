@@ -1,13 +1,10 @@
 import {
-  EventId,
   GuestMessageId,
   GuestShareId,
   MessageId,
-  ProviderDriverKind,
   RunId,
   TurnItemId,
   type GuestShareView,
-  type GuestStreamEvent,
   type OrchestrationV2TurnItem,
   type ThreadGuestMessage,
 } from "@t3tools/contracts";
@@ -16,20 +13,22 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { makeThreadProjectionFixture } from "../../test-fixtures";
 import {
-  applyGuestStreamEvent,
-  formatGuestExpiry,
+  guestBoardOpenStep,
+  guestEntryStep,
   guestFilesProblem,
-  initialGuestStreamState,
+  guestShareIdOfEnvironment,
+  inviteJoinStep,
   inviteShareId,
-  parseGuestStreamEvent,
+  nextAwaitingRowIds,
   unplacedGuestMessages,
-  type GuestStreamState,
 } from "./guestStream.logic";
 
 const view: GuestShareView = {
   shareId: GuestShareId.make("share-1"),
   title: "Fix login",
   guestName: "Sam",
+  guests: [],
+  direct: false,
   expiresAt: "2026-10-24T00:00:00.000Z",
   messages: [],
   model: { driver: null, name: "gpt-5.4" },
@@ -54,15 +53,6 @@ const base = {
   updatedAt: now,
 } as const;
 
-const reply = (id: string, text: string): OrchestrationV2TurnItem => ({
-  ...base,
-  id: TurnItemId.make(id),
-  type: "assistant_message",
-  messageId: MessageId.make(id),
-  text,
-  streaming: false,
-});
-
 const guestMessageRow = (id: string, guestMessageId: GuestMessageId): OrchestrationV2TurnItem => ({
   ...base,
   id: TurnItemId.make(id),
@@ -76,122 +66,33 @@ const guestMessageRow = (id: string, guestMessageId: GuestMessageId): Orchestrat
   attachments: [],
 });
 
-const snapshot = (snapshotSequence = 1): GuestStreamEvent => ({
-  type: "thread",
-  item: { kind: "snapshot", snapshotSequence, projection },
+const row = (item: OrchestrationV2TurnItem) => ({
+  position: 0,
+  visibility: "local" as const,
+  sourceThreadId: projection.thread.id,
+  sourceItemId: item.id,
+  item,
 });
 
-const itemEvent = (sequence: number, item: OrchestrationV2TurnItem): GuestStreamEvent => ({
-  type: "thread",
-  item: {
-    kind: "event",
-    sequence,
-    event: {
-      id: EventId.make(`event-${sequence}`),
-      type: "turn-item.updated",
-      threadId: projection.thread.id,
-      driver: ProviderDriverKind.make("codex"),
-      providerInstanceId: projection.thread.providerInstanceId,
-      occurredAt: now,
-      payload: item,
-    },
-  },
-});
-
-const apply = (events: ReadonlyArray<GuestStreamEvent>, state = initialGuestStreamState) =>
-  events.reduce<GuestStreamState>(applyGuestStreamEvent, state);
-
-const itemIds = (state: GuestStreamState) =>
-  state.projection?.visibleTurnItems.map((row) => row.item.id) ?? [];
-
-describe("applyGuestStreamEvent", () => {
-  it("builds the thread from the snapshot and applies each later event once", () => {
-    const once = apply([{ type: "view", view }, snapshot(1), itemEvent(2, reply("a1", "Hi"))]);
-    expect(itemIds(once)).toEqual(["a1"]);
-    // A replayed or older event changes nothing.
-    expect(apply([itemEvent(2, reply("a1", "Changed"))], once)).toBe(once);
-  });
-
-  it("merges older pages in front, only for the cursor the thread is at", () => {
-    const windowed: GuestStreamEvent = {
-      type: "thread",
-      item: {
-        kind: "snapshot",
-        snapshotSequence: 1,
-        projection,
-        historyCursor: "cursor-1",
-        hasMoreHistory: true,
-      },
-    };
-    const page = (id: string, nextCursor: string | null) => ({
-      snapshotSequence: 1,
-      items: [
-        {
-          position: 0,
-          visibility: "local" as const,
-          sourceThreadId: projection.thread.id,
-          sourceItemId: TurnItemId.make(id),
-          item: reply(id, "Earlier"),
-        },
-      ],
-      nextCursor,
-      hasMoreHistory: nextCursor !== null,
-    });
-    const live = apply([windowed, itemEvent(2, reply("a1", "Hi"))]);
-    expect(live.historyCursor).toBe("cursor-1");
-    // A page fetched before a reconnect moved the cursor changes nothing.
-    const stale = { type: "history-page" as const, cursor: "cursor-0", page: page("old", null) };
-    expect(applyGuestStreamEvent(live, stale)).toBe(live);
-    const merged = applyGuestStreamEvent(live, {
-      type: "history-page",
-      cursor: "cursor-1",
-      page: page("o1", null),
-    });
-    expect(itemIds(merged)).toEqual(["o1", "a1"]);
-    expect(merged.historyCursor).toBeNull();
-  });
-
-  it("replaces the thread on a new snapshot, as after a reconnect", () => {
-    const before = apply([snapshot(1), itemEvent(2, reply("a1", "Hi")), { type: "ended" }]);
-    const after = apply([snapshot(1)], { ...before, ended: false });
-    expect(itemIds(after)).toEqual([]);
-  });
-
-  it("ends when the view names another link than the page's", () => {
-    const state = apply([
-      { type: "view", view },
-      { type: "view", view: { ...view, shareId: GuestShareId.make("share-2") } },
-    ]);
-    expect(state.ended).toBe(true);
-    expect(state.view?.shareId).toBe(view.shareId);
-  });
-
-  it("remembers a waiting message across a reconnect until its row arrives", () => {
+describe("nextAwaitingRowIds", () => {
+  it("remembers a waiting message until its row arrives, and never brings it back", () => {
     const waiting = {
       id: GuestMessageId.make("m1"),
       text: "Why?",
       status: "pending" as const,
       submittedAt: "2026-10-23T10:00:00.000Z",
     };
-    const sent = { ...waiting, status: "sent" as const };
-    const queued = apply([
-      { type: "view", view: { ...view, messages: [waiting] } },
-      snapshot(1),
-      { type: "view", view: { ...view, messages: [sent] } },
-    ]);
-    expect([...queued.awaitingRowIds]).toEqual([waiting.id]);
+    const none: ReadonlySet<GuestMessageId> = new Set();
+    const seen = nextAwaitingRowIds(none, { ...view, messages: [waiting] }, []);
+    expect([...seen]).toEqual([waiting.id]);
+    // The owner sent it, but its row is still queued: it keeps showing after the transcript.
+    const sent = { ...view, messages: [{ ...waiting, status: "sent" as const }] };
+    expect(nextAwaitingRowIds(seen, sent, [])).toBe(seen);
 
-    // Once placed, a later snapshot whose window no longer holds the row must not resurrect it.
-    const placed = apply([itemEvent(2, guestMessageRow("u1", waiting.id)), snapshot(3)], queued);
-    expect(placed.awaitingRowIds.size).toBe(0);
-  });
-});
-
-describe("parseGuestStreamEvent", () => {
-  it("decodes a valid frame and rejects malformed ones", () => {
-    expect(parseGuestStreamEvent(JSON.stringify({ type: "ended" }))).toEqual({ type: "ended" });
-    expect(parseGuestStreamEvent("{not json")).toBeNull();
-    expect(parseGuestStreamEvent(JSON.stringify({ type: "unknown" }))).toBeNull();
+    // Once placed, a later window that no longer holds the row must not resurrect it.
+    const placed = nextAwaitingRowIds(seen, sent, [row(guestMessageRow("u1", waiting.id))]);
+    expect(placed.size).toBe(0);
+    expect(nextAwaitingRowIds(placed, sent, [])).toBe(placed);
   });
 });
 
@@ -231,21 +132,108 @@ describe("unplacedGuestMessages", () => {
   });
 });
 
-describe("formatGuestExpiry", () => {
-  const now = Date.parse("2026-10-23T00:00:00.000Z");
-  it("shows whole hours, then minutes, then expired", () => {
-    expect(formatGuestExpiry("2026-10-23T23:59:00.000Z", now)).toBe("23h left");
-    expect(formatGuestExpiry("2026-10-23T00:45:30.000Z", now)).toBe("45m left");
-    expect(formatGuestExpiry("2026-10-23T00:00:00.000Z", now)).toBe("Expired");
-  });
-});
-
 describe("inviteShareId", () => {
   it("reads the share id before the signature and rejects anything else", () => {
     expect(inviteShareId("k3J9xQ2mT8vL5nR1pW7yZa.sig")).toBe("k3J9xQ2mT8vL5nR1pW7yZa");
     expect(inviteShareId("no-signature")).toBeNull();
     expect(inviteShareId(".sig")).toBeNull();
     expect(inviteShareId("")).toBeNull();
+  });
+});
+
+describe("guestEntryStep", () => {
+  const joined = [{ shareId: "board-1" }, { shareId: "board-2" }];
+  it("reuses a share this browser joined, checking the session when an invite could replace it", () => {
+    expect(guestEntryStep(joined, { credential: "board-2.secret", shareId: "board-2" })).toEqual({
+      step: "check",
+      share: { shareId: "board-2" },
+    });
+    expect(guestEntryStep(joined, { credential: null, shareId: "board-1" })).toEqual({
+      step: "open",
+      share: { shareId: "board-1" },
+    });
+  });
+  it("joins with an invite only for a share not joined yet", () => {
+    expect(guestEntryStep(joined, { credential: "board-3.secret", shareId: "board-3" })).toEqual({
+      step: "join",
+    });
+    expect(guestEntryStep(joined, { credential: null, shareId: "board-3" })).toEqual({
+      step: "invalid",
+    });
+    expect(guestEntryStep(joined, { credential: "no-signature", shareId: null })).toEqual({
+      step: "invalid",
+    });
+  });
+  it("joins a board only looked at once its edit link comes, and keeps an editor editing", () => {
+    const looking = [{ shareId: "board-1", viewOnly: true }, { shareId: "board-2" }];
+    expect(guestEntryStep(looking, { credential: "board-1.secret", shareId: "board-1" })).toEqual({
+      step: "join",
+    });
+    expect(guestEntryStep(looking, { credential: "board-1.v.secret", shareId: "board-1" })).toEqual(
+      { step: "check", share: looking[0] },
+    );
+    expect(guestEntryStep(looking, { credential: "board-2.v.secret", shareId: "board-2" })).toEqual(
+      { step: "check", share: looking[1] },
+    );
+    expect(guestEntryStep(looking, { credential: "board-3.v.secret", shareId: "board-3" })).toEqual(
+      { step: "join" },
+    );
+  });
+});
+
+describe("inviteJoinStep", () => {
+  const signedIn = (name: string | null) => ({ status: "signed-in", name }) as const;
+  it("joins a cloud board under the account's own name, and asks an account that has none", () => {
+    expect(inviteJoinStep({ cloud: true, account: signedIn("Maya Lin"), failed: false })).toEqual({
+      step: "join",
+      name: "Maya Lin",
+    });
+    for (const name of [null, "", "  "]) {
+      expect(inviteJoinStep({ cloud: true, account: signedIn(name), failed: false })).toEqual({
+        step: "ask",
+      });
+    }
+  });
+  it("asks everyone else, and waits only while it does not know who is signed in", () => {
+    const ask = { step: "ask" };
+    expect(inviteJoinStep({ cloud: true, account: { status: "loading" }, failed: false })).toEqual({
+      step: "wait",
+    });
+    expect(
+      inviteJoinStep({ cloud: true, account: { status: "signed-out" }, failed: false }),
+    ).toEqual(ask);
+    expect(inviteJoinStep({ cloud: true, account: { status: "off" }, failed: false })).toEqual(ask);
+    // Someone else's computer never gets the account, and a refused join falls back to the form.
+    expect(inviteJoinStep({ cloud: false, account: signedIn("Maya Lin"), failed: false })).toEqual(
+      ask,
+    );
+    expect(inviteJoinStep({ cloud: true, account: signedIn("Maya Lin"), failed: true })).toEqual(
+      ask,
+    );
+  });
+});
+
+describe("guestBoardOpenStep", () => {
+  const cold = {
+    hasSession: false,
+    reopening: false,
+    cloud: true,
+    account: "signed-in",
+    accountRefused: false,
+  } as const;
+  it("opens a cloud board's plain address as the signed-in account before calling it ended", () => {
+    expect(guestBoardOpenStep(cold)).toBe("account");
+    expect(guestBoardOpenStep({ ...cold, account: "loading" })).toBe("opening");
+    expect(guestBoardOpenStep({ ...cold, accountRefused: true })).toBe("invalid");
+    expect(guestBoardOpenStep({ ...cold, account: "signed-out" })).toBe("invalid");
+    expect(guestBoardOpenStep({ ...cold, cloud: false })).toBe("invalid");
+    expect(guestBoardOpenStep({ ...cold, hasSession: true, accountRefused: true })).toBe("board");
+    expect(guestBoardOpenStep({ ...cold, reopening: true })).toBe("opening");
+  });
+  it("reads the share from a board's address", () => {
+    expect(guestShareIdOfEnvironment("guest-share-abc-123")).toBe("abc-123");
+    expect(guestShareIdOfEnvironment("guest-share-")).toBeNull();
+    expect(guestShareIdOfEnvironment("local")).toBeNull();
   });
 });
 

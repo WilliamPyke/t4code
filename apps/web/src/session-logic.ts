@@ -1,5 +1,8 @@
 import type { ThreadStructureRuntime } from "@t3tools/client-runtime/state/shell";
-import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
+import {
+  resolveThreadWorkingStartedAt,
+  type ThreadStructure,
+} from "@t3tools/client-runtime/state/models";
 import {
   type AssetResource,
   type OrchestrationV2Checkpoint,
@@ -36,7 +39,11 @@ import type {
   ThreadPendingUserInput,
 } from "@t3tools/client-runtime/state/thread-requests";
 import type { ThreadRunSummary, ThreadRuntimeSummary } from "@t3tools/client-runtime/state/shell";
-import { threadRuntimeHasInterruptibleRun } from "@t3tools/client-runtime/state/thread-execution";
+import {
+  deriveRunlessWorkStartedAt,
+  deriveThreadStructureRuntime,
+  threadRuntimeHasInterruptibleRun,
+} from "@t3tools/client-runtime/state/thread-execution";
 import { turnItemIsWorkspacePreparation } from "@t3tools/client-runtime/state/turn-item-presentation";
 
 import {
@@ -1066,6 +1073,14 @@ export function derivePhase(runtime: ThreadStructureRuntime | null): SessionPhas
     return "connecting";
   if (runtime.status === "running" || runtime.status === "waiting") return "running";
   return "ready";
+}
+
+/** Whether the thread's agent is working now, as the timeline's working row says. */
+export function deriveThreadAgentWorking(projection: ThreadStructure): boolean {
+  return (
+    derivePhase(deriveThreadStructureRuntime(projection)) === "running" ||
+    deriveRunlessWorkStartedAt(projection) !== null
+  );
 }
 
 /** Preparing and starting runs can be interrupted; Stop need not wait for running. */

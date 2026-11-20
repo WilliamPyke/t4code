@@ -30,6 +30,7 @@ const clientSettings: ClientSettings = {
   browserAutoShowFloatingPreview: false,
   browserProfiles: [{ id: "work", name: "Work", kind: "persistent" }],
   browserDefaultProfileId: "work",
+  boardToolsPlacement: "bottom",
   confirmQuit: "double-click",
   confirmThreadArchive: true,
   confirmThreadDelete: false,

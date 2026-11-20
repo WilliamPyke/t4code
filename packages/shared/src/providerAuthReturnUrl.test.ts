@@ -13,7 +13,16 @@ describe("provider auth return destinations", () => {
       ).toBe(`${scheme}://app/settings/providers?instanceId=work`);
     },
   );
+  it.each(["https://app.tinkjam.com", "https://app.trellium.org"])(
+    "returns to the hosted app on %s",
+    (origin) => {
+      expect(providerAuthReturnUrl(`${origin}/welcome#agents:machine-id`)).toBe(
+        `${origin}/welcome#agents:machine-id`,
+      );
+    },
+  );
   it.each([
+    "https://app.tinkjam.com.attacker.example/welcome",
     "t3code://attacker/welcome",
     "t3code://app/welcome/../evil",
     "https://attacker.example/welcome",

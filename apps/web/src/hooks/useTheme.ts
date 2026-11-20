@@ -461,6 +461,12 @@ function handleStorageChange(e: StorageEvent) {
   }
 }
 
+// For the life of the page, not of a subscriber: pages with no theme reader (a board, the welcome)
+// must follow the system's light or dark too.
+if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+  window.matchMedia(MEDIA_QUERY).addEventListener("change", handleSystemAppearanceChange);
+}
+
 let removeWindowListeners: (() => void) | null = null;
 
 function subscribe(listener: () => void): () => void {
@@ -468,11 +474,8 @@ function subscribe(listener: () => void): () => void {
   listeners.push(listener);
 
   if (!removeWindowListeners) {
-    const mq = typeof window.matchMedia === "function" ? window.matchMedia(MEDIA_QUERY) : null;
-    mq?.addEventListener("change", handleSystemAppearanceChange);
     window.addEventListener("storage", handleStorageChange);
     removeWindowListeners = () => {
-      mq?.removeEventListener("change", handleSystemAppearanceChange);
       window.removeEventListener("storage", handleStorageChange);
     };
   }

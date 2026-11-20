@@ -9,18 +9,21 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 import { vi } from "vite-plus/test";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ConnectReachability from "./ConnectReachability.ts";
 import { classifyReachability, type ReachabilityFacts } from "./ConnectReachability.ts";
+import * as ServerConfig from "../config.ts";
 import * as ManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
+import { withMachineSleep } from "./systemResume.testkit.ts";
+import * as TunnelEndpointProbe from "./tunnelEndpointProbe.ts";
 
 vi.mock("node:net", { spy: true });
 
@@ -37,6 +40,22 @@ const facts = (overrides: Partial<ReachabilityFacts>): ReachabilityFacts => ({
 });
 
 describe("classifyReachability", () => {
+  it("gives the reason linking stopped instead of a tunnel that will never come", () => {
+    const linkFailure = { reason: "This computer was removed.", fix: "Approve it again." };
+    expect(
+      classifyReachability(
+        facts({ managedTunnelConfigured: false, connector: null, linkFailure }),
+        checkedAt,
+      ),
+    ).toMatchObject({ status: "unreachable", cause: "not_linked", ...linkFailure });
+    expect(
+      classifyReachability(
+        facts({ endpoint: { kind: "status", status: 200 }, linkFailure }),
+        checkedAt,
+      ),
+    ).toMatchObject({ status: "reachable" });
+  });
+
   it.each([
     [{ kind: "status", status: 502 }, "origin_unreachable"],
     [{ kind: "status", status: 530 }, "no_connector"],
@@ -109,44 +128,56 @@ interface ServedResponse {
   readonly body: string | ReadableStream<Uint8Array> | { readonly cloudflareError: number };
 }
 
-// What Cloudflare serves for its 530 page: HTML unless the client accepts JSON.
-const cloudflareErrorPage = (request: HttpClientRequest.HttpClientRequest, code: number) =>
-  request.headers.accept === "application/json"
-    ? JSON.stringify({ status: 530, error_code: code, error_name: "tunnel_error" })
-    : `<!doctype html><h1><span>Error</span> <span>${code}</span></h1>`;
+// What Cloudflare serves for its 530 page to a client that accepts JSON, as the probe does.
+const cloudflareErrorPage = (code: number) =>
+  JSON.stringify({ status: 530, error_code: code, error_name: "tunnel_error" });
 
 const reachabilityLayer = (
   respond: Effect.Effect<ServedResponse>,
   restartConnector: (pid: number, stillDead: Effect.Effect<boolean>) => Effect.Effect<boolean>,
+  options?: { readonly sync?: boolean },
 ) =>
-  ConnectReachability.layer.pipe(
+  ConnectReachability.layerWithoutTunnelEndpoint.pipe(
     Layer.provide(
       Layer.mergeAll(
+        options?.sync === true
+          ? Layer.effect(
+              ServerConfig.ServerConfig,
+              Effect.map(ServerConfig.ServerConfig, (config) => ({
+                ...config,
+                startupPresentation: "sync" as const,
+              })),
+            ).pipe(
+              Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-reachability-" })),
+              Layer.provide(NodeServices.layer),
+            )
+          : Layer.empty,
         Layer.mock(ManagedEndpointRuntime.CloudManagedEndpointRuntime)({
           inspectConnector: Effect.succeed(connected),
           readinessChanged: Stream.never,
           restartConnector,
         }),
         Layer.mock(ServerSecretStore.ServerSecretStore)({
-          get: () => Effect.succeedSome(new Uint8Array()),
+          get: (name) =>
+            name === "cloud-endpoint-runtime-config"
+              ? Effect.succeedSome(new Uint8Array())
+              : Effect.succeedNone,
         }),
         Layer.succeed(
-          HttpClient.HttpClient,
-          HttpClient.make((request) =>
-            respond.pipe(
-              Effect.map(({ status, body }) =>
-                HttpClientResponse.fromWeb(
-                  request,
-                  new Response(
+          TunnelEndpointProbe.TunnelEndpoint,
+          TunnelEndpointProbe.TunnelEndpoint.of({
+            get: () =>
+              respond.pipe(
+                Effect.map(({ status, body }) => ({
+                  kind: "status" as const,
+                  status,
+                  text:
                     typeof body === "object" && "cloudflareError" in body
-                      ? cloudflareErrorPage(request, body.cloudflareError)
-                      : body,
-                    { status },
-                  ),
-                ),
+                      ? Effect.succeed(cloudflareErrorPage(body.cloudflareError))
+                      : Effect.promise(() => new Response(body).text()),
+                })),
               ),
-            ),
-          ),
+          }),
         ),
         Layer.succeed(
           ChildProcessSpawner.ChildProcessSpawner,
@@ -209,6 +240,70 @@ describe("ConnectReachability stale connector recovery", () => {
         expect(yield* Queue.take(restarts)).toBe(connected.pid);
       }).pipe(Effect.provide(layer));
     }),
+  );
+
+  it.effect("restarts a Tinkjam Sync connector the edge never routed after 20 s, then 40 s", () =>
+    Effect.gen(function* () {
+      using _connect = mockEdgeConnect();
+      const restarts = yield* Queue.unbounded<number>();
+      const layer = reachabilityLayer(
+        Effect.succeed({ status: 530, body: { cloudflareError: 1033 } }),
+        (pid, stillDead) =>
+          stillDead.pipe(Effect.tap((dead) => (dead ? Queue.offer(restarts, pid) : Effect.void))),
+        { sync: true },
+      );
+      yield* Effect.gen(function* () {
+        const reachability = yield* ConnectReachability.ConnectReachability;
+        expect(yield* reachability.check).toMatchObject({ cause: "no_connector" });
+        yield* TestClock.adjust(Duration.seconds(19));
+        expect(yield* Queue.size(restarts)).toBe(0);
+        yield* TestClock.adjust(Duration.seconds(1));
+        expect(yield* Queue.take(restarts)).toBe(connected.pid);
+
+        yield* reachability.check;
+        yield* TestClock.adjust(Duration.seconds(39));
+        expect(yield* Queue.size(restarts)).toBe(0);
+        yield* TestClock.adjust(Duration.seconds(1));
+        expect(yield* Queue.take(restarts)).toBe(connected.pid);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("looks at once when the machine wakes, and waits the first wait again", () =>
+    withMachineSleep((sleepFor) =>
+      Effect.gen(function* () {
+        using _connect = mockEdgeConnect();
+        const restarts = yield* Queue.unbounded<number>();
+        let requests = 0;
+        const layer = reachabilityLayer(
+          Effect.sync(() => {
+            requests += 1;
+            return { status: 530, body: { cloudflareError: 1033 } };
+          }),
+          (pid, stillDead) =>
+            stillDead.pipe(Effect.tap((dead) => (dead ? Queue.offer(restarts, pid) : Effect.void))),
+          { sync: true },
+        );
+        yield* Effect.gen(function* () {
+          const reachability = yield* ConnectReachability.ConnectReachability;
+          // Two restarts that did not help grow the wait to 80 s.
+          yield* reachability.check;
+          yield* TestClock.adjust(Duration.seconds(20));
+          yield* reachability.check;
+          yield* TestClock.adjust(Duration.seconds(40));
+          expect(yield* Queue.takeAll(restarts)).toHaveLength(2);
+
+          const before = requests;
+          yield* sleepFor(Duration.hours(1));
+          yield* TestClock.adjust(Duration.seconds(10));
+          expect(requests).toBe(before + 1);
+
+          yield* reachability.check;
+          yield* TestClock.adjust(Duration.seconds(20));
+          expect(yield* Queue.size(restarts)).toBe(1);
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
   );
 
   it.effect("starts a new streak after a healthy check that a newer check overtook", () =>

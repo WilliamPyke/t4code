@@ -101,7 +101,7 @@ export const buildInitialFxProviderSnapshot = (
       auth: { status: "unknown" },
       message: settings.enabled
         ? "Checking fx CLI availability..."
-        : "fx is disabled in T3 Code settings.",
+        : "fx is turned off in Tinkjam settings.",
     }),
   );
 
@@ -159,7 +159,7 @@ export const checkFxProviderStatus = Effect.fn("checkFxProviderStatus")(function
       version: null,
       status: "warning",
       auth: { status: "unknown" },
-      message: "fx is disabled in T3 Code settings.",
+      message: "fx is turned off in Tinkjam settings.",
     });
   }
 
@@ -174,7 +174,9 @@ export const checkFxProviderStatus = Effect.fn("checkFxProviderStatus")(function
       version: null,
       status: "error",
       auth: { status: "unknown" },
-      message: missing ? "fx is not installed or not on PATH." : "Failed to run `fx --version`.",
+      message: missing
+        ? "fx is not installed on this computer, or Tinkjam cannot find the `fx` command."
+        : "Failed to run `fx --version`.",
     });
   }
   const versionOutput = versionResult.success.value;

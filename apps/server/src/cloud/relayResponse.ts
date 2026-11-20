@@ -14,6 +14,10 @@ export class RelayRequestError extends Schema.TaggedError<RelayRequestError>()(
     description: Schema.String,
     /** How long the relay asked callers to wait (`Retry-After`) before retrying. */
     retryAfterMillis: Schema.optionalKey(Schema.Number),
+    /** The relay's own name for the refusal, when it sent one. */
+    code: Schema.optionalKey(Schema.String),
+    /** The relay's clock minus this machine's, from the response's `Date`. */
+    clockSkewMillis: Schema.optionalKey(Schema.Number),
   },
 ) {
   override get message(): string {
@@ -73,6 +77,74 @@ function recoveryHint(error: RelayProtectedError): string {
   }
 }
 
+// Signed requests live a minute or two; a clock further out than this makes the relay refuse them.
+const CLOCK_SKEW_LIMIT_MILLIS = 90_000;
+
+/** What stops this computer from connecting, in words for the person using it. */
+export interface LinkFailure {
+  readonly kind: "removed" | "limit" | "clock" | "account" | "refused";
+  readonly reason: string;
+  readonly fix: string;
+}
+
+const hasTag = (error: unknown, tag: string) =>
+  typeof error === "object" && error !== null && "_tag" in error && error._tag === tag;
+
+/**
+ * The failures retrying cannot fix by itself, each with what the person can do. `null` for
+ * the rest (the relay or the network being down), which Sync keeps retrying.
+ */
+export function linkFailureFor(error: unknown): LinkFailure | null {
+  if (hasTag(error, "CloudLinkAccountMismatchError")) {
+    return {
+      kind: "account",
+      reason:
+        "This computer is connected to a different Tinkjam account than the one that approved it.",
+      fix: "Disconnect this computer, then connect it again with the account you want.",
+    };
+  }
+  if (!isRelayRequestError(error)) return null;
+  if (
+    error.code === "RelayEnvironmentLinkProofExpiredError" ||
+    (error.rejection === "unauthorized" &&
+      Math.abs(error.clockSkewMillis ?? 0) > CLOCK_SKEW_LIMIT_MILLIS)
+  ) {
+    return {
+      kind: "clock",
+      reason: "This computer's date and time are wrong, so Tinkjam cannot accept its requests.",
+      fix: "Turn on automatic date and time on this computer. It connects by itself once the clock is right.",
+    };
+  }
+  if (error.code === "RelayEnvironmentLinkRemovedError") {
+    return {
+      kind: "removed",
+      reason: "This computer was removed from your Tinkjam account.",
+      fix: "Connect it again to use it.",
+    };
+  }
+  if (error.code === "RelayEnvironmentLinkLimitExceededError") {
+    return {
+      kind: "limit",
+      reason: "Your Tinkjam account already has its maximum number of connected computers.",
+      fix: "Open Tinkjam, go to Settings and remove a computer you no longer use. Then start Tinkjam Sync again.",
+    };
+  }
+  if (error.rejection === "unavailable") return null;
+  return {
+    kind: "refused",
+    reason: `Tinkjam did not accept this computer's request to connect. ${error.description}`,
+    fix: "Update Tinkjam Sync and start it again. If it stays like this, send this message to Tinkjam support.",
+  };
+}
+
+export const LINK_REMOVED_FAILURE = linkFailureFor(
+  new RelayRequestError({
+    rejection: "forbidden",
+    description: "",
+    code: "RelayEnvironmentLinkRemovedError",
+  }),
+);
+
 export const filterRelayResponse = Effect.fn("cloud.filter_relay_response")(function* (
   response: HttpClientResponse.HttpClientResponse,
 ) {
@@ -86,19 +158,27 @@ export const filterRelayResponse = Effect.fn("cloud.filter_relay_response")(func
     ? `T3 Connect: ${decoded.value.message}. ${recoveryHint(decoded.value)} Trace ID: ${decoded.value.traceId}.`
     : `T3 Connect relay returned HTTP ${response.status} without a recognized error response. Check relay access and any proxy or firewall restrictions, then restart T3 Code.${requestId}`;
 
+  const now = yield* Clock.currentTimeMillis;
+  const relayTime = Date.parse(response.headers["date"] ?? "");
+  const details = {
+    description,
+    ...(Option.isSome(decoded) ? { code: decoded.value._tag } : {}),
+    ...(Number.isFinite(relayTime) ? { clockSkewMillis: relayTime - now } : {}),
+  };
+
   // Only a schema-decoded expired-proof 401 is retryable for clock skew; every other 401 is permanent.
   if (
     response.status === 401 &&
     Option.isSome(decoded) &&
     decoded.value._tag === "RelayEnvironmentLinkProofExpiredError"
   ) {
-    return yield* new RelayRequestError({ rejection: "unavailable", description });
+    return yield* new RelayRequestError({ rejection: "unavailable", ...details });
   }
   if (response.status === 401) {
-    return yield* new RelayRequestError({ rejection: "unauthorized", description });
+    return yield* new RelayRequestError({ rejection: "unauthorized", ...details });
   }
   if (response.status === 403) {
-    return yield* new RelayRequestError({ rejection: "forbidden", description });
+    return yield* new RelayRequestError({ rejection: "forbidden", ...details });
   }
   if (
     response.status >= 400 &&
@@ -106,15 +186,12 @@ export const filterRelayResponse = Effect.fn("cloud.filter_relay_response")(func
     response.status !== 408 &&
     response.status !== 429
   ) {
-    return yield* new RelayRequestError({ rejection: "rejected", description });
+    return yield* new RelayRequestError({ rejection: "rejected", ...details });
   }
-  const retryAfterMillis = parseRetryAfterMillis(
-    response.headers["retry-after"],
-    yield* Clock.currentTimeMillis,
-  );
+  const retryAfterMillis = parseRetryAfterMillis(response.headers["retry-after"], now);
   return yield* new RelayRequestError({
     rejection: "unavailable",
-    description,
+    ...details,
     ...(retryAfterMillis === undefined ? {} : { retryAfterMillis }),
   });
 });

@@ -168,6 +168,10 @@ function makeEnvironmentSessionAtoms<R, E>(
         if (prepared === null || Option.isNone(connection)) {
           return Effect.never;
         }
+        // A guest of a shared thread has no session there, and asking again changes nothing.
+        if (prepared.target._tag === "GuestConnectionTarget") {
+          return Effect.fail(new SessionHttpClientUnavailable());
+        }
         if (connection.value !== backoffConnection) {
           backoffConnection = connection.value;
           consecutiveFailures = 0;

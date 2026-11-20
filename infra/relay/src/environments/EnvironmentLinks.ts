@@ -9,7 +9,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
 
 import * as RelayDb from "../db.ts";
 import { relayEnvironmentLinks } from "../persistence/schema.ts";
@@ -149,6 +149,18 @@ export class EnvironmentLinks extends Context.Service<
       readonly userId: string;
       readonly environmentId: string;
     }) => Effect.Effect<boolean, EnvironmentLinkRevokePersistenceError>;
+    /** Other accounts still linked to the computer that holds this key. */
+    readonly listOtherUsersForEnvironmentKey: (input: {
+      readonly userId: string;
+      readonly environmentId: string;
+      readonly environmentPublicKey: string;
+    }) => Effect.Effect<ReadonlyArray<string>, EnvironmentLinkEnvironmentLookupPersistenceError>;
+    /** The account's other active links made from the same computer and data folder. */
+    readonly listOtherEnvironmentsForMachine: (input: {
+      readonly userId: string;
+      readonly environmentId: string;
+      readonly machineId: string;
+    }) => Effect.Effect<ReadonlyArray<string>, EnvironmentLinkEnvironmentLookupPersistenceError>;
   }
 >()("t3code-relay/environments/EnvironmentLinks") {}
 
@@ -202,6 +214,7 @@ const make = Effect.gen(function* () {
           liveActivitiesEnabled: request.liveActivitiesEnabled,
           managedTunnelsEnabled: request.managedTunnelsEnabled,
           createdByDeviceId: request.deviceId ?? null,
+          machineId: proof.machineId ?? null,
           revokedAt: null,
           createdAt: now,
           updatedAt: now,
@@ -218,6 +231,8 @@ const make = Effect.gen(function* () {
             liveActivitiesEnabled: request.liveActivitiesEnabled,
             managedTunnelsEnabled: request.managedTunnelsEnabled,
             createdByDeviceId: request.deviceId ?? null,
+            // A relink from a server too old to send one keeps the id already recorded.
+            ...(proof.machineId === undefined ? {} : { machineId: proof.machineId }),
             revokedAt: null,
             updatedAt: now,
             holdWebhooksWhileOffline: inheritedHoldWebhooks,
@@ -475,6 +490,60 @@ const make = Effect.gen(function* () {
           ),
         );
       return rows.length > 0;
+    }),
+
+    listOtherUsersForEnvironmentKey: Effect.fn(
+      "relay.environment_links.list_other_users_for_environment_key",
+    )(function* (input) {
+      yield* Effect.annotateCurrentSpan({ "relay.environment_id": input.environmentId });
+      const rows = yield* db
+        .select({ userId: relayEnvironmentLinks.userId })
+        .from(relayEnvironmentLinks)
+        .where(
+          and(
+            eq(relayEnvironmentLinks.environmentId, input.environmentId),
+            eq(relayEnvironmentLinks.environmentPublicKey, input.environmentPublicKey),
+            ne(relayEnvironmentLinks.userId, input.userId),
+            isNull(relayEnvironmentLinks.revokedAt),
+          ),
+        )
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new EnvironmentLinkEnvironmentLookupPersistenceError({
+                environmentId: input.environmentId,
+                cause,
+              }),
+          ),
+        );
+      return rows.map((row) => row.userId);
+    }),
+
+    listOtherEnvironmentsForMachine: Effect.fn(
+      "relay.environment_links.list_other_environments_for_machine",
+    )(function* (input) {
+      yield* Effect.annotateCurrentSpan({ "relay.environment_id": input.environmentId });
+      const rows = yield* db
+        .select({ environmentId: relayEnvironmentLinks.environmentId })
+        .from(relayEnvironmentLinks)
+        .where(
+          and(
+            eq(relayEnvironmentLinks.userId, input.userId),
+            eq(relayEnvironmentLinks.machineId, input.machineId),
+            ne(relayEnvironmentLinks.environmentId, input.environmentId),
+            isNull(relayEnvironmentLinks.revokedAt),
+          ),
+        )
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new EnvironmentLinkEnvironmentLookupPersistenceError({
+                environmentId: input.environmentId,
+                cause,
+              }),
+          ),
+        );
+      return rows.map((row) => row.environmentId);
     }),
   });
 });

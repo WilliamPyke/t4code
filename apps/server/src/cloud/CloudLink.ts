@@ -80,6 +80,8 @@ import * as CliTokenManager from "./CliTokenManager.ts";
 import {
   CLOUD_ENDPOINT_CONFIRMED_ORIGIN,
   CLOUD_ENDPOINT_RUNTIME_CONFIG,
+  CLOUD_LINK_FAILURE,
+  CLOUD_LINK_FRESH_APPROVAL,
   CLOUD_LINK_REVOKED,
   CLOUD_LINKED_USER_ID,
   CLOUD_MINT_PUBLIC_KEY,
@@ -93,15 +95,18 @@ import {
   RELAY_ENVIRONMENT_CREDENTIAL_SECRET,
   RELAY_ISSUER_SECRET,
   RELAY_URL_SECRET,
+  StoredLinkFailure,
 } from "./config.ts";
 import { EnvironmentSigningKey } from "./environmentKeys.ts";
 import * as ConnectReachability from "./ConnectReachability.ts";
 import * as ManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
+import { linkMachineId } from "./linkMachineId.ts";
 import * as ManagedLimits from "../policy/managedLimits.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import { relayUrlConfig } from "./publicConfig.ts";
 import {
   filterRelayResponse,
+  linkFailureFor,
   relayRequestError,
   type RelayRequestError,
   shouldRetryRelayRequest,
@@ -270,7 +275,14 @@ export class CloudLinkInternalError extends Schema.TaggedError<CloudLinkInternal
   },
 ) {
   override get message(): string {
-    return INTERNAL_OPERATION_MESSAGES[this.operation];
+    const summary = INTERNAL_OPERATION_MESSAGES[this.operation];
+    const detail =
+      this.cause instanceof Error
+        ? this.cause.message
+        : typeof this.cause === "string"
+          ? this.cause
+          : "";
+    return detail.length > 0 && detail !== summary ? `${summary} (${detail})` : summary;
   }
 }
 
@@ -296,6 +308,8 @@ export const shouldRetryCloudLink = (error: unknown): boolean =>
   shouldRetryRelayRequest(error) &&
   !isPermanentLinkError(error) &&
   !(CliTokenManager.isCloudCliCredentialRefreshError(error) && error.requiresLogin);
+
+const encodeLinkFailure = Schema.encodeEffect(StoredLinkFailure);
 
 const rollbackFailed = (cause: unknown) =>
   Effect.logWarning("Could not roll back a T3 Connect preference", { cause });
@@ -540,6 +554,22 @@ const make = Effect.gen(function* () {
       Effect.provideService(Path.Path, path),
     );
 
+  // Kept where the reachability check reads it, so the person learns why connecting stopped.
+  const recordLinkFailure = (error: unknown) => {
+    const failure = linkFailureFor(error);
+    if (failure === null) return Effect.void;
+    return encodeLinkFailure({ reason: failure.reason, fix: failure.fix }).pipe(
+      Effect.flatMap((json) => secrets.set(CLOUD_LINK_FAILURE, stringToBytes(json))),
+      Effect.andThen(
+        failure.kind === "removed"
+          ? secrets.set(CLOUD_LINK_REVOKED, stringToBytes("true"))
+          : Effect.void,
+      ),
+      Effect.ignore,
+    );
+  };
+  const clearLinkFailure = secrets.remove(CLOUD_LINK_FAILURE).pipe(Effect.ignore);
+
   const validateLinkedCloudUser = (
     cloudUserId: string,
   ): Effect.Effect<void, EnvironmentAuth.ServerAuthInternalError | CloudLinkAccountMismatchError> =>
@@ -595,6 +625,7 @@ const make = Effect.gen(function* () {
     const expiresAt = DateTime.add(now, { minutes: 5 });
     const nowSeconds = Math.floor(now.epochMilliseconds / 1_000);
     const descriptor = yield* environment.getDescriptor;
+    const machineId = yield* linkMachineId(config.stateDir);
     const payload = {
       iss: `t3-env:${descriptor.environmentId}`,
       aud: normalizeRelayIssuer(request.relayIssuer),
@@ -609,6 +640,7 @@ const make = Effect.gen(function* () {
       endpoint: request.endpoint,
       origin: request.origin,
       scopes: linkProofScopes(request),
+      ...(machineId === null ? {} : { machineId }),
     } satisfies RelayEnvironmentLinkProofPayload;
     return yield* signingKey
       .sign({
@@ -788,6 +820,7 @@ const make = Effect.gen(function* () {
         stringToBytes(payload.environmentCredential),
       );
       yield* secrets.remove(CLOUD_LINK_REVOKED);
+      yield* clearLinkFailure;
       yield* secrets.set(CLOUD_MINT_PUBLIC_KEY, stringToBytes(payload.cloudMintPublicKey));
       yield* awarenessRelay.requestCatchUp();
       if (endpointRuntimeJson !== null) {
@@ -850,6 +883,12 @@ const make = Effect.gen(function* () {
       );
       const mode = yield* readCliDesiredLinkMode.pipe(withSecrets);
       const managedTunnelsEnabled = mode !== "publish_only";
+      const approval = Option.map(yield* secrets.get(CLOUD_LINK_FRESH_APPROVAL), bytesToString);
+      const freshApproval = Option.isSome(approval);
+      // Older versions stored "true"; the relay redeems only the sign-in's own verifier.
+      const approvalVerifier = Option.getOrNull(
+        Option.filter(approval, (value) => value !== "true"),
+      );
       const relayUrl = yield* requireRelayUrl;
       const challenge = yield* relayClientRequest({
         url: `${relayUrl}/v1/client/environment-link-challenges`,
@@ -882,10 +921,13 @@ const make = Effect.gen(function* () {
           notificationsEnabled: true,
           liveActivitiesEnabled: true,
           managedTunnelsEnabled,
+          ...(freshApproval ? { freshApproval: true } : {}),
+          ...(approvalVerifier === null ? {} : { approvalVerifier }),
         },
         schema: RelayEnvironmentLinkResponse,
         timeout: MANAGED_ENDPOINT_PROVISION_REQUEST_TIMEOUT,
       });
+      yield* secrets.remove(CLOUD_LINK_FRESH_APPROVAL);
       yield* setCliDesiredCloudLink(true, mode).pipe(withSecrets);
       yield* applyCloudRelayConfig(
         {
@@ -909,14 +951,16 @@ const make = Effect.gen(function* () {
   const reconcileDesiredLinkIfStillDesired = Effect.fn(
     "environment.cloud.reconcileDesiredLinkIfStillDesired",
   )(function* (localOrigin: string) {
-    return yield* endpointRuntime.withLinkStateLock(
-      Effect.gen(function* () {
-        if (!(yield* readCliDesiredCloudLink.pipe(withSecrets))) {
-          return null;
-        }
-        return yield* reconcileDesiredCloudLinkWith(localOrigin);
-      }),
-    );
+    return yield* endpointRuntime
+      .withLinkStateLock(
+        Effect.gen(function* () {
+          if (!(yield* readCliDesiredCloudLink.pipe(withSecrets))) {
+            return null;
+          }
+          return yield* reconcileDesiredCloudLinkWith(localOrigin);
+        }),
+      )
+      .pipe(Effect.tapError(recordLinkFailure));
   });
 
   const makeManagedTunnelRecoveryProof = Effect.fn(
@@ -1032,17 +1076,20 @@ const make = Effect.gen(function* () {
     }).pipe(
       Effect.catchTags({
         RelayRequestError: (error) =>
-          error.rejection === "unauthorized"
-            ? markLinkRevoked(credential, error).pipe(
-                Effect.map((marked) => (marked ? ("revoked" as const) : ("superseded" as const))),
-              )
-            : Effect.fail(error),
+          error.rejection !== "unauthorized"
+            ? Effect.fail(error)
+            : linkFailureFor(error)?.kind === "clock"
+              ? recordLinkFailure(error).pipe(Effect.andThen(Effect.fail(error)))
+              : markLinkRevoked(credential, error).pipe(
+                  Effect.map((marked) => (marked ? ("revoked" as const) : ("superseded" as const))),
+                ),
       }),
     );
     if (registered === "revoked" || registered === "superseded") {
       return { status: registered };
     }
     yield* secrets.remove(CLOUD_LINK_REVOKED);
+    yield* clearLinkFailure;
     if (registered.status === "recovery_required") {
       return { status: registered.status, config };
     }
@@ -1120,7 +1167,11 @@ const make = Effect.gen(function* () {
       timeout: MANAGED_ENDPOINT_PROVISION_REQUEST_TIMEOUT,
     }).pipe(
       Effect.tapError((error) =>
-        error.rejection === "unauthorized" ? markLinkRevoked(credential, error) : Effect.void,
+        error.rejection !== "unauthorized"
+          ? Effect.void
+          : linkFailureFor(error)?.kind === "clock"
+            ? recordLinkFailure(error)
+            : markLinkRevoked(credential, error),
       ),
     );
     if (recovered.endpointRuntime.providerKind !== "cloudflare_tunnel") {
@@ -1144,6 +1195,7 @@ const make = Effect.gen(function* () {
         yield* secrets.set(CLOUD_ENDPOINT_RUNTIME_CONFIG, stringToBytes(encoded));
         yield* secrets.remove(CLOUD_ENDPOINT_CONFIRMED_ORIGIN);
         yield* secrets.remove(CLOUD_LINK_REVOKED);
+        yield* clearLinkFailure;
         return true;
       }),
     );
@@ -1207,6 +1259,11 @@ const make = Effect.gen(function* () {
   )(function* () {
     const runtimeConfig = yield* secrets.get(CLOUD_ENDPOINT_RUNTIME_CONFIG);
     if (Option.isNone(runtimeConfig)) {
+      return false;
+    }
+    // Sync restarts at every login and update, and a new tunnel takes minutes to route; it keeps
+    // its tunnel until the person disconnects or removes the computer.
+    if (config.startupPresentation === "sync") {
       return false;
     }
     // CLI authorization releases only CLI-desired managed links; web/mobile links recover by credential and expire through the relay reaper.
@@ -1335,8 +1392,10 @@ const make = Effect.gen(function* () {
               secrets.remove(PUBLISH_AGENT_ACTIVITY_SECRET),
               secrets.remove(HOLD_WEBHOOKS_WHILE_OFFLINE_SECRET),
               secrets.remove(CLOUD_LINK_REVOKED),
+              secrets.remove(CLOUD_LINK_FAILURE),
+              secrets.remove(CLOUD_LINK_FRESH_APPROVAL),
             ],
-            { concurrency: 10 },
+            { concurrency: 12 },
           );
           yield* setCliDesiredCloudLink(false).pipe(withSecrets);
           return { ok: true, endpointRuntimeStatus } satisfies EnvironmentCloudRelayConfigResult;

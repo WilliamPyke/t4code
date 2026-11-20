@@ -22,7 +22,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { HttpClient } from "effect/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
 import * as RelayClient from "@t3tools/shared/relayClient";
 
@@ -30,6 +30,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
+import { withMachineSleep } from "./systemResume.testkit.ts";
 
 const layerRelayClientAvailable = Layer.succeed(
   RelayClient.RelayClient,
@@ -349,6 +350,7 @@ describe("CloudManagedEndpointRuntime", () => {
       transport?: string;
       failSpawn?: number;
       isRunning?: Effect.Effect<boolean>;
+      startupOutput?: string;
     } = {},
   ) {
     const spawned: Array<ChildProcess.StandardCommand> = [];
@@ -372,6 +374,9 @@ describe("CloudManagedEndpointRuntime", () => {
           });
         }
         const output = yield* Queue.unbounded<Uint8Array>();
+        if (options.startupOutput !== undefined) {
+          yield* Queue.offer(output, new TextEncoder().encode(options.startupOutput));
+        }
         const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
         outputs[index] = output;
         exits[index] = exit;
@@ -428,6 +433,43 @@ describe("CloudManagedEndpointRuntime", () => {
       expect(yield* runtime.restartConnector(800, Effect.succeed(true))).toBe(false);
       expect(yield* runtime.inspectConnector).toMatchObject({ pid: 801 });
     }),
+  );
+
+  it.effect("restarts an unconnected connector sooner after the machine wakes, a few times", () =>
+    withMachineSleep((sleepFor) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeTransportSpawner({
+          startupOutput:
+            "2026-10-16T20:30:00Z INF Starting metrics server on 127.0.0.1:20241/metrics\n",
+        });
+        // cloudflared runs but never connects: its /ready answers 503.
+        const notReady = HttpClient.make((request) =>
+          Effect.succeed(HttpClientResponse.fromWeb(request, new Response("", { status: 503 }))),
+        );
+        const runtime = yield* buildCloudManagedEndpointRuntime(
+          fixture.spawner,
+          layerRelayClientAvailable,
+          notReady,
+        );
+        yield* runtime.applyConfig(tunnelConfig);
+
+        // Offline: six checks 30 s apart restart it, and the next restart would take twelve.
+        yield* TestClock.adjust(Duration.minutes(3));
+        expect(fixture.spawned).toHaveLength(2);
+
+        yield* sleepFor(Duration.hours(1));
+        yield* TestClock.adjust(Duration.minutes(1));
+        expect(fixture.spawned).toHaveLength(3);
+        yield* TestClock.adjust(Duration.minutes(2));
+        expect(fixture.spawned).toHaveLength(5);
+
+        // Three minutes after the wake the usual wait is back, and it doubles again.
+        yield* TestClock.adjust(Duration.minutes(3));
+        expect(fixture.spawned).toHaveLength(6);
+        yield* TestClock.adjust(Duration.minutes(5));
+        expect(fixture.spawned).toHaveLength(6);
+      }),
+    ),
   );
 
   it.effect("preserves an explicit transport choice despite repeated QUIC stalls", () =>

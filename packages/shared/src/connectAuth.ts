@@ -1,13 +1,20 @@
+import { ownDomainOrigins } from "./ownDomains.ts";
 import { readHashParams } from "./remote.ts";
 
 const CONNECT_AUTH_STATE_PARAM = "state";
 const CONNECT_AUTH_CHALLENGE_PARAM = "challenge";
 const CONNECT_AUTH_PORT_PARAM = "port";
+const CONNECT_AUTH_COMPUTER_PARAM = "computer";
 const CONNECT_LOOPBACK_CALLBACK_PATH = "/callback";
+// The approval page shows it; anything longer is not a computer name.
+const COMPUTER_NAME_MAX_LENGTH = 64;
 
 const CONNECT_AUTHORIZE_PATH = "/connect";
 
-export const DEFAULT_HOSTED_APP_URL = "https://app.t3.codes";
+export const DEFAULT_HOSTED_APP_URL = "https://app.tinkjam.com";
+
+/** Every origin the hosted app is served from, the current one first. */
+export const HOSTED_APP_ORIGINS = ownDomainOrigins(DEFAULT_HOSTED_APP_URL);
 
 export const CONNECT_OAUTH_SCOPES = ["openid", "profile", "email", "offline_access"] as const;
 
@@ -15,6 +22,8 @@ export interface ConnectAuthorizeRequest {
   readonly state: string;
   readonly challenge: string;
   readonly loopbackPort: number;
+  /** Set by Tinkjam Sync, which asks to connect this computer rather than sign in a terminal. */
+  readonly computerName?: string;
 }
 
 /** Route through /connect because Clerk's signed-out redirect can lose OAuth query parameters. */
@@ -23,13 +32,17 @@ export function buildConnectAuthorizeRequestUrl(input: {
   readonly state: string;
   readonly challenge: string;
   readonly loopbackPort: number;
+  readonly computerName?: string;
 }): string {
   const url = new URL(CONNECT_AUTHORIZE_PATH, input.hostedAppUrl);
-  url.hash = new URLSearchParams([
+  const computerName = normalizeComputerName(input.computerName ?? "");
+  const params = new URLSearchParams([
     [CONNECT_AUTH_STATE_PARAM, input.state],
     [CONNECT_AUTH_CHALLENGE_PARAM, input.challenge],
     [CONNECT_AUTH_PORT_PARAM, String(input.loopbackPort)],
-  ]).toString();
+  ]);
+  if (computerName !== null) params.set(CONNECT_AUTH_COMPUTER_PARAM, computerName);
+  url.hash = params.toString();
   return url.toString();
 }
 
@@ -41,7 +54,20 @@ export function readConnectAuthorizeRequest(url: URL): ConnectAuthorizeRequest |
   if (!state || !challenge || loopbackPort === null) {
     return null;
   }
-  return { state, challenge, loopbackPort };
+  const computerName = normalizeComputerName(params.get(CONNECT_AUTH_COMPUTER_PARAM) ?? "");
+  return { state, challenge, loopbackPort, ...(computerName === null ? {} : { computerName }) };
+}
+
+/** One printable line: the name is shown as plain text on the approval page. */
+function normalizeComputerName(value: string): string | null {
+  const name = value
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (name === "") return null;
+  return name.length > COMPUTER_NAME_MAX_LENGTH
+    ? `${name.slice(0, COMPUTER_NAME_MAX_LENGTH - 1).trimEnd()}…`
+    : name;
 }
 
 function parseLoopbackPort(value: string): number | null {

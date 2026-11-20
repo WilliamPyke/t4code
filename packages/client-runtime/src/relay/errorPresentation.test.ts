@@ -17,7 +17,7 @@ describe("relayProtectedErrorMessage", () => {
     });
 
     expect(relayProtectedErrorMessage(error)).toBe(
-      `Relay rejected the DPoP proof. ${DPOP_UNKNOWN_HINT}`,
+      `Tinkjam could not confirm this device's request. ${DPOP_UNKNOWN_HINT}`,
     );
   });
 
@@ -41,7 +41,7 @@ describe("relayProtectedErrorMessage", () => {
     });
 
     expect(relayProtectedErrorMessage(error)).toBe(
-      `Relay rejected the DPoP proof. ${DPOP_RETRY_HINT}`,
+      `Tinkjam could not confirm this device's request. ${DPOP_RETRY_HINT}`,
     );
   });
 });

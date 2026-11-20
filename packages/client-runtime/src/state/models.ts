@@ -162,6 +162,12 @@ export interface EnvironmentThreadShell {
   readonly pendingSubagentRequest?: PendingSubagentRequest | null;
   /** Guest messages waiting for the owner to send or dismiss. */
   readonly pendingGuestMessageCount?: number;
+  /** Shared with guests or a team, even past the link's end, so it has a board to open. */
+  readonly guestShared?: boolean;
+  /** Keeps a board while it is not shared. */
+  readonly hasRoomBoard?: boolean;
+  /** The owner's threads in thread boxes on this thread's board. */
+  readonly boardBoxThreadIds?: ReadonlyArray<ThreadId>;
   readonly hasActionableProposedPlan: boolean;
   readonly pendingBackgroundTasks: ReadonlyArray<
     NonNullable<OrchestrationV2ThreadShell["pendingBackgroundTasks"]>[number]
@@ -319,6 +325,11 @@ export function presentThreadShell(
         : null,
     pendingSubagentRequest,
     pendingGuestMessageCount: thread.pendingGuestMessageCount ?? 0,
+    ...(thread.guestShared === true ? { guestShared: true } : {}),
+    ...(thread.hasRoomBoard === true ? { hasRoomBoard: true } : {}),
+    ...(thread.boardBoxThreadIds === undefined
+      ? {}
+      : { boardBoxThreadIds: thread.boardBoxThreadIds }),
     hasActionableProposedPlan: thread.hasActionableProposedPlan,
     pendingBackgroundTasks: thread.pendingBackgroundTasks ?? [],
     providerInstanceHistory: thread.providerInstanceHistory ?? [],

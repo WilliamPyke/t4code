@@ -368,7 +368,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
   const serverTracePath = env.traceFile ?? derivedPaths.serverTracePath;
   yield* fs.makeDirectory(path.dirname(serverTracePath), { recursive: true });
   const startupPresentation = options?.startupPresentation ?? "browser";
-  const isHeadlessStartup = startupPresentation === "headless";
+  const isHeadlessStartup = startupPresentation !== "browser";
   const noBrowser = Option.getOrElse(
     resolveOptionPrecedence(
       isHeadlessStartup ? Option.some(true) : Option.none(),

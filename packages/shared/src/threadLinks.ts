@@ -2,14 +2,15 @@ import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@t3tools/contract
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { DEFAULT_HOSTED_APP_URL } from "./connectAuth.ts";
+import { DEFAULT_HOSTED_APP_URL, HOSTED_APP_ORIGINS } from "./connectAuth.ts";
 
 export const THREAD_LINK_PROTOCOL = "t3-thread";
 const V1_PREFIX = `${THREAD_LINK_PROTOCOL}://v1/`;
 const V2_PREFIX = `${THREAD_LINK_PROTOCOL}://v2/`;
-const HOSTED_PREFIX = `${DEFAULT_HOSTED_APP_URL}/threads/`;
+// Links copied on either of our app origins open threads.
+const HOSTED_PREFIXES = HOSTED_APP_ORIGINS.map((origin) => `${origin}/threads/`);
 const HOSTED_SEGMENT = "[A-Za-z0-9_%-]+";
-const HOSTED_LINK = `${HOSTED_PREFIX.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}${HOSTED_SEGMENT}/${HOSTED_SEGMENT}`;
+const HOSTED_LINK = `(?:${HOSTED_PREFIXES.map((prefix) => prefix.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")).join("|")})${HOSTED_SEGMENT}/${HOSTED_SEGMENT}`;
 // Code comes first in the alternation so a link written inside a code span or fence is skipped.
 // A labeled link's destination may be angle-bracketed, as CommonMark allows: [label](<href>).
 const THREAD_LINK_OUTSIDE_CODE = new RegExp(
@@ -41,8 +42,8 @@ export function hostedThreadLink(ref: ScopedThreadRef, origin = DEFAULT_HOSTED_A
 
 const HOSTED_PATH = new RegExp(`^(${HOSTED_SEGMENT})/(${HOSTED_SEGMENT})$`);
 
-function parseHostedThreadLink(href: string): ThreadLink | null {
-  const match = HOSTED_PATH.exec(href.slice(HOSTED_PREFIX.length));
+function parseHostedThreadLink(href: string, prefix: string): ThreadLink | null {
+  const match = HOSTED_PATH.exec(href.slice(prefix.length));
   if (!match) return null;
   try {
     const environmentId = Option.getOrNull(decodeEnvironmentId(decodeURIComponent(match[1]!)));
@@ -58,7 +59,8 @@ function parseHostedThreadLink(href: string): ThreadLink | null {
  * except in a hosted link, which escapes them itself.
  */
 export function parseThreadLinkHref(href: string): ThreadLink | null {
-  if (href.startsWith(HOSTED_PREFIX)) return parseHostedThreadLink(href);
+  const hostedPrefix = HOSTED_PREFIXES.find((prefix) => href.startsWith(prefix));
+  if (hostedPrefix !== undefined) return parseHostedThreadLink(href, hostedPrefix);
   if (href.startsWith(V1_PREFIX)) {
     const threadId = Option.getOrNull(decodeThreadId(href.slice(V1_PREFIX.length)));
     return threadId === null ? null : { environmentId: null, threadId };
@@ -143,7 +145,10 @@ export function formatHostedThreadLink(
 }
 
 export function hasThreadLinks(markdown: string): boolean {
-  return markdown.includes(`${THREAD_LINK_PROTOCOL}://v`) || markdown.includes(HOSTED_PREFIX);
+  return (
+    markdown.includes(`${THREAD_LINK_PROTOCOL}://v`) ||
+    HOSTED_PREFIXES.some((prefix) => markdown.includes(prefix))
+  );
 }
 
 /** Every thread the markdown's links can name, so their titles are keyed reads. */

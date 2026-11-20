@@ -1,105 +1,95 @@
+import { useAtomValue } from "@effect/atom-react";
+import { guestShareRequest } from "@t3tools/client-runtime/rpc";
 import {
-  EnvironmentId,
-  GUEST_MESSAGE_MAX_LENGTH,
-  GUEST_HISTORY_ROUTE,
-  GUEST_NAME_MAX_LENGTH,
+  GUEST_HOST_PARAM,
   GUEST_ROUTE_PREFIX,
+  GUEST_NAME_MAX_LENGTH,
   GUEST_SHARE_PARAM,
-  GuestMessageId,
-  type GuestRedeemRequest,
-  type GuestShareView,
-  type GuestThreadModel,
-  OrchestrationV2ThreadHistoryPage,
-  type OrchestrationV2ThreadProjection,
-  type ThreadGuestMessage,
-  type ThreadGuestMessageStatus,
+  GUEST_SIGN_IN_PARAM,
+  GuestInvitePreview,
+  GuestSignInFailure,
+  isCloudBoardViewCredential,
 } from "@t3tools/contracts";
-import type { LegendListRef } from "@legendapp/list/react";
+import { Navigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
-import {
-  deriveRunlessWorkStartedAt,
-  deriveThreadActivityRun,
-  deriveThreadStructureRuntime,
-} from "@t3tools/client-runtime/state/thread-execution";
-import { createQuestionHistoryProjector } from "@t3tools/client-runtime/state/thread-requests";
-import { ArrowUpIcon, PaperclipIcon, XIcon } from "lucide-react";
-import {
-  useEffect,
-  useReducer,
-  useRef,
-  useState,
-  type ClipboardEvent,
-  type FormEvent,
-  type KeyboardEvent,
-} from "react";
+import { useEffect, useEffectEvent, useState, type FormEvent } from "react";
 
-import { useIncrementalTimelineEntries } from "~/hooks/useIncrementalTimelineEntries";
-import { useNowMinute } from "~/hooks/useNowMinute";
-import { useStableCallback } from "~/hooks/useStableCallback";
-import { useTheme } from "~/hooks/useTheme";
-import { cn } from "~/lib/utils";
-import { deriveActiveWorkStartedAt, derivePhase } from "~/session-logic";
-import { ComposerControl, ComposerControlIcon } from "../chat/ComposerControl";
-import type { ExpandedImagePreview } from "../chat/ExpandedImagePreview";
-import { GuestMessageAttachments } from "../chat/GuestMessageAttachments";
-import { HostImageUrlContext } from "../chat/hostImageUrl";
-import { PierreEntryIcon } from "../chat/PierreEntryIcon";
-import { GuestMessageName, guestBubbleClassName } from "../chat/guestMessageStyle";
-import { MessagesTimeline, type MessagesTimelineHistoryControls } from "../chat/MessagesTimeline";
-import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
-import { getDisplayModelName, getTriggerDisplayModelName } from "../chat/providerIconUtils";
-import { ScrollToEndButton } from "../chat/TimelineOverlays";
-import type { TimelineRow } from "../chat/timelineRowContext";
-import { useTimelineFollow } from "../chat/useTimelineFollow";
-import { GuestHtmlRender } from "./GuestHtmlRender";
+import {
+  endedShareNoticesAtom,
+  forgetGuestShare,
+  guestLinkHost,
+  guestShareEndpointOf,
+  guestShareLocation,
+  guestShareOrigin,
+  guestSharesAtom,
+  type JoinedGuestShare,
+  rememberGuestShare,
+} from "~/guest/guestShares";
+import { boardAccountsEnabled, useBoardAccount } from "~/guest/boardAccount";
+import { openViewLink, rememberBoardName, suggestedBoardName } from "~/guest/cloudBoards";
+import { isCloudBoardsHost } from "~/guest/cloudBoardsHost";
+import {
+  ENDED_NOTICE,
+  decodeRefusalBody,
+  linkRefusalNotice,
+  type RefusalNotice,
+} from "~/guest/linkRefusal.logic";
+import { redeemInvite } from "~/guest/redeemInvite";
+import { AccountCorner } from "../boards/BoardsAccount";
+import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
+import { BoardBackdrop } from "../room/BoardChrome";
+import { TinkjamLoading } from "../TinkjamLoading";
+import { TinkjamWordmark } from "../TinkjamLogo";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import {
-  applyGuestStreamEvent,
-  formatGuestExpiry,
-  guestAttachmentUrl,
-  guestMediaUrl,
-  createGuestAttachmentUrls,
-  guestFilesProblem,
-  initialGuestStreamState,
-  inviteShareId,
-  type GuestStreamState,
-  parseGuestStreamEvent,
-  unplacedGuestMessages,
-} from "./guestStream.logic";
-import { guestTurnItemSource } from "./guestTurnItemSource";
+import { useAccountBoardOpen } from "./useAccountBoardOpen";
+import { GuestNotice, noteGuestSignInFailure } from "./GuestThreadView";
+import { guestEntryStep, inviteJoinStep, inviteShareId } from "./guestStream.logic";
 
 interface GuestEntry {
   /** Unspent invite from the URL hash, if this load came from a link. */
   readonly credential: string | null;
+  /** The owner's host the link names, or null when the link may not be followed. */
+  readonly host: string | null;
   readonly shareId: string | null;
 }
 
-let capturedEntry: GuestEntry | null = null;
+// The entry is read once per address: reading it rewrites the address, and a second read (as
+// React's development double render makes) must not find the credential gone.
+let captured: { readonly href: string; readonly entry: GuestEntry } | null = null;
 
-// A reload keeps the tab's session, so it keeps which messages still wait for a row too.
-const AWAITING_ROWS_KEY = "t3:guest-awaiting-rows";
-const AWAITING_ROWS_LIMIT = 50;
+const decodeSignInFailure = Schema.decodeUnknownOption(GuestSignInFailure);
+const decodeInvitePreview = Schema.decodeUnknownOption(GuestInvitePreview);
 
-function readAwaitingRowIds(): ReadonlySet<GuestMessageId> {
+// Per tab: an invite kept while its person signs in, since a sign-in that leaves the page comes
+// back without the address's hash. Never sent anywhere; read back once, for the same board.
+const PENDING_INVITE_KEY = "t3code:pending-invite:v1";
+const PendingInvite = Schema.Struct({ shareId: Schema.String, credential: Schema.String });
+const decodePendingInvite = Schema.decodeUnknownOption(Schema.fromJsonString(PendingInvite));
+
+function keepInviteForSignIn(shareId: string, credential: string) {
   try {
-    const stored: unknown = JSON.parse(sessionStorage.getItem(AWAITING_ROWS_KEY) ?? "[]");
-    return new Set(
-      Array.isArray(stored)
-        ? stored.filter((id) => typeof id === "string").map((id) => GuestMessageId.make(id))
-        : [],
-    );
-  } catch {
-    return new Set();
-  }
+    window.sessionStorage.setItem(PENDING_INVITE_KEY, JSON.stringify({ shareId, credential }));
+  } catch {}
 }
 
-function writeAwaitingRowIds(ids: ReadonlySet<GuestMessageId>) {
+function forgetKeptInvite() {
   try {
-    sessionStorage.setItem(AWAITING_ROWS_KEY, JSON.stringify([...ids].slice(-AWAITING_ROWS_LIMIT)));
+    window.sessionStorage.removeItem(PENDING_INVITE_KEY);
   } catch {}
+}
+
+function takeKeptInvite(shareId: string | null): string | null {
+  try {
+    const kept = Option.getOrNull(
+      decodePendingInvite(window.sessionStorage.getItem(PENDING_INVITE_KEY) ?? ""),
+    );
+    window.sessionStorage.removeItem(PENDING_INVITE_KEY);
+    return kept !== null && kept.shareId === shareId ? kept.credential : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -108,119 +98,63 @@ function writeAwaitingRowIds(ids: ReadonlySet<GuestMessageId>) {
  * only submitting a name does, so a reload before that leaves the link usable.
  */
 function takeGuestEntry(): GuestEntry {
-  if (capturedEntry === null) {
+  if (captured === null || captured.href !== window.location.href) {
     // A malformed fragment is an invalid link, not a crash.
     let credential = "";
     try {
       credential = decodeURIComponent(window.location.hash.slice(1)).trim();
     } catch {}
-    const shareId =
-      credential !== ""
-        ? inviteShareId(credential)
-        : new URLSearchParams(window.location.search).get(GUEST_SHARE_PARAM);
-    // The share stays in the URL, so a reload or bookmark finds this browser's session for it.
+    const query = new URLSearchParams(window.location.search);
+    const requestedHost = query.get(GUEST_HOST_PARAM);
+    const shareId = credential !== "" ? inviteShareId(credential) : query.get(GUEST_SHARE_PARAM);
+    if (credential === "") credential = takeKeptInvite(shareId) ?? "";
+    const signInFailure = Option.getOrNull(decodeSignInFailure(query.get(GUEST_SIGN_IN_PARAM)));
+    if (shareId !== null && signInFailure !== null) noteGuestSignInFailure(shareId, signInFailure);
+    // The share and its host stay in the URL, so a reload finds this browser's session for it.
+    const kept = new URLSearchParams();
+    if (requestedHost !== null) kept.set(GUEST_HOST_PARAM, requestedHost);
+    if (shareId !== null) kept.set(GUEST_SHARE_PARAM, shareId);
+    const view = query.get("view");
+    if (view !== null) kept.set("view", view);
     window.history.replaceState(
       window.history.state,
       "",
-      shareId === null
-        ? window.location.pathname
-        : `${window.location.pathname}?${GUEST_SHARE_PARAM}=${encodeURIComponent(shareId)}`,
+      kept.size === 0 ? window.location.pathname : `${window.location.pathname}?${kept}`,
     );
-    capturedEntry = { credential: credential === "" ? null : credential, shareId };
-  }
-  return capturedEntry;
-}
-
-const decodeErrorBody = Schema.decodeUnknownOption(Schema.Struct({ message: Schema.String }));
-const decodeHistoryPage = Schema.decodeUnknownOption(
-  Schema.toCodecJson(OrchestrationV2ThreadHistoryPage),
-);
-
-/** Resolves to the page, or to a message the guest can read. */
-async function fetchGuestHistoryPage(
-  shareId: string,
-  cursor: string,
-): Promise<OrchestrationV2ThreadHistoryPage | string> {
-  const failed = "Could not load earlier turns. Try again.";
-  try {
-    const response = await fetch(
-      `${GUEST_HISTORY_ROUTE}?${GUEST_SHARE_PARAM}=${encodeURIComponent(shareId)}&cursor=${encodeURIComponent(cursor)}`,
-    );
-    const json: unknown = await response.json().catch(() => null);
-    if (!response.ok) {
-      return Option.match(decodeErrorBody(json), {
-        onNone: () => failed,
-        onSome: ({ message }) => message,
-      });
-    }
-    return Option.getOrElse(decodeHistoryPage(json), () => failed);
-  } catch {
-    return "Could not reach the server.";
-  }
-}
-
-/** Resolves to null on success, or to a message the guest can read. */
-async function postGuest(
-  path: "redeem" | `messages?${string}`,
-  body: typeof GuestRedeemRequest.Encoded | FormData,
-): Promise<string | null> {
-  try {
-    const response = await fetch(
-      `${GUEST_ROUTE_PREFIX}/${path}`,
-      body instanceof FormData
-        ? { method: "POST", body }
-        : {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(body),
-          },
-    );
-    if (response.ok) return null;
-    const json: unknown = await response.json().catch(() => null);
-    return Option.match(decodeErrorBody(json), {
-      onNone: () => "Something went wrong. Try again.",
-      onSome: ({ message }) => message,
-    });
-  } catch {
-    return "Could not reach the server.";
-  }
-}
-
-const STATUS_LABEL: Record<ThreadGuestMessageStatus, string> = {
-  pending: "Waiting for approval",
-  sent: "Sent",
-  dismissed: "Not sent",
-};
-
-/** Same column as the owner's timeline, so both views wrap text at the same width. */
-const LANE = "chat-content-lane px-4";
-
-type GuestAccess = "checking" | "session" | "name" | "none";
-
-export function GuestPage() {
-  const [{ credential, shareId }] = useState(takeGuestEntry);
-  // A browser that already joined this share goes straight back in, even from the spent link.
-  // Sessions are per share, so one for another link never stands in for this one.
-  const [access, setAccess] = useState<GuestAccess>(shareId === null ? "none" : "checking");
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- fetches whether this browser already has a guest session and ignores the answer after cleanup
-  useEffect(() => {
-    if (shareId === null) return;
-    let live = true;
-    void fetch(`${GUEST_ROUTE_PREFIX}/session?${GUEST_SHARE_PARAM}=${encodeURIComponent(shareId)}`)
-      .then(
-        (response): GuestAccess =>
-          response.ok ? "session" : credential !== null ? "name" : "none",
-        // Offline: an invite still needs the name form; without one, the stream reports what
-        // it finds once the network is back.
-        (): GuestAccess => (credential !== null ? "name" : "session"),
-      )
-      .then((next) => {
-        if (live) setAccess(next);
-      });
-    return () => {
-      live = false;
+    captured = {
+      href: window.location.href,
+      entry: {
+        credential: credential === "" ? null : credential,
+        host: guestLinkHost(requestedHost),
+        shareId,
+      },
     };
-  }, [credential, shareId]);
+  }
+  return captured.entry;
+}
+
+const INVALID = <GuestNotice {...ENDED_NOTICE} />;
+
+/**
+ * Where a guest link lands. It asks for the guest's name, joins the share on the owner's host,
+ * and hands over to the app, where the thread opens beside any other thread shared with this
+ * browser. A share this browser already joined opens straight away.
+ */
+export function GuestPage() {
+  const [entry] = useState(takeGuestEntry);
+  const { credential, host } = entry;
+  const shares = useAtomValue(guestSharesAtom);
+  const [joined, setJoined] = useState<JoinedGuestShare | null>(null);
+  const step = guestEntryStep(shares, entry);
+  const checking = joined === null && step.step === "check" ? step.share : null;
+  const endedNotice = useAtomValue(endedShareNoticesAtom).get(entry.shareId ?? "") ?? null;
+  // A plain address with no invite, on a browser with no session: the account may open it.
+  const accountStep = useAccountBoardOpen({
+    shareId: entry.shareId,
+    hasSession: step.step !== "invalid",
+    reopening: false,
+    cloud: credential === null && (host === null || isCloudBoardsHost(host)),
+  });
   // Pasting another guest link into this tab changes only the hash, which does not reload the
   // page; reload so the new invite is read instead of the one already captured.
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- hashchange listener reloads the page when another guest link is pasted into this tab
@@ -231,147 +165,235 @@ export function GuestPage() {
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- asks the share's host whether this browser's stored session still works before reusing it
+  useEffect(() => {
+    if (checking === null) return;
+    let stopped = false;
+    void guestShareRequest(guestShareEndpointOf(checking), GUEST_SESSION_ROUTE).then(
+      async (response) => {
+        if (stopped) return;
+        // Only a refusal joins again; anything else opens the board, which says what is wrong.
+        if (SESSION_REFUSED.has(response.status)) {
+          const body: unknown = await response.json().catch(() => null);
+          if (!stopped) {
+            forgetGuestShare(checking.shareId, Option.getOrNull(decodeRefusalBody(body))?.detail);
+          }
+        } else setJoined(checking);
+      },
+      () => {
+        if (!stopped) setJoined(checking);
+      },
+    );
+    return () => {
+      stopped = true;
+    };
+  }, [checking]);
 
-  return (
-    <div className="flex h-dvh flex-col bg-background text-foreground">
-      {access === "checking" ? (
-        <Notice title="Connecting..." />
-      ) : access === "name" && credential !== null ? (
-        <NameForm
-          credential={credential}
-          onJoined={() => {
-            // The invite is spent; a remount must open the session, not the name form again.
-            capturedEntry = { credential: null, shareId };
-            setAccess("session");
-          }}
-        />
-      ) : access === "session" && shareId !== null ? (
-        <GuestSession shareId={shareId} />
-      ) : (
-        <Notice
-          title="This link has ended or is not valid"
-          detail="Ask the owner for a new link. Each link works in one browser."
-        />
-      )}
-    </div>
-  );
-}
-
-function GuestSession({ shareId }: { readonly shareId: string }) {
-  const [stream, dispatch] = useReducer(applyGuestStreamEvent, null, () => ({
-    ...initialGuestStreamState,
-    awaitingRowIds: readAwaitingRowIds(),
-  }));
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- persists the awaiting row ids to sessionStorage so a reload keeps them
-  useEffect(() => writeAwaitingRowIds(stream.awaitingRowIds), [stream.awaitingRowIds]);
-  // EventSource closes for good only on a non-200 response, which the guest routes send for a
-  // missing, invalid, or ended session. Network drops reconnect on their own.
-  const [rejected, setRejected] = useState(false);
-
-  const [historyLoad, setHistoryLoad] = useState<{
-    readonly cursor: string;
-    readonly error: string | null;
-  } | null>(null);
-  const historyCursor = stream.historyCursor;
-  // A load for an older cursor is stale: a page or a reconnect snapshot moved the cursor on.
-  const currentLoad = historyLoad?.cursor === historyCursor ? historyLoad : null;
-  const loadingHistory = currentLoad !== null && currentLoad.error === null;
-  const historyError = currentLoad?.error ?? null;
-  const loadEarlier = async () => {
-    if (historyCursor === null || loadingHistory) return;
-    setHistoryLoad({ cursor: historyCursor, error: null });
-    const result = await fetchGuestHistoryPage(shareId, historyCursor);
-    if (typeof result === "string") setHistoryLoad({ cursor: historyCursor, error: result });
-    else dispatch({ type: "history-page", cursor: historyCursor, page: result });
+  const open = joined ?? (step.step === "open" ? step.share : null);
+  const onJoined = (share: JoinedGuestShare) => {
+    // Signing in without leaving the page never read the invite back; it is spent now.
+    forgetKeptInvite();
+    rememberGuestShare(share);
+    setJoined(share);
   };
-  const historyControls: MessagesTimelineHistoryControls | undefined =
-    historyCursor === null
-      ? undefined
-      : {
-          hasMoreHistory: true,
-          loading: loadingHistory,
-          error: historyError,
-          onLoadEarlier: () => void loadEarlier(),
-        };
-
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- sets document.title to the shared thread's title
-  useEffect(() => {
-    if (stream.view) document.title = stream.view.title;
-  }, [stream.view]);
-
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens the guest EventSource stream and closes it on cleanup
-  useEffect(() => {
-    const source = new EventSource(
-      `${GUEST_ROUTE_PREFIX}/stream?${GUEST_SHARE_PARAM}=${encodeURIComponent(shareId)}`,
-    );
-    source.addEventListener("message", (message) => {
-      const event = parseGuestStreamEvent(message.data);
-      if (event === null) return;
-      dispatch(event);
-      if (event.type === "ended") source.close();
-    });
-    source.addEventListener("error", () => {
-      if (source.readyState === EventSource.CLOSED) setRejected(true);
-    });
-    return () => source.close();
-  }, [shareId]);
-
-  if (stream.ended || (rejected && stream.view !== null)) {
-    return <Notice title="This link has ended" detail="The owner stopped sharing this thread." />;
-  }
-  if (stream.view !== null) {
-    if (stream.projection === null) return <Notice title="Connecting..." />;
-    return (
-      <GuestThread
-        view={stream.view}
-        projection={stream.projection}
-        awaitingRowIds={stream.awaitingRowIds}
-        historyControls={historyControls}
-      />
-    );
-  }
-  if (!rejected) return <Notice title="Connecting..." />;
   return (
-    <Notice
-      title="This link has ended or is not valid"
-      detail="Ask the owner for a new link. Each link works in one browser."
-    />
+    <BoardBackdrop className="relative flex h-dvh flex-col px-4 text-foreground">
+      {open === null ? <AccountCorner /> : null}
+      {open !== null ? (
+        <>
+          <Navigate {...guestShareLocation(open)} replace />
+          {/* Until the board's page has loaded and takes over with a cover of its own. */}
+          <TinkjamLoading cover label="Opening the board" />
+        </>
+      ) : checking !== null || (step.step === "invalid" && accountStep === "opening") ? (
+        <TinkjamLoading cover label="Opening the board" />
+      ) : step.step === "invalid" || host === null || credential === null ? (
+        endedNotice === null ? (
+          INVALID
+        ) : (
+          <GuestNotice {...endedNotice} />
+        )
+      ) : isCloudBoardViewCredential(credential) ? (
+        <ViewStep credential={credential} host={host} onJoined={onJoined} />
+      ) : (
+        <JoinStep credential={credential} host={host} onJoined={onJoined} />
+      )}
+    </BoardBackdrop>
   );
 }
 
-function Notice({ title, detail }: { readonly title: string; readonly detail?: string }) {
-  return (
-    <div className="m-auto flex max-w-sm flex-col gap-1 p-6 text-center">
-      <p className="text-sm font-medium">{title}</p>
-      {detail ? <p className="text-xs text-muted-foreground">{detail}</p> : null}
-    </div>
+const GUEST_SESSION_ROUTE = `${GUEST_ROUTE_PREFIX}/session`;
+const SESSION_REFUSED = new Set([401, 403, 410]);
+
+interface JoinProps {
+  readonly credential: string;
+  readonly host: string;
+  readonly onJoined: (share: JoinedGuestShare) => void;
+}
+
+/**
+ * Joins straight away under the account's name when it has one, and asks for a name otherwise
+ * (see `inviteJoinStep`). Anyone already on the board comes back as the same person either way.
+ */
+function JoinStep(props: JoinProps) {
+  const account = useBoardAccount();
+  const [failed, setFailed] = useState<string | null>(null);
+  const step = inviteJoinStep({
+    cloud: isCloudBoardsHost(props.host),
+    account,
+    failed: failed !== null,
+  });
+  if (step.step === "join") {
+    return <JoinAsAccount {...props} name={step.name} onFailed={setFailed} />;
+  }
+  if (step.step === "wait") return <TinkjamLoading cover label="Opening the board" />;
+  return <NameForm {...props} error={failed} />;
+}
+
+function JoinAsAccount({
+  credential,
+  host,
+  name,
+  onJoined,
+  onFailed,
+}: JoinProps & { readonly name: string; readonly onFailed: (message: string) => void }) {
+  const settle = useEffectEvent((joined: JoinedGuestShare | string) => {
+    if (typeof joined === "string") onFailed(joined);
+    else onJoined(joined);
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- joins the board on its host once, as the signed-in account
+  useEffect(() => {
+    let stopped = false;
+    void redeemInvite({ credential, host, name }).then((joined) => {
+      if (!stopped) settle(joined);
+    });
+    return () => {
+      stopped = true;
+    };
+  }, [credential, host, name]);
+  return <TinkjamLoading cover label="Opening the board" />;
+}
+
+/** A view link opens the board at once: no name, no sign-in, and nobody's seat. */
+function ViewStep({ credential, host, onJoined }: JoinProps) {
+  const [failed, setFailed] = useState<string | null>(null);
+  const settle = useEffectEvent((opened: JoinedGuestShare | string) => {
+    if (typeof opened === "string") setFailed(opened);
+    else onJoined(opened);
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens the board on its host once, from the view link
+  useEffect(() => {
+    let stopped = false;
+    void openViewLink({ credential, host }).then((opened) => {
+      if (!stopped) settle(opened);
+    });
+    return () => {
+      stopped = true;
+    };
+  }, [credential, host]);
+  return failed === null ? (
+    <TinkjamLoading cover label="Opening the board" />
+  ) : (
+    <GuestNotice title="This board could not be opened" detail={failed} />
   );
 }
 
 function NameForm({
   credential,
+  host,
   onJoined,
-}: {
-  readonly credential: string;
-  readonly onJoined: () => void;
-}) {
-  const [name, setName] = useState("");
+  error: initialError,
+}: JoinProps & { readonly error: string | null }) {
+  const [name, setName] = useState(suggestedBoardName);
+  const cloud = isCloudBoardsHost(host);
+  // Signed in with no name yet: what they type here becomes the account's name.
+  const naming = useBoardAccount().status === "signed-in";
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError);
+  // What the host says of the invite: why it refused it, or what it opens; null until it answers.
+  const [told, setTold] = useState<GuestInvitePreview | RefusalNotice | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- asks the host whether the invite still opens anything, and what, before asking for a name
+  useEffect(() => {
+    let stopped = false;
+    void fetch(`${guestShareOrigin(host)}${GUEST_ROUTE_PREFIX}/invite`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ credential }),
+      credentials: "omit",
+    })
+      .then(
+        // Only a plain refusal counts: an older host has no such route.
+        async (response) => {
+          if (SESSION_REFUSED.has(response.status)) {
+            const body: unknown = await response.json().catch(() => null);
+            return linkRefusalNotice(Option.getOrNull(decodeRefusalBody(body))?.detail);
+          }
+          // Only the cloud board host says what the invite opens; no other answer is read.
+          const body: unknown =
+            cloud && response.ok ? await response.json().catch(() => null) : null;
+          return Option.getOrElse(decodeInvitePreview(body), () => ({}));
+        },
+        () => ({}),
+      )
+      .then((answer) => {
+        if (!stopped) setTold(answer);
+      });
+    return () => {
+      stopped = true;
+    };
+  }, [cloud, credential, host]);
+  // A refusal is a notice of its own; only an invite that opens something shows the form.
+  if (told !== null && "detail" in told) {
+    return <GuestNotice title={told.title} detail={told.detail} />;
+  }
+  // The cloud host answers at once; waiting for it shows the card whole, with nothing changing.
+  if (cloud && told === null) return <TinkjamLoading cover label="Opening the invite" />;
+  const invite = told ?? {};
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const trimmed = name.trim();
     if (trimmed === "" || submitting) return;
     setSubmitting(true);
-    const failure = await postGuest("redeem", { credential, name: trimmed });
+    const joined = await redeemInvite({ credential, host, name: trimmed });
     setSubmitting(false);
-    if (failure === null) onJoined();
-    else setError(failure);
+    if (typeof joined === "string") {
+      setError(joined);
+      return;
+    }
+    // The board first: once this browser has it, nothing here can join it a second time.
+    onJoined(joined);
+    rememberBoardName(trimmed);
   };
   return (
-    <form className="m-auto flex w-full max-w-xs flex-col gap-3 p-6" onSubmit={submit}>
-      <h1 className="text-base font-medium">Join a shared thread</h1>
-      <label className="flex flex-col gap-1.5 text-sm" htmlFor="guest-name">
+    <form
+      className="m-auto flex w-full max-w-md flex-col gap-5 rounded-dialog border bg-raised p-6 text-card-foreground shadow-board sm:p-8"
+      onSubmit={submit}
+    >
+      <TinkjamWordmark />
+      <div className="flex flex-col gap-2">
+        <h1
+          className="font-heading text-2xl leading-tight font-semibold tracking-brand wrap-break-word"
+          data-guest-invite
+        >
+          {inviteHeading(invite)}
+        </h1>
+        <p className="text-sm text-muted-foreground">
+          {cloud ? (
+            <>
+              {invite.title !== undefined && invite.maker !== undefined
+                ? `${invite.maker} made this board. `
+                : null}
+              Pick the name everyone on it will see.{" "}
+              {naming ? "It becomes the name on your account." : "You can change it later."}
+            </>
+          ) : (
+            <>
+              Shared with you from <span className="font-medium text-foreground">{host}</span>
+            </>
+          )}
+        </p>
+      </div>
+      <label className="flex flex-col gap-2 text-sm font-semibold" htmlFor="guest-name">
         Your name
         <Input
           id="guest-name"
@@ -387,422 +409,46 @@ function NameForm({
           {error}
         </p>
       ) : null}
-      <Button type="submit" disabled={submitting || name.trim() === ""}>
-        Join
+      <Button type="submit" size="lg" disabled={submitting || name.trim() === ""} data-guest-join>
+        Join the board
       </Button>
-      <p className="text-xs text-muted-foreground">
-        The owner sees your name and approves each message before the agent gets it.
-      </p>
-    </form>
-  );
-}
-
-// The timeline needs an environment id to key its rows. Nothing behind it loads on this page;
-// see isGuestPage.
-const GUEST_ENVIRONMENT_ID = EnvironmentId.make("guest");
-const NO_TURN_DIFFS: ReadonlyArray<never> = [];
-const NO_OPTIMISTIC_MESSAGES: ReadonlyArray<never> = [];
-const ignore = () => {};
-
-/**
- * The owner's timeline, read-only: every action that would reach the owner's machine (fork,
- * revert, diffs, files, other threads, shell) is left out, so its control does not render.
- */
-function GuestThread({
-  view: { shareId, title, expiresAt, messages, model },
-  projection,
-  awaitingRowIds,
-  historyControls,
-}: {
-  readonly view: GuestShareView;
-  readonly projection: OrchestrationV2ThreadProjection;
-  readonly awaitingRowIds: GuestStreamState["awaitingRowIds"];
-  readonly historyControls: MessagesTimelineHistoryControls | undefined;
-}) {
-  // No ":" so the timeline finds no environment thread behind the key.
-  const threadKey = `guest-${shareId}`;
-  const listRef = useRef<LegendListRef | null>(null);
-  const { resolvedTheme } = useTheme();
-  // The rest is what ChatView derives from the same projection.
-  const [projectQuestionHistory] = useState(() => createQuestionHistoryProjector());
-  const items = projectQuestionHistory(projection);
-  // Files load through the guest route.
-  const [attachmentUrls] = useState(() => createGuestAttachmentUrls(shareId));
-  // Expanded rows read detail and command output through the guest routes.
-  const [turnItemSource] = useState(() => guestTurnItemSource(shareId));
-  const attachmentUrlById = attachmentUrls(items);
-  const entries = useIncrementalTimelineEntries(threadKey, {
-    visibleTurnItems: items,
-    optimisticMessages: NO_OPTIMISTIC_MESSAGES,
-    attachmentUrlById,
-    attempts: projection.attempts,
-    nodes: projection.nodes,
-    plans: projection.plans,
-  });
-  const openFile = useStableCallback((file: { readonly id: string }) =>
-    openInNewTab(guestAttachmentUrl(shareId, file.id)),
-  );
-  const hostImageUrl = useStableCallback((path: string) => guestMediaUrl(shareId, path));
-  const activityRun = deriveThreadActivityRun(projection);
-  const runtime = deriveThreadStructureRuntime(projection);
-  const runlessWorkStartedAt = deriveRunlessWorkStartedAt(projection);
-  const isWorking = derivePhase(runtime) === "running" || runlessWorkStartedAt !== null;
-  const workStartedAt =
-    deriveActiveWorkStartedAt(activityRun, runtime, null) ?? runlessWorkStartedAt;
-  const runningRunId = runtime?.activeRunId ?? null;
-  const follow = useTimelineFollow({
-    legendListRef: listRef,
-    composerTimelineInset: 0,
-    routeThreadKey: threadKey,
-    activeThreadKey: threadKey,
-    // Not a server thread: new turns follow the end instead of anchoring near the top.
-    isServerThread: false,
-    serverProjection: null,
-    threadStatus: "live",
-    activeActivityRun: activityRun,
-    activeRunningTurnId: runningRunId,
-    timelineEntries: entries,
-    timelineAnchorMessageId: null,
-    setTimelineAnchor: ignore,
-  });
-  const renderHtmlRender = useStableCallback(
-    (row: Extract<TimelineRow, { kind: "html-render" }>) => (
-      <GuestHtmlRender itemId={row.id} reference={row.htmlRender} shareId={shareId} />
-    ),
-  );
-  const unplaced = unplacedGuestMessages(messages, items, awaitingRowIds);
-  return (
-    <>
-      <header className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-2.5">
-        <h1 className="min-w-0 flex-1 truncate text-sm font-medium">{title}</h1>
-        <ExpiryLabel expiresAt={expiresAt} />
-      </header>
-      <div className="relative min-h-0 flex-1">
-        <HostImageUrlContext value={hostImageUrl}>
-          <MessagesTimeline
-            listRef={listRef}
-            timelineEntries={entries}
-            isWorking={isWorking}
-            activeTurnStartedAt={workStartedAt}
-            latestRun={activityRun}
-            runningRunId={runningRunId}
-            turnDiffSummaries={NO_TURN_DIFFS}
-            runs={projection.runs}
-            routeThreadKey={threadKey}
-            onOpenThread={ignore}
-            supportsConversationRollback={false}
-            onRevertToTurnCount={ignore}
-            isRevertingCheckpoint={false}
-            onImageExpand={openExpandedImage}
-            onFileOpen={openFile}
-            onFileDownload={openFile}
-            renderHtmlRender={renderHtmlRender}
-            turnItemSource={turnItemSource}
-            historyControls={historyControls}
-            activeThreadEnvironmentId={GUEST_ENVIRONMENT_ID}
-            markdownCwd={undefined}
-            resolvedTheme={resolvedTheme}
-            timestampFormat="locale"
-            workspaceRoot={undefined}
-            anchorMessageId={null}
-            onAnchorReady={ignore}
-            onAnchorSizeChanged={ignore}
-            contentInsetEndAdjustment={0}
-            emptyPlaceholderInset={0}
-            liveFollowEnabled={follow.timelineLiveFollowEnabled}
-            onIsAtEndChange={follow.onIsAtEndChangeStable}
-            onViewportAttach={follow.attachTimelineViewport}
-            onFooterGrow={follow.onTimelineFooterGrowStable}
-            footer={
-              unplaced.length === 0 ? null : (
-                <ol className="chat-content-lane flex flex-col gap-4 pb-4">
-                  {unplaced.map((message) => (
-                    <li key={message.id}>
-                      <UnplacedGuestMessage shareId={shareId} message={message} />
-                    </li>
-                  ))}
-                </ol>
-              )
-            }
-          />
-        </HostImageUrlContext>
-        {follow.showScrollToBottom ? (
-          <ScrollToEndButton
-            summary={null}
-            bottom={4}
-            onScrollToEnd={() => follow.scrollToEnd(true)}
-          />
-        ) : null}
-      </div>
-      <div className={cn(LANE, "shrink-0 pb-4")}>
-        <GuestComposer shareId={shareId} model={model} onSent={() => follow.scrollToEnd(true)} />
-      </div>
-    </>
-  );
-}
-
-function ExpiryLabel({ expiresAt }: { readonly expiresAt: string }) {
-  const nowMinute = useNowMinute();
-  return (
-    <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-      {formatGuestExpiry(expiresAt, Date.parse(`${nowMinute}Z`))}
-    </span>
-  );
-}
-
-const BUBBLE =
-  "flex min-w-0 max-w-[80%] flex-col gap-2 rounded-2xl p-3 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]";
-
-const openInNewTab = (url: string) => window.open(url, "_blank", "noopener,noreferrer");
-/** Guests have no image viewer; the browser shows the picture in its own tab. */
-const openExpandedImage = (preview: ExpandedImagePreview) => {
-  const src = preview.images[preview.index]?.src;
-  if (src) openInNewTab(src);
-};
-
-/** A guest message the owner has not sent yet, or chose not to send. */
-function UnplacedGuestMessage({
-  shareId,
-  message,
-}: {
-  readonly shareId: GuestShareView["shareId"];
-  readonly message: ThreadGuestMessage;
-}) {
-  // A dismissed message's files are deleted, so only their names remain.
-  const served = message.status !== "dismissed";
-  const url = (attachment: { readonly id: string }) => guestAttachmentUrl(shareId, attachment.id);
-  return (
-    <div className="flex flex-col items-end gap-1">
-      <GuestMessageName name="You" />
-      <div
-        className={cn(
-          BUBBLE,
-          guestBubbleClassName(message.status !== "sent"),
-          message.status === "dismissed" ? "text-muted-foreground" : "text-message-foreground",
-        )}
-      >
-        <GuestMessageAttachments
-          attachments={message.attachments ?? []}
-          imageUrl={(attachment) => (served ? url(attachment) : undefined)}
-          onOpenImage={(attachment) => openInNewTab(url(attachment))}
-          {...(served ? { fileHref: url } : {})}
-        />
-        {message.text ? <span>{message.text}</span> : null}
-      </div>
-      <p className="me-1 text-2xs text-muted-foreground">{STATUS_LABEL[message.status]}</p>
-    </div>
-  );
-}
-
-/** The thread's model, labeled as the owner's composer labels it, with no way to change it. */
-function GuestModelLabel({ model }: { readonly model: GuestThreadModel }) {
-  const label = getTriggerDisplayModelName({ slug: model.name, ...model }, model.driver);
-  const fullLabel = getDisplayModelName({ slug: model.name, ...model });
-  return (
-    <ComposerControl
-      render={<span />}
-      aria-label={`Model: ${fullLabel}`}
-      className="pointer-events-none min-w-0 shrink"
-    >
-      {model.driver === null ? null : (
-        <ProviderInstanceIcon
-          driverKind={model.driver}
-          displayName={label}
-          className="size-4"
-          iconClassName="size-4"
-        />
+      {cloud && boardAccountsEnabled() ? <SignInInstead credential={credential} /> : null}
+      {cloud ? null : (
+        <p className="text-xs text-muted-foreground">
+          The owner sees your name and approves each message before the agent gets it.
+        </p>
       )}
-      <span className="min-w-0 truncate" data-chat-provider-model-picker-label="true">
-        {label}
-      </span>
-    </ComposerControl>
-  );
-}
-
-interface StagedFile {
-  readonly key: string;
-  readonly file: File;
-}
-
-/** A staged image's thumbnail; its object URL lives as long as the element. */
-function StagedImage({ file }: { readonly file: File }) {
-  return (
-    <img
-      alt={file.name}
-      className="size-full object-cover"
-      ref={(image) => {
-        if (!image) return;
-        const url = URL.createObjectURL(file);
-        image.src = url;
-        return () => URL.revokeObjectURL(url);
-      }}
-    />
-  );
-}
-
-function GuestComposer({
-  shareId,
-  model,
-  onSent,
-}: {
-  readonly shareId: GuestShareView["shareId"];
-  readonly model: GuestThreadModel;
-  /** The guest's own message comes into view even if they had scrolled up, as the owner's does. */
-  readonly onSent: () => void;
-}) {
-  const [text, setText] = useState("");
-  const [files, setFiles] = useState<ReadonlyArray<StagedFile>>([]);
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const nextFileKey = useRef(0);
-  const { resolvedTheme } = useTheme();
-  const addFiles = (added: ReadonlyArray<File>) => {
-    if (added.length === 0) return;
-    const next = [
-      ...files,
-      ...added.map((file) => ({ key: `staged-${nextFileKey.current++}`, file })),
-    ];
-    const problem = guestFilesProblem(next.map((staged) => staged.file));
-    setError(problem);
-    if (problem === null) setFiles(next);
-  };
-  const send = async () => {
-    const trimmed = text.trim();
-    if ((trimmed === "" && files.length === 0) || sending) return;
-    setSending(true);
-    const sentFiles = files;
-    const form = new FormData();
-    form.append("shareId", shareId);
-    form.append("text", trimmed);
-    for (const staged of sentFiles) form.append("file", staged.file, staged.file.name);
-    const failure = await postGuest(
-      `messages?${GUEST_SHARE_PARAM}=${encodeURIComponent(shareId)}`,
-      form,
-    );
-    setSending(false);
-    setError(failure);
-    // Keep anything typed or attached while the request was in flight.
-    if (failure === null) {
-      onSent();
-      setText((current) => (current.trim() === trimmed ? "" : current));
-      setFiles((current) => current.filter((staged) => !sentFiles.includes(staged)));
-    }
-  };
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    // Same as the app composer: Enter sends, Shift+Enter adds a line, IME composition is left alone.
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-      event.preventDefault();
-      void send();
-    }
-  };
-  // As in the app composer: pasted images attach, and other files attach when no text came along.
-  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const pasted = Array.from(event.clipboardData.files);
-    const hasImage = pasted.some((file) => file.type.startsWith("image/"));
-    if (pasted.length === 0 || (!hasImage && event.clipboardData.getData("text/plain") !== "")) {
-      return;
-    }
-    event.preventDefault();
-    addFiles(pasted);
-  };
-  return (
-    <form
-      className="flex flex-col gap-2 rounded-3xl border border-border bg-card px-4 pt-3 pb-2.5 shadow-composer dark:shadow-composer-dark"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void send();
-      }}
-      onDragOver={(event) => {
-        if (event.dataTransfer.types.includes("Files")) event.preventDefault();
-      }}
-      onDrop={(event) => {
-        if (event.dataTransfer.files.length === 0) return;
-        event.preventDefault();
-        addFiles(Array.from(event.dataTransfer.files));
-      }}
-    >
-      {files.length > 0 ? (
-        <ul className="flex flex-wrap gap-2" aria-label="Attached files">
-          {files.map((staged) => (
-            <li
-              key={staged.key}
-              className="flex h-14 min-w-0 items-center gap-2 overflow-hidden rounded-lg border border-border/80 bg-background/70 pe-1"
-            >
-              {staged.file.type.startsWith("image/") ? (
-                <span className="size-14 shrink-0">
-                  <StagedImage file={staged.file} />
-                </span>
-              ) : (
-                <span className="flex min-w-0 items-center gap-2 ps-2 text-sm">
-                  <PierreEntryIcon pathValue={staged.file.name} kind="file" theme={resolvedTheme} />
-                  <span className="max-w-40 truncate">{staged.file.name}</span>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {formatAttachmentSize(staged.file.size)}
-                  </span>
-                </span>
-              )}
-              <Button
-                size="icon-xs"
-                variant="ghost-muted"
-                aria-label={`Remove ${staged.file.name}`}
-                onClick={() => {
-                  setError(null);
-                  setFiles((current) => current.filter((candidate) => candidate !== staged));
-                }}
-              >
-                <XIcon />
-              </Button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      <textarea
-        aria-label="Message"
-        placeholder="Message"
-        rows={2}
-        maxLength={GUEST_MESSAGE_MAX_LENGTH}
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        onKeyDown={onKeyDown}
-        onPaste={onPaste}
-        className="max-h-60 min-h-12 w-full resize-none bg-transparent text-sm outline-none field-sizing-content placeholder:text-placeholder"
-      />
-      <div className="flex items-center gap-3">
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          hidden
-          aria-label="Files to attach"
-          onChange={(event) => {
-            addFiles(Array.from(event.target.files ?? []));
-            // The same file can be picked again after it is removed.
-            event.target.value = "";
-          }}
-        />
-        <ComposerControl aria-label="Attach files" onClick={() => fileInputRef.current?.click()}>
-          <ComposerControlIcon icon={PaperclipIcon} />
-        </ComposerControl>
-        <GuestModelLabel model={model} />
-        {error !== null ? (
-          <p role="alert" className="min-w-0 flex-1 text-xs text-destructive">
-            {error}
-          </p>
-        ) : (
-          <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-            The owner approves each message
-          </p>
-        )}
-        <button
-          type="submit"
-          aria-label="Send"
-          disabled={sending || (text.trim() === "" && files.length === 0)}
-          className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full bg-message-action text-message-action-foreground shadow-xs hover:bg-message-action-hover focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-64"
-        >
-          <ArrowUpIcon aria-hidden className="size-4" />
-        </button>
-      </div>
     </form>
+  );
+}
+
+/** Which board the invite is for, as far as its host said: its name, else whose it is. */
+const inviteHeading = ({ title, maker }: GuestInvitePreview) =>
+  title !== undefined
+    ? `You're invited to "${title}"`
+    : maker !== undefined
+      ? `You're invited to ${maker}'s board`
+      : "You're invited to a board";
+
+/** Signs in first, to join under the account and find the board again on any device. */
+function SignInInstead({ credential }: { readonly credential: string }) {
+  const account = useBoardAccount();
+  const { openAuthPrompt } = useT3ConnectAuthPrompt();
+  if (account.status !== "signed-out") return null;
+  return (
+    <p className="flex flex-wrap items-center justify-center text-center text-sm text-muted-foreground">
+      <Button
+        variant="link"
+        size="sm"
+        onClick={() => {
+          keepInviteForSignIn(inviteShareId(credential) ?? "", credential);
+          openAuthPrompt();
+        }}
+        data-guest-sign-in
+      >
+        Sign in or create an account
+      </Button>
+      to find this board on every device.
+    </p>
   );
 }

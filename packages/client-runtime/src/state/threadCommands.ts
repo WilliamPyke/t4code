@@ -21,8 +21,10 @@ import {
   type InterruptThreadTurnInput,
   type UpdateThreadMetadataInput,
   archiveThread,
+  clearRoomBoard,
   closeGuestShare,
-  resolveGuestMessage,
+  removeGuest,
+  setGuestTrust,
   cancelQueuedRun,
   createThread,
   deleteThread,
@@ -138,9 +140,29 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
-    resolveGuestMessage: createEnvironmentCommand(runtime, {
+    clearRoomBoard: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:clear-room-board",
+      execute: clearRoomBoard,
+      scheduler,
+      concurrency,
+    }),
+    removeGuest: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:remove-guest",
+      execute: removeGuest,
+      scheduler,
+      concurrency,
+    }),
+    setGuestTrust: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:set-guest-trust",
+      execute: setGuestTrust,
+      scheduler,
+      concurrency,
+    }),
+    // Send runs the guest's text as a turn, in their thread box when the message names one; the
+    // server supplies the text, never the client.
+    resolveGuestMessage: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:commands:thread:resolve-guest-message",
-      execute: resolveGuestMessage,
+      tag: WS_METHODS.guestShareResolveMessage,
       scheduler,
       concurrency,
     }),

@@ -14,6 +14,7 @@ packages/*/dist
 build/
 .logs/
 release/
+/dist-sync/
 release-mock/
 .t3
 .idea/

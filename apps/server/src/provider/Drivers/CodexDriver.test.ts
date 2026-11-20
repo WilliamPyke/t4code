@@ -57,6 +57,13 @@ const layerDeps = ServerConfig.layerTest(process.cwd(), {
   Layer.provideMerge(
     Layer.mock(CodexInstallation.CodexInstallation)({
       managedDirectory: "unused-managed-installation",
+      resolve: () =>
+        Effect.fail(
+          new CodexInstallation.CodexInstallationError({
+            operation: "resolve",
+            detail: "No Codex in this test.",
+          }),
+        ),
     }),
   ),
   Layer.provideMerge(Layer.mock(ServerSecretStore.ServerSecretStore)({})),
@@ -494,6 +501,58 @@ it.layer(layerTest)("CodexDriver", (it) => {
         });
         expect(instance.continuationIdentity.continuationKey).toBe(`codex:home:${codexHome}`);
       }
+    }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn), Effect.scoped),
+  );
+
+  it.effect("starts sessions with the Codex it found off PATH, not a bare `codex`", () =>
+    Effect.gen(function* () {
+      const bundled = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex";
+      const installation = yield* CodexInstallation.CodexInstallation;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const launches: Array<string> = [];
+      const instance = yield* CodexDriver.create({
+        instanceId: ProviderInstanceId.make("chatgpt-app-codex"),
+        displayName: "Codex",
+        enabled: false,
+        environment: [],
+        config: CodexDriver.defaultConfig(),
+      }).pipe(
+        Effect.provideService(
+          CodexAdapterV2.CodexAppServerClientFactory,
+          CodexAdapterV2.CodexAppServerClientFactory.of({
+            open: (launch) =>
+              Effect.sync(() => launches.push(launch.settings.binaryPath)).pipe(
+                Effect.andThen(Effect.die("The fixture stops after recording the launch")),
+              ),
+          }),
+        ),
+        Effect.provideService(
+          CodexInstallation.CodexInstallation,
+          CodexInstallation.CodexInstallation.of({
+            ...installation,
+            resolve: () =>
+              Effect.succeed({
+                executablePath: bundled,
+                managedVersionDirectory: null,
+                source: "local" as const,
+                version: "0.156.1",
+              }),
+          }),
+        ),
+      );
+      yield* instance.orchestrationAdapter
+        .openSession({
+          threadId: ThreadId.make("chatgpt-app-thread"),
+          providerSessionId: ProviderSessionId.make("chatgpt-app-session"),
+          modelSelection: { instanceId: instance.instanceId, model: "gpt-5.4" },
+          runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            cwd: serverConfig.stateDir,
+          }),
+        })
+        .pipe(Effect.scoped, Effect.exit);
+      expect(launches).toEqual([bundled]);
     }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn), Effect.scoped),
   );
 

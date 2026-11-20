@@ -43,6 +43,8 @@ import {
 const RETRY_BASE_DELAY_MS = 1_000;
 const RETRY_MAX_DELAY_MS = 300_000;
 const SESSION_LOSS_RETRY_DELAY_MS = 250;
+// A refused sign-in is often a token that expired mid-request; one later try gets a fresh one.
+const BLOCKED_AUTHENTICATION_RETRY_DELAY_MS = 5_000;
 // A cold server with a large database can take longer than 15 seconds to
 // answer, and that is not a reason to drop a working connection.
 const CONNECTION_ESTABLISHMENT_TIMEOUT = "15 seconds";
@@ -631,7 +633,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       yield* Ref.set(preferredRouteId, Option.some(next.routeId));
       return "reset" as const;
     }
-    // Only a session over T3 Connect holds the old account's credential.
+    // Only a session over Tinkjam Connect holds the old account's credential.
     if (next._tag === "Wakeup" && next.reason === "credentials-changed" && isRelayLease(lease)) {
       yield* logManagedRelayAccountChange;
       return "end" as const;
@@ -1093,9 +1095,11 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     let generation = 0;
     let latestFailure: ConnectionAttemptError | null = null;
     let pendingRetry = Option.none<PendingRetryTrace>();
+    let retriedBlockedAuthentication = false;
     const resetRetryLadder = () => {
       failureCount = 0;
       pendingRetry = Option.none();
+      retriedBlockedAuthentication = false;
     };
     let replacing = false;
 
@@ -1167,7 +1171,11 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           lastFailure: error,
           retryAt: null,
         });
-        const applicationActivated = yield* waitForSignal;
+        const retryOnce = error.reason === "authentication" && !retriedBlockedAuthentication;
+        retriedBlockedAuthentication = true;
+        const applicationActivated = retryOnce
+          ? yield* waitForRetrySignal(BLOCKED_AUTHENTICATION_RETRY_DELAY_MS)
+          : yield* waitForSignal;
         if (applicationActivated) {
           resetRetryLadder();
         }

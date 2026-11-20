@@ -63,6 +63,28 @@ export function useEnvironmentsWithScope(
   );
 }
 
+/** Whether a machine's session grants a scope, lacks it, or is not here to say. */
+export type EnvironmentScopeAccess = "granted" | "denied" | "not-connected";
+
+export function sessionScopeAccess(
+  result: AsyncResult.AsyncResult<AuthSessionState, unknown>,
+  scope: AuthEnvironmentScope,
+): EnvironmentScopeAccess {
+  const session = result._tag === "Failure" ? null : AsyncResult.getOrElse(result, () => null);
+  if (session === null) return "not-connected";
+  return sessionGrantsScope(session, scope) ? "granted" : "denied";
+}
+
+export function readEnvironmentScopeAccess(
+  environmentId: EnvironmentId,
+  scope: AuthEnvironmentScope,
+): EnvironmentScopeAccess {
+  return sessionScopeAccess(
+    appAtomRegistry.get(environmentSession.sessionStateAtom(environmentId)),
+    scope,
+  );
+}
+
 export function readEnvironmentScope(
   environmentId: EnvironmentId,
   scope: AuthEnvironmentScope,

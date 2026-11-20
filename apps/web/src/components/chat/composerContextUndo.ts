@@ -1,6 +1,7 @@
 import type {
   EnvironmentContextRecord,
   PreviewAnnotationPayload,
+  RoomUpdatesContextRecord,
   ThreadContextRecord,
 } from "@t3tools/contracts";
 import { useEffect, useState } from "react";
@@ -25,6 +26,7 @@ export interface RetainedContextPayloads extends RetainedAttachmentContextPayloa
   reviewComments: Map<string, ReviewCommentContext>;
   threads: Map<string, ThreadContextRecord>;
   environments: Map<string, EnvironmentContextRecord>;
+  roomUpdates: Map<string, RoomUpdatesContextRecord>;
 }
 
 function createRetainedContextPayloads(): RetainedContextPayloads {
@@ -33,6 +35,7 @@ function createRetainedContextPayloads(): RetainedContextPayloads {
     reviewComments: new Map(),
     threads: new Map(),
     environments: new Map(),
+    roomUpdates: new Map(),
     files: new Map(),
     previewAnnotations: new Map(),
   };

@@ -184,10 +184,18 @@ export const CodexDriver: ProviderDriver<
           }),
       ),
     );
+    // The default finds Codex where PATH does not reach, such as inside the ChatGPT app for Mac.
+    const binaryPath =
+      config.binaryPath === "codex"
+        ? yield* installation.resolve().pipe(
+            Effect.map((executable) => executable.executablePath),
+            Effect.orElseSucceed(() => config.binaryPath),
+          )
+        : config.binaryPath;
     const effectiveConfig = {
       ...config,
       enabled,
-      binaryPath: expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
+      binaryPath: expandHomePath(binaryPath, yield* HostProcess.HomeDirectory),
       homePath: homeLayout.effectiveHomePath ?? "",
     } satisfies CodexSettings;
     const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
@@ -211,7 +219,7 @@ export const CodexDriver: ProviderDriver<
         accentColor,
         environment,
         enabled,
-        config,
+        config: { ...config, binaryPath },
       },
       {
         onUsageLimits: (update) => snapshot.applyUsageLimits(update),

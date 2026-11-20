@@ -182,6 +182,8 @@ describe("server ownership", () => {
         Effect.gen(function* () {
           const owner = yield* ServerOwnership.acquireServerOwnership(statePath);
           yield* owner.publish(state);
+          // Tinkjam Sync reads the lock this way to tell whether a Sync still runs.
+          assert.isTrue(ServerOwnership.isServerOwnershipHeld(statePath));
           const before = yield* fs.readFileString(statePath);
           const refused = yield* ServerOwnership.acquireServerOwnership(statePath).pipe(
             Effect.flip,
@@ -192,6 +194,7 @@ describe("server ownership", () => {
         }),
       );
       assert.isFalse(yield* fs.exists(statePath));
+      assert.isFalse(ServerOwnership.isServerOwnershipHeld(statePath));
       yield* Effect.scoped(ServerOwnership.acquireServerOwnership(statePath));
     }).pipe(Effect.provide(layerOwnership)),
   );

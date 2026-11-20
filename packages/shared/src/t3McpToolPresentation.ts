@@ -31,6 +31,11 @@ export type T3McpToolSummaryAction =
   | "thread-transfers"
   | "thread-organize"
   | "thread-update"
+  | "room-catch-up"
+  | "board-read"
+  | "board-add"
+  | "board-update"
+  | "board-arrange"
   | "queue-list"
   | "queue-read"
   | "queue-edit"
@@ -290,6 +295,14 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     ["Run", "Running", "Requested a run of", "a scheduled task"],
     "schedule-run",
   ),
+  t3_room_catch_up: tool(
+    ["Catch up on", "Catching up on", "Caught up on", "the shared room"],
+    "room-catch-up",
+  ),
+  t3_board_read: tool(["Read", "Reading", "Read", "the board"], "board-read"),
+  t3_board_add: tool(["Add to", "Adding to", "Added to", "the board"], "board-add"),
+  t3_board_update: tool(["Change", "Changing", "Changed", "the board"], "board-update"),
+  t3_board_arrange: tool(["Arrange", "Arranging", "Arranged", "the board"], "board-arrange"),
   t3_queue: tool(["Manage", "Managing", "Managed", "queued messages"], "queue-edit"),
   t3_pending_request: tool(
     ["Handle", "Handling", "Handled", "pending questions"],

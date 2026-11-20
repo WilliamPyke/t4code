@@ -1,11 +1,16 @@
 # Appearance and themes
 
-On web and desktop, open **Settings → Appearance** to choose a theme and follow the system
+In Simple mode, **Settings** has **Light or dark**, **Text size** and **Choose a theme**. Text size
+is Small, Medium or Large; Medium is the standard size. It changes the words everywhere, including
+on board cards, which keep their size and place on the board. In Advanced mode, **Text size** under
+**Settings → Appearance** sets the font sizes below it together, and reads Custom once you change
+one of them yourself. In Advanced mode and the
+desktop app, open **Settings → Appearance** to choose a theme and follow the system
 appearance or stay in light or dark mode. To use different themes for light and dark mode, select
 the corresponding preview within each theme. Appearance preferences are saved separately on each
 device or browser.
 
-On web and desktop, use **Change theme** in the command palette to select a theme without leaving chat.
+On web and desktop, use **Change theme** in the command menu to select a theme without leaving the board.
 Press **Cmd+Option+A** on macOS or **Ctrl+Alt+A** on Windows/Linux to open the theme picker directly.
 Use **Change appearance** in the command palette to choose System, Light, or Dark independently of
 the theme. **Cmd+Option+Shift+A** on macOS or **Ctrl+Alt+Shift+A** on Windows/Linux cycles through
@@ -50,7 +55,7 @@ without replaying its transitions.
 
 ## Custom themes
 
-On web and desktop, choose **Create theme** to adjust a palette, or import a T3 Code or VS Code
+On web and desktop, choose **Create theme** to adjust a palette, or import a Tinkjam or VS Code
 theme. The theme editor's color picker lets you select an area of the app to find the color to
 change. Export your theme as JSON to share it.
 
@@ -59,11 +64,11 @@ change. Export your theme as JSON to share it.
 Environment themes and defaults come from the server serving your web app or the desktop app's
 main local environment. With the desktop app's local environment off, they come from the
 [background service](./background-service.md) on the same machine while the app is connected to
-it. app.t3.codes and other connections do not use them.
+it. app.tinkjam.com and other connections do not use them.
 
 Select a published theme in **Settings → Appearance** to follow its palette as the server updates
 it. **Duplicate** makes an independent copy you can edit. A saved custom theme with the same ID
-takes precedence. If the server stops publishing the selected theme, T3 Code falls back to its
+takes precedence. If the server stops publishing the selected theme, Tinkjam falls back to its
 standard theme.
 
 Run this on the server to set a default and switch connected clients to it:
@@ -81,7 +86,7 @@ the default and published themes.
 
 ### Publish a theme
 
-Save a theme exported from T3 Code into `~/.t3/userdata/themes/` on the server, or the `themes`
+Save a theme exported from Tinkjam into `~/.t3/userdata/themes/` on the server, or the `themes`
 directory under your custom state directory. The filename supplies the theme ID: `nightfall.json`
 can be selected with `t3 theme set nightfall`. Keep the filename stable when updating its colors.
 Do not use `system`, `light`, `dark`, or a built-in theme's ID.
@@ -101,7 +106,7 @@ For an integration that generates a palette, this shorter format also works:
 }
 ```
 
-Set `appearance` to `light` or `dark` and supply hex colors for `canvas` and `accent`. T3 Code
+Set `appearance` to `light` or `dark` and supply hex colors for `canvas` and `accent`. Tinkjam
 generates the rest. The optional `colors` overrides use the names in the theme editor's advanced
 view.
 

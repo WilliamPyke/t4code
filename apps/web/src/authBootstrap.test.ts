@@ -71,7 +71,7 @@ function installTestBrowser(url: string) {
   };
 
   vi.stubGlobal("window", testWindow);
-  vi.stubGlobal("document", { title: "T3 Code" });
+  vi.stubGlobal("document", { title: "Tinkjam" });
 
   return testWindow;
 }
@@ -172,6 +172,11 @@ describe("resolveInitialServerAuthGateState", () => {
     expect(takePairingTokenFromUrl()).toBe("pairing-token");
     expect(testWindow.location.hash).toBe("");
     expect(testWindow.location.searchParams.get("token")).toBeNull();
+
+    // A join link's token is the shared thread's, so it stays for the join page.
+    testWindow.location = new URL("http://localhost/join?host=https%3A%2F%2Fboards&token=room");
+    expect(takePairingTokenFromUrl()).toBeNull();
+    expect(testWindow.location.searchParams.get("token")).toBe("room");
   });
 
   it.each([

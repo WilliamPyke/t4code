@@ -9,7 +9,7 @@ import {
   stripPairingTokenFromUrl,
   submitServerAuthCredential,
 } from "../../environments/primary";
-import { readHostedPairingRequest } from "../../hostedPairing";
+import { describeHostedPairingRequest, hostedPairingRequestOn } from "../../hostedPairing";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { StandalonePage, StandalonePageHeader } from "../ui/standalone-page";
@@ -140,26 +140,16 @@ export function HostedPairingRouteSurface() {
   const connectPairingEnvironment = useAtomCommand(connectPairing, {
     reportFailure: false,
   });
-  const [request] = useState(readHostedPairingRequest);
-  const [status, setStatus] = useState<"pairing" | "paired" | "error">(
-    request ? "pairing" : "error",
-  );
-  const [message, setMessage] = useState(
-    request
-      ? "Connecting to this backend."
-      : "This pairing link is missing its backend host or token.",
-  );
+  const [request] = useState(() => hostedPairingRequestOn("/pair"));
+  const target = request ? describeHostedPairingRequest(request) : null;
+  const [status, setStatus] = useState<"confirm" | "pairing" | "paired" | "error">("confirm");
+  const [message, setMessage] = useState("");
   const [canRetry, setCanRetry] = useState(false);
-  const submitAttemptedRef = useRef(false);
+  const tokenStrippedRef = useRef(false);
   const tokenSubmittedRef = useRef(false);
 
   const submitHostedPairingRequest = async () => {
-    if (!request) {
-      setStatus("error");
-      setMessage("This pairing link is missing its backend host or token.");
-      setCanRetry(false);
-      return;
-    }
+    if (!request || target === null || "refused" in target) return;
 
     if (tokenSubmittedRef.current) {
       setStatus("error");
@@ -169,17 +159,17 @@ export function HostedPairingRouteSurface() {
     }
 
     setStatus("pairing");
-    setMessage("Connecting to this backend.");
+    setMessage("Connecting to this computer.");
     setCanRetry(false);
     tokenSubmittedRef.current = true;
 
     const result = await connectPairingEnvironment({
-      host: request.host,
+      host: target.origin,
       pairingCode: request.token,
     });
     if (result._tag === "Success") {
       setStatus("paired");
-      setMessage(`${request.label || "The environment"} is saved in this browser.`);
+      setMessage(`${target.label || "The computer"} is saved in this browser.`);
       return;
     }
 
@@ -187,57 +177,82 @@ export function HostedPairingRouteSurface() {
     setStatus("error");
     setCanRetry(true);
     setMessage(
-      `${errorMessageFromUnknown(squashAtomCommandFailure(result))} If the backend accepted this one-time token, request a new pairing link before retrying.`,
+      `${errorMessageFromUnknown(squashAtomCommandFailure(result))} If the computer accepted this one-time token, request a new pairing link before retrying.`,
     );
   };
 
-  const submitOnMount = useEffectEvent(() => {
-    void submitHostedPairingRequest();
-  });
-
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- strips the pairing token from the URL and submits the hosted pairing request once on mount
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- removes the pairing token from the address bar once; nothing is sent until the person presses Connect
   useEffect(() => {
-    if (submitAttemptedRef.current) {
-      return;
-    }
-    submitAttemptedRef.current = true;
-
+    if (tokenStrippedRef.current) return;
+    tokenStrippedRef.current = true;
     stripPairingTokenFromUrl();
-    submitOnMount();
   }, []);
+
+  if (!request || target === null || "refused" in target) {
+    return (
+      <StandalonePage>
+        <StandalonePageHeader
+          title="Can't use this link"
+          description={
+            target && "refused" in target
+              ? target.refused
+              : "This pairing link is missing its computer address or token."
+          }
+        />
+      </StandalonePage>
+    );
+  }
 
   return (
     <StandalonePage>
       <StandalonePageHeader
         title={
           status === "paired"
-            ? "Backend paired"
+            ? "Computer connected"
             : status === "error"
-              ? "Pairing failed"
-              : "Pairing backend"
+              ? "Connecting failed"
+              : "Connect to this computer?"
         }
-        description={message}
+        description={
+          status === "confirm"
+            ? "Only connect to a computer you own or trust: your boards can send it prompts."
+            : message
+        }
       />
 
-      {request ? (
-        <div className="mt-5 rounded-lg border border-border/70 bg-background/55 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
-          Host: <span className="font-mono text-foreground/80">{request.host}</span>
+      <div className="mt-5 space-y-1 rounded-lg border border-border/70 bg-background/55 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
+        {target.label ? (
+          <div className="truncate">
+            Name: <span className="text-foreground/80">{target.label}</span>
+          </div>
+        ) : null}
+        <div className="truncate">
+          Address: <span className="font-mono text-foreground/80">{target.origin}</span>
         </div>
-      ) : null}
+      </div>
 
       {status === "error" ? (
         <Alert variant="error" className="mt-5">
           <AlertDescription>
-            Verify the backend is reachable from this browser, supports CORS for hosted clients, and
-            is served over HTTPS when opening this page from HTTPS.
+            Verify the computer is reachable from this browser, supports CORS for hosted clients,
+            and is served over HTTPS.
           </AlertDescription>
         </Alert>
       ) : null}
 
       <div className="mt-6 flex flex-wrap gap-2">
-        {status === "pairing" ? (
+        {status === "confirm" ? (
+          <>
+            <Button size="sm" onClick={() => void submitHostedPairingRequest()}>
+              Connect to this computer
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => (window.location.href = "/")}>
+              Cancel
+            </Button>
+          </>
+        ) : status === "pairing" ? (
           <Button disabled size="sm">
-            Pairing...
+            Connecting...
           </Button>
         ) : canRetry ? (
           <Button size="sm" onClick={() => void submitHostedPairingRequest()}>

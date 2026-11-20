@@ -14,15 +14,24 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import { HttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import { CLOUD_ENDPOINT_RUNTIME_CONFIG } from "./config.ts";
+import * as ServerConfig from "../config.ts";
+import {
+  CLOUD_ENDPOINT_RUNTIME_CONFIG,
+  CLOUD_LINK_FAILURE,
+  CLOUD_LINK_REVOKED,
+  StoredLinkFailure,
+} from "./config.ts";
+import { LINK_REMOVED_FAILURE } from "./relayResponse.ts";
 import * as ManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
+import { onSystemResume } from "./systemResume.ts";
+import * as TunnelEndpointProbe from "./tunnelEndpointProbe.ts";
 
 // cloudflared finds the edge through the SRV record `_v2-origintunneld._tcp.argotunnel.com`,
 // which names these two hosts on port 7844. QUIC and HTTP/2 both use that port.
@@ -39,11 +48,16 @@ const RECHECK_INTERVAL = Duration.minutes(5);
 // own readiness watch never restarts it. A 530 can also be brief, so restart only once it
 // lasts, and wait longer after each restart that did not help.
 const DEAD_CONNECTOR_RESTART_AFTER = Duration.minutes(2);
+// Tinkjam Sync waits far less: right after an install, the first connector of a tunnel often
+// registers yet stays unrouted (530/1033) until it reconnects, while the person waits on it.
+// Doubling from here (20 s, 40 s, 80 s...) up to the same hour keeps a dead tunnel from storming.
+const SYNC_DEAD_CONNECTOR_RESTART_AFTER = Duration.seconds(20);
 const DEAD_CONNECTOR_RESTART_AFTER_MAX = Duration.hours(1);
 
 export type EndpointProbe =
   | { readonly kind: "status"; readonly status: number; readonly cloudflareError?: string }
-  | { readonly kind: "dns_failed" | "timeout" | "network_error" };
+  | { readonly kind: "dns_failed"; readonly detail?: string }
+  | { readonly kind: "timeout" | "network_error" };
 
 /** Everything one check learned. `null` means that step did not run. */
 export interface ReachabilityFacts {
@@ -52,7 +66,11 @@ export interface ReachabilityFacts {
   readonly endpoint: EndpointProbe | null;
   readonly edgeReachable: boolean | null;
   readonly exitNode: TailscaleExitNode | null;
+  /** Why linking stopped, when retrying cannot fix it. */
+  readonly linkFailure?: { readonly reason: string; readonly fix: string } | null;
 }
+
+const decodeLinkFailure = Schema.decodeUnknownOption(StoredLinkFailure);
 
 type Unreachable = Extract<EnvironmentConnectReachability, { status: "unreachable" }>;
 
@@ -75,7 +93,12 @@ export function classifyReachability(
     hint: string | null = null,
   ): Unreachable => ({ status: "unreachable", checkedAt, cause, reason, hint, fix });
   const restart = "Restart T3 Code. If it stays, run `t3 connect` again.";
+  const status = endpoint?.kind === "status" ? endpoint.status : null;
 
+  // A tunnel that still answers outranks an older failure; otherwise the failure is the cause.
+  if (facts.linkFailure && status !== 200) {
+    return fail("not_linked", facts.linkFailure.reason, facts.linkFailure.fix);
+  }
   if (!facts.managedTunnelConfigured) {
     // A running server reads the link `t3 connect` stores only at startup.
     return fail(
@@ -91,7 +114,6 @@ export function classifyReachability(
       "Restart T3 Code. If it stays down, check the server log for relay client errors.",
     );
   }
-  const status = endpoint?.kind === "status" ? endpoint.status : null;
   if (status === 200) {
     return {
       status: "reachable",
@@ -127,7 +149,7 @@ export function classifyReachability(
   if (endpoint === null || connector.readyConnections === 0) {
     return fail(
       "connector_not_ready",
-      "cloudflared has not connected to Cloudflare yet.",
+      "The tunnel is not up yet: cloudflared has not connected to Cloudflare.",
       "Wait a minute. If it stays, check the network and the server log.",
     );
   }
@@ -145,20 +167,20 @@ export function classifyReachability(
     const code = cloudflareError === undefined ? "" : ` (Cloudflare error ${cloudflareError})`;
     return fail(
       "unexpected_response",
-      `The T3 Connect address answered with HTTP ${status}${code}.`,
+      `The tunnel is up, but its public address answered HTTP ${status}${code}.`,
       restart,
     );
   }
   return endpoint.kind === "dns_failed"
     ? fail(
         "dns_failed",
-        "The T3 Connect address does not resolve from this machine.",
-        "Check the DNS settings on this machine or its VPN.",
+        `The tunnel is up, but its address does not resolve on this machine yet${endpoint.detail ? `: ${endpoint.detail}.` : "."}`,
+        "A new address can take a few minutes to appear; the check keeps trying. If it stays, check the DNS settings on this machine or its VPN.",
         exitNodeHint(exitNode),
       )
     : fail(
         "timeout",
-        "The T3 Connect address did not answer from this machine.",
+        "The tunnel is up, but its public address did not answer from this machine.",
         "Check the network, VPN, or proxy on this machine.",
         exitNodeHint(exitNode),
       );
@@ -174,19 +196,6 @@ export function formatReachabilityFailure(result: Unreachable): string {
     `  More info: ${connectReachabilityHelpUrl(result.cause)}`,
   ].join("\n");
 }
-
-function hasErrorCode(error: unknown, codes: ReadonlySet<string>): boolean {
-  let current = error;
-  for (let depth = 0; depth < 6 && typeof current === "object" && current !== null; depth++) {
-    if ("code" in current && typeof current.code === "string" && codes.has(current.code)) {
-      return true;
-    }
-    current = "cause" in current ? current.cause : undefined;
-  }
-  return false;
-}
-
-const DNS_ERROR_CODES = new Set(["ENOTFOUND", "EAI_AGAIN", "EAI_NONAME"]);
 
 const canOpenTcp = (host: string, port: number) =>
   Effect.callback<boolean>((resume) => {
@@ -213,7 +222,7 @@ export class ConnectReachability extends Context.Service<
 const make = Effect.gen(function* () {
   const runtime = yield* ManagedEndpointRuntime.CloudManagedEndpointRuntime;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
-  const httpClient = yield* HttpClient.HttpClient;
+  const tunnelEndpoint = yield* TunnelEndpointProbe.TunnelEndpoint;
   // `order` ranks checks by start, so a slow older one cannot replace a newer result.
   const latestRef = yield* Ref.make(
     Option.none<{ readonly order: number; readonly result: EnvironmentConnectReachability }>(),
@@ -222,6 +231,14 @@ const make = Effect.gen(function* () {
   // Checks update this as they finish, even when a newer check already did. A dead streak
   // or a restart backoff that began before a healthy check no longer counts.
   const lastHealthyOrder = yield* Ref.make(0);
+  // Tinkjam Sync says how connecting goes in its own words; a tunnel still starting is not an error.
+  const quiet = Option.exists(
+    yield* Effect.serviceOption(ServerConfig.ServerConfig),
+    (config) => config.startupPresentation === "sync",
+  );
+  const firstRestartAfterMillis = Duration.toMillis(
+    quiet ? SYNC_DEAD_CONNECTOR_RESTART_AFTER : DEAD_CONNECTOR_RESTART_AFTER,
+  );
   const deadConnectorRef = yield* SynchronizedRef.make<{
     readonly streak: {
       readonly pid: number;
@@ -232,7 +249,7 @@ const make = Effect.gen(function* () {
     readonly restartOrder: number;
   }>({
     streak: null,
-    restartAfterMillis: Duration.toMillis(DEAD_CONNECTOR_RESTART_AFTER),
+    restartAfterMillis: firstRestartAfterMillis,
     restartOrder: 0,
   });
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -242,34 +259,31 @@ const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => null),
   );
 
-  const probeEndpoint = Effect.fn("ConnectReachability.probeEndpoint")(
-    function* (hostname: string) {
-      const response = yield* httpClient
-        .get(`https://${hostname}/.well-known/t3/environment`, { acceptJson: true })
-        .pipe(Effect.timeoutOption(ENDPOINT_REQUEST_TIMEOUT));
-      if (Option.isNone(response)) return { kind: "timeout" } satisfies EndpointProbe;
-      const { status } = response.value;
-      if (status !== 530) return { kind: "status", status } satisfies EndpointProbe;
-      // Cloudflare's error page is HTML unless the client accepts JSON, which carries
-      // `"error_code":1033`. Clients that send no User-Agent get `error code: 1033`.
-      const body = yield* response.value.text.pipe(
-        Effect.timeoutOption(ERROR_BODY_READ_TIMEOUT),
-        Effect.orElseSucceed(() => Option.none<string>()),
-      );
-      const code = /error[_ ]code"?:\s*(\d{4})/i.exec(Option.getOrElse(body, () => ""))?.[1];
-      return (
-        code === undefined
-          ? { kind: "status", status }
-          : { kind: "status", status, cloudflareError: code }
-      ) satisfies EndpointProbe;
-    },
-    Effect.scoped,
-    Effect.catch((error) =>
-      Effect.succeed<EndpointProbe>({
-        kind: hasErrorCode(error, DNS_ERROR_CODES) ? "dns_failed" : "network_error",
-      }),
-    ),
-  );
+  // Resolved directly and pinned, never through the OS resolver: see tunnelEndpointProbe.ts.
+  const probeEndpoint = Effect.fn("ConnectReachability.probeEndpoint")(function* (
+    hostname: string,
+  ) {
+    const response = yield* tunnelEndpoint.get({
+      hostname,
+      path: "/.well-known/t3/environment",
+      timeoutMs: Duration.toMillis(ENDPOINT_REQUEST_TIMEOUT),
+    });
+    if (response.kind === "unresolved") {
+      return { kind: "dns_failed", detail: response.reason } satisfies EndpointProbe;
+    }
+    if (response.kind !== "status") return { kind: response.kind } satisfies EndpointProbe;
+    const { status } = response;
+    if (status !== 530) return { kind: "status", status } satisfies EndpointProbe;
+    // Cloudflare's error page is HTML unless the client accepts JSON, which carries
+    // `"error_code":1033`. Clients that send no User-Agent get `error code: 1033`.
+    const body = yield* response.text.pipe(Effect.timeoutOption(ERROR_BODY_READ_TIMEOUT));
+    const code = /error[_ ]code"?:\s*(\d{4})/i.exec(Option.getOrElse(body, () => ""))?.[1];
+    return (
+      code === undefined
+        ? { kind: "status", status }
+        : { kind: "status", status, cloudflareError: code }
+    ) satisfies EndpointProbe;
+  });
 
   const gatherFacts = Effect.gen(function* () {
     const managedTunnelConfigured = Option.isSome(
@@ -280,12 +294,24 @@ const make = Effect.gen(function* () {
       connector?.hostname && connector.readyConnections !== 0
         ? yield* probeEndpoint(connector.hostname)
         : null;
+    const [revoked, storedFailure] = yield* Effect.all([
+      secrets.get(CLOUD_LINK_REVOKED),
+      secrets.get(CLOUD_LINK_FAILURE),
+    ]).pipe(Effect.orElseSucceed(() => [Option.none(), Option.none()] as const));
+    const linkFailure = Option.isSome(revoked)
+      ? LINK_REMOVED_FAILURE
+      : Option.getOrNull(
+          Option.flatMap(storedFailure, (bytes) =>
+            decodeLinkFailure(new TextDecoder().decode(bytes)),
+          ),
+        );
     const facts: ReachabilityFacts = {
       managedTunnelConfigured,
       connector,
       endpoint,
       edgeReachable: null,
       exitNode: null,
+      linkFailure,
     };
     if (connector === null || (endpoint?.kind === "status" && endpoint.status === 200)) {
       return facts;
@@ -329,9 +355,7 @@ const make = Effect.gen(function* () {
         const state = {
           streak: current.streak && current.streak.order > healthy ? current.streak : null,
           restartAfterMillis:
-            current.restartOrder > healthy
-              ? current.restartAfterMillis
-              : Duration.toMillis(DEAD_CONNECTOR_RESTART_AFTER),
+            current.restartOrder > healthy ? current.restartAfterMillis : firstRestartAfterMillis,
           restartOrder: current.restartOrder,
         };
         if (!(yield* isLatest(order))) return [null, state] as const;
@@ -400,7 +424,8 @@ const make = Effect.gen(function* () {
     if (result.status === "unreachable") {
       // A connector that has not connected yet is usually still starting; the
       // runtime restarts it, and an unreachable edge is reported as its own cause.
-      const log = result.cause === "connector_not_ready" ? Effect.logWarning : Effect.logError;
+      const log =
+        quiet || result.cause === "connector_not_ready" ? Effect.logWarning : Effect.logError;
       yield* log(`\n${formatReachabilityFailure(result)}`).pipe(
         Effect.annotateLogs({ cause: result.cause }),
       );
@@ -422,6 +447,15 @@ const make = Effect.gen(function* () {
     Effect.forever,
     Effect.forkScoped,
   );
+  // A wait that grew before the sleep says nothing about the network the machine woke on,
+  // and nothing else looks until the next periodic check. Forked: the watch must keep its beat.
+  yield* onSystemResume(() =>
+    SynchronizedRef.update(deadConnectorRef, (state) => ({
+      ...state,
+      restartAfterMillis: firstRestartAfterMillis,
+      restartOrder: 0,
+    })).pipe(Effect.andThen(Effect.forkIn(check, scope))),
+  ).pipe(Effect.forkScoped);
 
   return ConnectReachability.of({
     check,
@@ -429,4 +463,7 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(ConnectReachability, make);
+/** Needs a TunnelEndpoint; tests give it a fake one. */
+export const layerWithoutTunnelEndpoint = Layer.effect(ConnectReachability, make);
+
+export const layer = layerWithoutTunnelEndpoint.pipe(Layer.provide(TunnelEndpointProbe.layer));

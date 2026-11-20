@@ -171,6 +171,10 @@
       "types": "./src/webhookAddress.ts",
       "default": "./src/webhookAddress.ts"
     },
+    "./room-catch-up": {
+      "types": "./src/roomCatchUp.ts",
+      "default": "./src/roomCatchUp.ts"
+    },
     "./queued-run-edit": {
       "types": "./src/queuedRunEdit.ts",
       "default": "./src/queuedRunEdit.ts"

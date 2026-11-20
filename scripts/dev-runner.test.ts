@@ -21,10 +21,50 @@ import { ChildProcessSpawner } from "effect/process";
 import {
   checkPortAvailabilityOnHosts,
   createDevRunnerEnv,
+  devRunArgs,
   findFirstAvailableOffset,
   resolveModePortOffsets,
   runDevRunnerWithInput,
 } from "./dev-runner.ts";
+
+describe("devRunArgs", () => {
+  it("runs the server without watching only when asked, and everything else as before", () => {
+    const extra = ["--inspect"];
+    assert.deepEqual(devRunArgs("dev", { built: false, steady: false }, extra), [
+      [
+        "run",
+        "--filter=@t3tools/contracts",
+        "--filter=@t3tools/web",
+        "--filter=t3",
+        "--parallel",
+        "dev",
+        "--inspect",
+      ],
+    ]);
+    assert.deepEqual(devRunArgs("dev", { built: false, steady: true }, extra), [
+      [
+        "run",
+        "--filter=@t3tools/contracts",
+        "--filter=@t3tools/web",
+        "--parallel",
+        "dev",
+        "--inspect",
+      ],
+      ["run", "--filter=t3", "dev:steady", "--inspect"],
+    ]);
+    assert.deepEqual(devRunArgs("dev:server", { built: false, steady: true }, []), [
+      ["run", "--filter=t3", "dev:steady"],
+    ]);
+    assert.deepEqual(devRunArgs("dev", { built: true, steady: true }, []), [
+      ["run", "--filter=@t3tools/web", "--parallel", "dev:built"],
+      ["run", "--filter=t3", "dev:steady"],
+    ]);
+    // A mode with no server process has nothing to hold still.
+    assert.deepEqual(devRunArgs("dev:web", { built: false, steady: true }, []), [
+      ["run", "--filter=@t3tools/web", "dev"],
+    ]);
+  });
+});
 
 const emptyConfigLayer = ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }));
 const netServiceLayer = Layer.succeed(NetService.NetService, {

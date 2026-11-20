@@ -1,5 +1,6 @@
 import {
   type LinkedPrompt,
+  parseJoinLink,
   parseNewThreadLink,
   parseThreadLinkPrompt,
   promptLinkAppPath,
@@ -9,7 +10,7 @@ import { useLocation } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
-import { DESKTOP_DOWNLOAD_URL } from "~/branding";
+import { TINKJAM_SYNC_URL } from "~/branding";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { isHostedStaticApp } from "~/hostedPairing";
 import { useEnvironments } from "~/state/environments";
@@ -38,6 +39,44 @@ function summarize(
   appPath: string,
 ): { ok: true; value: LinkSummary } | { ok: false; error: string } {
   const url = new URL(appPath, window.location.origin);
+  if (url.pathname === "/join") {
+    const join = parseJoinLink(url.search);
+    if (!join.ok) return join;
+    if (join.value.artifact !== undefined) {
+      return {
+        ok: true,
+        value: {
+          title: "Take this artifact to your agent",
+          description:
+            "It opens as a draft in your thread from this room, with the artifact attached. Nothing runs until you press Send.",
+          prompt: join.value.artifact.prompt,
+          details: [`Shared from ${join.value.host}`],
+        },
+      };
+    }
+    if (join.value.task !== undefined) {
+      return {
+        ok: true,
+        value: {
+          title: "Take this to your agent",
+          description:
+            "It opens as a draft in your thread from this room. Nothing runs until you press Send.",
+          prompt: join.value.task.prompt,
+          details: [`Shared from ${join.value.host}`],
+        },
+      };
+    }
+    return {
+      ok: true,
+      value: {
+        title: "Bring this shared thread to your machine",
+        description:
+          "You get your own copy of the conversation. Your turns run on your machine, on your own provider login.",
+        prompt: null,
+        details: [`Shared from ${join.value.host}`],
+      },
+    };
+  }
   if (url.pathname !== "/new") {
     const prompt = parseThreadLinkPrompt(url.search);
     if (!prompt.ok) return prompt;
@@ -47,7 +86,7 @@ function summarize(
         prompt.value === null
           ? {
               title: "Open this thread",
-              description: "It opens in T3 Code if you're connected to the machine it runs on.",
+              description: "It opens in Tinkjam if you're connected to the machine it runs on.",
               prompt: null,
               details: [],
             }
@@ -149,7 +188,7 @@ function HostedPromptLinkLanding({
         <Alert className="mt-5" variant="error">
           <AlertTitle>This prompt had hidden characters, it may be malicious</AlertTitle>
           <AlertDescription>
-            T3 Code removed {prompt.hiddenCharacters} hidden character
+            Tinkjam removed {prompt.hiddenCharacters} hidden character
             {prompt.hiddenCharacters === 1 ? "" : "s"}. Read the prompt before you send it.
           </AlertDescription>
         </Alert>
@@ -171,8 +210,8 @@ function HostedPromptLinkLanding({
             Continue here
           </Button>
         ) : null}
-        <Button variant="ghost" render={<a href={DESKTOP_DOWNLOAD_URL} />}>
-          Get T3 Code
+        <Button variant="ghost" render={<a href={TINKJAM_SYNC_URL} />}>
+          Get Tinkjam Sync
         </Button>
       </div>
       <label className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">

@@ -1,9 +1,5 @@
 import type { DpopFailureReason } from "@t3tools/contracts";
-import {
-  T3CHAT_PLAN_TUNNEL_LIMITS,
-  type RelayEnvironmentStatusResponse,
-  type RelayProtectedError,
-} from "@t3tools/contracts/relay";
+import type { RelayEnvironmentStatusResponse, RelayProtectedError } from "@t3tools/contracts/relay";
 
 export const DPOP_CLOCK_HINT =
   "Hint: Check that automatic date and time is enabled on both devices, then try again.";
@@ -31,49 +27,52 @@ export function relayProtectedErrorMessage(error: RelayProtectedError): string {
       switch (error.reason) {
         case "missing_bearer":
         case "invalid_bearer":
-          return "Relay rejected the cloud session token.";
+          return "Tinkjam could not confirm your sign-in. Sign out and back in, then try again.";
         case "invalid_dpop":
-          return dpopFailureMessage("Relay rejected the DPoP proof.", error.dpopFailureReason);
+          return dpopFailureMessage(
+            "Tinkjam could not confirm this device's request.",
+            error.dpopFailureReason,
+          );
         case "not_authorized":
-          return "Relay rejected the authenticated request.";
+          return "Your account is not allowed to do this.";
       }
     case "RelayEnvironmentLinkProofExpiredError":
-      return "Relay rejected an expired environment link proof.";
+      return "The computer's request to connect expired before it arrived. Check that its date and time are set automatically, then try again.";
     case "RelayEnvironmentLinkProofInvalidError":
-      return `Relay rejected the environment link proof (${error.reason}).`;
+      return `Tinkjam did not accept the computer's request to connect (${error.reason}). Update Tinkjam on that computer and try again.`;
     case "RelayEnvironmentConnectNotAuthorizedError":
-      // "Not authorized" covers non-auth causes too; surface the reason so a
-      // missing link does not read as a credential problem.
+      // "Not authorized" covers non-auth causes too; say which, so a removed
+      // computer does not read as a sign-in problem.
       if (error.reason === "environment_link_not_found") {
-        return "Relay has no active link for this environment. If it was deregistered from T3 Connect, link it again on that machine.";
+        return "This computer is no longer on your Tinkjam account. Connect it again from that computer.";
       }
       if (error.reason === "managed_endpoint_allocation_not_ready") {
-        return "The environment's T3 Connect tunnel is still being set up.";
+        return "This computer's connection is still being set up.";
       }
       if (error.reason === "endpoint_provider_not_managed") {
-        return "This environment is linked only to publish agent activity, so it cannot accept connections. On that computer, open Settings > Sharing & access and turn T3 Connect on.";
+        return "This environment is linked only to publish agent activity, so it cannot accept connections. On that computer, open Settings > Sharing & access and turn Tinkjam Connect on.";
       }
       return error.reason
-        ? `Relay rejected the environment connection request (${error.reason}).`
-        : "Relay rejected the environment connection request.";
+        ? `Tinkjam did not allow the connection to this computer (${error.reason}).`
+        : "Tinkjam did not allow the connection to this computer.";
     case "RelayEnvironmentEndpointUnavailableError":
-      return `Relay could not reach the environment endpoint (${error.reason}).`;
+      return `Tinkjam could not reach this computer (${error.reason}). Check that it is on, online, and running Tinkjam.`;
     case "RelayEnvironmentEndpointTimedOutError":
-      return "Relay timed out while contacting the environment endpoint.";
+      return "This computer did not answer in time. Check that it is on, online, and running Tinkjam.";
     case "RelayEnvironmentLinkFailedError":
-      return `Relay could not link the environment (${error.reason}).`;
+      return `Tinkjam could not save this computer's connection (${error.reason}). Try again in a minute.`;
     case "RelayEnvironmentLinkUnavailableError":
-      return `Relay cannot provision the managed endpoint (${error.reason}).${
-        error.provisioningStage ? ` Failed stage: ${error.provisioningStage}.` : ""
-      }`;
+      return `Tinkjam could not set up this computer's connection (${error.reason}${
+        error.provisioningStage ? `, at ${error.provisioningStage}` : ""
+      }). Try again in a minute.`;
     case "RelayEnvironmentLinkLimitExceededError":
-      return error.maxTunnels < T3CHAT_PLAN_TUNNEL_LIMITS.premier
-        ? `Relay refused the link: this account already has its maximum of ${error.maxTunnels} managed tunnels. Unlink an environment, or link a paid T3 Chat account in your T3 Connect account settings on web or desktop. Pro raises the default limit to ${T3CHAT_PLAN_TUNNEL_LIMITS.pro} and Premier to ${T3CHAT_PLAN_TUNNEL_LIMITS.premier}.`
-        : `Relay refused the link: this account already has its maximum of ${error.maxTunnels} managed tunnels. Unlink an environment to free one up.`;
+      return `Your account already has its maximum of ${error.maxTunnels} connected computers. Remove a computer you no longer use in Settings, then try again.`;
+    case "RelayEnvironmentLinkRemovedError":
+      return "This computer was removed from your Tinkjam account. Connect it again to use it.";
     case "RelayAgentActivityPublishProofExpiredError":
-      return "Relay rejected an expired agent activity publish proof.";
+      return "The computer's update arrived too late to be accepted. Check that its date and time are set automatically.";
     case "RelayAgentActivityPublishProofInvalidError":
-      return `Relay rejected the agent activity publish proof (${error.reason}).`;
+      return `Tinkjam did not accept an update from the computer (${error.reason}).`;
     case "RelayInternalError":
       return `Relay encountered an internal error (${error.reason}).`;
   }
@@ -82,7 +81,7 @@ export function relayProtectedErrorMessage(error: RelayProtectedError): string {
 // The relay cuts off a request it cannot finish in time with a 504 that no
 // endpoint declares, so the client sees only the status.
 export const RELAY_GATEWAY_TIMEOUT_MESSAGE =
-  "Relay timed out before it finished the request (HTTP 504). Try again in a few minutes. If it keeps failing, copy the trace ID when you report it.";
+  "Tinkjam took too long to answer (HTTP 504). Try again in a few minutes. If it keeps failing, copy the trace ID when you report it.";
 
 export function relayRequestFailureDetail(error: {
   readonly relayError?: RelayProtectedError | undefined;
@@ -90,12 +89,13 @@ export function relayRequestFailureDetail(error: {
 }): string | null {
   if (error.relayError) return relayProtectedErrorMessage(error.relayError);
   if (error.status === 504) return RELAY_GATEWAY_TIMEOUT_MESSAGE;
-  if (error.status !== undefined) return `Relay returned an unexpected HTTP ${error.status}.`;
+  if (error.status !== undefined)
+    return `Tinkjam answered with an unexpected HTTP ${error.status}.`;
   return null;
 }
 
 const RELAY_TUNNEL_RELEASED_MESSAGE =
-  "Offline for a while, so its T3 Connect tunnel was removed. Start T3 Code on that computer and update it to the latest version to reconnect.";
+  "Offline for a while, so its connection was put away. It comes back by itself a minute or two after Tinkjam starts on that computer.";
 
 export function relayOfflineReasonMessage(
   status: Pick<RelayEnvironmentStatusResponse, "offlineReason">,

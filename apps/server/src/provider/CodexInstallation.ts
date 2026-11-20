@@ -268,7 +268,9 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
       );
     return yield* fromDirectory(directory, version, record.target);
   });
-  const compatibility = Effect.fn("CodexInstallation.compatibility")(function* (version: string) {
+  const compatibility = Effect.fn("CodexInstallation.compatibility")(function* (reported: string) {
+    // The Codex bundled in the ChatGPT app is a prerelease build: judge it as its release.
+    const version = reported.replace(/^(\d+\.\d+\.\d+)-[0-9A-Za-z.]+$/u, "$1");
     const manifest = yield* manifestService.current;
     return (
       resolveProviderCompatibility(manifest.compatibility, DRIVER, version) ??
@@ -292,7 +294,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
       return executable;
     },
     Effect.mapError(
-      wrapFailure("resolve", "Codex is not installed in T3 Code. Install it to continue."),
+      wrapFailure("resolve", "Codex is not installed in Tinkjam. Install it to continue."),
     ),
   );
   const acquire = Effect.fn("CodexInstallation.acquire")(function* () {
@@ -378,14 +380,34 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
     Effect.scoped,
     Effect.orElseSucceed(() => false),
   );
+  // The ChatGPT and Codex apps for Mac ship Codex without putting it on PATH.
+  const bundledInChatGpt = Effect.fn("CodexInstallation.bundledInChatGpt")(function* () {
+    if (platform !== "darwin") return null;
+    const home = environment.HOME;
+    for (const applications of [
+      "/Applications",
+      ...(home ? [path.join(home, "Applications")] : []),
+    ]) {
+      for (const inside of [
+        "ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+        "Codex.app/Contents/Resources/codex-cli/bin/codex",
+        "Codex.app/Contents/Resources/codex",
+      ]) {
+        const candidate = path.join(applications, inside);
+        if (yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))) return candidate;
+      }
+    }
+    return null;
+  });
   const localCache = new Map<string, { fingerprint: string; executable: CodexExecutable | null }>();
   const resolveLocal = Effect.fn("CodexInstallation.resolveLocal")(
     function* () {
-      const executablePath = yield* resolveCommandPath("codex", { env: environment }).pipe(
-        Effect.provideService(HostProcess.Platform, platform),
-        Effect.provideService(FileSystem.FileSystem, fs),
-        Effect.provideService(Path.Path, path),
-      );
+      const executablePath =
+        (yield* resolveCommandPath("codex", { env: environment }).pipe(
+          Effect.provideService(HostProcess.Platform, platform),
+          Effect.provideService(FileSystem.FileSystem, fs),
+          Effect.provideService(Path.Path, path),
+        )) ?? (yield* bundledInChatGpt());
       if (executablePath === null) return null;
       // Keep launcher symlinks intact: version-manager shims dispatch by their invoked name.
       const realExecutablePath = yield* fs.realPath(executablePath);
@@ -405,7 +427,9 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
           ? cached.executable
           : yield* Effect.gen(function* () {
               const output = yield* runCommand(executablePath, ["--version"]);
-              const version = /^codex-cli (\d+\.\d+\.\d+)$/u.exec(output.trim())?.[1];
+              const version = /^codex-cli (\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)$/u.exec(
+                output.trim(),
+              )?.[1];
               if (!version) return null;
               yield* runCommand(executablePath, ["app-server", "--help"]);
               return {

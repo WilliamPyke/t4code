@@ -9,7 +9,14 @@ const authFlowElements = {
 export const clerkAppearance = {
   // index.css orders this layer below components and utilities so the element classes below win.
   cssLayerName: "clerk",
-  options: { shimmer: false },
+  options: {
+    shimmer: false,
+    logoImageUrl: "/tinkjam-mark.svg",
+    logoPlacement: "inside",
+    // One clear button per way in reads better than a row of bare icons.
+    socialButtonsVariant: "blockButton",
+    showOptionalFields: false,
+  },
   variables: {
     borderRadius: "0.5rem",
     // Clerk reuses its primary color for filled buttons and bare links.
@@ -29,8 +36,12 @@ export const clerkAppearance = {
     colorRing: "var(--ring)",
   },
   elements: {
-    modalBackdrop: "dialog-backdrop z-50",
+    // The board's dotted canvas behind the sign-in, as on the welcome and join pages.
+    modalBackdrop:
+      "dialog-backdrop z-50 bg-[radial-gradient(var(--color-board-dot)_1px,transparent_1px)] bg-size-[24px_24px]",
     cardBox: "dialog-glass rounded-2xl border",
+    // "Last used" means nothing to someone on a new browser, or to two people sharing one.
+    lastAuthenticationStrategyBadge: "hidden",
     card: "border-0 bg-transparent shadow-none",
     footer: "bg-transparent bg-none",
     header: "items-start text-start",
@@ -46,3 +57,119 @@ export const clerkAppearance = {
   signIn: { elements: authFlowElements },
   signUp: { elements: authFlowElements },
 } satisfies NonNullable<ClerkProviderProps["appearance"]>;
+
+const linkElement =
+  "font-medium text-update-foreground underline underline-offset-3 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset";
+
+/**
+ * The sign-in page's form, laid out as the page's own content: no card, the heading face, tall
+ * fields, pill buttons. Every colour, font and radius is the person's theme, through its tokens.
+ */
+export const signInScreenAppearance = {
+  options: {
+    logoPlacement: "none",
+    socialButtonsVariant: "blockButton",
+  },
+  variables: {
+    colorBackground: "var(--background)",
+    colorMuted: "var(--background)",
+    fontFamily: "var(--font-sans)",
+    fontSize: "1rem",
+  },
+  elements: {
+    rootBox: "w-full",
+    cardBox: "w-full max-w-none overflow-visible rounded-none border-0 bg-transparent shadow-none",
+    card: "w-full gap-8 rounded-none border-0 bg-transparent p-0 shadow-none",
+    header: "items-start gap-2.5 text-start",
+    headerTitle:
+      "font-heading text-[2.25rem] leading-[1.05] font-semibold tracking-[-0.035em] text-foreground sm:text-[2.75rem]",
+    headerSubtitle: "text-base text-muted-foreground",
+    socialButtons: "gap-3",
+    socialButtonsBlockButton:
+      "h-13 rounded-full border-[1.5px] border-border bg-card text-[15px] font-semibold text-foreground shadow-none hover:border-foreground hover:bg-card focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+    socialButtonsBlockButtonText: "text-[15px] font-semibold",
+    dividerRow: "my-0",
+    dividerLine: "bg-border",
+    dividerText: "text-[13px] text-muted-foreground",
+    formFieldLabel: "text-[13px] font-semibold text-foreground",
+    // A style object, not classes: Clerk applies it with its own specificity, so its input
+    // padding and line height can no longer shrink the field below the design's 48px.
+    formFieldInput: {
+      boxSizing: "border-box",
+      height: "3rem",
+      minHeight: "3rem",
+      paddingBlock: 0,
+      paddingInline: "0.875rem",
+      borderRadius: "var(--radius)",
+      border: "1.5px solid var(--contrast-border)",
+      backgroundColor: "var(--card)",
+      color: "var(--contrast-foreground)",
+      fontSize: "1rem",
+      lineHeight: 1.5,
+      boxShadow: "none",
+      "&:focus": { borderColor: "var(--ring)", boxShadow: "none" },
+    },
+    otpCodeFieldInput: "border-[1.5px] border-border bg-card text-foreground",
+    formButtonPrimary:
+      "h-12 rounded-full border-primary bg-primary bg-none text-base font-semibold text-primary-foreground shadow-none hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+    formFieldAction: linkElement,
+    formResendCodeLink: linkElement,
+    identityPreviewEditButton: linkElement,
+    alternativeMethodsBlockButton:
+      "h-12 rounded-full border-[1.5px] border-border bg-card text-foreground shadow-none",
+    backLink: linkElement,
+    footer: "mt-0 bg-transparent bg-none p-0 [&>*]:px-0",
+    footerAction: "justify-start px-0 py-0",
+    footerActionText: "text-base text-muted-foreground",
+    footerActionLink: `text-base ${linkElement}`,
+    lastAuthenticationStrategyBadge: "hidden",
+    buttonArrowIcon: "hidden",
+    formFieldErrorText: { color: "var(--error-foreground)" },
+    formFieldWarningText: { color: "var(--warning-foreground)" },
+    formFieldSuccessText: { color: "var(--success-foreground)" },
+    otpCodeFieldErrorText: { color: "var(--error-foreground)" },
+    otpCodeFieldSuccessText: { color: "var(--success-foreground)" },
+  },
+} satisfies NonNullable<ClerkProviderProps["appearance"]>;
+
+const TO_CONTINUE = "to continue to Tinkjam";
+// The one line of what Tinkjam is, under every first step.
+const VALUE = "Your team and your agents on one board, on every device.";
+// The form makes an account for an email it does not know, so this is the way to sign up.
+const NEW_HERE = "New here? Use the same form to create your account.";
+
+/**
+ * Clerk names the product with its dashboard's application name; every line that would show it
+ * says Tinkjam instead.
+ */
+export const clerkLocalization = {
+  signIn: {
+    start: {
+      title: "Sign in",
+      subtitle: NEW_HERE,
+      titleCombined: "Sign in",
+      subtitleCombined: NEW_HERE,
+      actionText: "New here?",
+      actionLink: "Create an account",
+    },
+    password: { subtitle: TO_CONTINUE },
+    passkey: { subtitle: TO_CONTINUE },
+    emailCode: { subtitle: TO_CONTINUE },
+    emailLink: { subtitle: TO_CONTINUE },
+    phoneCode: { subtitle: TO_CONTINUE },
+  },
+  signUp: {
+    start: {
+      title: "Create an account",
+      titleCombined: "Create an account",
+      subtitle: VALUE,
+      subtitleCombined: VALUE,
+      actionText: "Have an account?",
+      actionLink: "Sign in",
+    },
+    emailCode: { subtitle: TO_CONTINUE },
+    emailLink: { subtitle: TO_CONTINUE },
+    phoneCode: { subtitle: TO_CONTINUE },
+    continue: { subtitle: TO_CONTINUE },
+  },
+} satisfies NonNullable<ClerkProviderProps["localization"]>;

@@ -23,6 +23,12 @@ import {
 import { PREFERRED_HIGHLIGHTER } from "../../lib/syntaxHighlighting";
 import ChatMarkdown from "../ChatMarkdown";
 import { EnvironmentContextChip } from "../EnvironmentContextChip";
+import { RoomUpdatesContextChip } from "../RoomUpdatesContextChip";
+import {
+  RoomArtifactContextChip,
+  RoomCardsContextChip,
+  RoomCommentContextChip,
+} from "./RoomBoardContextChips";
 import { ThreadContextChip } from "../ThreadContextChip";
 import { MessageCircleIcon, MousePointerClickIcon, PaintbrushIcon } from "lucide-react";
 import type { ComposerContextId, KnownComposerContextRecord } from "@t3tools/contracts";
@@ -329,6 +335,46 @@ const userMessageContextPresentationRegistry = createContextPresentationRegistry
       render: (record, context) =>
         record.kind === "environment" ? (
           <EnvironmentContextChip record={record} copyMarkdown={context.copyMarkdown} />
+        ) : (
+          <UnavailableUserMessageContextChip {...context} />
+        ),
+    },
+    {
+      kind: "room-updates",
+      canRender: (record) => record.kind === "room-updates",
+      render: (record, context) =>
+        record.kind === "room-updates" ? (
+          <RoomUpdatesContextChip record={record} copyMarkdown={context.copyMarkdown} />
+        ) : (
+          <UnavailableUserMessageContextChip {...context} />
+        ),
+    },
+    {
+      kind: "room-cards",
+      canRender: (record) => record.kind === "room-cards",
+      render: (record, context) =>
+        record.kind === "room-cards" ? (
+          <RoomCardsContextChip record={record} copyMarkdown={context.copyMarkdown} />
+        ) : (
+          <UnavailableUserMessageContextChip {...context} />
+        ),
+    },
+    {
+      kind: "room-artifact",
+      canRender: (record) => record.kind === "room-artifact",
+      render: (record, context) =>
+        record.kind === "room-artifact" ? (
+          <RoomArtifactContextChip record={record} copyMarkdown={context.copyMarkdown} />
+        ) : (
+          <UnavailableUserMessageContextChip {...context} />
+        ),
+    },
+    {
+      kind: "room-comment",
+      canRender: (record) => record.kind === "room-comment",
+      render: (record, context) =>
+        record.kind === "room-comment" ? (
+          <RoomCommentContextChip record={record} copyMarkdown={context.copyMarkdown} />
         ) : (
           <UnavailableUserMessageContextChip {...context} />
         ),

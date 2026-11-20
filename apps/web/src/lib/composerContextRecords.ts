@@ -20,6 +20,7 @@ import type {
   PreviewAnnotationContextRecord,
   PreviewAnnotationPayload,
   ReviewCommentContextRecord,
+  RoomUpdatesContextRecord,
   TerminalContextRecord,
   ThreadContextRecord,
   ThreadId,
@@ -172,6 +173,12 @@ export function environmentContextReference(
   record: EnvironmentContextRecord,
 ): ComposerContextReference {
   return { kind: "environment", contextId: record.contextId, label: record.label };
+}
+
+export function roomUpdatesContextReference(
+  record: RoomUpdatesContextRecord,
+): ComposerContextReference {
+  return { kind: "room-updates", contextId: record.contextId, label: record.label };
 }
 
 export function environmentContextRecord(
@@ -331,6 +338,7 @@ export function buildMessageContext(input: {
   previewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
   threadContexts?: ReadonlyArray<ThreadContextRecord>;
   environmentContexts?: ReadonlyArray<EnvironmentContextRecord>;
+  roomUpdatesContexts?: ReadonlyArray<RoomUpdatesContextRecord>;
   attachments?: ReadonlyArray<BoundComposerAttachment>;
 }): OrchestrationMessageContext | undefined {
   const screenshotAttachmentIds = new Set(
@@ -343,6 +351,7 @@ export function buildMessageContext(input: {
     ...input.reviewComments.map(reviewCommentContextRecord),
     ...(input.threadContexts ?? []),
     ...(input.environmentContexts ?? []),
+    ...(input.roomUpdatesContexts ?? []),
     ...input.previewAnnotations.map((annotation) =>
       previewAnnotationContextRecord(annotation, {
         screenshotContextId: screenshotAttachmentIds.has(annotation.id) ? annotation.id : undefined,

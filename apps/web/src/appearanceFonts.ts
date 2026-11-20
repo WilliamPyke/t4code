@@ -76,6 +76,7 @@ export function applyAppearanceFontVariables(
 ): void {
   const families: ReadonlyArray<readonly [variable: string, custom: string, fallback: string]> = [
     ["--font-sans", preferences.sans, DEFAULT_SANS_FONT_STACK],
+    ["--font-heading", preferences.sans, DEFAULT_SANS_FONT_STACK],
     ["--font-mono", preferences.code, DEFAULT_CODE_FONT_STACK],
     ["--font-composer", preferences.separate ? preferences.composer : "", "var(--font-sans)"],
   ];

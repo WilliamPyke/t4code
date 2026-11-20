@@ -71,8 +71,31 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: AuthOrchestrationOperateScope,
   // Force stop kills agent processes, as Stop on a terminal does.
   [ORCHESTRATION_V2_WS_METHODS.forceStopThread]: AuthOrchestrationOperateScope,
+  // Both make this server call the machine a link names; joining also creates a thread.
+  [WS_METHODS.sharedThreadPreview]: AuthOrchestrationOperateScope,
+  [WS_METHODS.sharedThreadJoin]: AuthOrchestrationOperateScope,
+  [WS_METHODS.sharedThreadLeave]: AuthOrchestrationOperateScope,
+  [WS_METHODS.sharedThreadCatchUp]: AuthOrchestrationOperateScope,
+  // Marks which turn of a joined thread answers a task; it changes what the room is shown.
+  [WS_METHODS.sharedThreadTakeTask]: AuthOrchestrationOperateScope,
+  // Makes this server call the room's machine for a card the user then sends to their agent.
+  [WS_METHODS.sharedThreadTakeArtifact]: AuthOrchestrationOperateScope,
+  [WS_METHODS.sharedThreadPromptBox]: AuthOrchestrationOperateScope,
+  // Changes what the room is shown of one of this machine's threads.
+  [WS_METHODS.sharedThreadLinkBox]: AuthOrchestrationOperateScope,
+  [WS_METHODS.sharedThreadFindRoom]: AuthOrchestrationOperateScope,
   // A guest link hands thread access to someone outside, like a pairing link.
   [WS_METHODS.guestShareCreate]: AuthAccessWriteScope,
+  // Changes what the guests on the link see, as dismissing one of their messages does.
+  [WS_METHODS.guestShareChangeBoard]: AuthOrchestrationOperateScope,
+  [WS_METHODS.guestShareMoveCursor]: AuthOrchestrationOperateScope,
+  // Both start a turn on this environment's agent, as sending a message does.
+  [WS_METHODS.guestSharePromptBox]: AuthOrchestrationOperateScope,
+  // Shows one of the owner's threads to the room from then on.
+  [WS_METHODS.guestShareAddBoxThread]: AuthOrchestrationOperateScope,
+  [WS_METHODS.guestShareResolveMessage]: AuthOrchestrationOperateScope,
+  // Spends the owner's GitHub requests to show a pull request to the room.
+  [WS_METHODS.guestShareRefreshPullRequest]: AuthOrchestrationOperateScope,
   [WS_METHODS.peerLinksLink]: AuthAccessWriteScope,
   [WS_METHODS.peerLinksUnlink]: AuthAccessWriteScope,
   // A link lets every agent here reach the other environment: Settings' bar.

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// @effect-diagnostics nodeBuiltinImport:off globalTimers:off
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalFetch:off
 /**
  * A free ACP agent for dev servers. It plays recorded ACP transcripts with simulated
  * streaming, so the real adapter, orchestration, and UI run without a paid model.
@@ -65,6 +65,108 @@ export const SCENARIOS = [
     file: `${FIXTURES}/multi_turn/registry_transcript.ndjson`,
   },
 ] as const;
+
+// Not a recording: it reads the board its thread is on through T3's MCP server and adds a task
+// for each note there, so the board's agent tools can be tried for free.
+const BOARD_SCENARIO = { id: "board-tasks", name: "Board: notes to tasks" } as const;
+// Not a recording either: a long markdown reply streamed slowly, to watch a box hold its size.
+const LONG_REPLY_SCENARIO = { id: "long-reply", name: "Long reply" } as const;
+// Replies an artifact card can show: a short document, then a small complete page, in turn.
+const ARTIFACT_SCENARIO = { id: "artifact-rewrite", name: "Artifact: rewrite" } as const;
+const MODELS = [...SCENARIOS, BOARD_SCENARIO, LONG_REPLY_SCENARIO, ARTIFACT_SCENARIO];
+const LONG_REPLY_MS = 20_000;
+const ARTIFACT_REPLY_MS = 4_000;
+
+const ARTIFACT_DOCUMENT = [
+  "# Launch plan",
+  "",
+  "A shorter plan, rewritten from what the card said.",
+  "",
+  "## This week",
+  "",
+  "- Finish the sign-up page",
+  "- Write the release notes",
+  "- Ask two people to try it",
+  "",
+  "## Next week",
+  "",
+  "1. Fix what they found",
+  "2. Ship it",
+].join("\n");
+
+const ARTIFACT_PAGE = [
+  "```html",
+  "<!doctype html>",
+  '<html lang="en">',
+  "<head>",
+  '<meta charset="utf-8">',
+  "<title>Launch plan</title>",
+  "<style>",
+  "  body { font: 15px/1.5 system-ui, sans-serif; margin: 24px; color: #1f2933; }",
+  "  h1 { font-size: 20px; margin: 0 0 12px; }",
+  "  ul { padding-left: 20px; }",
+  "  .done { color: #2f855a; }",
+  "</style>",
+  "</head>",
+  "<body>",
+  "<h1>Launch plan</h1>",
+  "<p>The same plan, as a page.</p>",
+  "<ul>",
+  '  <li class="done">Finish the sign-up page</li>',
+  "  <li>Write the release notes</li>",
+  "  <li>Ask two people to try it</li>",
+  "</ul>",
+  "</body>",
+  "</html>",
+  "```",
+].join("\n");
+
+/** About 150 lines of mixed markdown: headings, lists, a table and a code block. */
+export function longReplyText(): string {
+  const parts = ["Here is a long reply, so you can watch it stream inside a fixed box.", ""];
+  for (let section = 1; section <= 6; section += 1) {
+    parts.push(`## Part ${section}: notes on step ${section}`, "");
+    parts.push(
+      `Step ${section} keeps the same shape as the others, with enough text to wrap across a narrow box and push the reply well past its height.`,
+      "",
+    );
+    for (let item = 1; item <= 8; item += 1) {
+      parts.push(`- Item ${section}.${item}: check the **part ${item}** and note what changed`);
+    }
+    parts.push("");
+    parts.push(
+      "### Why it matters",
+      "",
+      `Without step ${section}, the \`next\` step has nothing to use.`,
+      "",
+    );
+    for (let item = 1; item <= 3; item += 1) {
+      parts.push(`${item}. Then do the ${["first", "second", "third"][item - 1]} thing`);
+    }
+    parts.push("");
+    if (section === 2) {
+      parts.push("| Step | Owner | State |", "| --- | --- | --- |");
+      for (let row = 1; row <= 6; row += 1) {
+        parts.push(`| ${row} | Person ${row} | ${row % 2 === 0 ? "Done" : "Open"} |`);
+      }
+      parts.push("");
+    }
+    if (section === 4) {
+      parts.push("```ts");
+      parts.push("export function total(values: ReadonlyArray<number>): number {");
+      parts.push("  let sum = 0;");
+      parts.push("  for (const value of values) {");
+      parts.push("    sum += value;");
+      parts.push("  }");
+      parts.push("  return sum;");
+      parts.push("}");
+      parts.push("```", "");
+    }
+    parts.push(`> Part ${section} is done. The next part starts below.`, "");
+  }
+  parts.push("That is the end of the long reply.");
+  return parts.join("\n");
+}
 
 // Session setup and vendor state stay out: they would replace the replay agent's own models.
 const REPLAYED_UPDATES = new Set([
@@ -171,6 +273,83 @@ function permissionRejectedToolCallId(request: LogicalFrame, answer: unknown): s
   return rejected ? params.toolCall?.toolCallId : undefined;
 }
 
+interface T3Mcp {
+  readonly url: string;
+  readonly authorization: string;
+}
+
+/** T3's MCP endpoint, from the stdio bridge's environment or an HTTP server's headers. */
+function t3McpOf(servers: unknown): T3Mcp | undefined {
+  if (!Array.isArray(servers)) return undefined;
+  for (const server of servers as ReadonlyArray<Record<string, unknown>>) {
+    const pairs = [
+      ...(Array.isArray(server.env) ? server.env : []),
+      ...(Array.isArray(server.headers) ? server.headers : []),
+    ] as ReadonlyArray<{ readonly name?: unknown; readonly value?: unknown }>;
+    const value = (name: string) =>
+      pairs.find((pair) => String(pair.name).toLowerCase() === name.toLowerCase())?.value;
+    const url = typeof server.url === "string" ? server.url : value("T3_ACP_MCP_ENDPOINT");
+    const authorization = value("Authorization") ?? value("T3_ACP_MCP_AUTHORIZATION");
+    if (typeof url === "string" && typeof authorization === "string") return { url, authorization };
+  }
+  return undefined;
+}
+
+const MCP_PROTOCOL_VERSION = "2025-06-18";
+
+/** Calls one of T3's MCP tools over HTTP and returns its structured result. */
+async function callT3Tool(mcp: T3Mcp, name: string, args: object): Promise<unknown> {
+  let session: string | null = null;
+  const post = async (body: object) => {
+    const response = await fetch(mcp.url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        authorization: mcp.authorization,
+        "mcp-protocol-version": MCP_PROTOCOL_VERSION,
+        ...(session === null ? {} : { "mcp-session-id": session }),
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", ...body }),
+    });
+    session = response.headers.get("mcp-session-id") ?? session;
+    const text = await response.text();
+    // A reply is plain JSON or one server-sent event.
+    const json = text.trimStart().startsWith("{")
+      ? text
+      : text
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice("data:".length))
+          .at(-1);
+    return json === undefined || json.trim() === ""
+      ? undefined
+      : (JSON.parse(json) as { result?: unknown; error?: { message?: string } });
+  };
+  await post({
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: MCP_PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: "t3-dev-replay", version: "1" },
+    },
+  });
+  await post({ method: "notifications/initialized" });
+  const reply = await post({ id: 2, method: "tools/call", params: { name, arguments: args } });
+  if (reply?.error !== undefined) throw new Error(reply.error.message ?? `${name} failed`);
+  const result = reply?.result as
+    | {
+        structuredContent?: unknown;
+        isError?: boolean;
+        content?: ReadonlyArray<{ type?: string; text?: string }>;
+      }
+    | undefined;
+  const text = result?.content?.find((part) => part.type === "text")?.text;
+  if (result?.isError === true) throw new Error(text ?? `${name} failed`);
+  return result?.structuredContent ?? (text === undefined ? undefined : JSON.parse(text));
+}
+
 function runAgent(): void {
   const turnsByScenario = new Map<string, ReadonlyArray<ReplayTurn>>();
   const loadTurns = (scenarioId: string) => {
@@ -186,7 +365,13 @@ function runAgent(): void {
 
   const sessions = new Map<
     string,
-    { cwd: string; model: string; promptCount: number; cancel: (() => void) | undefined }
+    {
+      cwd: string;
+      model: string;
+      promptCount: number;
+      cancel: (() => void) | undefined;
+      mcp: T3Mcp | undefined;
+    }
   >();
   const pendingAgentRequests = new Map<string, (result: unknown) => void>();
   let nextAgentRequestId = 1;
@@ -271,6 +456,129 @@ function runAgent(): void {
     }
   };
 
+  /** Streams `text` as one reply over about `ms`. */
+  const playSlowly = async (sessionId: string, text: string, ms: number, signal: AbortSignal) => {
+    const chunks = streamChunks(text);
+    const delay = Math.max(1, Math.round(ms / chunks.length));
+    for (const chunk of chunks) {
+      await sleep(delay, signal);
+      if (signal.aborted) return;
+      send({
+        method: "session/update",
+        params: {
+          sessionId,
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: chunk } },
+        },
+      });
+    }
+  };
+
+  /** Reads the board through T3's tools and adds a task for each note on it, in a section. */
+  const playBoardTurn = async (sessionId: string, signal: AbortSignal) => {
+    const mcp = sessions.get(sessionId)?.mcp;
+    const update = (sessionUpdate: Record<string, unknown>) =>
+      send({ method: "session/update", params: { sessionId, update: sessionUpdate } });
+    const say = async (text: string) => {
+      for (const chunk of streamChunks(text)) {
+        await sleep(CHUNK_DELAY_MS, signal);
+        if (signal.aborted) return;
+        update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: chunk } });
+      }
+    };
+    if (mcp === undefined) {
+      return say("This replay needs T3's tools, which this session did not get.");
+    }
+    const tool = async (name: string, args: object) => {
+      const toolCallId = `${NodeCrypto.randomUUID()}-${name}`;
+      update({
+        sessionUpdate: "tool_call",
+        toolCallId,
+        title: `mcp__t3-code__${name}`,
+        kind: "other",
+        status: "in_progress",
+        rawInput: args,
+      });
+      try {
+        const output = await callT3Tool(mcp, name, args);
+        update({
+          sessionUpdate: "tool_call_update",
+          toolCallId,
+          status: "completed",
+          rawOutput: output,
+        });
+        return output;
+      } catch (error) {
+        update({ sessionUpdate: "tool_call_update", toolCallId, status: "failed" });
+        throw error;
+      }
+    };
+    try {
+      const board = (await tool("t3_board_read", {})) as
+        | { cards?: ReadonlyArray<{ id?: string; kind?: string; text?: string }> }
+        | undefined;
+      const notes = (board?.cards ?? [])
+        .filter((card) => card.kind === "note" && (card.text ?? "").trim() !== "")
+        .slice(0, 40);
+      if (signal.aborted) return;
+      if (notes.length === 0) return say("There are no notes on this board to turn into tasks.");
+      type Answer = { done?: ReadonlyArray<string>; refused?: ReadonlyArray<{ reason?: string }> };
+      // Within the tools' caps (20 cards an add, 40 changes an update), as a careful model sends.
+      const inCalls = async <T>(
+        items: ReadonlyArray<T>,
+        size: number,
+        call: (part: ReadonlyArray<T>) => Promise<Answer>,
+      ) => {
+        const done: Array<string> = [];
+        const refused: Array<{ reason?: string }> = [];
+        for (let start = 0; start < items.length && !signal.aborted; start += size) {
+          const answer = await call(items.slice(start, start + size));
+          done.push(...(answer.done ?? []));
+          refused.push(...(answer.refused ?? []));
+        }
+        return { done, refused };
+      };
+      const added = await inCalls(
+        notes,
+        20,
+        async (part) =>
+          (await tool("t3_board_add", {
+            section: "Tasks",
+            cards: part.map((note) => ({ text: note.text, task: true })),
+          })) as Answer,
+      );
+      if (signal.aborted) return;
+      // Plans the new tasks and moves the notes, which were there before the turn too, so undoing
+      // it has something to put back.
+      const plan = [
+        ...added.done.map((id, index) =>
+          index === 0
+            ? { id, status: "doing", priority: "high", assignee: "me" }
+            : { id, priority: index < 3 ? "medium" : "low" },
+        ),
+        ...notes.flatMap((note) =>
+          note.id === undefined ? [] : [{ id: note.id, section: "Turned into tasks" }],
+        ),
+      ];
+      const moved = await inCalls(
+        plan,
+        40,
+        async (part) => (await tool("t3_board_update", { changes: part })) as Answer,
+      );
+      const refused = [...added.refused, ...moved.refused];
+      await say(
+        `Added ${added.done.length} tasks to the "Tasks" section (the first is yours, high priority and in progress, the rest prioritised) and moved ${
+          moved.done.filter((id) => !added.done.includes(id)).length
+        } notes into "Turned into tasks".${
+          refused.length === 0 ? "" : ` The board refused ${refused.length}: ${refused[0]?.reason}`
+        }`,
+      );
+    } catch (error) {
+      await say(
+        `The board tools failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  };
+
   const handleRequest = async (message: JsonRpcMessage): Promise<unknown> => {
     const params = message.params ?? {};
     switch (message.method) {
@@ -291,12 +599,18 @@ function runAgent(): void {
         const sessionId =
           message.method === "session/load" ? String(params.sessionId) : NodeCrypto.randomUUID();
         const cwd = typeof params.cwd === "string" ? params.cwd : process.cwd();
-        sessions.set(sessionId, { cwd, model: SCENARIOS[0].id, promptCount: 0, cancel: undefined });
+        sessions.set(sessionId, {
+          cwd,
+          model: SCENARIOS[0].id,
+          promptCount: 0,
+          cancel: undefined,
+          mcp: t3McpOf(params.mcpServers),
+        });
         return {
           ...(message.method === "session/new" ? { sessionId } : {}),
           models: {
             currentModelId: SCENARIOS[0].id,
-            availableModels: SCENARIOS.map((scenario) => ({
+            availableModels: MODELS.map((scenario) => ({
               modelId: scenario.id,
               name: scenario.name,
             })),
@@ -305,7 +619,7 @@ function runAgent(): void {
       }
       case "session/set_model": {
         const session = sessions.get(String(params.sessionId));
-        if (!SCENARIOS.some((scenario) => scenario.id === params.modelId)) {
+        if (!MODELS.some((scenario) => scenario.id === params.modelId)) {
           throw Object.assign(new Error(`Unknown replay scenario ${String(params.modelId)}`), {
             code: -32602,
           });
@@ -320,14 +634,23 @@ function runAgent(): void {
         const sessionId = String(params.sessionId);
         const session = sessions.get(sessionId);
         if (session === undefined) throw new Error(`Unknown session ${sessionId}`);
-        const turns = loadTurns(session.model);
+        const board = session.model === BOARD_SCENARIO.id;
+        const long = session.model === LONG_REPLY_SCENARIO.id;
+        const artifact = session.model === ARTIFACT_SCENARIO.id;
+        const turns = board || long || artifact ? [] : loadTurns(session.model);
         const turn = turns[session.promptCount % Math.max(turns.length, 1)];
+        const artifactReply = session.promptCount % 2 === 0 ? ARTIFACT_DOCUMENT : ARTIFACT_PAGE;
         session.promptCount += 1;
         const controller = new AbortController();
         session.cancel = () => controller.abort();
         let ended: "cancelled" | undefined;
         try {
-          if (turn !== undefined) ended = await playTurn(sessionId, turn, controller.signal);
+          if (board) await playBoardTurn(sessionId, controller.signal);
+          else if (long) {
+            await playSlowly(sessionId, longReplyText(), LONG_REPLY_MS, controller.signal);
+          } else if (artifact) {
+            await playSlowly(sessionId, artifactReply, ARTIFACT_REPLY_MS, controller.signal);
+          } else if (turn !== undefined) ended = await playTurn(sessionId, turn, controller.signal);
         } finally {
           session.cancel = undefined;
         }

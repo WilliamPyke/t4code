@@ -64,10 +64,16 @@ import {
   FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
+  LaptopIcon,
+  LayoutGridIcon,
+  LayoutTemplateIcon,
+  MegaphoneIcon,
   MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
   PaletteIcon,
+  PanelsTopLeftIcon,
+  PlusIcon,
   RotateCcwIcon,
   SettingsIcon,
   MonitorIcon,
@@ -77,6 +83,8 @@ import {
   SquarePenIcon,
   TextSearchIcon,
   UserPlusIcon,
+  UsersRoundIcon,
+  WrenchIcon,
 } from "lucide-react";
 import { openThreadFind } from "./chat/threadFindStore";
 import {
@@ -129,6 +137,8 @@ import { reportProjectFailure, useProjectPin } from "../hooks/useProjectGroupUpd
 import {
   useEnvironmentProviders,
   useEnvironments,
+  useGuestOnly,
+  useHasComputer,
   usePrimaryEnvironmentId,
 } from "../state/environments";
 import {
@@ -189,6 +199,7 @@ import {
   buildCommandPaletteRows,
   enumerateCommandPaletteItems,
   newThreadNoProjectIndex,
+  commandPaletteEnterItem,
   findHighlightedCommandPaletteItem,
   type CommandPaletteActionItem,
   type CommandPaletteOpenIntent,
@@ -237,6 +248,7 @@ import {
   sourceControlHostIcon,
 } from "./CommandPaletteAddProject";
 import { useCommandPaletteThreadItems } from "./CommandPaletteThreadItems";
+import { useBoardPaletteEntries } from "./room/boardPalette";
 import { useCommandPaletteThemeItems } from "./CommandPaletteThemeItems";
 import {
   CommandPaletteVirtualizedResults,
@@ -248,7 +260,14 @@ import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
 import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
 import { openGuestShareDialog } from "./chat/guestShareDialogState";
+import { roomBoardLocation } from "./room/roomBoardNavigation";
+import { openBoardTemplates, useStartNewBoard } from "./boards/newBoard";
 import { openUseInAnotherApp } from "./mcp/UseInAnotherAppDialog";
+import { openNewTeamDialog } from "./teams/NewTeamDialog";
+import { openConnectComputer } from "./ConnectComputerDialog";
+import { setShellMode, useShellMode } from "../shellMode";
+import { paletteActionShows } from "../shellMode.logic";
+import { useTeams } from "../teams/teams";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { settingsForThisPlatform, SETTINGS_SECTION_LABELS } from "./settings/settingsSearch";
 import { primaryServerKeybindingsAtom } from "../state/server";
@@ -401,6 +420,7 @@ function OpenCommandPaletteDialog(props: {
   readonly initialContext: CommandPaletteReturnContext | undefined;
 }) {
   const navigate = useNavigate();
+  const startNewBoard = useStartNewBoard();
   const pathname = useLocation({ select: (location) => location.pathname });
   const { openChildSearch, setOpen } = props;
   // Keyed by palette session: the intent and restored search only seed this
@@ -427,6 +447,8 @@ function OpenCommandPaletteDialog(props: {
   const { query, views: viewStack } = searchState;
   const setQuery = (query: string) => dispatchSearch({ type: "query", query });
   const deferredQuery = useDeferredValue(query);
+  // An Enter pressed before the list caught up with the typing, run once it has.
+  const enterPendingRef = useRef(false);
   const isActionsOnly = deferredQuery.startsWith(">");
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
   const resultListRef = useRef<LegendListRef | null>(null);
@@ -464,6 +486,9 @@ function OpenCommandPaletteDialog(props: {
     reportFailure: false,
   });
   const { environments } = useEnvironments();
+  const guestOnly = useGuestOnly();
+  const hasComputer = useHasComputer();
+  const shellMode = useShellMode();
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
@@ -483,6 +508,7 @@ function OpenCommandPaletteDialog(props: {
   const activeThreadServerConfig = useServerConfigs().get(
     activeThread?.environmentId ?? ("" as EnvironmentId),
   );
+  const { accountId: teamsAccountId, teams } = useTeams();
   const canShareActiveThreadWithGuest = useAtomValue(
     canShareWithGuestAtom(activeThread?.environmentId ?? ("" as EnvironmentId)),
   );
@@ -894,6 +920,7 @@ function OpenCommandPaletteDialog(props: {
   const projectThreadItems = openingOrderThreadItems.map(
     (item) => projectJumpItems.get(item.value) ?? item,
   );
+  const boardEntries = useBoardPaletteEntries(deferredQuery);
 
   const {
     threadItems: allThreadItems,
@@ -1260,6 +1287,41 @@ function OpenCommandPaletteDialog(props: {
   };
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
+  // Boards first: home and a new board lead the actions.
+  actionItems.push(
+    {
+      kind: "action",
+      value: "action:go-to-boards",
+      searchTerms: ["boards", "home", "all boards", "canvas"],
+      title: "Go to Boards",
+      icon: <LayoutGridIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "boards.open",
+      run: async () => {
+        await navigate({ to: "/" });
+      },
+    },
+    {
+      kind: "action",
+      value: "action:new-board",
+      searchTerms: ["new board", "board", "canvas", "create", "start"],
+      title: "New board",
+      icon: <PlusIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "boards.new",
+      run: async () => {
+        await startNewBoard();
+      },
+    },
+    {
+      kind: "action",
+      value: "action:new-board-template",
+      searchTerms: ["new board from template", "template", "board", "plan", "retro", "bug bash"],
+      title: "New board from template…",
+      icon: <LayoutTemplateIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        openBoardTemplates();
+      },
+    },
+  );
 
   if (projects.length > 0) {
     const activeProjectTitle =
@@ -1320,7 +1382,7 @@ function OpenCommandPaletteDialog(props: {
       value: "action:triage",
       searchTerms: ["triage", "bug", "issue", "report", "broken", "debug", "help", "support"],
       title: "Triage an issue",
-      description: "An agent investigates a T3 Code problem and helps file an issue",
+      description: "An agent investigates a Tinkjam problem and helps file an issue",
       icon: <BugIcon className={ITEM_ICON_CLASS} />,
       run: () => startTriage(triageEnvironmentId),
     });
@@ -1440,10 +1502,92 @@ function OpenCommandPaletteDialog(props: {
       kind: "action",
       value: "action:share-thread-with-guest",
       searchTerms: ["share", "guest", "invite", "link", "teammate"],
-      title: "Share with guest",
+      title: "Share with guests",
       icon: <UserPlusIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
         openGuestShareDialog(threadRef);
+      },
+    });
+  }
+
+  if (activeThread !== null) {
+    const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
+    actionItems.push({
+      kind: "action",
+      value: "action:open-board",
+      searchTerms: ["board", "room", "guests", "canvas", "cards"],
+      title: "Open board",
+      icon: <PanelsTopLeftIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate(roomBoardLocation(threadRef));
+      },
+    });
+  }
+  const sharedThreads = threads.filter(
+    (thread) => thread.guestShared === true || thread.hasRoomBoard === true,
+  );
+  if (sharedThreads.length > 0) {
+    actionItems.push({
+      kind: "submenu",
+      value: "action:open-board-of",
+      searchTerms: ["board", "room", "shared threads", "guests", "canvas"],
+      title: "Open board...",
+      icon: <PanelsTopLeftIcon className={ITEM_ICON_CLASS} />,
+      addonIcon: <PanelsTopLeftIcon className={ADDON_ICON_CLASS} />,
+      groups: [
+        {
+          value: "shared-threads",
+          label: "Boards",
+          items: sharedThreads.map((thread) => ({
+            kind: "action" as const,
+            value: `action:open-board:${thread.environmentId}:${thread.id}`,
+            searchTerms: [thread.title, "board"],
+            title: thread.title || "Untitled thread",
+            icon: <PanelsTopLeftIcon className={ITEM_ICON_CLASS} />,
+            run: async () => {
+              await navigate(roomBoardLocation(scopeThreadRef(thread.environmentId, thread.id)));
+            },
+          })),
+        },
+      ],
+    });
+  }
+
+  if (teamsAccountId !== null) {
+    if (teams !== null && teams.length > 0) {
+      actionItems.push({
+        kind: "submenu",
+        value: "action:open-team",
+        searchTerms: ["team", "teams", "members", "shared threads", "board"],
+        title: "Open team...",
+        icon: <UsersRoundIcon className={ITEM_ICON_CLASS} />,
+        addonIcon: <UsersRoundIcon className={ADDON_ICON_CLASS} />,
+        groups: [
+          {
+            value: "teams",
+            label: "Teams",
+            items: teams.map((team) => ({
+              kind: "action" as const,
+              value: `action:open-team:${team.id}`,
+              searchTerms: [team.name, "team"],
+              title: team.name,
+              icon: <UsersRoundIcon className={ITEM_ICON_CLASS} />,
+              run: async () => {
+                await navigate({ to: "/teams/$teamId", params: { teamId: team.id } });
+              },
+            })),
+          },
+        ],
+      });
+    }
+    actionItems.push({
+      kind: "action",
+      value: "action:new-team",
+      searchTerms: ["new team", "create team", "team", "teammates"],
+      title: "New team",
+      icon: <UsersRoundIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        openNewTeamDialog();
       },
     });
   }
@@ -1554,7 +1698,7 @@ function OpenCommandPaletteDialog(props: {
       openAddProjectFlow();
     },
   };
-  actionItems.push(addProjectAction);
+  if (!guestOnly) actionItems.push(addProjectAction);
 
   if (wslAddProjectEnvironmentOption) {
     actionItems.push({
@@ -1620,7 +1764,7 @@ function OpenCommandPaletteDialog(props: {
       "openclaw",
       "hermes",
     ],
-    title: "Use T3 Code in another app (MCP)",
+    title: "Use Tinkjam in another app (MCP)",
     icon: <PlugIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       openUseInAnotherApp(
@@ -1641,6 +1785,17 @@ function OpenCommandPaletteDialog(props: {
     shortcutCommand: "usage.open",
     run: async () => {
       await navigate({ to: "/usage" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:whats-new",
+    searchTerms: ["what's new", "whats new", "changelog", "release notes", "updates", "new"],
+    title: "What's new",
+    icon: <MegaphoneIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/whats-new" });
     },
   });
 
@@ -1726,7 +1881,53 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
-  const rootGroups = buildRootGroups({ actionItems, recentThreadItems });
+  actionItems.push(
+    {
+      kind: "action",
+      value: "action:connect-computer",
+      searchTerms: [
+        "connect a computer",
+        "computer",
+        "agent",
+        "sync",
+        "claude",
+        "codex",
+        "my agent",
+      ],
+      title: "Connect a computer",
+      description: "Use your own agents on your boards",
+      icon: <LaptopIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        openConnectComputer();
+      },
+    },
+    {
+      kind: "action",
+      value: "action:switch-shell-mode",
+      searchTerms: ["advanced", "simple", "developer", "mode", "switch", "threads", "projects"],
+      title: shellMode === "simple" ? "Switch to Advanced" : "Switch to Simple",
+      description:
+        shellMode === "simple"
+          ? "Adds chats, projects, code changes and other developer tools"
+          : "Shows only your boards",
+      icon: <WrenchIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        setShellMode(shellMode === "simple" ? "advanced" : "simple");
+      },
+    },
+  );
+  const simpleShell = shellMode === "simple";
+  const shownActionItems = actionItems.filter((item) =>
+    paletteActionShows(item.value, shellMode, hasComputer),
+  );
+  const rootGroups = [
+    // The board on screen leads: its own commands are what someone on it wants first.
+    ...(boardEntries.group === null ? [] : [boardEntries.group]),
+    ...buildRootGroups({
+      actionItems: shownActionItems,
+      recentThreadItems: simpleShell ? [] : recentThreadItems,
+    }),
+  ];
   // Every setting goes to the palette's own matcher, so settings get the same
   // word starts and typo tolerance as threads.
   const settingsSearchItems: CommandPaletteActionItem[] = settingsForThisPlatform(
@@ -1785,14 +1986,15 @@ function OpenCommandPaletteDialog(props: {
       ? {
           allOptions: {
             rootGroups,
-            nestedItems: buildNestedSearchItems(actionItems, deferredQuery),
+            nestedItems: buildNestedSearchItems(shownActionItems, deferredQuery),
           },
         }
       : {}),
-    projectSearchItems: projectSearchItems,
-    settingsSearchItems,
-    threadSearchItems:
-      isLinkedThreadSearch && linkedThreadSearch?.linkedThreads
+    projectSearchItems: simpleShell ? [] : projectSearchItems,
+    settingsSearchItems: simpleShell ? [] : settingsSearchItems,
+    threadSearchItems: simpleShell
+      ? []
+      : isLinkedThreadSearch && linkedThreadSearch?.linkedThreads
         ? buildLinkedThreadActionItems({
             ...linkedThreadSearch.linkedThreads,
             threads: visibleLinkedThreads(
@@ -1812,7 +2014,8 @@ function OpenCommandPaletteDialog(props: {
             },
           })
         : allThreadItems,
-    threadMessageItems: isLinkedThreadSearch ? [] : threadMessageItems,
+    threadMessageItems: simpleShell || isLinkedThreadSearch ? [] : threadMessageItems,
+    boardSearchItems: boardEntries.finds,
     now: searchNow,
   });
 
@@ -2527,7 +2730,9 @@ function OpenCommandPaletteDialog(props: {
       event.keyCode !== 229 &&
       (command === "chat.new" ||
         command === "chat.newLocal" ||
-        command === "chat.newWithoutProject");
+        command === "chat.newWithoutProject" ||
+        command === "boards.open" ||
+        command === "boards.new");
     const matchingItem =
       isJump || isNewThread
         ? displayedGroups
@@ -2653,9 +2858,20 @@ function OpenCommandPaletteDialog(props: {
 
     // Virtualization may unmount the highlighted row; handle Enter directly instead of Base UI's click.
     if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
-      const highlightedItem = findHighlightedCommandPaletteItem(
+      // The list still shows what was typed before: the Enter runs once it shows the rest, so the
+      // first press runs the row for what was typed, never a row of the list before it.
+      if (query !== deferredQuery && autoHighlightsFirstRow) {
+        (event as typeof event & { preventBaseUIHandler?: () => void }).preventBaseUIHandler?.();
+        event.preventDefault();
+        event.stopPropagation();
+        enterPendingRef.current = true;
+        return;
+      }
+      const highlightedItem = commandPaletteEnterItem(
         displayedGroups,
-        highlightedItemValue ?? firstItemValue ?? null,
+        resultRows.itemValues,
+        highlightedItemValue,
+        autoHighlightsFirstRow,
       );
       if (highlightedItem) {
         (event as typeof event & { preventBaseUIHandler?: () => void }).preventBaseUIHandler?.();
@@ -2690,6 +2906,18 @@ function OpenCommandPaletteDialog(props: {
       );
     });
   }
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- an Enter pressed while the filtered list lagged the typing runs once React has drawn the list for what was typed
+  useEffect(() => {
+    if (!enterPendingRef.current || query !== deferredQuery) return;
+    enterPendingRef.current = false;
+    const item = commandPaletteEnterItem(
+      displayedGroups,
+      resultRows.itemValues,
+      highlightedItemValue,
+      autoHighlightsFirstRow,
+    );
+    if (item) executeItem(item);
+  });
 
   const handleOpenProjectFromFileManager = async () => {
     if (!canOpenProjectFromFileManager || isPickingProjectFolder) {

@@ -321,6 +321,21 @@ export function summarizeT3ToolCalls(
         quantity(countEntities(entityIds("worktreePath")), "worktree"),
       );
       break;
+    case "room-catch-up":
+      label = phrase("Caught up on", "catch up on", `the shared room ${times}`);
+      break;
+    case "board-read":
+      label = phrase("Read", "read", `the board ${times}`);
+      break;
+    case "board-add":
+      label = phrase("Added to", "add to", `the board ${times}`);
+      break;
+    case "board-update":
+      label = phrase("Changed", "change", `the board ${times}`);
+      break;
+    case "board-arrange":
+      label = phrase("Arranged", "arrange", `the board ${times}`);
+      break;
     case "worktree-list":
       label = phrase("Listed", "list", `workspace branches ${times}`);
       break;

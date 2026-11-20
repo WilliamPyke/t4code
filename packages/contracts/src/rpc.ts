@@ -168,10 +168,50 @@ import {
 } from "./provider.ts";
 import { ProviderInstanceId, ProviderInstanceMutation } from "./providerInstance.ts";
 import {
+  GuestPresence,
+  GuestPresenceInput,
   GuestShareCreateError,
   GuestShareCreateInput,
   GuestShareCreateResult,
+  RoomAgentsEvent,
+  RoomBoardChangeError,
+  RoomBoardChangeInput,
+  RoomCodePatch,
+  RoomCodePatchError,
+  RoomCodePatchInput,
+  RoomPullRequestRefreshInput,
+  RoomCursorInput,
+  RoomCursorsEvent,
+  RoomLiveInput,
 } from "./guestShare.ts";
+import { RoomBoardSummaries, RoomBoardSummariesInput } from "./roomBoardSummary.ts";
+import {
+  SharedThreadJoinError,
+  SharedThreadJoinInput,
+  SharedThreadJoinResult,
+  SharedThreadCatchUpInput,
+  SharedThreadCatchUpResult,
+  SharedThreadLeaveInput,
+  SharedThreadPreview,
+  SharedThreadSource,
+  SharedThreadFindRoomInput,
+  SharedThreadFindRoomResult,
+  SharedThreadBoxPatchInput,
+  SharedThreadLinkBoxInput,
+  SharedThreadPromptBoxInput,
+  SharedThreadPromptBoxResult,
+  SharedThreadTakeArtifactInput,
+  SharedThreadTakeArtifactResult,
+  SharedThreadTakeTaskInput,
+  SharedThreadTakeTaskResult,
+} from "./sharedThread.ts";
+import {
+  GuestMessageResolveInput,
+  RoomBoxAddThreadInput,
+  RoomBoxError,
+  RoomBoxPromptInput,
+  RoomBoxPromptResult,
+} from "./roomBox.ts";
 import { PullRequestReviewGuideResult } from "./pullRequestReviewGuide.ts";
 import {
   PullRequestActionInput,
@@ -556,6 +596,27 @@ export const WS_METHODS = {
   scheduledTasksRotateWebhookToken: "scheduledTasks.rotateWebhookToken",
   secretsAnswerRequest: "secrets.answerRequest",
   guestShareCreate: "guestShare.create",
+  guestShareSubscribePresence: "guestShare.subscribePresence",
+  guestShareChangeBoard: "guestShare.changeBoard",
+  guestShareSubscribeRoomAgents: "guestShare.subscribeRoomAgents",
+  guestShareSubscribeRoomCursors: "guestShare.subscribeRoomCursors",
+  guestShareMoveCursor: "guestShare.moveCursor",
+  guestSharePromptBox: "guestShare.promptBox",
+  guestShareAddBoxThread: "guestShare.addBoxThread",
+  guestShareResolveMessage: "guestShare.resolveMessage",
+  sharedThreadPreview: "sharedThread.preview",
+  sharedThreadJoin: "sharedThread.join",
+  sharedThreadLeave: "sharedThread.leave",
+  sharedThreadCatchUp: "sharedThread.catchUp",
+  sharedThreadTakeTask: "sharedThread.takeTask",
+  sharedThreadTakeArtifact: "sharedThread.takeArtifact",
+  sharedThreadPromptBox: "sharedThread.promptBox",
+  sharedThreadLinkBox: "sharedThread.linkBox",
+  sharedThreadFindRoom: "sharedThread.findRoom",
+  sharedThreadBoxPatch: "sharedThread.boxPatch",
+  guestShareCodePatch: "guestShare.codePatch",
+  guestShareRefreshPullRequest: "guestShare.refreshPullRequest",
+  guestShareBoardSummaries: "guestShare.boardSummaries",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
 
@@ -2016,10 +2077,132 @@ const WsScheduledTasksRotateWebhookTokenRpc = Rpc.make(
   },
 );
 
+const WsGuestShareSubscribePresenceRpc = Rpc.make(WS_METHODS.guestShareSubscribePresence, {
+  payload: GuestPresenceInput,
+  success: GuestPresence,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const WsGuestShareSubscribeRoomAgentsRpc = Rpc.make(WS_METHODS.guestShareSubscribeRoomAgents, {
+  payload: RoomLiveInput,
+  success: RoomAgentsEvent,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const WsGuestShareSubscribeRoomCursorsRpc = Rpc.make(WS_METHODS.guestShareSubscribeRoomCursors, {
+  payload: RoomLiveInput,
+  success: RoomCursorsEvent,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const WsGuestShareMoveCursorRpc = Rpc.make(WS_METHODS.guestShareMoveCursor, {
+  payload: RoomCursorInput,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsSharedThreadPreviewRpc = Rpc.make(WS_METHODS.sharedThreadPreview, {
+  payload: SharedThreadSource,
+  success: SharedThreadPreview,
+  error: Schema.Union([SharedThreadJoinError, EnvironmentAuthorizationError]),
+});
+
+const WsSharedThreadJoinRpc = Rpc.make(WS_METHODS.sharedThreadJoin, {
+  payload: SharedThreadJoinInput,
+  success: SharedThreadJoinResult,
+  error: Schema.Union([SharedThreadJoinError, EnvironmentAuthorizationError]),
+});
+
+const WsSharedThreadLeaveRpc = Rpc.make(WS_METHODS.sharedThreadLeave, {
+  payload: SharedThreadLeaveInput,
+  error: Schema.Union([SharedThreadJoinError, EnvironmentAuthorizationError]),
+});
+
+const WsSharedThreadCatchUpRpc = Rpc.make(WS_METHODS.sharedThreadCatchUp, {
+  payload: SharedThreadCatchUpInput,
+  success: SharedThreadCatchUpResult,
+  error: Schema.Union([SharedThreadJoinError, EnvironmentAuthorizationError]),
+});
+
+const WsSharedThreadTakeTaskRpc = Rpc.make(WS_METHODS.sharedThreadTakeTask, {
+  payload: SharedThreadTakeTaskInput,
+  success: SharedThreadTakeTaskResult,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsSharedThreadTakeArtifactRpc = Rpc.make(WS_METHODS.sharedThreadTakeArtifact, {
+  payload: SharedThreadTakeArtifactInput,
+  success: SharedThreadTakeArtifactResult,
+  error: Schema.Union([SharedThreadJoinError, EnvironmentAuthorizationError]),
+});
+
+const WsSharedThreadPromptBoxRpc = Rpc.make(WS_METHODS.sharedThreadPromptBox, {
+  payload: SharedThreadPromptBoxInput,
+  success: SharedThreadPromptBoxResult,
+  error: Schema.Union([SharedThreadJoinError, EnvironmentAuthorizationError]),
+});
+
+const WsSharedThreadLinkBoxRpc = Rpc.make(WS_METHODS.sharedThreadLinkBox, {
+  payload: SharedThreadLinkBoxInput,
+  error: Schema.Union([SharedThreadJoinError, EnvironmentAuthorizationError]),
+});
+
+const WsSharedThreadBoxPatchRpc = Rpc.make(WS_METHODS.sharedThreadBoxPatch, {
+  payload: SharedThreadBoxPatchInput,
+  success: RoomCodePatch,
+  error: Schema.Union([RoomCodePatchError, EnvironmentAuthorizationError]),
+});
+
+const WsGuestShareCodePatchRpc = Rpc.make(WS_METHODS.guestShareCodePatch, {
+  payload: RoomCodePatchInput,
+  success: RoomCodePatch,
+  error: Schema.Union([RoomCodePatchError, EnvironmentAuthorizationError]),
+});
+
+const WsGuestShareBoardSummariesRpc = Rpc.make(WS_METHODS.guestShareBoardSummaries, {
+  payload: RoomBoardSummariesInput,
+  success: RoomBoardSummaries,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsGuestShareRefreshPullRequestRpc = Rpc.make(WS_METHODS.guestShareRefreshPullRequest, {
+  payload: RoomPullRequestRefreshInput,
+  error: Schema.Union([RoomBoardChangeError, EnvironmentAuthorizationError]),
+});
+
+const WsSharedThreadFindRoomRpc = Rpc.make(WS_METHODS.sharedThreadFindRoom, {
+  payload: SharedThreadFindRoomInput,
+  success: SharedThreadFindRoomResult,
+  error: EnvironmentAuthorizationError,
+});
+
 const WsGuestShareCreateRpc = Rpc.make(WS_METHODS.guestShareCreate, {
   payload: GuestShareCreateInput,
   success: GuestShareCreateResult,
   error: Schema.Union([GuestShareCreateError, EnvironmentAuthorizationError]),
+});
+
+const WsGuestShareChangeBoardRpc = Rpc.make(WS_METHODS.guestShareChangeBoard, {
+  payload: RoomBoardChangeInput,
+  error: Schema.Union([RoomBoardChangeError, EnvironmentAuthorizationError]),
+});
+
+const WsGuestSharePromptBoxRpc = Rpc.make(WS_METHODS.guestSharePromptBox, {
+  payload: RoomBoxPromptInput,
+  success: RoomBoxPromptResult,
+  error: Schema.Union([RoomBoxError, EnvironmentAuthorizationError]),
+});
+
+const WsGuestShareAddBoxThreadRpc = Rpc.make(WS_METHODS.guestShareAddBoxThread, {
+  payload: RoomBoxAddThreadInput,
+  error: Schema.Union([RoomBoxError, EnvironmentAuthorizationError]),
+});
+
+const WsGuestShareResolveMessageRpc = Rpc.make(WS_METHODS.guestShareResolveMessage, {
+  payload: GuestMessageResolveInput,
+  error: Schema.Union([RoomBoxError, EnvironmentAuthorizationError]),
 });
 
 const WsSecretsAnswerRequestRpc = Rpc.make(WS_METHODS.secretsAnswerRequest, {
@@ -2066,6 +2249,27 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 
 export const WsRpcGroup = RpcGroup.make(
   WsGuestShareCreateRpc,
+  WsGuestShareSubscribePresenceRpc,
+  WsGuestShareChangeBoardRpc,
+  WsGuestSharePromptBoxRpc,
+  WsGuestShareAddBoxThreadRpc,
+  WsGuestShareResolveMessageRpc,
+  WsGuestShareSubscribeRoomAgentsRpc,
+  WsGuestShareSubscribeRoomCursorsRpc,
+  WsGuestShareMoveCursorRpc,
+  WsSharedThreadPreviewRpc,
+  WsSharedThreadJoinRpc,
+  WsSharedThreadLeaveRpc,
+  WsSharedThreadCatchUpRpc,
+  WsSharedThreadTakeTaskRpc,
+  WsSharedThreadTakeArtifactRpc,
+  WsSharedThreadPromptBoxRpc,
+  WsSharedThreadLinkBoxRpc,
+  WsSharedThreadFindRoomRpc,
+  WsSharedThreadBoxPatchRpc,
+  WsGuestShareCodePatchRpc,
+  WsGuestShareRefreshPullRequestRpc,
+  WsGuestShareBoardSummariesRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

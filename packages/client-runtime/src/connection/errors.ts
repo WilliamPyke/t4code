@@ -87,6 +87,7 @@ function relayProtectedError(error: RelayProtectedError): ConnectionAttemptError
       });
     case "RelayEnvironmentLinkProofInvalidError":
     case "RelayEnvironmentLinkLimitExceededError":
+    case "RelayEnvironmentLinkRemovedError":
       return new ConnectionBlockedError({ reason: "permission", detail, traceId, hop: "relay" });
     case "RelayEnvironmentEndpointTimedOutError":
       return new ConnectionTransientError({
@@ -104,7 +105,7 @@ function relayProtectedError(error: RelayProtectedError): ConnectionAttemptError
         reason: "endpoint-unavailable",
         detail,
         traceId,
-        // The tunnel carried the request when T3 Code is what failed to answer.
+        // The tunnel carried the request when Tinkjam is what failed to answer.
         hop:
           endpointFailure === "origin_unreachable" || endpointFailure === "invalid_response"
             ? "server"
@@ -183,7 +184,7 @@ export function mapRemoteEnvironmentError(
   connectionMethod: ClientConnectionMethod = "direct",
 ): ConnectionAttemptError {
   const networkHint = connectionMethod === "relay" ? ` ${NETWORK_BLOCKING_HINT}` : "";
-  // Over T3 Connect the relay already reached the host, so a request that never
+  // Over Tinkjam Connect the relay already reached the host, so a request that never
   // arrives was blocked between this device and the tunnel.
   const unreachableHop = connectionMethod === "relay" ? "tunnel" : "server";
   const via = connectionMethod === "relay" ? "relay" : "direct";

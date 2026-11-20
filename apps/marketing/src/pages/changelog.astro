@@ -1,0 +1,200 @@
+---
+import Layout from "../layouts/Layout.astro";
+
+const newest = [
+  {
+    title: "Agents arrange the board",
+    text: "Ask your agent to put notes in a grid inside a section, place one card beside another, or tidy and rename a section. What it moves carries its name, and one Undo takes it all back.",
+  },
+  {
+    title: "Notes that say when they are done",
+    text: "A note connected to an agent reads To send, With the agent, then Done by agent once the agent's reply is in. If it was not fixed, send it again with one click.",
+  },
+  {
+    title: "Compare versions of an artifact",
+    text: "Connect an artifact to an empty artifact card and the second card shows the same page live, at its own size. Keep this version turns it into its own copy, so an old version can sit beside the new one.",
+  },
+  {
+    title: "Mark up a page for your agent",
+    text: "On an artifact showing a page, click a part of it and say what should change. It becomes a numbered note your agent reads with the exact spot, the next time you send it a prompt.",
+  },
+  {
+    title: "Open a page's links beside it",
+    text: "Right-click a link in an artifact's page to open it beside the artifact: another site as a card showing its page, a spot further down as a second view scrolled there, and a page that is not made yet as an empty artifact for your agent to write.",
+  },
+  {
+    title: "Any link, shown in place",
+    text: "A link card can show its site's page inside the card. Some sites do not allow this, and the card says so. Each person chooses to load it.",
+  },
+  {
+    title: "Tidier lines",
+    text: "Lines between cards take one clean turn, and any line can be switched to Elbow: straight segments that go around other cards.",
+  },
+  {
+    title: "Sections that behave",
+    text: "Sections move by their title or edges and take their cards along, ask before deleting what is on them, and have a larger heading and a background colour.",
+  },
+  {
+    title: "Resize from any edge, and much larger",
+    text: "Every card resizes from any edge, not only the corners. Sections and other cards can be made far larger than before.",
+  },
+  {
+    title: "A board's contents in the sidebar",
+    text: "Open the arrow beside a board in the sidebar to see its artifacts, agents and sections, and click one to go straight to it.",
+  },
+  {
+    title: "Text size",
+    text: "Choose Small, Medium or Large in Settings.",
+  },
+  {
+    title: "Choose the computer",
+    text: "With more than one computer connected, an agent's prompt says which computer it runs on, and you can pick another for a new agent.",
+  },
+  {
+    title: "A simpler first screen",
+    text: "Start a board opens one screen: pick Blank, Project kickoff or Design review, name the board if you like, and you are on it in one click. No account needed.",
+  },
+  {
+    title: "Your name, asked once",
+    text: "Tinkjam asks what to call you once, instead of again on each board.",
+  },
+  {
+    title: "Sign in without leaving the page",
+    text: "Signing in opens over the page you are on, so you stay where you were. It is still optional: it makes your boards follow you to every device.",
+  },
+  {
+    title: "A Getting started guide",
+    text: "A new board has a short guide that ticks itself off as you go. Hide it when you are done with it.",
+  },
+  {
+    title: "Invites that say what they are for",
+    text: "An invite now names the board and who made it, before you join. Invites are still links you paste yourself: Tinkjam does not send emails.",
+  },
+  {
+    title: "Short board addresses",
+    text: "A board's address is now short and starts with /b/, so it is easier to paste and to recognise.",
+  },
+  {
+    title: "Boards fit a phone",
+    text: "A board now fits a phone screen, so you can open one wherever you are.",
+  },
+  {
+    title: "A calmer page for connecting a computer",
+    text: "The steps for Tinkjam Sync are in plain words, with the reasons. Windows says it protected your PC because it does not recognise the app yet: choose More info, then Run anyway. On a Mac you paste one line into Terminal, once, because Apple has not checked the app yet; it asks for no password and changes no settings. Then you press Connect.",
+  },
+  {
+    title: "Computers reconnect sooner",
+    text: "After your computer wakes from sleep it is back on your boards sooner, and it no longer shows up twice after you reinstall Tinkjam Sync.",
+  },
+];
+
+const latest = [
+  {
+    title: "Agents plan the work",
+    text: "Tell your own agent to break a goal into tasks, and it creates, prioritises and assigns them on the board and in the Plan. One undo takes a whole agent turn back.",
+  },
+  {
+    title: "Bring documents in with your agent",
+    text: "On any link card, such as a Linear issue, a private Google Doc or a Notion page, your agent reads it with the tools you connected and puts a readable snapshot on the board that any agent can use as context. It only runs when you press Send.",
+  },
+  {
+    title: "Sharing",
+    text: "Can edit and Can view links. Viewers need no account and can ask for edit access, and a board's maker can allow copies.",
+  },
+  {
+    title: "Mentions and an inbox",
+    text: "Mention teammates in notes, tasks and comments. An inbox in the app gathers mentions, assignments, replies and access requests, and My tasks lists your tasks across boards.",
+  },
+  {
+    title: "Faster for people who live in it",
+    text: "A command menu (Ctrl or Cmd and K), FigJam-style keys, right-click menus, a catch-up of what changed while you were away, and export to Markdown and PNG.",
+  },
+  {
+    title: "Simple by default, Advanced on demand",
+    text: "The app opens as a plain boards product. One switch reveals the full coding-agent workbench: chats, diffs, terminals and pull requests.",
+  },
+];
+
+const entries = [
+  {
+    title: "We're called Tinkjam now",
+    text: "A new name everywhere you see it, in the app and on this site.",
+  },
+  {
+    title: "A new logo",
+    text: "A lowercase t drawn as a line leaving a sticky note, on a jam-red tile.",
+  },
+  {
+    title: "Boards in the cloud",
+    text: "Boards live online, so your team can open them when every computer is off.",
+  },
+  {
+    title: "Accounts",
+    text: "Sign in and your boards follow you to any device.",
+  },
+  {
+    title: "Link embeds",
+    text: "Paste a Figma, Google Docs, Sheets or Slides, YouTube, Loom or Vimeo link for a live preview. Linear, GitHub, Notion, Jira and any other link become a titled card. Draw a line to an agent to make it context.",
+  },
+  {
+    title: "Plan view",
+    text: "The board's tasks as a kanban or a list, with priority, due dates, assignees and filters. A task is the same on the board and in the Plan, and you can take one to your own agent; nothing runs until you send it.",
+  },
+  {
+    title: "Workspaces",
+    text: "Make a workspace, invite teammates with a link, and every member sees the workspace's boards.",
+  },
+  {
+    title: "Tinkjam Sync",
+    text: "A small app for Mac and Windows that connects the agents on your computer. On Windows you download it and open it; on a Mac you paste one line into Terminal, once. Then press Connect. It lives in the menu bar on a Mac, or the system tray on Windows, starts with your computer and updates itself.",
+  },
+];
+---
+
+<Layout
+  title="Changelog | Tinkjam"
+  description="What is new in Tinkjam, in plain words: a simpler start, clearer invites and a calmer way to connect your computer."
+>
+  <div class="page">
+    <article class="prose changelog">
+      <h1>Changelog</h1>
+      <p>What is new in Tinkjam, in plain words.</p>
+
+      <h2>19 November</h2>
+      <ul class="changelog__list">
+        {
+          newest.map((entry) => (
+            <li>
+              <b>{entry.title}</b>
+              <span>{entry.text}</span>
+            </li>
+          ))
+        }
+      </ul>
+
+      <h2>17 November</h2>
+      <ul class="changelog__list">
+        {
+          latest.map((entry) => (
+            <li>
+              <b>{entry.title}</b>
+              <span>{entry.text}</span>
+            </li>
+          ))
+        }
+      </ul>
+
+      <h2>Earlier this week</h2>
+      <ul class="changelog__list">
+        {
+          entries.map((entry) => (
+            <li>
+              <b>{entry.title}</b>
+              <span>{entry.text}</span>
+            </li>
+          ))
+        }
+      </ul>
+    </article>
+  </div>
+</Layout>

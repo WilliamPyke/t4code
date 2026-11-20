@@ -324,3 +324,22 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
     );
   },
 );
+
+it.effect("a restarted Sync answers the approval page an earlier one opened, for 30 minutes", () =>
+  Effect.gen(function* () {
+    const stored = new Map<string, Uint8Array>();
+    const secrets = Layer.mock(ServerSecretStore.ServerSecretStore)({
+      get: (name) => Effect.sync(() => Option.fromNullishOr(stored.get(name))),
+      set: (name, value) => Effect.sync(() => void stored.set(name, new Uint8Array(value))),
+    });
+    const request = CliTokenManager.pendingApprovalRequest().pipe(
+      Effect.provide(Layer.mergeAll(secrets, NodeCrypto.layer)),
+    );
+    const first = yield* request;
+    yield* TestClock.adjust(Duration.minutes(29));
+    assert.equal((yield* request).state, first.state);
+    assert.equal((yield* request).verifier, first.verifier);
+    yield* TestClock.adjust(Duration.minutes(2));
+    assert.notEqual((yield* request).state, first.state);
+  }),
+);

@@ -1,8 +1,6 @@
 import type { DesktopBridge, DesktopUpdateState } from "@t3tools/contracts";
 
-const FALLBACK_TRIAGE_COMMAND = "npx t3 triage";
-const DOWNLOAD_URL = "https://t3.codes/download";
-const ISSUE_URL = "https://github.com/pingdotgg/t3code/issues/new";
+const DOWNLOAD_URL = "https://tinkjam.com";
 const LAST_FAILURE_KEY = "t3code:boot-failed-at";
 const REPEAT_FAILURE_MS = 5 * 60_000;
 const MAX_CAUSES = 3;
@@ -23,7 +21,10 @@ function launcherCommand(launcherPath: string) {
     : `'${launcherPath.replaceAll("'", `'"'"'`)}'`;
 }
 
-/** Desktop can run its bundled launcher without Node; everything else falls back to npx. */
+/**
+ * The command that checks this computer's logs, from the desktop app's own launcher. Null in a
+ * browser: nothing there could run it, and `npx t3` would fetch a different product.
+ */
 export async function resolveTriageCommand(bridge: DesktopBridge | undefined) {
   try {
     const state = await bridge?.cliCommand.getState();
@@ -34,7 +35,7 @@ export async function resolveTriageCommand(bridge: DesktopBridge | undefined) {
   } catch (error) {
     console.warn("Could not read the desktop CLI state.", error);
   }
-  return FALLBACK_TRIAGE_COMMAND;
+  return null;
 }
 
 /** The update button only appears when the desktop updater has a newer build to offer. */
@@ -235,7 +236,7 @@ function mountUpdateButton(
           : undefined;
     run?.then(
       (result) => render(result.state),
-      (error: unknown) => console.warn("Could not update T3 Code.", error),
+      (error: unknown) => console.warn("Could not update Tinkjam.", error),
     );
   });
   // A pushed state is newer than the initial read, so the read must not overwrite it.
@@ -255,7 +256,7 @@ function mountUpdateButton(
 }
 
 export function showBootError(error: unknown) {
-  console.error("T3 Code failed to start.", error);
+  console.error("Tinkjam failed to start.", error);
   const bootShell = document.getElementById("boot-shell");
   if (!bootShell) return;
 
@@ -274,11 +275,11 @@ export function showBootError(error: unknown) {
   };
 
   const message = element("div", {}, [
-    element("h1", { textContent: "T3 Code failed to start" }),
+    element("h1", { textContent: "Tinkjam could not open" }),
     element("p", {
       textContent: offline
-        ? "This browser appears to be offline. Check the connection, then reload."
-        : "We are not sure why. Try a reload first.",
+        ? "You appear to be offline. Check your internet connection, then reload. Your boards are safe."
+        : "Your boards are safe: this is a problem opening the app, not with anything you made. Reloading usually fixes it.",
     }),
   ]);
   message.setAttribute("role", "alert");
@@ -293,7 +294,7 @@ export function showBootError(error: unknown) {
   const updateNote = element("p", { id: "boot-error-update-note", hidden: true });
   if (bridge) mountUpdateButton(bridge, update, updateNote, announce);
 
-  const command = element("code", { textContent: FALLBACK_TRIAGE_COMMAND });
+  const command = element("code");
   const copyCommand = element("button", {
     className: "boot-error-icon",
     type: "button",
@@ -318,7 +319,13 @@ export function showBootError(error: unknown) {
       },
     ),
   );
-  void resolveTriageCommand(bridge).then((value) => (command.textContent = value));
+  const triage = element("div", {}, [
+    element("p", {
+      textContent:
+        "Run this in a terminal on this computer. It checks the app's logs and says what went wrong.",
+    }),
+    element("div", { id: "boot-error-command" }, [command, copyCommand]),
+  ]);
 
   let report = "(no error message)";
   try {
@@ -327,7 +334,7 @@ export function showBootError(error: unknown) {
     console.warn("Could not describe the startup error.", reportError);
   }
   const details = element("pre", { id: "boot-error-details", tabIndex: 0, textContent: report });
-  const copyDetails = element("button", { type: "button", textContent: "Copy error details" });
+  const copyDetails = element("button", { type: "button", textContent: "Copy details" });
   copyDetails.addEventListener("click", () =>
     copyText(
       details,
@@ -342,46 +349,43 @@ export function showBootError(error: unknown) {
     ),
   );
 
-  const issue = new URL(ISSUE_URL);
-  issue.searchParams.set("template", "bug_report.yml");
-  issue.searchParams.set("title", "T3 Code failed to start");
-  issue.searchParams.set("area", "apps/web");
-  issue.searchParams.set("version", `${environment.version} (${environment.channel})`);
-  issue.searchParams.set("environment", `${environment.surface}, ${environment.platform}`);
   const link = (href: string, textContent: string) =>
     element("a", { href, textContent, target: "_blank", rel: "noreferrer" });
   const nightly = environment.channel === "nightly";
 
   const more = element("details", { open: isRepeatFailure(Date.now()) }, [
-    element("summary", { textContent: "More options if it keeps failing" }),
+    element("summary", { textContent: "If it keeps happening" }),
+    element("p", {
+      textContent: `${
+        bridge
+          ? "Quit Tinkjam and open it again."
+          : "Wait a few minutes and reload, or open Tinkjam in another browser."
+      } If you ask someone for help, send them the details below.`,
+    }),
     ...(bridge
       ? [
           link(
             nightly ? `${DOWNLOAD_URL}?channel=nightly` : DOWNLOAD_URL,
             nightly
               ? "Download and reinstall the latest nightly build"
-              : "Download and reinstall T3 Code",
+              : "Download and reinstall Tinkjam",
           ),
         ]
       : []),
     element("div", {}, [
-      element("p", {
-        textContent:
-          "Run this on the computer that runs T3 Code. Your agent can check the local logs and help you file a bug report.",
-      }),
-      element("div", { id: "boot-error-command" }, [command, copyCommand]),
-    ]),
-    element("div", {}, [
       details,
       element("p", {
-        textContent: "Details may include local file paths and names. Check before sharing.",
+        textContent: "The details may include file names from your computer. Check before sharing.",
       }),
-      element("div", { id: "boot-error-report" }, [
-        copyDetails,
-        link(issue.href, "File a bug report on GitHub"),
-      ]),
+      element("div", { id: "boot-error-report" }, [copyDetails]),
     ]),
   ]);
+
+  void resolveTriageCommand(bridge).then((value) => {
+    if (value === null) return;
+    command.textContent = value;
+    more.lastElementChild?.before(triage);
+  });
 
   bootShell.replaceChildren(
     element("div", { id: "boot-error" }, [

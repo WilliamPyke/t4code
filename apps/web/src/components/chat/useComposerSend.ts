@@ -57,7 +57,6 @@ import {
   collapseExpandedComposerCursor,
 } from "../../composer-logic";
 import { type ChatMessage, DEFAULT_INTERACTION_MODE } from "../../types";
-import { recordPromptSent } from "../GitHubStarPrompt";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { newMessageId, newThreadId } from "~/lib/utils";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
@@ -121,6 +120,14 @@ import {
   prepareTurnAttachments,
   restoreComposerDraft,
 } from "./chatViewSend";
+import {
+  readRoomArtifactDraft,
+  readRoomTaskDraft,
+  takeRoomArtifactToDraft,
+  takeRoomTaskToDraft,
+  withRoomArtifact,
+  withRoomTaskContext,
+} from "./roomTaskDraft";
 import type {
   EnvironmentProject,
   EnvironmentThreadShell,
@@ -469,7 +476,8 @@ export function useComposerSend(input: ComposerSendInput) {
         sendCtx.previewAnnotations.length > 0 ||
         sendCtx.reviewComments.length > 0 ||
         sendCtx.threadContexts.length > 0 ||
-        sendCtx.environmentContexts.length > 0
+        sendCtx.environmentContexts.length > 0 ||
+        sendCtx.roomUpdatesContexts.length > 0
       ) {
         toastManager.add(
           stackedThreadToast({
@@ -545,6 +553,7 @@ export function useComposerSend(input: ComposerSendInput) {
       reviewComments: composerReviewComments,
       threadContexts: composerThreadContexts,
       environmentContexts: composerEnvironmentContexts,
+      roomUpdatesContexts: composerRoomUpdatesContexts,
       selectedProvider: ctxSelectedProvider,
       selectedModel: ctxSelectedModel,
       selectedProviderModels: ctxSelectedProviderModels,
@@ -597,6 +606,7 @@ export function useComposerSend(input: ComposerSendInput) {
           previewAnnotations: composerPreviewAnnotations,
           threadContexts: composerThreadContexts,
           environmentContexts: composerEnvironmentContexts,
+          roomUpdatesContexts: composerRoomUpdatesContexts,
         },
         setThreadError,
       );
@@ -615,7 +625,8 @@ export function useComposerSend(input: ComposerSendInput) {
         composerPreviewAnnotations.length +
         composerReviewComments.length +
         composerThreadContexts.length +
-        composerEnvironmentContexts.length,
+        composerEnvironmentContexts.length +
+        composerRoomUpdatesContexts.length,
     });
     const feedbackCommand =
       ctxSelectedProvider === "codex" &&
@@ -625,7 +636,8 @@ export function useComposerSend(input: ComposerSendInput) {
       composerPreviewAnnotations.length === 0 &&
       composerReviewComments.length === 0 &&
       composerThreadContexts.length === 0 &&
-      composerEnvironmentContexts.length === 0
+      composerEnvironmentContexts.length === 0 &&
+      composerRoomUpdatesContexts.length === 0
         ? parseCodexFeedbackCommand(trimmed)
         : null;
     if (feedbackCommand && multipleModelSelections === null) {
@@ -681,7 +693,8 @@ export function useComposerSend(input: ComposerSendInput) {
       composerPreviewAnnotations.length === 0 &&
       composerReviewComments.length === 0 &&
       composerThreadContexts.length === 0 &&
-      composerEnvironmentContexts.length === 0;
+      composerEnvironmentContexts.length === 0 &&
+      composerRoomUpdatesContexts.length === 0;
     if (freshSessionAvailable && composerHoldsOnlyText && isClearComposerCommand(trimmed)) {
       armFreshSession(routeThreadKey);
       promptRef.current = "";
@@ -718,6 +731,12 @@ export function useComposerSend(input: ComposerSendInput) {
       return;
     }
     const threadIdForSend = activeThread.id;
+    const roomTaskAtSend = isServerThread
+      ? readRoomTaskDraft(scopeThreadRef(activeThread.environmentId, threadIdForSend))
+      : undefined;
+    const roomArtifactAtSend = isServerThread
+      ? readRoomArtifactDraft(scopeThreadRef(activeThread.environmentId, threadIdForSend))
+      : undefined;
     const sendSnapshot = snapshotComposerSend({
       prompt: promptForSend,
       images: composerImages,
@@ -728,6 +747,7 @@ export function useComposerSend(input: ComposerSendInput) {
       reviewComments: composerReviewComments,
       threadContexts: composerThreadContexts,
       environmentContexts: composerEnvironmentContexts,
+      roomUpdatesContexts: composerRoomUpdatesContexts,
     });
     const {
       files: composerFilesSnapshot,
@@ -737,6 +757,7 @@ export function useComposerSend(input: ComposerSendInput) {
       reviewComments: composerReviewCommentsSnapshot,
       threadContexts: composerThreadContextsSnapshot,
       environmentContexts: composerEnvironmentContextsSnapshot,
+      roomUpdatesContexts: composerRoomUpdatesContextsSnapshot,
       messageText: messageTextForSend,
     } = sendSnapshot;
     const {
@@ -773,6 +794,7 @@ export function useComposerSend(input: ComposerSendInput) {
         previewAnnotations: composerPreviewAnnotationsSnapshot,
         threadContexts: composerThreadContextsSnapshot,
         environmentContexts: composerEnvironmentContextsSnapshot,
+        roomUpdatesContexts: composerRoomUpdatesContextsSnapshot,
         attachments: composerAttachmentsSnapshot.map((attachment, index) => ({
           attachment,
           attachmentId: attachmentIds[index] ?? attachment.id,
@@ -1237,12 +1259,20 @@ export function useComposerSend(input: ComposerSendInput) {
             messageId: messageIdForSend,
             role: "user",
             attachments: turnAttachmentsResult.value,
-            ...withMessageContext({
-              text: outgoingMessageText,
-              context: buildOutgoingMessageContext(
-                boundAttachmentIds(turnAttachmentsResult.value, composerAttachmentsSnapshot),
+            ...withMessageContext(
+              withRoomArtifact(
+                {
+                  text: outgoingMessageText,
+                  context: withRoomTaskContext(
+                    buildOutgoingMessageContext(
+                      boundAttachmentIds(turnAttachmentsResult.value, composerAttachmentsSnapshot),
+                    ),
+                    roomTaskAtSend,
+                  ),
+                },
+                roomArtifactAtSend,
               ),
-            }),
+            ),
           },
           modelSelection: ctxSelectedModelSelection,
           titleSeed: title,
@@ -1322,7 +1352,6 @@ export function useComposerSend(input: ComposerSendInput) {
         ) {
           handleNewThreadInActiveProject();
         }
-        void recordPromptSent(environmentId);
       }
     }
 
@@ -1349,6 +1378,8 @@ export function useComposerSend(input: ComposerSendInput) {
         // The restored draft clones its images, so the sent copies are no longer used.
         optimisticBlobPreviews.release(optimisticMessage);
         const retryComposerImages = restoreComposerDraft(composerDraftTarget, sendSnapshot);
+        if (roomTaskAtSend !== undefined) takeRoomTaskToDraft(roomTaskAtSend);
+        if (roomArtifactAtSend !== undefined) takeRoomArtifactToDraft(roomArtifactAtSend);
         if (currentRouteThreadKeyRef.current === routeThreadKey) {
           promptRef.current = messageTextForSend;
           composerImagesRef.current = retryComposerImages;

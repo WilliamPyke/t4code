@@ -10,12 +10,13 @@ import { assert, beforeEach, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   allowed: new Set<string>(),
+  connected: true,
   readScope: vi.fn(),
   run: vi.fn(),
 }));
 
 vi.mock("react", () => ({ useCallback: (callback: unknown) => callback }));
-vi.mock("./session", () => ({ readEnvironmentScope: state.readScope }));
+vi.mock("./session", () => ({ readEnvironmentScopeAccess: state.readScope }));
 vi.mock("./use-atom-command", () => ({ useAtomCommand: () => state.run }));
 
 import { useOrchestrationCommand } from "./use-orchestration-command";
@@ -31,12 +32,16 @@ const target = (environmentId: EnvironmentId): Target => ({
 
 beforeEach(() => {
   state.allowed.clear();
+  state.connected = true;
   state.run.mockReset().mockResolvedValue(AsyncResult.success("receipt"));
   state.readScope
     .mockReset()
-    .mockImplementation(
-      (environmentId, scope) =>
-        scope === AuthOrchestrationOperateScope && state.allowed.has(environmentId),
+    .mockImplementation((environmentId, scope) =>
+      !state.connected
+        ? "not-connected"
+        : scope === AuthOrchestrationOperateScope && state.allowed.has(environmentId)
+          ? "granted"
+          : "denied",
     );
 });
 
@@ -47,7 +52,10 @@ it("checks the command's environment instead of borrowing the primary grant", as
   assert(result._tag === "Failure");
   const error = Cause.squash(result.cause);
   expect(error).toBeInstanceOf(EnvironmentAuthorizationError);
-  expect(error).toMatchObject({ requiredScope: AuthOrchestrationOperateScope });
+  expect(error).toMatchObject({
+    requiredScope: AuthOrchestrationOperateScope,
+    message: "This connection cannot change threads or projects.",
+  });
   expect(state.run).not.toHaveBeenCalled();
 
   expect(await mutate(target(first))).toMatchObject({ _tag: "Success", value: "receipt" });
@@ -70,4 +78,15 @@ it("does not dispatch a later mutation after access changes while awaiting a rec
   expect((await pending)._tag).toBe("Success");
   expect((await mutate(target(second)))._tag).toBe("Failure");
   expect(state.run).toHaveBeenCalledTimes(1);
+});
+
+it("says the machine is not connected when its session is not here, not that access is missing", async () => {
+  state.allowed.add(first);
+  state.connected = false;
+  const result = await useOrchestrationCommand(command, { reportFailure: false })(target(first));
+  assert(result._tag === "Failure");
+  expect(Cause.squash(result.cause)).toMatchObject({
+    message: "Not connected to this machine. Check that Tinkjam is running there.",
+  });
+  expect(state.run).not.toHaveBeenCalled();
 });

@@ -3,6 +3,7 @@ import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools
 import type { Thread } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
 import {
+  commandPaletteEnterItem,
   newThreadNoProjectIndex,
   buildNestedSearchItems,
   resolveCommandPaletteProject,
@@ -646,7 +647,7 @@ describe("buildThreadActionItems", () => {
     });
     const items = buildThreadActionItems({
       threads: [idThread, titleThread],
-      projectByKey: new Map([[`${LOCAL_ENVIRONMENT_ID}:${PROJECT_ID}`, { title: "T3 Code" }]]),
+      projectByKey: new Map([[`${LOCAL_ENVIRONMENT_ID}:${PROJECT_ID}`, { title: "Tinkjam" }]]),
       icon: null,
       runThread: async (_thread) => undefined,
     });
@@ -959,5 +960,31 @@ describe("newThreadNoProjectIndex", () => {
   it("keeps a pinned or current scratch project in its own place", () => {
     expect(newThreadNoProjectIndex([entry(false, true, true), entry()])).toBe(0);
     expect(newThreadNoProjectIndex([entry(true), entry(true, false, true), entry()])).toBe(1);
+  });
+});
+
+describe("commandPaletteEnterItem", () => {
+  const action = (value: string) => ({
+    kind: "action" as const,
+    value,
+    searchTerms: [value],
+    title: value,
+    icon: null,
+    run: async () => undefined,
+  });
+  const groups = [
+    { value: "board", label: "This board", items: [action("add-task"), action("fit")] },
+  ];
+  const rows = ["add-task", "fit"];
+
+  it("runs the row highlighted on screen, and the first one once the highlight is not listed", () => {
+    expect(commandPaletteEnterItem(groups, rows, "fit", true)?.value).toBe("fit");
+    // Typing narrowed the list away from what was highlighted: Enter runs the first row, at once.
+    expect(commandPaletteEnterItem(groups, rows, "add-note", true)?.value).toBe("add-task");
+    expect(commandPaletteEnterItem(groups, rows, null, true)?.value).toBe("add-task");
+    // A row still in the groups but no longer shown is never run.
+    expect(commandPaletteEnterItem(groups, ["fit"], "add-task", true)?.value).toBe("fit");
+    expect(commandPaletteEnterItem(groups, rows, null, false)).toBeNull();
+    expect(commandPaletteEnterItem(groups, [], null, true)).toBeNull();
   });
 });

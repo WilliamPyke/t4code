@@ -1592,6 +1592,114 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:guest-share:create",
       tag: WS_METHODS.guestShareCreate,
     }),
+    // One card move or note edit on a shared thread's board.
+    changeGuestBoard: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:guest-share:board",
+      tag: WS_METHODS.guestShareChangeBoard,
+    }),
+    // Prompts one of the owner's thread boxes on a shared thread's board; starts a turn.
+    promptRoomBox: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:guest-share:prompt-box",
+      tag: WS_METHODS.guestSharePromptBox,
+    }),
+    // Puts one of the owner's existing threads on a shared thread's board as a thread box.
+    addRoomBoxThread: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:guest-share:add-box-thread",
+      tag: WS_METHODS.guestShareAddBoxThread,
+    }),
+    // What a shared thread's link would bring to this environment, read before joining.
+    previewSharedThread: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:shared-thread:preview",
+      tag: WS_METHODS.sharedThreadPreview,
+    }),
+    joinSharedThread: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:shared-thread:join",
+      tag: WS_METHODS.sharedThreadJoin,
+    }),
+    // Stops a thread joined from a room showing its turns there.
+    leaveSharedRoom: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:shared-thread:leave",
+      tag: WS_METHODS.sharedThreadLeave,
+    }),
+    // Reads what the room said since the joined thread last caught up. Starts no turn.
+    catchUpSharedRoom: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:shared-thread:catch-up",
+      tag: WS_METHODS.sharedThreadCatchUp,
+    }),
+    // Finds the thread joined from a room and has its next turn answer a task card there.
+    takeSharedRoomTask: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:shared-thread:take-task",
+      tag: WS_METHODS.sharedThreadTakeTask,
+    }),
+    // Finds the thread joined from a room and reads an artifact card there for its draft.
+    takeSharedRoomArtifact: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:shared-thread:take-artifact",
+      tag: WS_METHODS.sharedThreadTakeArtifact,
+    }),
+    // Runs a prompt to the user's own thread box of a room in that box's thread on this machine.
+    promptSharedRoomBox: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:shared-thread:prompt-box",
+      tag: WS_METHODS.sharedThreadPromptBox,
+    }),
+    // Makes one of this machine's threads the thread behind the user's own new box on a room's board.
+    linkSharedRoomBox: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:shared-thread:link-box",
+      tag: WS_METHODS.sharedThreadLinkBox,
+    }),
+    // What this machine has of a room: the thread joined from it and its thread boxes' threads.
+    findSharedRoom: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:shared-thread:find-room",
+      tag: WS_METHODS.sharedThreadFindRoom,
+    }),
+    // One file's patch of a code window on the owner's board. Reads only.
+    readRoomCodePatch: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:guest-share:code-patch",
+      tag: WS_METHODS.guestShareCodePatch,
+    }),
+    // Reads a pull request window's pull request again, with this environment's GitHub sign-in.
+    refreshRoomPullRequest: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:guest-share:refresh-pull-request",
+      tag: WS_METHODS.guestShareRefreshPullRequest,
+    }),
+    // One file's patch of the user's own box's thread here, for a code window on a room's board.
+    readSharedRoomBoxPatch: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:shared-thread:box-patch",
+      tag: WS_METHODS.sharedThreadBoxPatch,
+    }),
+    // What the boards home draws of each board: counts, people and card rectangles. Read only.
+    roomBoardSummaries: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:guest-share:board-summaries",
+      tag: WS_METHODS.guestShareBoardSummaries,
+      staleTimeMs: 10_000,
+      refreshIntervalMs: 30_000,
+    }),
+    // Which guests have a shared thread open. Mounted only while the owner's guest list is open.
+    guestPresence: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:guest-share:presence",
+      tag: WS_METHODS.guestShareSubscribePresence,
+      idleTtlMs: 0,
+    }),
+    // Which guests' agents run a turn on their machines now. Mounted while the board is open.
+    guestRoomAgents: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:guest-share:room-agents",
+      tag: WS_METHODS.guestShareSubscribeRoomAgents,
+      idleTtlMs: 0,
+    }),
+    // The guests' pointers on the board. The owner's own shows to them only while this is read.
+    guestRoomCursors: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:guest-share:room-cursors",
+      tag: WS_METHODS.guestShareSubscribeRoomCursors,
+      idleTtlMs: 0,
+    }),
+    // Sends where the owner's pointer is on the board; a newer position replaces one not sent yet.
+    moveGuestRoomCursor: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:guest-share:move-cursor",
+      tag: WS_METHODS.guestShareMoveCursor,
+      concurrency: {
+        mode: "latest",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.shareId]),
+      },
+    }),
     // Off the config lane: answering a card must not queue behind settings
     // edits. One answer per card at a time.
     answerSecretRequest: createEnvironmentRpcCommand(runtime, {

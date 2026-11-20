@@ -173,6 +173,8 @@ function harness() {
       findActiveManagedForEnvironment: () => Effect.succeed([]),
       setHoldWebhooksWhileOffline: () => Effect.void,
       revokeForUser: () => Effect.succeed(false),
+      listOtherUsersForEnvironmentKey: () => Effect.succeed([]),
+      listOtherEnvironmentsForMachine: () => Effect.succeed([]),
       getForUser: (input) =>
         Effect.sync(() =>
           current.linked && !current.revokedEnvironments.includes(input.environmentId)

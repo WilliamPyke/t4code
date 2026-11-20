@@ -175,6 +175,26 @@ const olderBootServiceHome = Effect.fn("olderBootServiceHome")(
 );
 
 /**
+ * Whether a live process holds the ownership lock of `statePath`'s directory. It takes the lock
+ * for an instant, so call it only from a process that is not the owner.
+ */
+export const isServerOwnershipHeld = (statePath: string): boolean => {
+  const lockPath = NodePath.join(NodePath.dirname(statePath), "server-owner.sqlite");
+  if (!NodeFS.existsSync(lockPath)) return false;
+  let db: NodeSqlite.DatabaseSync | undefined;
+  try {
+    db = new NodeSqlite.DatabaseSync(lockPath);
+    db.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
+    db.exec("ROLLBACK;");
+    return false;
+  } catch (cause) {
+    return isSqliteBusy(cause);
+  } finally {
+    db?.close();
+  }
+};
+
+/**
  * Hold an exclusive lock on the state directory until the scope closes. The
  * lock is an exclusive transaction on `server-owner.sqlite`, which never holds
  * data and must never be unlinked: the OS releases it when the process exits,

@@ -1,0 +1,35 @@
+{
+  "name": "trellium-boards",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-28",
+  // Lets a board's object see a guest's stream request end when their page closes.
+  "compatibility_flags": ["enable_request_signal"],
+  "account_id": "df8279c833d38dca96f9a091ca3a9219",
+  "workers_dev": false,
+  "routes": [
+    { "pattern": "boards.trellium.org", "custom_domain": true },
+    { "pattern": "boards.tinkjam.com", "custom_domain": true },
+  ],
+  "vars": {
+    // Pages that may call the board host from a browser, separated by commas. A signed-in
+    // person's session token must also have been made for one of them.
+    "ALLOWED_ORIGINS": "https://app.tinkjam.com,https://app.trellium.org,http://localhost:5733",
+    // The Clerk instance's Frontend API origin (the host in the web app's publishable key). Its
+    // public keys verify sessions; no Clerk secret is used. Empty turns accounts off.
+    "CLERK_ISSUER": "https://adequate-quail-9442.clerk.accounts.dev",
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "BOARDS", "class_name": "BoardRoom" },
+      { "name": "CREATE_LIMITS", "class_name": "CreateLimit" },
+      { "name": "ACCOUNTS", "class_name": "BoardAccount" },
+      { "name": "WORKSPACES", "class_name": "BoardWorkspace" },
+    ],
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["BoardRoom", "CreateLimit"] },
+    { "tag": "v2", "new_sqlite_classes": ["BoardAccount"] },
+    { "tag": "v3", "new_sqlite_classes": ["BoardWorkspace"] },
+  ],
+  "observability": { "enabled": true },
+}

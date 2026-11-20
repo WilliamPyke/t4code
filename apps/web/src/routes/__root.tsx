@@ -7,11 +7,11 @@ import {
   createRootRoute,
   type ErrorComponentProps,
   useLocation,
-  useNavigate,
+  useMatches,
   useRouter,
 } from "@tanstack/react-router";
 import { Check, Copy } from "lucide";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 
 import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
@@ -19,8 +19,16 @@ import { CommandPalette } from "../components/CommandPalette";
 import { CustomSnoozeDialogHost } from "../components/CustomSnoozeDialog";
 import { GuestShareDialogHost } from "../components/chat/GuestShareControls";
 import { UseInAnotherAppDialogHost } from "../components/mcp/UseInAnotherAppDialog";
+import { NewTeamDialogHost } from "../components/teams/NewTeamDialog";
+import { useHomeFocus } from "../components/boards/homeFocus";
+import { NewBoardDialogHost } from "../components/boards/newBoard";
 import { AddProjectToMachineDialogHost } from "../components/AddProjectToMachineDialog";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
+import { ConnectComputerDialogHost } from "../components/ConnectComputerDialog";
+import { isSignInPath } from "../components/sidebar/mainAppLocation";
+import { AdvancedOnlyPage } from "../components/shell/AdvancedOnlyPage";
+import { DocumentTitleSync } from "../components/shell/DocumentTitleSync";
+import { OfflineNote } from "../components/shell/OfflineNote";
 import { DevReplayHost } from "../components/DevReplayHost";
 import { FirstRunGate } from "../components/onboarding/FirstRunGate";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
@@ -37,6 +45,7 @@ import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { Button } from "../components/ui/button";
 import { MorphIcon } from "~/components/MorphIcon";
+import { TinkjamMark } from "../components/TinkjamLogo";
 import { StandalonePage, StandalonePageHeader } from "../components/ui/standalone-page";
 import { AnchoredToastProvider, ToastProvider } from "../components/ui/toast";
 import { isElectron } from "../env";
@@ -50,22 +59,26 @@ import {
 import { useUiStateStore } from "../uiStateStore";
 import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
-import { GUEST_PAGE_PATH } from "../guestPage";
-import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
+import { hasGuestShares } from "../guest/guestShares";
+import { isGuestEntryPath, setGuestOnlySession } from "../guestPage";
+import { hostedPairingRequestOn, isHostedStaticApp } from "../hostedPairing";
 import { useHostedPromptLinkLanding } from "../components/promptLinks/HostedPromptLinkLanding";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
 import { useAtomValue } from "@effect/atom-react";
 import { primaryServerConfigAtom, primaryServerWelcomeAtom } from "../state/server";
 import { readProject } from "../state/entities";
+import { useShellMode } from "../shellMode";
+import { advancedOnlyPageName } from "../shellMode.logic";
+import { useHasComputer } from "../state/environments";
+import { ComputerReconnectCoordinator } from "../components/guest/ComputerReconnectCoordinator";
 
 import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
 import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
-    // Guest links open on the owner's tunnel host in a browser with no T3 session, and must
-    // not trigger pairing or an environment connection.
-    if (location.pathname === GUEST_PAGE_PATH) {
+    // A guest link asks for a name before anything connects, and must not trigger pairing.
+    if (isGuestEntryPath(location.pathname)) {
       return {
         authGateState: {
           status: "guest",
@@ -73,7 +86,7 @@ export const Route = createRootRoute({
       };
     }
 
-    if (location.pathname === "/pair" && hasHostedPairingRequest(new URL(window.location.href))) {
+    if (hostedPairingRequestOn(location.pathname) !== null) {
       return {
         authGateState: {
           status: "hosted-pairing",
@@ -82,6 +95,7 @@ export const Route = createRootRoute({
     }
 
     if (isLocalEnvironmentDisabled() || isHostedStaticApp(new URL(window.location.href))) {
+      setGuestOnlySession(false);
       return {
         authGateState: {
           status: "hosted-static",
@@ -90,6 +104,17 @@ export const Route = createRootRoute({
     }
 
     const authGateState = await resolveInitialServerAuthGateState();
+    // No session on this host, but threads shared from it or elsewhere: the app opens with
+    // those and nothing of this host's own.
+    const guestOnly = authGateState.status !== "authenticated" && hasGuestShares();
+    setGuestOnlySession(guestOnly);
+    if (guestOnly) {
+      return {
+        authGateState: {
+          status: "guest",
+        } as const,
+      };
+    }
     if (authGateState.status === "authenticated") {
       // Idempotent, so every navigation can ask for it.
       void configureClientTracing();
@@ -118,12 +143,15 @@ function RootRouteNotFoundView() {
   return (
     <main className="flex min-h-0 min-w-0 flex-1 items-center justify-center p-6">
       <div className="flex max-w-sm flex-col items-center gap-4 text-center">
-        <h1 className="text-lg font-medium text-foreground">Page not found</h1>
+        <TinkjamMark aria-hidden className="size-10" />
+        <h1 className="font-heading text-2xl leading-tight font-semibold tracking-brand text-foreground">
+          Nothing here
+        </h1>
         <p className="text-sm text-muted-foreground">
-          This link doesn't point to a page in {APP_DISPLAY_NAME}. Go home to choose a project or
-          start a thread.
+          This link does not lead to anything in Tinkjam. The board may have been deleted, or the
+          link may be cut short.
         </p>
-        <Button render={<Link to="/" replace />}>Go home</Button>
+        <Button render={<Link to="/" replace />}>Go to your boards</Button>
       </div>
     </main>
   );
@@ -135,6 +163,8 @@ function RootRouteView() {
   return (
     <ToastProvider>
       <AnchoredToastProvider>
+        {/* Boards and the app shell alike wait on the person's computers. */}
+        <ComputerReconnectCoordinator />
         <RootRouteBranch />
       </AnchoredToastProvider>
     </ToastProvider>
@@ -143,20 +173,30 @@ function RootRouteView() {
 
 function RootRouteBranch() {
   const pathname = useLocation({ select: (location) => location.pathname });
+  // The location moves when a navigation starts; the page drawn stays until the next has loaded.
+  const drawnPathname = useMatches({ select: (matches) => matches.at(-1)?.pathname ?? pathname });
+  const homeFocused = useHomeFocus(drawnPathname);
   const { authGateState } = Route.useRouteContext();
   const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
   // A sync IPC read; the setting only changes across a relaunch.
   const [localEnvironmentDisabled] = useState(isLocalEnvironmentDisabled);
-  // Once true, stays true: a visit to /welcome means the bootstrap already chose a route.
-  const [returningFromWelcome, setReturningFromWelcome] = useState(pathname === "/welcome");
-  if (pathname === "/welcome" && !returningFromWelcome) setReturningFromWelcome(true);
   const hostedPromptLinkLanding = useHostedPromptLinkLanding(
     authGateState.status === "hosted-static",
   );
+  const shellMode = useShellMode();
+  const hasComputer = useHasComputer();
+  const advancedOnlyPage =
+    shellMode === "simple" ? advancedOnlyPageName(pathname, hasComputer) : null;
 
-  if (pathname === GUEST_PAGE_PATH) return <Outlet />;
+  // By the page drawn: a guest's page keeps the window, and its cover, until the board has loaded.
+  if (isGuestEntryPath(drawnPathname)) return <Outlet />;
 
-  if (pathname === "/pair" || pathname === "/connect" || pathname === "/connect-agent") {
+  if (
+    pathname === "/pair" ||
+    pathname === "/connect" ||
+    pathname === "/connect-agent" ||
+    isSignInPath(pathname)
+  ) {
     return <Outlet />;
   }
 
@@ -166,7 +206,10 @@ function RootRouteBranch() {
   }
 
   const isWelcome = pathname === "/welcome";
-  if (authGateState.status !== "authenticated" && authGateState.status !== "hosted-static") {
+  // A guest gets the same shell a hosted app with no machine of its own gets.
+  const withoutLocalEnvironment =
+    authGateState.status === "hosted-static" || authGateState.status === "guest";
+  if (authGateState.status !== "authenticated" && !withoutLocalEnvironment) {
     return <Outlet />;
   }
 
@@ -190,14 +233,20 @@ function RootRouteBranch() {
       <ProjectCloneToastCoordinator />
       <AddProjectToMachineDialogHost />
       <UseInAnotherAppDialogHost />
+      <NewTeamDialogHost />
+      <NewBoardDialogHost />
+      <ConnectComputerDialogHost />
+      <DocumentTitleSync />
+      <OfflineNote />
       {import.meta.env.DEV && primaryEnvironmentAuthenticated ? <DevReplayHost /> : null}
     </>
   );
   const appShell = (
     <CommandPalette>
-      {/* Setup starts with an empty workspace, so the Welcome page has no thread list. */}
-      <AppSidebarLayout showSidebar={!isWelcome}>
-        <Outlet />
+      {/* Setup starts with an empty workspace, so the Welcome page has no thread list. Nor has the
+          boards home before a first board. */}
+      <AppSidebarLayout showSidebar={!isWelcome && !homeFocused}>
+        {advancedOnlyPage === null ? <Outlet /> : <AdvancedOnlyPage name={advancedOnlyPage} />}
       </AppSidebarLayout>
     </CommandPalette>
   );
@@ -213,12 +262,10 @@ function RootRouteBranch() {
       ) : (
         <FirstRunGate
           enabled={primaryEnvironmentAuthenticated}
-          hostedStatic={authGateState.status === "hosted-static"}
+          hostedStatic={withoutLocalEnvironment}
         >
           {appHosts}
-          {primaryEnvironmentAuthenticated ? (
-            <EventRouter skipInitialBootstrapNavigation={returningFromWelcome} />
-          ) : null}
+          {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
           {appShell}
         </FirstRunGate>
       )}
@@ -237,24 +284,40 @@ function RootRouteErrorView({ error }: ErrorComponentProps) {
 
   return (
     <StandalonePage>
-      <StandalonePageHeader title="Something went wrong." description={message} />
+      <TinkjamMark aria-hidden className="mb-4 size-10" />
+      <StandalonePageHeader
+        title="Something went wrong"
+        description="Tinkjam could not show this page. Your boards are safe. Try again, or go back to your boards."
+      />
 
       <div className="mt-5 flex flex-wrap gap-2">
         <Button size="sm" onClick={() => void router.invalidate()}>
           Try again
         </Button>
-        <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
-          Reload app
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => void router.navigate({ to: "/" }).then(() => router.invalidate())}
+        >
+          Go to your boards
         </Button>
-        <CopyErrorButton report={report} />
+        <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
+          Reload the page
+        </Button>
       </div>
 
-      <div className="mt-5 overflow-hidden rounded-lg border border-border/70 bg-background/55">
-        <p className="px-3 py-1.5 text-xs font-medium text-muted-foreground">Error report</p>
-        <pre className="max-h-64 overflow-auto border-t border-border/70 bg-background/80 px-3 py-2 text-xs whitespace-pre-wrap text-foreground/85">
-          {report}
-        </pre>
-      </div>
+      <details className="mt-6 text-sm">
+        <summary className="cursor-pointer text-muted-foreground">Technical details</summary>
+        <p className="mt-2 text-muted-foreground">{message}</p>
+        <div className="mt-2">
+          <CopyErrorButton report={report} />
+        </div>
+        <div className="mt-3 overflow-hidden rounded-lg border border-border/70 bg-background/55">
+          <pre className="max-h-64 overflow-auto bg-background/80 px-3 py-2 text-xs whitespace-pre-wrap text-foreground/85">
+            {report}
+          </pre>
+        </div>
+      </details>
     </StandalonePage>
   );
 }
@@ -279,7 +342,7 @@ function errorMessage(error: unknown): string {
     return error;
   }
 
-  return "An unexpected router error occurred.";
+  return "The page stopped without saying why.";
 }
 
 function errorDetails(error: unknown): string {
@@ -317,66 +380,32 @@ function errorReport(error: unknown, pathname: string): string {
   return lines.join("\n");
 }
 
-function EventRouter({
-  skipInitialBootstrapNavigation,
-}: {
-  readonly skipInitialBootstrapNavigation: boolean;
-}) {
-  const navigate = useNavigate();
-  const pathname = useLocation({ select: (loc) => loc.pathname });
+// The home is the boards list, so a server's bootstrap thread only expands its project in the
+// sidebar; it never takes "/" away from the boards.
+function EventRouter() {
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const serverConfig = useAtomValue(primaryServerConfigAtom);
   const serverWelcome = useAtomValue(primaryServerWelcomeAtom);
-  const readPathname = useEffectEvent(() => pathname);
-  const handledBootstrapThreadIdRef = useRef<string | null>(null);
-  const skipInitialBootstrapNavigationRef = useRef(skipInitialBootstrapNavigation);
 
   const handleWelcome = useEffectEvent((payload: ServerLifecycleWelcomePayload | null) => {
-    if (!payload) return;
-
-    void (async () => {
-      if (!payload.bootstrapProjectId || !payload.bootstrapThreadId) {
-        return;
-      }
-      const bootstrapProject = readProject(
+    if (!payload?.bootstrapProjectId || !payload.bootstrapThreadId) return;
+    const bootstrapProject = readProject(
+      scopeProjectRef(payload.environment.environmentId, payload.bootstrapProjectId),
+    );
+    const bootstrapProjectKey =
+      (bootstrapProject
+        ? deriveLogicalProjectKeyFromSettings(bootstrapProject, projectGroupingSettings)
+        : null) ??
+      (serverConfig?.cwd
+        ? derivePhysicalProjectKeyFromPath(payload.environment.environmentId, serverConfig.cwd)
+        : null) ??
+      scopedProjectKey(
         scopeProjectRef(payload.environment.environmentId, payload.bootstrapProjectId),
       );
-      const bootstrapProjectKey =
-        (bootstrapProject
-          ? deriveLogicalProjectKeyFromSettings(bootstrapProject, projectGroupingSettings)
-          : null) ??
-        (serverConfig?.cwd
-          ? derivePhysicalProjectKeyFromPath(payload.environment.environmentId, serverConfig.cwd)
-          : null) ??
-        scopedProjectKey(
-          scopeProjectRef(payload.environment.environmentId, payload.bootstrapProjectId),
-        );
-      useUiStateStore.getState().setProjectExpanded(bootstrapProjectKey, true);
-
-      if (readPathname() !== "/") {
-        return;
-      }
-      if (skipInitialBootstrapNavigationRef.current) {
-        skipInitialBootstrapNavigationRef.current = false;
-        handledBootstrapThreadIdRef.current = payload.bootstrapThreadId;
-        return;
-      }
-      if (handledBootstrapThreadIdRef.current === payload.bootstrapThreadId) {
-        return;
-      }
-      await navigate({
-        to: "/$environmentId/$threadId",
-        params: {
-          environmentId: payload.environment.environmentId,
-          threadId: payload.bootstrapThreadId,
-        },
-        replace: true,
-      });
-      handledBootstrapThreadIdRef.current = payload.bootstrapThreadId;
-    })().catch(() => undefined);
+    useUiStateStore.getState().setProjectExpanded(bootstrapProjectKey, true);
   });
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- expands the bootstrap project in the UI store and navigates the router on a server welcome
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- expands the bootstrap project in the UI store on a server welcome
   useEffect(() => {
     handleWelcome(serverWelcome);
   }, [serverWelcome]);

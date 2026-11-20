@@ -114,6 +114,16 @@ export const hostedAppUrlConfig = makePublicValueConfig(
   DEFAULT_HOSTED_APP_URL,
 ).pipe(Config.mapEffect(validateHostedAppUrl));
 
+/**
+ * The hosted app only when this server was told about one. Guest links open there instead of on
+ * this server's own host; the default app belongs to another deployment and cannot open them.
+ */
+export const configuredHostedAppUrlConfig = Config.NonEmptyString("T3CODE_HOSTED_APP_URL").pipe(
+  Config.map((value) => value.trim()),
+  Config.mapEffect(validateHostedAppUrl),
+  Config.option,
+);
+
 function validateHostedAppUrl(value: string) {
   try {
     const url = new URL(value);

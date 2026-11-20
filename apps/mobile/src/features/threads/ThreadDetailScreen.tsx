@@ -199,7 +199,7 @@ import { WorkspaceMutationIdProvider } from "./WorkspaceMutationIdProvider";
 import { useThreadTurnSubagents } from "./ThreadAgentsSheet";
 import { ComposerQueuedEditBanner } from "./ComposerQueuedEdit";
 import { useThreadQueuedCount } from "./ThreadQueueControl";
-import { ThreadGuestShareBar } from "./ThreadGuestShareBar";
+import { ThreadGuestShareBar, ThreadRoomLinkBar } from "./ThreadGuestShareBar";
 import { ThreadSideChatsRow } from "./ThreadSideChatsRow";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-scroll-position";
@@ -1628,6 +1628,11 @@ function ThreadDetailBody(
                     <ThreadGuestShareBar
                       threadRef={props.selectedThreadDetailRef}
                       canOperateThread={props.canOperateThread}
+                    />
+                    <ThreadRoomLinkBar
+                      key={selectedThreadKey}
+                      threadRef={props.selectedThreadDetailRef}
+                      draftKey={props.composerDraftKey}
                     />
                     {props.draftMode ? null : (
                       <ThreadSideChatsRow

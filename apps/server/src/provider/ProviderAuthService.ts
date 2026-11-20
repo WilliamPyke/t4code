@@ -83,7 +83,7 @@ export const makeProviderAuthService = Effect.gen(function* () {
         instanceId,
         operation,
         detail: instance
-          ? "This provider does not support sign-in in T3 Code."
+          ? "You cannot sign in to this agent from Tinkjam. Sign in to it on its own, on this computer."
           : "This provider instance is no longer available.",
       });
     }

@@ -227,6 +227,16 @@ export type ProjectionSettlementCandidate = Pick<
     readonly latestUserAuthoredMessageAt: DateTime.Utc | null;
   };
 
+/** The owner's threads in thread boxes on a thread's board, as a shell field. */
+const boardBoxThreadIdsOf = (
+  thread: Pick<OrchestrationV2AppThread, "guestShare" | "roomBoard">,
+) => {
+  const ids = Object.values(
+    thread.guestShare?.boardThreads ?? thread.roomBoard?.boardThreads ?? {},
+  );
+  return ids.length === 0 ? {} : { boardBoxThreadIds: ids };
+};
+
 const ProjectionCheckpointContext = Schema.Struct({
   runs: Schema.Array(
     OrchestrationV2RunJsonSchema.mapFields(({ id, ordinal, status }) => ({ id, ordinal, status })),
@@ -544,6 +554,11 @@ export interface ProjectionStoreV2Shape {
   readonly findGuestShareThreadId: (
     shareId: GuestShareId,
   ) => Effect.Effect<ThreadId | null, ProjectionStoreV2Error>;
+  /** Every thread a share records behind one of its thread boxes, with its room thread. */
+  readonly listRoomBoxThreads: () => Effect.Effect<
+    ReadonlyArray<{ readonly roomThreadId: ThreadId; readonly boxThreadId: ThreadId }>,
+    ProjectionStoreV2Error
+  >;
   readonly getThread: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2AppThread, ProjectionStoreV2Error>;
@@ -1668,6 +1683,9 @@ export function threadShellFromProjection(
     ),
     pendingRuntimeRequest,
     pendingGuestMessageCount: pendingGuestMessageCount(projection.thread.guestShare),
+    ...((projection.thread.guestShare ?? null) === null ? {} : { guestShared: true }),
+    ...((projection.thread.roomBoard ?? null) === null ? {} : { hasRoomBoard: true }),
+    ...boardBoxThreadIdsOf(projection.thread),
     // Thread detail owns message bodies. Keeping them out of shell rows makes
     // initial hydration and streaming updates independent of transcript size.
     latestVisibleMessage: null,
@@ -1944,6 +1962,9 @@ function shellFromState(input: {
     usageLimitResetAt: input.state.usageLimitResetAt,
     pendingRuntimeRequest: input.state.pendingRuntimeRequest,
     pendingGuestMessageCount: pendingGuestMessageCount(input.state.thread.guestShare),
+    ...((input.state.thread.guestShare ?? null) === null ? {} : { guestShared: true }),
+    ...((input.state.thread.roomBoard ?? null) === null ? {} : { hasRoomBoard: true }),
+    ...boardBoxThreadIdsOf(input.state.thread),
     latestVisibleMessage: null,
     latestUserMessageAt: input.state.latestUserMessageAt,
     latestUserAuthoredMessageAt: input.state.latestUserAuthoredMessageAt,
@@ -6688,6 +6709,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   activityRunStartedAt: null,
                   pendingRuntimeRequest: null,
                   pendingGuestMessageCount: pendingGuestMessageCount(thread.guestShare),
+                  ...((thread.guestShare ?? null) === null ? {} : { guestShared: true }),
+                  ...((thread.roomBoard ?? null) === null ? {} : { hasRoomBoard: true }),
+                  ...boardBoxThreadIdsOf(thread),
                   pendingBackgroundTasks: derivePendingBackgroundWork({
                     latestRun:
                       latestRunId === null || status === "idle"
@@ -7354,6 +7378,24 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       return rows[0] === undefined ? null : ThreadId.make(rows[0].thread_id);
     }, Effect.mapError(shellSnapshotReadError));
 
+    const listRoomBoxThreads = Effect.fn("ProjectionStore.listRoomBoxThreads")(function* () {
+      const rows = yield* sql<{ readonly room_thread_id: string; readonly box_thread_id: string }>`
+        SELECT thread.thread_id AS room_thread_id, box.value AS box_thread_id
+        FROM orchestration_v2_projection_threads AS thread,
+          json_each(thread.payload_json, '$.guestShare.boardThreads') AS box
+        WHERE thread.deleted_at IS NULL
+        UNION ALL
+        SELECT thread.thread_id AS room_thread_id, box.value AS box_thread_id
+        FROM orchestration_v2_projection_threads AS thread,
+          json_each(thread.payload_json, '$.roomBoard.boardThreads') AS box
+        WHERE thread.deleted_at IS NULL
+      `;
+      return rows.map((row) => ({
+        roomThreadId: ThreadId.make(row.room_thread_id),
+        boxThreadId: ThreadId.make(row.box_thread_id),
+      }));
+    }, Effect.mapError(shellSnapshotReadError));
+
     const listOlderSettledThreads: ProjectionStoreV2Shape["listOlderSettledThreads"] = Effect.fn(
       "ProjectionStore.listOlderSettledThreads",
     )(function* ({ before, projectIds, limit }) {
@@ -7505,6 +7547,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       listOlderSettledThreads: readOnReader(listOlderSettledThreads),
       getThreadShell: readOnReader(getThreadShell),
       findGuestShareThreadId: readOnReader(findGuestShareThreadId),
+      listRoomBoxThreads: readOnReader(listRoomBoxThreads),
       getThread: readOnReader(getThread),
       getSettlementCandidates: readOnReader(getSettlementCandidates),
       getThreadsWithPullRequests: readOnReader(getThreadsWithPullRequests),

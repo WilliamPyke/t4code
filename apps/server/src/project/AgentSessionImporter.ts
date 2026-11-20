@@ -10,7 +10,6 @@ import {
   AgentSessionScanError,
   AgentSessionSource,
   EventId,
-  MessageId,
   ProjectId,
   ProviderDriverKind,
   ThreadId,
@@ -18,10 +17,8 @@ import {
   type AgentSessionImportInput,
   type AgentSessionImportResult,
   type OrchestrationV2AppThread,
-  type OrchestrationV2ConversationMessage,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderThread,
-  type OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
@@ -34,6 +31,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as EventSink from "../orchestration-v2/EventSink.ts";
+import { importedMessage } from "../orchestration-v2/importedHistory.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
@@ -94,62 +92,10 @@ function messageEvents(input: {
   readonly index: number;
   readonly message: AgentSessionScanner.AgentSessionThreadMessage;
 }): ReadonlyArray<OrchestrationV2DomainEvent> {
-  const ordinal = input.index + 1;
-  const suffix = String(input.index).padStart(6, "0");
-  const messageId = MessageId.make(`${input.threadId}:${suffix}`);
-  const turnItemId = TurnItemId.make(
-    `${IMPORT_EVENT_PREFIX}:turn-item:${input.threadId}:${suffix}`,
-  );
-  const at = dateTime(input.message.createdAt);
-  const message: OrchestrationV2ConversationMessage = {
-    createdBy: input.message.role === "user" ? "user" : "agent",
-    creationSource: "server",
-    id: messageId,
-    threadId: input.threadId,
-    runId: null,
-    nodeId: null,
-    role: input.message.role,
-    text: input.message.text,
-    attachments: [],
-    streaming: false,
-    createdAt: at,
-    updatedAt: at,
-  };
-  const common = {
-    id: turnItemId,
-    threadId: input.threadId,
-    runId: null,
-    nodeId: null,
-    providerThreadId: null,
-    providerTurnId: null,
-    nativeItemRef: null,
-    parentItemId: null,
-    ordinal,
-    status: "completed" as const,
-    title: null,
-    startedAt: at,
-    completedAt: at,
-    updatedAt: at,
-  };
-  const turnItem: OrchestrationV2TurnItem =
-    input.message.role === "user"
-      ? {
-          ...common,
-          createdBy: "user",
-          creationSource: "server",
-          type: "user_message",
-          messageId,
-          inputIntent: "turn_start",
-          text: input.message.text,
-          attachments: [],
-        }
-      : {
-          ...common,
-          type: "assistant_message",
-          messageId,
-          text: input.message.text,
-          streaming: false,
-        };
+  const { at, suffix, message, turnItem } = importedMessage({
+    ...input,
+    idPrefix: IMPORT_EVENT_PREFIX,
+  });
   return [
     {
       id: EventId.make(`${IMPORT_EVENT_PREFIX}:message:${input.threadId}:${suffix}`),

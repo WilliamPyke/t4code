@@ -26,7 +26,7 @@ import {
   type ThreadId,
   type ThreadEnvMode,
   type UploadChatAttachment,
-  type GuestMessageId,
+  type GuestId,
 } from "@t3tools/contracts";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
@@ -421,7 +421,8 @@ function simpleThreadCommand(
     | "thread.settle"
     | "thread.pin"
     | "thread.unpin"
-    | "thread.guest-share.close",
+    | "thread.guest-share.close"
+    | "thread.room-board.clear",
   input: ThreadCommandInput,
 ) {
   return allocateCommandId(input).pipe(
@@ -447,35 +448,42 @@ export const closeGuestShare = Effect.fn("EnvironmentCommands.closeGuestShare")(
   return yield* simpleThreadCommand("thread.guest-share.close", input);
 });
 
-export interface ResolveGuestMessageInput extends ThreadCommandInput {
-  readonly guestMessageId: GuestMessageId;
-  readonly decision: "send" | "dismiss";
-  readonly creationSource?: "web" | "mobile";
-}
-/** Send runs the guest's text as a normal turn; the server supplies the text, not the client. */
-export const resolveGuestMessage = Effect.fn("EnvironmentCommands.resolveGuestMessage")(function* (
-  input: ResolveGuestMessageInput,
+/** Removes every card, arrow and comment thread from a thread's board, shared or kept. */
+export const clearRoomBoard = Effect.fn("EnvironmentCommands.clearRoomBoard")(function* (
+  input: ThreadCommandInput,
 ) {
-  const commandId = yield* allocateCommandId(input);
-  if (input.decision === "dismiss") {
-    return yield* dispatch({
-      type: "thread.guest-message.dismiss",
-      commandId,
-      threadId: input.threadId,
-      guestMessageId: input.guestMessageId,
-    });
-  }
+  return yield* simpleThreadCommand("thread.room-board.clear", input);
+});
+
+export interface SetGuestTrustInput extends ThreadCommandInput {
+  readonly guestId: GuestId;
+  readonly trusted: boolean;
+}
+/** Lets a guest's messages reach the agent without a Send for each one, or stops that. */
+export const setGuestTrust = Effect.fn("EnvironmentCommands.setGuestTrust")(function* (
+  input: SetGuestTrustInput,
+) {
   return yield* dispatch({
-    type: "message.dispatch",
-    commandId,
+    type: "thread.guest.trust",
+    commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
-    messageId: MessageId.make(commandId),
-    guestMessageId: input.guestMessageId,
-    text: "",
-    attachments: [],
-    dispatchMode: { type: "queue_after_active" },
-    createdBy: "user",
-    creationSource: input.creationSource ?? "web",
+    guestId: input.guestId,
+    trusted: input.trusted,
+  });
+});
+
+export interface RemoveGuestInput extends ThreadCommandInput {
+  readonly guestId: GuestId;
+}
+/** Removes one guest. The link then lets no one new in, so they cannot join again. */
+export const removeGuest = Effect.fn("EnvironmentCommands.removeGuest")(function* (
+  input: RemoveGuestInput,
+) {
+  return yield* dispatch({
+    type: "thread.guest.remove",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    guestId: input.guestId,
   });
 });
 

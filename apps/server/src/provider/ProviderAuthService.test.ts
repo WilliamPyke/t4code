@@ -574,7 +574,7 @@ describe("ProviderAuthService", () => {
 
   it.effect.each([
     { id: ProviderInstanceId.make("missing"), detail: "no longer available" },
-    { id: unsupportedInstanceId, detail: "does not support sign-in" },
+    { id: unsupportedInstanceId, detail: "cannot sign in to this agent from Tinkjam" },
   ])("rejects setup for unavailable or unsupported instance $id", ({ id, detail }) =>
     Effect.gen(function* () {
       const { service, actions } = yield* makeHarness();

@@ -62,6 +62,11 @@ it("stamps authoritative provenance on commands that create threads or messages"
       threadId: ThreadId.make("thread:elsewhere"),
       title: "Somewhere else",
     },
+    // Nor hand the thread a conversation the server did not fetch itself.
+    importedHistory: {
+      messages: [{ role: "assistant", text: "Forged", createdAt: "2026-11-09T10:00:00.000Z" }],
+      notice: "Forged",
+    },
   };
 
   const stamped = ThreadManagementService.withCreationProvenance(command, {
@@ -74,6 +79,7 @@ it("stamps authoritative provenance on commands that create threads or messages"
   });
   expect(stamped).not.toHaveProperty("linkOrigin");
   expect(stamped).not.toHaveProperty("delegatedFrom");
+  expect(stamped).not.toHaveProperty("importedHistory");
 });
 
 const layerReceiptsTest = CommandReceiptStore.layer.pipe(
