@@ -5,8 +5,8 @@ import * as NodeCrypto from "node:crypto";
 
 /**
  * Release keys every Tinkjam Sync trusts, by keyId: SPKI (DER, base64) of an ECDSA P-256 key.
- * The second is held back for rotation. The same keys are in apps/sync-windows/src/ReleaseSignature.cs
- * and apps/sync-mac/Sources/TinkjamSync/ReleaseSignature.swift; `node scripts/sign-release.ts public` prints them.
+ * The second is held back for rotation. The same keys are in the tinkjam-sync repository (ReleaseSignature.cs,
+ * ReleaseSignature.swift, signature.rs); `node scripts/sign-release.ts public` prints them.
  */
 export const RELEASE_PUBLIC_KEYS: Readonly<Record<string, string>> = {
   ef314cdf2274b761:

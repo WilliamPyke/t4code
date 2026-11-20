@@ -1,5 +1,5 @@
 // How each computer gets Tinkjam Sync, the one list every place that offers it reads. Served
-// beside the homepage (see apps/sync-mac and apps/sync-windows). When an OS gets files a browser
+// beside the homepage (the apps are in the tinkjam-sync repository). When an OS gets files a browser
 // download can open (a notarized Mac build, Linux packages), switch its entry to `method: "file"`.
 const DOWNLOADS = "https://tinkjam.com/downloads";
 

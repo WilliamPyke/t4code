@@ -45,7 +45,7 @@ describe("syncNeedsApproval", () => {
 
 describe("appApprovalLine", () => {
   it("is the one line Tinkjam Sync for Mac reads the approval link from", () => {
-    // apps/sync-mac/Sources/TinkjamSync/SyncProcess.swift matches this prefix.
+    // SyncProcess.swift in the tinkjam-sync repository matches this prefix.
     expect(appApprovalLine("http://127.0.0.1:34338")).toBe(
       "TINKJAM_SYNC_APPROVE_URL http://127.0.0.1:34338",
     );

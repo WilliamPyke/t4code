@@ -19,10 +19,11 @@ const LINUX_DOWNLOADS = [
   { label: ".deb (beta)", href: `/downloads/tinkjam-sync-v${SYNC_VERSION}-linux-x86_64.deb` },
   { label: ".rpm (beta)", href: `/downloads/tinkjam-sync-v${SYNC_VERSION}-linux-x86_64.rpm` },
 ];
-// The published install commands (apps/sync-mac/scripts/install.sh prints the Linux one).
+// The published install commands (mac/scripts/install.sh in the tinkjam-sync repository prints the Linux one).
 const MAC_INSTALL_COMMAND = "curl -fsSL https://tinkjam.com/downloads/install.sh | bash";
 const LINUX_INSTALL_COMMAND = "npx -y https://tinkjam.com/sync.tgz --install";
 export const CHECKSUMS_URL = "/downloads/checksums.txt";
+export const SYNC_SOURCE_URL = "https://github.com/WilliamPyke/tinkjam-sync";
 // A Mac app downloaded in a browser is stopped by Gatekeeper unless it is notarized, so until
 // then Mac installs by command. Set each flag once its files are in dist/downloads/.
 const MAC_NOTARIZED: boolean = false;
