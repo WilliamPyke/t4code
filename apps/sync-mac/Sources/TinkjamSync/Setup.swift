@@ -118,7 +118,7 @@ enum SyncPackage {
     }
 
     static func latestRelease() async throws -> SyncRelease {
-        do { return try await fetchJSON(SyncRelease.self, from: Config.syncManifestURL) } catch {
+        do { return try await fetchJSON(SyncRelease.self, fromFirstOf: Config.syncManifestURLs) } catch {
             throw SetupError.from(error, doing: "checking for Tinkjam Sync")
         }
     }
@@ -264,7 +264,8 @@ enum Legacy {
             if let ownLabel, name == ownLabel { return true }
             if name.lowercased().hasPrefix("org.trellium.tinkjam-sync") { return false } // another home's
             guard let text = try? String(contentsOf: file, encoding: .utf8).lowercased() else { return false }
-            return text.contains("trellium.org/sync.tgz") || text.contains("tinkjam-sync")
+            return text.contains("trellium.org/sync.tgz") || text.contains("tinkjam.com/sync.tgz")
+                || text.contains("tinkjam-sync")
                 || text.contains(paths.base.path.lowercased())
         }
     }

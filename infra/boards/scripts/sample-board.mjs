@@ -12,8 +12,11 @@ through the board host's own routes, and prints its view link.
 
   node infra/boards/scripts/sample-board.mjs --host https://boards.trellium.org
 
+The public sample board was made through boards.trellium.org, and its state file is named after
+that host: keep passing it (the same service answers at boards.tinkjam.com).
+
   --host <url>    the board host (required); http://localhost:8799 for \`wrangler dev\`
-  --app <url>     the web app the link opens in (default https://app.trellium.org)
+  --app <url>     the web app the link opens in (default https://app.tinkjam.com)
   --state <file>  where the board's sessions are kept, outside the repository
                   (default ~/.tinkjam/sample-board.<host>.json)
   --fresh         deletes the board in the state file and makes a new one, with a new view link
@@ -28,7 +31,7 @@ const here = dirname(NodeURL.fileURLToPath(import.meta.url));
 const SAMPLE = join(here, "..", "sample", "onboarding-v2.json");
 
 function argsOf(argv) {
-  const args = { app: "https://app.trellium.org", fresh: false };
+  const args = { app: "https://app.tinkjam.com", fresh: false };
   for (let at = 0; at < argv.length; at++) {
     const flag = argv[at];
     if (flag === "--fresh") args.fresh = true;

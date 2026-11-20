@@ -1,3 +1,4 @@
+import { ownDomainOrigins } from "./ownDomains.ts";
 import { readHashParams } from "./remote.ts";
 
 const CONNECT_AUTH_STATE_PARAM = "state";
@@ -10,7 +11,10 @@ const COMPUTER_NAME_MAX_LENGTH = 64;
 
 const CONNECT_AUTHORIZE_PATH = "/connect";
 
-export const DEFAULT_HOSTED_APP_URL = "https://app.trellium.org";
+export const DEFAULT_HOSTED_APP_URL = "https://app.tinkjam.com";
+
+/** Every origin the hosted app is served from, the current one first. */
+export const HOSTED_APP_ORIGINS = ownDomainOrigins(DEFAULT_HOSTED_APP_URL);
 
 export const CONNECT_OAUTH_SCOPES = ["openid", "profile", "email", "offline_access"] as const;
 

@@ -243,8 +243,17 @@ describe("isRoomEmbedPersonFrameUrl", () => {
     "https://app.tinkjam.com/settings",
     "https://BOARDS.tinkjam.com./api/boards",
     "https://other.tinkjam.com",
+    "https://app.trellium.org/b/1",
+    "https://boards.trellium.org/api/boards",
+    "https://trellium.org/legal",
   ])("never frames %s", (url) => {
     expect(isRoomEmbedPersonFrameUrl(url, own)).toBe(false);
+  });
+
+  it("never frames either of our domains, even when the caller names no own hosts", () => {
+    expect(isRoomEmbedPersonFrameUrl("https://app.tinkjam.com/b/1")).toBe(false);
+    expect(isRoomEmbedPersonFrameUrl("https://app.trellium.org/b/1")).toBe(false);
+    expect(isRoomEmbedPersonFrameUrl("https://tinkjam.com.example.org/")).toBe(true);
   });
 
   it("leaves the sources the board frames itself to their own rule", () => {

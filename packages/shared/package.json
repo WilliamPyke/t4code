@@ -259,6 +259,10 @@
       "types": "./src/cliArgs.ts",
       "import": "./src/cliArgs.ts"
     },
+    "./ownDomains": {
+      "types": "./src/ownDomains.ts",
+      "import": "./src/ownDomains.ts"
+    },
     "./connectAuth": {
       "types": "./src/connectAuth.ts",
       "import": "./src/connectAuth.ts"

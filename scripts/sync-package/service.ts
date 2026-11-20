@@ -296,6 +296,7 @@ const OUR_NAME_PATTERNS = [
 export function leftoverMarkers(baseDir: string, isDefaultHome: boolean): ReadonlyArray<string> {
   return [
     "trellium.org/sync.tgz",
+    "tinkjam.com/sync.tgz",
     "tinkjam-sync",
     baseDir,
     baseDir.replaceAll("\\", "/"),

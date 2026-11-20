@@ -11,7 +11,8 @@
 #   xcrun notarytool store-credentials tinkjam-notary --apple-id <id> --team-id <TEAMID> --password <app-specific password>
 #
 # Options (environment): TINKJAM_VERSION (default: ../VERSION), TINKJAM_ARCHS ("arm64 x86_64"),
-# TINKJAM_DOWNLOAD_BASE (default https://trellium.org/downloads).
+# TINKJAM_DOWNLOAD_BASE (default https://trellium.org/downloads: the signed mac.json names its zip
+# there, which every installed copy and allowlisted network reaches; tinkjam.com serves it too).
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")/.." && pwd)"

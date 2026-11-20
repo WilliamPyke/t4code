@@ -2,7 +2,7 @@
 # Installs Tinkjam Sync for Mac, or brings an older copy up to date, and opens it. Safe to run
 # again. For people and agents who prefer a terminal:
 #
-#   curl -fsSL https://trellium.org/downloads/install.sh | bash
+#   curl -fsSL https://tinkjam.com/downloads/install.sh | bash
 #
 # It downloads the app, checks it against its published SHA-256, puts it in /Applications (or
 # ~/Applications when /Applications is not writable), quits a running copy first and opens the
@@ -10,14 +10,14 @@
 # `npx … --install` setup. Needs no sudo, no Node.js and no Xcode.
 set -euo pipefail
 
-base="${TINKJAM_DOWNLOAD_BASE:-https://trellium.org/downloads}"
+base="${TINKJAM_DOWNLOAD_BASE:-https://tinkjam.com/downloads}"
 name="Tinkjam Sync.app"
 bundle_id="org.trellium.tinkjam-sync-app"
 
 say() { printf 'Tinkjam Sync: %s\n' "$*"; }
 fail() { printf 'Tinkjam Sync: %s\n' "$*" >&2; exit 1; }
 
-[ "$(uname -s)" = "Darwin" ] || fail "this installer is for macOS. On Windows, download and open https://trellium.org/downloads/TinkjamSyncSetup.exe. On Linux, use: npx -y https://trellium.org/sync.tgz --install"
+[ "$(uname -s)" = "Darwin" ] || fail "this installer is for macOS. On Windows, download and open https://tinkjam.com/downloads/TinkjamSyncSetup.exe. On Linux, use: npx -y https://tinkjam.com/sync.tgz --install"
 arch="$(uname -m)"
 case "$arch" in
   arm64 | x86_64) ;;

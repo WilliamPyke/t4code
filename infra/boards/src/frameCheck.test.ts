@@ -39,7 +39,8 @@ describe("frameCheck", () => {
   });
 
   it("asks for no address the rule refuses, at the start or after a redirect", async () => {
-    for (const inner of ["https://127.0.0.1/admin", "http://example.com/", pageOrigin]) {
+    const ours = [pageOrigin, "https://app.trellium.org/b/1"];
+    for (const inner of ["https://127.0.0.1/admin", "http://example.com/", ...ours]) {
       expect(await checked(inner, {})).toEqual({ verdict: "unknown", asked: [] });
       const start = "https://example.com/";
       expect(await checked(start, { [start]: redirect(inner) })).toEqual({

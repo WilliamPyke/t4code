@@ -841,6 +841,45 @@ it.effect("opens links on a configured hosted app, and returns a guest who signs
   }).pipe(Effect.provide(layerHostedApp)),
 );
 
+it.effect("returns a guest to whichever of our app's domains they started signing in on", () =>
+  Effect.gen(function* () {
+    const { guestShares, credential } = yield* shareThreadFor(
+      ThreadId.make("thread:guest-share-two-domains"),
+      null,
+      "https://app.trellium.org/guest?host=env.t3.test#",
+    );
+    const sam = yield* guestShares.redeem({ credential, name: "Sam" });
+    for (const origin of ["https://app.trellium.org.evil.test", "https://tinkjam.com"]) {
+      assert.equal(
+        (yield* Effect.flip(guestShares.signInFromHostedApp({ session: sam.token, origin })))
+          .reason,
+        "invalid",
+      );
+    }
+    for (const origin of ["https://app.tinkjam.com", "https://app.trellium.org"]) {
+      const started = yield* guestShares.signInFromHostedApp({ session: sam.token, origin });
+      assert.equal(
+        yield* guestShares.signInFinish({
+          state: started.cookie.split(".")[1]!,
+          code: "code",
+          cookie: started.cookie,
+        }),
+        `${origin}/guest?host=env.t3.test&share=${sam.shareId}`,
+      );
+    }
+  }).pipe(
+    Effect.provide(
+      layerTest.pipe(
+        Layer.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({ env: { T3CODE_HOSTED_APP_URL: "https://app.trellium.org" } }),
+          ),
+        ),
+      ),
+    ),
+  ),
+);
+
 it.effect("makes a link last as long as the owner chose, and extends it for everyone on it", () =>
   Effect.gen(function* () {
     const linkThread = ThreadId.make("thread:guest-share-lifetime");

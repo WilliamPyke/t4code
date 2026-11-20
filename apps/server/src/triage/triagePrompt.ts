@@ -71,7 +71,7 @@ different code depending on it:
 
 - How is T3 Code running on this machine: \`npx t3 serve\` in a terminal, the
   background service, or the desktop app?
-- Which surface is the user connecting from: the website (app.trellium.org), the
+- Which surface is the user connecting from: the website (app.tinkjam.com), the
   desktop app against a local server, the desktop app against a remote server,
   or the mobile app?
 

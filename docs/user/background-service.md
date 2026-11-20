@@ -50,7 +50,7 @@ Tinkjam Connect, or directly once you choose the local network in `t3 up` (or ru
 your local network and Tailscale addresses, so the desktop and mobile apps on
 the same network connect directly instead of through Tinkjam Connect. It still does
 not answer on public addresses. Anyone on the same network can reach the port,
-so a pairing code is all that keeps them out. The hosted web app at app.trellium.org
+so a pairing code is all that keeps them out. The hosted web app at app.tinkjam.com
 stays on Tinkjam Connect, because browsers block plain HTTP from an HTTPS page.
 
 A service installed before `T3CODE_LAN` existed keeps listening on the local

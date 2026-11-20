@@ -1,7 +1,11 @@
 # Start here
 
 Tinkjam is a shared board where your team and your agents work side by side. You need nothing
-installed to use a board: open [app.trellium.org](https://app.trellium.org) in a browser.
+installed to use a board: open [app.tinkjam.com](https://app.tinkjam.com) in a browser.
+
+Tinkjam used to live at app.trellium.org, and it still works there: links to it keep opening.
+Boards you joined without signing in stay in the browser at the address where you joined them, so
+open those at app.trellium.org. Boards on your account show at both.
 
 ## Boards
 

@@ -4,7 +4,7 @@
  * apps/marketing/src/lib/site.ts.
  */
 const SAMPLE_BOARD_URL =
-  "https://app.trellium.org/guest?host=boards.trellium.org#1ecbf7b4-8fc3-46f8-8a5c-8a683e311029.v.usrcvSaVH6bFGp3ACk5tGWNPWwFWYCZ5eXYLRB7usFE";
+  "https://app.tinkjam.com/guest?host=boards.tinkjam.com#1ecbf7b4-8fc3-46f8-8a5c-8a683e311029.v.usrcvSaVH6bFGp3ACk5tGWNPWwFWYCZ5eXYLRB7usFE";
 
 /**
  * Where the sample board opens in this app: the link's own page and its view credential, on this

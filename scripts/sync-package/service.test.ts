@@ -148,6 +148,7 @@ describe("Tinkjam Sync's login items", () => {
       [{ name: "org.trellium.tinkjam-sync.work", content: "tinkjam-sync" }, "other-home"],
       // What agents made when the first flow failed.
       [{ name: "com.codex.tinkjam", content: "npx -y https://trellium.org/sync.tgz" }, "leftover"],
+      [{ name: "com.claude.sync", content: "npx -y https://tinkjam.com/sync.tgz" }, "leftover"],
       [
         {
           name: "Start Tinkjam",

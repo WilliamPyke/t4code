@@ -1,13 +1,20 @@
 import { guestHostZoneOf, isGuestHostAllowed } from "@t3tools/shared/guestLinks";
+import { ownDomainHosts } from "@t3tools/shared/ownDomains";
 
 import { configuredHostedAppUrl } from "../hostedPairing";
 
 /**
- * The zone this deployment's tunnels live in. `VITE_GUEST_HOST_ZONE` names it; without it, it is
- * the hosted app's own host minus its first label.
+ * The zone this page's cloud board host is in. `VITE_GUEST_HOST_ZONE` names it; without it, it
+ * is the hosted app's own host minus its first label, on whichever of our domains the page is.
  */
-export const guestHostZone = (): string | null =>
+const guestHostZone = (): string | null =>
   import.meta.env.VITE_GUEST_HOST_ZONE?.trim() || guestHostZoneOf(configuredHostedAppUrl());
+
+/** The zones tunnels may be in: that zone on each of our domains, as links from either name them. */
+export const guestHostZones = (): ReadonlyArray<string> => {
+  const zone = guestHostZone();
+  return zone === null ? [] : ownDomainHosts(zone);
+};
 
 /**
  * Where the cloud board host is: the configured origin (`http://localhost:8799` works for local
@@ -35,22 +42,29 @@ export const cloudBoardsHost = (): string | null => {
   return origin === null ? null : new URL(origin).host;
 };
 
-export const isCloudBoardsHost = (host: string) => host === cloudBoardsHost();
+/** The cloud board host on each of our domains, this page's first. One service holds every board. */
+export const cloudBoardsHosts = (): ReadonlyArray<string> => {
+  const host = cloudBoardsHost();
+  return host === null ? [] : ownDomainHosts(host);
+};
+
+export const isCloudBoardsHost = (host: string) => cloudBoardsHosts().includes(host);
 
 /**
  * The host a guest link names, or null when the link may not be followed: no `host` is the page's
- * own; otherwise one of this deployment's tunnels, or its cloud board host.
+ * own; otherwise one of this deployment's tunnels, or the cloud board host under either of our
+ * names, kept as this page's (`cloudHosts[0]`) so a browser holds each board once.
  */
 export function acceptedGuestLinkHost(input: {
   readonly requested: string | null;
   readonly pageHost: string;
-  readonly zone: string | null;
-  readonly cloudHost: string | null;
+  readonly zones: ReadonlyArray<string>;
+  readonly cloudHosts: ReadonlyArray<string>;
 }): string | null {
   const { requested } = input;
   if (requested === null || requested === input.pageHost) return input.pageHost;
-  if (requested === input.cloudHost) return requested;
-  return isGuestHostAllowed(requested, input.zone) ? requested : null;
+  if (input.cloudHosts.includes(requested)) return input.cloudHosts[0] ?? requested;
+  return input.zones.some((zone) => isGuestHostAllowed(requested, zone)) ? requested : null;
 }
 
 /** The origin a share's guest routes are on, given where this page and the cloud host are. */
@@ -60,7 +74,11 @@ export function guestShareOriginOf(input: {
   readonly cloudOrigin: string | null;
 }): string {
   if (input.host === input.page.host) return input.page.origin;
-  if (input.cloudOrigin !== null && new URL(input.cloudOrigin).host === input.host) {
+  // A board joined under the other name of the board host is on the same service.
+  if (
+    input.cloudOrigin !== null &&
+    ownDomainHosts(new URL(input.cloudOrigin).host).includes(input.host)
+  ) {
     return input.cloudOrigin;
   }
   return `https://${input.host}`;

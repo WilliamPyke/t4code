@@ -42,7 +42,7 @@ without expanding shell expressions.
 ## Where agents run
 
 Registry agents always run on the machine that hosts your Tinkjam server. That stays true when you
-connect through `app.trellium.org`, Tinkjam Connect, or a relay.
+connect through `app.tinkjam.com`, Tinkjam Connect, or a relay.
 
 Agents install under `tools/<agent-id>/<version>/` inside T3 home. Tinkjam verifies SHA-256 when the Registry entry
 provides one; entries without a checksum retain the Registry's HTTPS distribution guarantee.

@@ -1,13 +1,13 @@
 # Onboarding a teammate to this deployment
 
-This fork runs on its own sign-in, relay, and hosted app at `trellium.org`. It has no installer
+This fork runs on its own sign-in, relay, and hosted app at `tinkjam.com`. It has no installer
 yet: the installers in the user guide fetch upstream T3 Code, which cannot join these rooms. A
 teammate either joins from a browser or runs this fork from source.
 
 ## Join a room from a browser
 
 Nothing to install. Open the link the owner sent, such as
-`https://app.trellium.org/r/tulip-otter-harbor`, and pick a name. You can follow the thread, send
+`https://app.tinkjam.com/r/tulip-otter-harbor`, and pick a name. You can follow the thread, send
 messages for the owner to approve, and use the board. [Guest links](../user/guest-links.md) covers
 the rest.
 
@@ -34,8 +34,8 @@ provider login.
    T3CODE_CLERK_JWT_TEMPLATE=t3-relay
    T3CODE_CLERK_CLI_OAUTH_CLIENT_ID=AxazEzSjlimhMFGf
    T3CODE_RELAY_URL=https://relay.trellium.org
-   T3CODE_HOSTED_APP_URL=https://app.trellium.org
-   T3CODE_DEV_ALLOWED_ORIGINS=https://app.trellium.org
+   T3CODE_HOSTED_APP_URL=https://app.tinkjam.com
+   T3CODE_DEV_ALLOWED_ORIGINS=https://app.tinkjam.com
    ```
 
 4. Start it with `vp run dev --steady` and open the address it prints. On Windows without a

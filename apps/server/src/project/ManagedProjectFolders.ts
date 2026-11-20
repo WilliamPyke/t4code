@@ -177,7 +177,7 @@ function namedProjectReadme(name: string): string {
     "",
     `# ${name}`,
     "",
-    "Created in [Tinkjam](https://trellium.org).",
+    "Created in [Tinkjam](https://tinkjam.com).",
     "",
   ].join("\n");
 }

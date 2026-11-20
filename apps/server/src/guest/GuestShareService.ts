@@ -72,6 +72,7 @@ import { chatMarkdownImageSources } from "@t3tools/shared/markdownPipeline";
 import { guestActivityFromRequest, guestTurnFromRequest } from "@t3tools/shared/guestRoom";
 import { buildGuestLink, buildShortGuestLink } from "@t3tools/shared/guestLinks";
 import { sanitizeLinkedPrompt } from "@t3tools/shared/promptLinks";
+import { ownDomainOrigins } from "@t3tools/shared/ownDomains";
 import { roomArtifactSource, roomBoardNoteOfRef, roomWindowBoxId } from "@t3tools/shared/roomBoard";
 import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 import * as NodeOS from "node:os";
@@ -145,6 +146,9 @@ import {
 const SIGNING_SECRET_NAME = "guest-share-signing-key";
 const SHARE_ID_BYTES = 16;
 const HOSTED_SIGN_IN_MARK = "hosted";
+// Which of the hosted app's origins the sign-in started on; the first keeps the bare mark.
+const hostedMark = (index: number) =>
+  index === 0 ? HOSTED_SIGN_IN_MARK : `${HOSTED_SIGN_IN_MARK}${index}`;
 const INVITE_SIGNATURE_BYTES = 16;
 const SNAPSHOT_ROW_LIMIT = 600;
 const SNAPSHOT_USER_TURN_LIMIT = 20;
@@ -592,6 +596,8 @@ const make = Effect.gen(function* () {
     Effect.map(Option.getOrNull),
     Effect.orElseSucceed(() => null),
   );
+  // The same app on each of our domains, the configured one first: a guest signs in on either.
+  const hostedAppOrigins = hostedAppUrl === null ? [] : ownDomainOrigins(hostedAppUrl);
   /** A truncated HMAC keeps invite links short. 128 bits is still far beyond guessing range. */
   const inviteSignature = (shareId: string) =>
     signer.sign(`guest-invite:${shareId}`).pipe(
@@ -981,7 +987,7 @@ const make = Effect.gen(function* () {
 
   const startSignIn = Effect.fn("GuestShareService.signIn")(function* (
     session: string,
-    hosted: boolean,
+    hosted: number | null,
   ) {
     const { share, guestId } = yield* authorize(session, "session");
     if (guestId === undefined) return yield* new GuestShareAccessError({ reason: "unavailable" });
@@ -989,17 +995,19 @@ const make = Effect.gen(function* () {
       .start({ session, redirectUri: `https://${share.host}${GUEST_SIGN_IN_CALLBACK_ROUTE}` })
       .pipe(Effect.mapError(() => new GuestShareAccessError({ reason: "sign_in_failed" })));
     // The mark only picks the guest page the browser returns to; `state` is what gets checked.
-    return { url, cookie: `${share.id}.${state}${hosted ? `.${HOSTED_SIGN_IN_MARK}` : ""}` };
+    return {
+      url,
+      cookie: `${share.id}.${state}${hosted === null ? "" : `.${hostedMark(hosted)}`}`,
+    };
   });
-  const signIn = (session: string) => startSignIn(session, false);
+  const signIn = (session: string) => startSignIn(session, null);
   const signInFromHostedApp = Effect.fn("GuestShareService.signInFromHostedApp")(function* (input: {
     readonly session: string;
     readonly origin: string | null;
   }) {
-    if (hostedAppUrl === null || input.origin !== hostedAppUrl) {
-      return yield* new GuestShareAccessError({ reason: "invalid" });
-    }
-    return yield* startSignIn(input.session, true);
+    const hosted = input.origin === null ? -1 : hostedAppOrigins.indexOf(input.origin);
+    if (hosted < 0) return yield* new GuestShareAccessError({ reason: "invalid" });
+    return yield* startSignIn(input.session, hosted);
   });
 
   const identify = Effect.fn("GuestShareService.identify")(function* (
@@ -1044,15 +1052,15 @@ const make = Effect.gen(function* () {
     // The cookie is `<share id>.<state>`, set in the browser that started this sign-in, with a
     // mark after it when that browser was on the hosted app.
     const [shareId = "", expected = "", mark = ""] = (input.cookie ?? "").split(".");
-    const host =
-      mark === HOSTED_SIGN_IN_MARK && hostedAppUrl !== null ? yield* connectHostname : null;
+    const hostedApp = hostedAppOrigins.find((_, index) => mark === hostedMark(index)) ?? null;
+    const host = hostedApp !== null ? yield* connectHostname : null;
     const back = (failure?: GuestSignInFailure) => {
       const params = new URLSearchParams();
       if (host !== null) params.set(GUEST_HOST_PARAM, host);
       if (shareId !== "") params.set(GUEST_SHARE_PARAM, shareId);
       if (failure !== undefined) params.set(GUEST_SIGN_IN_PARAM, failure);
       const page = params.size === 0 ? "/guest" : `/guest?${params}`;
-      return host === null ? page : `${hostedAppUrl}${page}`;
+      return host === null ? page : `${hostedApp}${page}`;
     };
     // Without this, a guest could send their GitHub link to someone else and be recorded as
     // that person's account once they approved it.

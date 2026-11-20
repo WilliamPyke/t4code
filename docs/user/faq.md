@@ -37,7 +37,7 @@ Tinkjam drives Claude through Anthropic's Agent SDK. I confirmed it's a real bug
 
 ## How do I use Tinkjam remotely?
 
-Your agents run wherever Tinkjam runs: your desktop, a server, a VPS. You connect to it from anywhere. I do this constantly. Less than 5% of my prompts run on my laptop. Run `t3 up` on that machine and you get really good remote support. Tinkjam Connect is the easy path. LAN pairing and Tailscale work too, and [app.trellium.org](https://app.trellium.org) is the web client. [Remote access](./remote-access.md)
+Your agents run wherever Tinkjam runs: your desktop, a server, a VPS. You connect to it from anywhere. I do this constantly. Less than 5% of my prompts run on my laptop. Run `t3 up` on that machine and you get really good remote support. Tinkjam Connect is the easy path. LAN pairing and Tailscale work too, and [app.tinkjam.com](https://app.tinkjam.com) is the web client. [Remote access](./remote-access.md)
 
 ## How do I use Tinkjam on my phone?
 

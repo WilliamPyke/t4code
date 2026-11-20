@@ -15,9 +15,9 @@ and the model you picked. Sent messages have a **Copy prompt link** button too.
 You can also write a link by hand:
 
 ```
-https://app.trellium.org/new?prompt=Rate%20my%20swearing
-https://app.trellium.org/new?prompt=Fix%20the%20build&repo=owner/name&provider=codex&model=gpt-5.5
-https://app.trellium.org/new?pr=owner/name/123&prompt=Fix%20the%20failing%20check
+https://app.tinkjam.com/new?prompt=Rate%20my%20swearing
+https://app.tinkjam.com/new?prompt=Fix%20the%20build&repo=owner/name&provider=codex&model=gpt-5.5
+https://app.tinkjam.com/new?pr=owner/name/123&prompt=Fix%20the%20failing%20check
 ```
 
 | Parameter  | Meaning                                                                       |
@@ -32,7 +32,7 @@ Encode the prompt for a URL. In JavaScript, use `encodeURIComponent`.
 
 ## Open a link
 
-On app.trellium.org, the link first asks where to open it: the desktop or mobile app, this browser
+On app.tinkjam.com, the link first asks where to open it: the desktop or mobile app, this browser
 when it is connected to a machine, or the download page. Select **Remember my choice** to skip
 this step next time.
 
@@ -47,7 +47,7 @@ this step next time.
   worktree. Tinkjam checks the code out only after you confirm, because the checkout runs your
   setup script on it.
 
-A thread link with a prompt, such as `https://app.trellium.org/<environment>/<thread>?prompt=…`,
+A thread link with a prompt, such as `https://app.tinkjam.com/<environment>/<thread>?prompt=…`,
 puts the prompt in that thread's composer. If you already typed a draft there, Tinkjam asks
 before it replaces it.
 
@@ -57,7 +57,7 @@ malicious.
 
 ## Share a thread
 
-**Copy thread** copies a link such as `https://app.trellium.org/threads/<environment>/<thread>`. Paste
+**Copy thread** copies a link such as `https://app.tinkjam.com/threads/<environment>/<thread>`. Paste
 it anywhere, such as Slack, a GitHub comment, or your notes. On a phone with Tinkjam installed, it
 opens the thread in the app. Elsewhere, opening it asks where to open it, like a prompt link, then
 opens the thread. Only someone connected to the machine that runs the thread can see it. In Tinkjam,

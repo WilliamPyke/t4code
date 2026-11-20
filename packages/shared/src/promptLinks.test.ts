@@ -200,6 +200,12 @@ describe("link round trips", () => {
     expect(promptLinkAppPath("https://app.trellium.org/threads/env-1/thread-1?prompt=go")).toBe(
       "/env-1/thread-1?prompt=go",
     );
+    // Links copied on either of our domains open, whichever one the app was built for.
+    expect(promptLinkAppPath("https://app.tinkjam.com/new?prompt=hi")).toBe("/new?prompt=hi");
+    expect(
+      promptLinkAppPath("https://app.tinkjam.com/new?prompt=hi", "https://app.trellium.org"),
+    ).toBe("/new?prompt=hi");
+    expect(promptLinkAppPath("https://app.tinkjam.com/new?prompt=hi", "https://x.test")).toBeNull();
     // The web app's own thread route, reloaded, is no link.
     expect(promptLinkAppPath("https://app.trellium.org/env-1/thread-1")).toBeNull();
     expect(promptLinkAppPath("https://app.trellium.org/threads/env-1")).toBeNull();

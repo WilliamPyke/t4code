@@ -236,7 +236,7 @@ namespace TinkjamSync
                 key.SetValue("InstallLocation", home.InstallDir);
                 key.SetValue("UninstallString", CommandLine.Join(uninstall));
                 key.SetValue("QuietUninstallString", CommandLine.Join(quiet));
-                key.SetValue("URLInfoAbout", "https://trellium.org");
+                key.SetValue("URLInfoAbout", "https://tinkjam.com");
                 key.SetValue("InstallDate", DateTime.Now.ToString("yyyyMMdd"));
                 key.SetValue("EstimatedSize", (int)Math.Max(1, new FileInfo(home.InstalledExe).Length / 1024), RegistryValueKind.DWord);
                 key.SetValue("NoModify", 1, RegistryValueKind.DWord);

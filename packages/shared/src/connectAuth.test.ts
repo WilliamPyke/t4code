@@ -3,8 +3,33 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildConnectAuthorizeRequestUrl,
   connectLoopbackRedirectUri,
+  HOSTED_APP_ORIGINS,
   readConnectAuthorizeRequest,
 } from "./connectAuth.ts";
+import { ownDomainHosts, ownDomainOrigins } from "./ownDomains.ts";
+
+describe("own domains", () => {
+  it("names the same host on each of our domains, and nothing for anyone else's", () => {
+    expect(HOSTED_APP_ORIGINS).toEqual(["https://app.tinkjam.com", "https://app.trellium.org"]);
+    expect(ownDomainHosts("boards.trellium.org")).toEqual([
+      "boards.trellium.org",
+      "boards.tinkjam.com",
+    ]);
+    expect(ownDomainHosts("BOARDS.tinkjam.com.")).toEqual([
+      "boards.tinkjam.com",
+      "boards.trellium.org",
+    ]);
+    expect(ownDomainHosts("tinkjam.com")).toEqual(["tinkjam.com", "trellium.org"]);
+    for (const host of ["eviltinkjam.com", "trellium.org.evil.io", "app.t3.test"]) {
+      expect(ownDomainHosts(host), host).toEqual([host]);
+    }
+    expect(ownDomainOrigins("https://app.trellium.org")).toEqual([
+      "https://app.trellium.org",
+      "https://app.tinkjam.com",
+    ]);
+    expect(ownDomainOrigins("http://localhost:5733")).toEqual(["http://localhost:5733"]);
+  });
+});
 
 describe("connectAuth", () => {
   it("round-trips state, challenge, and loopback port through the authorize URL fragment", () => {

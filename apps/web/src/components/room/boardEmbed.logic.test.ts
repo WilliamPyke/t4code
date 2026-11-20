@@ -57,6 +57,8 @@ describe("boardCanFramePage", () => {
     expect(boardCanFramePage("https://github.com/acme/app", own)).toBe(true);
     expect(boardCanFramePage("https://www.figma.com/design/Key/File", own)).toBe(false);
     expect(boardCanFramePage("https://boards.tinkjam.com/b/1", own)).toBe(false);
+    // The other of our domains is ours too, though this page is not on it.
+    expect(boardCanFramePage("https://app.trellium.org/b/1", own)).toBe(false);
     expect(boardCanFramePage("http://example.com/a", own)).toBe(false);
     expect(boardCanFramePage(undefined, own)).toBe(false);
   });

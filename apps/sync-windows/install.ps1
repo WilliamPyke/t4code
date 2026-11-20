@@ -1,10 +1,10 @@
 # Installs Tinkjam Sync for the current user, with no administrator and no questions:
-#   powershell -ExecutionPolicy Bypass -c "irm https://trellium.org/downloads/install.ps1 | iex"
+#   powershell -ExecutionPolicy Bypass -c "irm https://tinkjam.com/downloads/install.ps1 | iex"
 # Downloads the installer windows.json names, checks its SHA-256 against the one there, and runs it silently.
 # Safe to run again: when the same version is installed it only makes sure Tinkjam Sync is running.
 # Arguments after the script name go to the installer (when run as a file, not through iex).
 $ErrorActionPreference = 'Stop'
-$downloads = if ($env:TINKJAM_SYNC_DOWNLOADS) { $env:TINKJAM_SYNC_DOWNLOADS.TrimEnd('/') } else { 'https://trellium.org/downloads' }
+$downloads = if ($env:TINKJAM_SYNC_DOWNLOADS) { $env:TINKJAM_SYNC_DOWNLOADS.TrimEnd('/') } else { 'https://tinkjam.com/downloads' }
 $extra = @($args)
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 

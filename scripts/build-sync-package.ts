@@ -25,8 +25,10 @@ import { syncVersion } from "./sync-package/updateCheck.ts";
 const SYNC_PACKAGE_NAME = "tinkjam-sync";
 // Cloudflare Workers static assets refuse larger files.
 const MAX_TARBALL_BYTES = 25 * 1024 * 1024;
-const DEFAULT_HOSTED_APP_URL = "https://app.trellium.org";
+const DEFAULT_HOSTED_APP_URL = "https://app.tinkjam.com";
 // Where the tarball is published. It stays the same for every build; sync.json goes beside it.
+// tinkjam.com serves it too, but the signed manifest names trellium.org, which every installed
+// copy and every network told to allow it reaches.
 const DEFAULT_SYNC_URL = "https://trellium.org/sync.tgz";
 
 const repoRoot = NodePath.resolve(NodeURL.fileURLToPath(import.meta.url), "../..");

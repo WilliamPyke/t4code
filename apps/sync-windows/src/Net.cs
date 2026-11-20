@@ -103,6 +103,16 @@ namespace TinkjamSync
             catch (Exception error) { throw Explain(error, what); }
         }
 
+        /// <summary>The first address that answers; the last one's failure when none does.</summary>
+        public static async Task<Dictionary<string, object>> GetJson(string[] urls, string what)
+        {
+            for (var i = 0; ; i++)
+            {
+                try { return await GetJson(urls[i], what).ConfigureAwait(false); }
+                catch (SetupException) when (i < urls.Length - 1) { }
+            }
+        }
+
         /// <summary>Downloads to `path` through a .part file; reports whole percents when the size is known.</summary>
         public static async Task Download(string url, string path, string what, Action<int> progress)
         {

@@ -1,1 +1,1 @@
-export const PRIVACY_POLICY_URL = "https://trellium.org/legal";
+export const PRIVACY_POLICY_URL = "https://tinkjam.com/legal";

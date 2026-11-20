@@ -7,7 +7,7 @@ import { defineConfig } from "astro/config";
 delete process.env.VP_RUN_NODE_CLIENT_PATH;
 
 export default defineConfig({
-  site: "https://trellium.org",
+  site: "https://tinkjam.com",
   output: "static",
   // `/legal` builds to `legal.html`, which static hosts serve at `/legal` without a redirect.
   trailingSlash: "never",

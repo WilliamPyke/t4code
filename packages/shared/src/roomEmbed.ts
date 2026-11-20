@@ -1,3 +1,5 @@
+import { OWN_DOMAINS } from "./ownDomains.ts";
+
 /** Where a link card's address comes from: a source the board knows, or any other site. */
 export type RoomEmbedSource =
   | "figma"
@@ -89,7 +91,8 @@ export function isRoomEmbedPersonFrameUrl(
   const host = hostOf(url.hostname);
   if (!host.includes(".") || host.startsWith("[") || IPV4_HOST.test(host)) return false;
   if (PRIVATE_HOST.test(host)) return false;
-  return !ownHosts.some((own) => siteOf(hostOf(own)) === siteOf(host));
+  // Both of our domains are ours whatever the caller names: a page on either could reach a session.
+  return ![...OWN_DOMAINS, ...ownHosts].some((own) => siteOf(hostOf(own)) === siteOf(host));
 }
 
 /** Whether a site lets other pages frame it: what `roomEmbedFrameVerdict` reads from its headers. */

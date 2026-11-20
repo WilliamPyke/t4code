@@ -37,7 +37,7 @@ describe("cliAuthHtml", () => {
     ];
     for (const page of pages) {
       expect(page).not.toMatch(/javascript:|data:/);
-      expect(page).toContain('href="https://app.trellium.org/"');
+      expect(page).toContain('href="https://app.tinkjam.com/"');
     }
   });
 });

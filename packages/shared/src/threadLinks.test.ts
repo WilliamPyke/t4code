@@ -206,17 +206,21 @@ describe("hosted thread links", () => {
   it("escapes every id character a sentence or path could claim, and reads it back", () => {
     const thread = ref("env.1", "thread:delegated/mcp%3A1.");
     const link = hostedThreadLink(thread);
-    expect(link).toBe("https://app.trellium.org/threads/env%2E1/thread%3Adelegated%2Fmcp%253A1%2E");
+    expect(link).toBe("https://app.tinkjam.com/threads/env%2E1/thread%3Adelegated%2Fmcp%253A1%2E");
     expect(parseThreadLinkHref(link)).toEqual(thread);
     expect(hostedThreadLink(thread, "https://preview.t3.codes/")).toMatch(
       /^https:\/\/preview\.t3\.codes\/threads\//,
     );
   });
 
-  it("reads only a bare thread path on the hosted app", () => {
+  it("reads only a bare thread path on the hosted app, on either of its domains", () => {
     expect(parseThreadLinkHref("https://app.trellium.org/threads/env-1/thread-1")).toEqual(
       ref("env-1", "thread-1"),
     );
+    expect(parseThreadLinkHref("https://app.tinkjam.com/threads/env-1/thread-1")).toEqual(
+      ref("env-1", "thread-1"),
+    );
+    expect(parseThreadLinkHref("https://app.tinkjam.com.evil.test/threads/e/t")).toBeNull();
     expect(
       parseThreadLinkHref("https://app.trellium.org/threads/env-1/thread-1?prompt=go"),
     ).toBeNull();
@@ -228,10 +232,10 @@ describe("hosted thread links", () => {
 
   it("writes a copied link a reader can follow, labeled when it has a title", () => {
     expect(formatHostedThreadLink(ref("e", "t1"), "Fix [ci]")).toBe(
-      "[Fix ci](https://app.trellium.org/threads/e/t1)",
+      "[Fix ci](https://app.tinkjam.com/threads/e/t1)",
     );
     expect(formatHostedThreadLink(ref("e", "t1"), " ")).toBe(
-      "https://app.trellium.org/threads/e/t1",
+      "https://app.tinkjam.com/threads/e/t1",
     );
   });
 
@@ -241,7 +245,7 @@ describe("hosted thread links", () => {
       relabelThreadLinks(
         [
           "See https://app.trellium.org/threads/there/t1.",
-          "[old](https://app.trellium.org/threads/there/t1)",
+          "[old](https://app.tinkjam.com/threads/there/t1)",
           "<https://app.trellium.org/threads/there/t1>",
           "`https://app.trellium.org/threads/there/t1`",
           "https://app.trellium.org/threads/there/t1?prompt=go",

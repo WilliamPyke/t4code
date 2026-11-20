@@ -17,12 +17,14 @@ namespace TinkjamSync
 {
     /// <summary>
     /// Gets Sync onto this computer and keeps exactly one running as a hidden child. Sync itself is the
-    /// published package (https://trellium.org/sync.tgz) run by a private Node; this only drives it.
+    /// published package (https://tinkjam.com/sync.tgz) run by a private Node; this only drives it.
     /// Everything runs on the UI thread except the waits, so state needs no locks.
     /// </summary>
     public sealed class SyncEngine : IDisposable
     {
-        public const string AppUrl = "https://app.trellium.org";
+        public const string AppUrl = "https://app.tinkjam.com";
+        // The tarball's address as signed manifests name it: still trellium.org, which every copy out
+        // there and every network that was told to allow it reaches (tinkjam.com serves it too).
         public const string SyncUrl = "https://trellium.org/sync.tgz";
         public const int ApprovalPort = 34338;
         const string NodeVersion = "24.22.3";
@@ -35,8 +37,12 @@ namespace TinkjamSync
         static readonly TimeSpan SlowAfter = TimeSpan.FromSeconds(90);
         static readonly TimeSpan DisconnectTimeout = TimeSpan.FromMinutes(2);
 
-        static string SyncManifestUrl => Env("TINKJAM_SYNC_PACKAGE_MANIFEST") ?? "https://trellium.org/sync.json";
-        static string AppManifestUrl => Env("TINKJAM_SYNC_UPDATE_URL") ?? "https://trellium.org/downloads/windows.json";
+        // Each manifest from tinkjam.com, else the same file on trellium.org; an override stands alone.
+        static string[] SyncManifestUrls => Addresses(Env("TINKJAM_SYNC_PACKAGE_MANIFEST"), "/sync.json");
+        static string[] AppManifestUrls => Addresses(Env("TINKJAM_SYNC_UPDATE_URL"), "/downloads/windows.json");
+
+        static string[] Addresses(string overridden, string path) =>
+            overridden != null ? new[] { overridden } : new[] { "https://tinkjam.com" + path, "https://trellium.org" + path };
 
         static string Env(string name)
         {
@@ -404,7 +410,7 @@ namespace TinkjamSync
             }
             // First run: a fresh copy, which also clears out whatever an earlier `npx … --install` set up.
             Set(Phase.SettingUp, "getting Tinkjam Sync");
-            var staged = await StagePackage(await Net.GetJson(SyncManifestUrl, "read sync.json"), quiet: false);
+            var staged = await StagePackage(await Net.GetJson(SyncManifestUrls, "read sync.json"), quiet: false);
             await StopSync();
             await TakeOverWith(staged.Launcher);
             Set(Phase.SettingUp, "finishing");
@@ -865,7 +871,7 @@ namespace TinkjamSync
         {
             try
             {
-                var manifest = await Net.GetJson(AppManifestUrl, "check for updates");
+                var manifest = await Net.GetJson(AppManifestUrls, "check for updates");
                 var version = Json.Text(manifest, "version");
                 var url = Json.Text(manifest, "url");
                 var sha = Json.Text(manifest, "sha256");
@@ -930,7 +936,7 @@ namespace TinkjamSync
             Dictionary<string, object> manifest;
             try
             {
-                manifest = await Net.GetJson(SyncManifestUrl, "check for a newer Tinkjam Sync");
+                manifest = await Net.GetJson(SyncManifestUrls, "check for a newer Tinkjam Sync");
             }
             catch (SetupException)
             {

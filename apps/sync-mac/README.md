@@ -4,7 +4,7 @@ A menu bar app that sets up, runs and updates Tinkjam Sync, so nobody needs a te
 AppKit and SwiftPM only; no Xcode project.
 
 - First launch downloads Node.js (pinned version and SHA-256 in `Sources/TinkjamSync/Config.swift`)
-  into `~/.tinkjam/runtime`, unpacks the published Sync package (`https://trellium.org/sync.json`,
+  into `~/.tinkjam/runtime`, unpacks the published Sync package (`https://tinkjam.com/sync.json`, else the same file on trellium.org,
   `sync.tgz`) into `~/.tinkjam/app/node_modules/tinkjam-sync`, installs exactly its
   `npm-shrinkwrap.json` there with that Node's `npm ci`, and starts it.
 - The app is the only Sync: it removes the npx-installed LaunchAgent with the package's own
@@ -45,9 +45,10 @@ TINKJAM_NOTARY_PROFILE=tinkjam-notary apps/sync-mac/scripts/build.sh
 Installed copies refuse a `mac.json` the release key did not sign. The key stays on the release
 PC, so copy `dist/mac.json` there and run `node scripts/sign-release.ts sign <path to mac.json>`
 (then `verify`) unless `build.sh` found the key itself. Then upload everything in `dist/` to
-`https://trellium.org/downloads/`. Installed copies read `mac.json` (`version`, `build`, `url`,
+`/downloads/` on the site (tinkjam.com and trellium.org serve the same files; `mac.json` still names
+its zip on trellium.org, which every installed copy reaches). Installed copies read `mac.json` (`version`, `build`, `url`,
 `sha256`, `minimumSystemVersion`, `keyId`, `signature`) and update to a newer `version`.
-Agents and terminals install with `curl -fsSL https://trellium.org/downloads/install.sh | bash`.
+Agents and terminals install with `curl -fsSL https://tinkjam.com/downloads/install.sh | bash`.
 
 ## Testing without touching the real setup
 

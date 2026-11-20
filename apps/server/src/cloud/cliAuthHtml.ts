@@ -7,7 +7,7 @@ const escapeHtml = (value: string) =>
     .replace(/'/g, "&#39;");
 
 // Where a person's boards are when the caller does not say; a fork passes its own.
-const DEFAULT_BOARDS_URL = "https://app.trellium.org/";
+const DEFAULT_BOARDS_URL = "https://app.tinkjam.com/";
 
 // A link on these pages only ever leaves for a web page.
 const webUrl = (value: string | undefined, fallback: string) =>

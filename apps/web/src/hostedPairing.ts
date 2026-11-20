@@ -1,4 +1,5 @@
 import { DEFAULT_HOSTED_APP_URL } from "@t3tools/shared/connectAuth";
+import { ownDomainOrigins } from "@t3tools/shared/ownDomains";
 
 import { isLoopbackHost } from "@t3tools/shared/preview";
 import { getPairingTokenFromUrl, setPairingTokenOnUrl } from "@t3tools/shared/remote";
@@ -11,9 +12,37 @@ export interface HostedPairingRequest {
 
 export type HostedAppChannel = "latest" | "nightly";
 
+/**
+ * The hosted app that links name and checks compare with. A page on the same app on another of
+ * our domains is that app: what a person copies opens where their sign-in and joined boards live.
+ */
 export function configuredHostedAppUrl(): string {
-  return import.meta.env.VITE_HOSTED_APP_URL?.trim() || DEFAULT_HOSTED_APP_URL;
+  const configured = builtHostedAppUrl();
+  const page =
+    typeof window === "undefined" || window.location === undefined ? null : window.location.origin;
+  return page !== null && hostedAppOrigins().includes(page) ? page : configured;
 }
+
+const builtHostedAppUrl = () =>
+  import.meta.env.VITE_HOSTED_APP_URL?.trim() || DEFAULT_HOSTED_APP_URL;
+
+/**
+ * A link a computer made for the hosted app (a guest link, say), moved to the origin this page
+ * is on when that is the same app on our other domain, so it opens where the sender's access is.
+ */
+export function onThisHostedApp(link: string): string {
+  if (!URL.canParse(link)) return link;
+  const url = new URL(link);
+  const here = configuredHostedAppUrl();
+  if (!hostedAppOrigins().includes(url.origin) || !URL.canParse(here)) return link;
+  return `${new URL(here).origin}${url.pathname}${url.search}${url.hash}`;
+}
+
+/** The built hosted app's origin on each of our domains. */
+const hostedAppOrigins = (): ReadonlyArray<string> => {
+  const origin = originFromUrl(builtHostedAppUrl());
+  return origin === null ? [] : ownDomainOrigins(origin);
+};
 
 function configuredBackendUrl(): string {
   return import.meta.env.VITE_HTTP_URL?.trim() || import.meta.env.VITE_WS_URL?.trim() || "";
@@ -45,8 +74,7 @@ export function isHostedStaticApp(url?: URL): boolean {
     return false;
   }
 
-  const hostedOrigin = originFromUrl(configuredHostedAppUrl());
-  return hostedOrigin !== null && (url ?? new URL(window.location.href)).origin === hostedOrigin;
+  return hostedAppOrigins().includes((url ?? new URL(window.location.href)).origin);
 }
 
 export function readHostedPairingRequest(url: URL = new URL(window.location.href)) {

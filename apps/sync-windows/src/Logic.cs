@@ -44,7 +44,7 @@ namespace TinkjamSync
     {
         public const string Offline = "Can't reach the internet.";
         public const string Restricted =
-            "This network is blocking part of Tinkjam Sync. On a work network or VPN, try another network, or ask whoever runs it to allow trellium.org, nodejs.org and registry.npmjs.org.";
+            "This network is blocking part of Tinkjam Sync. On a work network or VPN, try another network, or ask whoever runs it to allow tinkjam.com, trellium.org, nodejs.org and registry.npmjs.org.";
         public const string ServerTrouble = "Tinkjam's servers aren't answering right now.";
         public const string Damaged = "The download didn't arrive in one piece.";
         public const string DiskFull = "This computer's disk is full, so Tinkjam Sync can't finish setting up. Free up some space.";

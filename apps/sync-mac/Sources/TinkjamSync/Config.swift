@@ -5,11 +5,14 @@ import Foundation
 /// is how the app is tested against a local server.
 enum Config {
     static let bundleIdentifier = "org.trellium.tinkjam-sync-app"
-    static let hostedAppURL = url("HostedAppURL", "https://app.trellium.org")
+    static let hostedAppURL = url("HostedAppURL", "https://app.tinkjam.com")
+    /// The tarball's address as signed manifests name it: still trellium.org, which every copy out
+    /// there and every network told to allow it reaches (tinkjam.com serves the same file).
     static let syncPackageURL = url("SyncPackageURL", "https://trellium.org/sync.tgz")
-    static let syncManifestURL = url("SyncManifestURL", "https://trellium.org/sync.json")
-    static let appManifestURL = url("AppManifestURL", "https://trellium.org/downloads/mac.json")
-    static let downloadPageURL = url("DownloadPageURL", "https://trellium.org/downloads/Tinkjam-Sync.dmg")
+    /// Each manifest from tinkjam.com, else the same file on trellium.org; an override stands alone.
+    static let syncManifestURLs = urls("SyncManifestURL", "/sync.json")
+    static let appManifestURLs = urls("AppManifestURL", "/downloads/mac.json")
+    static let downloadPageURL = url("DownloadPageURL", "https://tinkjam.com/downloads/Tinkjam-Sync.dmg")
 
     /// The npx-installed Sync's LaunchAgent for the default home.
     static let legacyLaunchdLabel = "org.trellium.tinkjam-sync"
@@ -35,6 +38,13 @@ enum Config {
 
     /// Sync rewrites sync-status.json every 30 seconds once connected; older than this, it is not trusted.
     static let statusStaleAfter: TimeInterval = 120
+
+    private static func urls(_ key: String, _ path: String) -> [URL] {
+        if let value = UserDefaults.standard.string(forKey: key), let url = URL(string: value) {
+            return [url]
+        }
+        return ["https://tinkjam.com", "https://trellium.org"].map { URL(string: $0 + path)! }
+    }
 
     private static func url(_ key: String, _ fallback: String) -> URL {
         if let value = UserDefaults.standard.string(forKey: key), let url = URL(string: value) {

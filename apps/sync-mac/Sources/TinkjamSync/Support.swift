@@ -193,6 +193,15 @@ func fetchJSON<T: Decodable>(_ type: T.Type, from url: URL) async throws -> T {
     return try JSONDecoder().decode(T.self, from: data)
 }
 
+/// The first of `urls` that answers; the last one's failure when none does.
+func fetchJSON<T: Decodable>(_ type: T.Type, fromFirstOf urls: [URL]) async throws -> T {
+    var failure: Error = SetupError(Plain.serverTrouble, offline: true, detail: "no address to ask")
+    for url in urls {
+        do { return try await fetchJSON(type, from: url) } catch { failure = error }
+    }
+    throw failure
+}
+
 func sha256(of file: URL) throws -> String {
     let handle = try FileHandle(forReadingFrom: file)
     defer { try? handle.close() }

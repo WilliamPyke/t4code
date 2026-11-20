@@ -1,5 +1,7 @@
 # Builds dist\TinkjamSyncSetup.exe (the app; it installs itself), its .sha256, windows.json and install.ps1.
-# Publish all four to https://trellium.org/downloads/. Signs with signtool when TINKJAM_SIGN_THUMBPRINT
+# Publish all four to /downloads/ on the site (tinkjam.com and trellium.org serve the same files).
+# windows.json names the installer on trellium.org, which every installed copy and every network
+# told to allow it reaches. Signs with signtool when TINKJAM_SIGN_THUMBPRINT
 # names a code-signing certificate in the current user's store; otherwise the exe stays unsigned.
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot

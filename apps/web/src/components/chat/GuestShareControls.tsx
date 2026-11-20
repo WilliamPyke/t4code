@@ -35,6 +35,7 @@ import { guestShareLocation, guestSharesAtom } from "~/guest/guestShares";
 import { useComposerHandleContext } from "~/composerHandleContext";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { ensureLocalApi } from "~/localApi";
+import { onThisHostedApp } from "~/hostedPairing";
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useQuietThreadProjection, useQuietThreadShell } from "~/state/entities";
@@ -190,7 +191,10 @@ function GuestShareDialog({
       input: { threadId: threadRef.threadId, extend: true, days: to },
     });
     if (result._tag === "Success") {
-      setState({ status: "created", url: result.value.shortUrl ?? result.value.url });
+      setState({
+        status: "created",
+        url: onThisHostedApp(result.value.shortUrl ?? result.value.url),
+      });
       return;
     }
     if (isAtomCommandInterrupted(result)) {
@@ -247,7 +251,7 @@ function GuestShareDialog({
       setState(
         shared !== undefined
           ? { status: "shared", teamName: shared.name }
-          : { status: "created", url: result.value.shortUrl ?? result.value.url },
+          : { status: "created", url: onThisHostedApp(result.value.shortUrl ?? result.value.url) },
       );
       return;
     }

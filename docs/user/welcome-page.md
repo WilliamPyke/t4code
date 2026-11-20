@@ -8,7 +8,7 @@ and the phone app. Only an agent is needed to start chatting.
 To see the page again, go to **Settings → About → Welcome page** and select
 **Open**. Direct links, such as Settings, open normally before setup is done.
 
-The hosted app at app.trellium.org does not open this page. It opens on your boards, in Simple
+The hosted app at app.tinkjam.com does not open this page. It opens on your boards, in Simple
 mode; see [Start here](./getting-started.md). To use the agents on a computer there, choose
 **Connect a computer**. To manage computers as an engineer, use **Advanced settings →
 Environments**.

@@ -1,6 +1,6 @@
 import Foundation
 
-/// `https://trellium.org/downloads/mac.json`, published with each build by `scripts/build.sh`:
+/// `https://tinkjam.com/downloads/mac.json` (else the same file on trellium.org), published with each build by `scripts/build.sh`:
 ///
 ///     { "version": "1.0.1", "url": "https://trellium.org/downloads/Tinkjam-Sync-mac.zip",
 ///       "sha256": "<hex of the zip>", "minimumSystemVersion": "13.0" }
@@ -111,7 +111,7 @@ enum AppUpdater {
 
     static func check(log: LogFile) async throws -> Outcome {
         let release: AppRelease
-        do { release = try await fetchJSON(AppRelease.self, from: Config.appManifestURL) } catch {
+        do { release = try await fetchJSON(AppRelease.self, fromFirstOf: Config.appManifestURLs) } catch {
             throw SetupError.from(error, doing: "checking for a new version of the app")
         }
         guard isNewerThanRunning(version: release.version, build: release.build ?? "") else { return .upToDate }

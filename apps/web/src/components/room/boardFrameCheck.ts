@@ -1,13 +1,18 @@
 import { CLOUD_BOARD_FRAME_CHECK_ROUTE } from "@t3tools/contracts";
+import { OWN_DOMAINS } from "@t3tools/shared/ownDomains";
 import type { RoomEmbedFrameVerdict } from "@t3tools/shared/roomEmbed";
 import { useEffect, useState } from "react";
 
 import { cloudBoardsOrigin } from "~/guest/cloudBoardsHost";
 
-/** The app's and the board host's hosts, whose pages a board never frames. */
+/** The app's and the board host's hosts, and both of our domains, whose pages a board never frames. */
 export function boardOwnHosts(): ReadonlyArray<string> {
   const boards = cloudBoardsOrigin();
-  return [window.location.hostname, ...(boards === null ? [] : [new URL(boards).hostname])];
+  return [
+    window.location.hostname,
+    ...(boards === null ? [] : [new URL(boards).hostname]),
+    ...OWN_DOMAINS,
+  ];
 }
 
 const CHECK_TIMEOUT_MS = 8_000;

@@ -30,9 +30,10 @@ import { sharedThreadLocationOf } from "./boardAddress";
 import { linkRefusalNotice, type RefusalNotice } from "./linkRefusal.logic";
 import {
   acceptedGuestLinkHost,
-  cloudBoardsHost,
+  cloudBoardsHosts,
   cloudBoardsOrigin,
-  guestHostZone,
+  isCloudBoardsHost,
+  guestHostZones,
   guestShareOriginOf,
 } from "./cloudBoardsHost";
 
@@ -320,7 +321,7 @@ export const guestShareOrigin = (host: string) =>
 
 /** Whether a joined share is a board on the cloud board host, on nobody's machine. */
 export const isCloudShare = (share: Pick<JoinedGuestShare, "host">) =>
-  share.host === cloudBoardsHost();
+  isCloudBoardsHost(share.host);
 
 /** Where a joined share opens in this app: for links to it and for going to it. */
 export const guestShareLocation = (
@@ -342,8 +343,8 @@ export const guestLinkHost = (requested: string | null): string | null =>
   acceptedGuestLinkHost({
     requested,
     pageHost: window.location.host,
-    zone: guestHostZone(),
-    cloudHost: cloudBoardsHost(),
+    zones: guestHostZones(),
+    cloudHosts: cloudBoardsHosts(),
   });
 
 /** How the connection runtime reads the joined shares and reports what their streams say. */

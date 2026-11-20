@@ -96,7 +96,7 @@ const policies = (): ReadonlyArray<Policy> => [
         kind: "checkbox",
         list: "Clients",
         name: "remote",
-        label: "Remote: phones, other computers, app.trellium.org",
+        label: "Remote: phones, other computers, app.tinkjam.com",
         defaultChecked: false,
       },
     ],
