@@ -80,11 +80,13 @@ const KINDS: Readonly<Record<string, ReleaseKind>> = {
   "sync.json": "sync",
   "windows.json": "windows",
   "mac.json": "mac",
+  "linux.json": "linux",
 };
 
 function kindOf(file: string): ReleaseKind {
   const kind = KINDS[NodePath.basename(file)];
-  if (kind === undefined) throw new Error(`${file} is not sync.json, windows.json or mac.json.`);
+  if (kind === undefined)
+    throw new Error(`${file} is not sync.json, windows.json, mac.json or linux.json.`);
   return kind;
 }
 

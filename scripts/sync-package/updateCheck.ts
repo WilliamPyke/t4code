@@ -15,7 +15,7 @@ export const RELEASE_PUBLIC_KEYS: Readonly<Record<string, string>> = {
     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUgGkI4A4huZQzmxgXfcRXLA3KsIB8/5kojMQOJRjVwVA4RQjHk8lQD7KvVZclEoPdjM1oUD2fTy7cwW+1zmh3w==",
 };
 
-export type ReleaseKind = "sync" | "windows" | "mac";
+export type ReleaseKind = "sync" | "windows" | "mac" | "linux";
 
 const SIGNED_FIELDS = ["version", "build", "url", "sha256", "minimumSystemVersion"] as const;
 

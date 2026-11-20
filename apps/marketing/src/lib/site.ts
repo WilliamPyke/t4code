@@ -11,9 +11,12 @@ const SYNC_VERSION = "1.0.5";
 const WINDOWS_DOWNLOAD = "/downloads/TinkjamSyncSetup.exe";
 const MAC_DMG_DOWNLOAD = "/downloads/Tinkjam-Sync.dmg";
 const LINUX_DOWNLOADS = [
-  { label: "AppImage", href: `/downloads/tinkjam-sync-v${SYNC_VERSION}-linux-x86_64.AppImage` },
-  { label: ".deb", href: `/downloads/tinkjam-sync-v${SYNC_VERSION}-linux-x86_64.deb` },
-  { label: ".rpm", href: `/downloads/tinkjam-sync-v${SYNC_VERSION}-linux-x86_64.rpm` },
+  {
+    label: "AppImage (beta)",
+    href: `/downloads/tinkjam-sync-v${SYNC_VERSION}-linux-x86_64.AppImage`,
+  },
+  { label: ".deb (beta)", href: `/downloads/tinkjam-sync-v${SYNC_VERSION}-linux-x86_64.deb` },
+  { label: ".rpm (beta)", href: `/downloads/tinkjam-sync-v${SYNC_VERSION}-linux-x86_64.rpm` },
 ];
 // The published install commands (apps/sync-mac/scripts/install.sh prints the Linux one).
 const MAC_INSTALL_COMMAND = "curl -fsSL https://tinkjam.com/downloads/install.sh | bash";
@@ -22,8 +25,8 @@ export const CHECKSUMS_URL = "/downloads/checksums.txt";
 // A Mac app downloaded in a browser is stopped by Gatekeeper unless it is notarized, so until
 // then Mac installs by command. Set each flag once its files are in dist/downloads/.
 const MAC_NOTARIZED: boolean = false;
-const LINUX_PUBLISHED: boolean = false;
-export const CHECKSUMS_PUBLISHED: boolean = false;
+const LINUX_PUBLISHED: boolean = true;
+export const CHECKSUMS_PUBLISHED: boolean = true;
 
 type SyncMethod =
   | { kind: "files"; files: ReadonlyArray<{ label: string; href: string }> }
