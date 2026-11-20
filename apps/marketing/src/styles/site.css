@@ -902,7 +902,6 @@ a {
   max-width: 100%;
   margin-top: 16px;
   padding: 12px 14px;
-  overflow-x: auto;
   border: 1px solid var(--rule);
   border-radius: 12px;
   background: var(--card);
@@ -913,13 +912,31 @@ a {
     "Cascadia Mono",
     Consolas,
     monospace;
-  white-space: pre;
+  /* Soft wraps only: the copied and selected text stays one line. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   user-select: all;
 }
 .prose .sync__how {
   margin-top: 10px;
   color: var(--quiet);
   font-size: 15px;
+}
+.prose .sync__phone {
+  margin-top: 24px;
+  color: var(--text);
+  font-weight: 500;
+}
+.download.is-phone .sync__files .btn,
+.download.is-phone .sync__files .btn:hover {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 .download__soon {
   margin-top: 28px !important;

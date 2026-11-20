@@ -12,6 +12,10 @@ import { CHECKSUMS_PUBLISHED, CHECKSUMS_URL, SYNC_SYSTEMS } from "../lib/site";
       <h1>Download Tinkjam Sync</h1>
       <p>Tinkjam Sync connects the agents on your computer to your boards.</p>
 
+      <p class="sync__phone" data-phone hidden>
+        Tinkjam Sync is installed on a computer, not on a phone or tablet.
+      </p>
+
       <nav class="sync-switch" aria-label="Choose your computer" data-switch hidden>
         {
           SYNC_SYSTEMS.map((system) => (
@@ -66,9 +70,17 @@ import { CHECKSUMS_PUBLISHED, CHECKSUMS_URL, SYNC_SYSTEMS } from "../lib/site";
     (function () {
       var root = document.querySelector("[data-download]");
       var ua = navigator.userAgent;
-      var os = /iPhone|iPad|iPod|Android/.test(ua)
-        ? "windows"
-        : /Mac/.test(ua)
+      // iPadOS reports itself as a Mac; touch tells them apart.
+      var phone =
+        /iPhone|iPad|iPod|Android|Mobile/.test(ua) ||
+        (/Mac/.test(ua) && navigator.maxTouchPoints > 1);
+      if (phone) {
+        // No main download on a phone: one line, then every system listed in full.
+        root.classList.add("is-phone");
+        root.querySelector("[data-phone]").hidden = false;
+        return;
+      }
+      var os = /Mac/.test(ua)
           ? "mac"
           : /Linux|X11|CrOS/.test(ua)
             ? "linux"
