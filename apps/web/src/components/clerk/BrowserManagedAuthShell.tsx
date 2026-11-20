@@ -33,6 +33,7 @@ export default function BrowserManagedAuthShell({
       localization={clerkLocalization}
       publishableKey={publishableKey}
       signInUrl="/sign-in"
+      signUpUrl="/sign-in"
       routerPush={move(false)}
       routerReplace={move(true)}
     >

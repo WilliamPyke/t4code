@@ -1877,10 +1877,45 @@ body {
   }
 }
 
-/* The sign-in page's first step has no subtitle, as its design; later steps keep theirs, which
-   say where a code went. Clerk names each step on its card. */
-[data-sign-in-form] :is(.cl-signIn-start, .cl-signUp-start) .cl-headerSubtitle {
-  display: none;
+/* The sign-in page's form sits directly on the page. The provider dresses Clerk's card as a dialog
+   (glass, border, shadow) for the desktop app's sign-in; on the page it has no surface at all.
+   Clerk names each element with a stable cl- class; these outrank its own styles and the
+   appearance classes. Clerk's development-mode strip is its own element and stays. */
+[data-sign-in-form] :is(.cl-cardBox, .cl-card, .cl-footer) {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+[data-sign-in-form] .cl-cardBox {
+  width: 100%;
+  max-width: none;
+  overflow: visible;
+}
+
+[data-sign-in-form] .cl-card {
+  padding: 0;
+}
+
+[data-sign-in-form] .cl-formFieldInput {
+  height: 3rem;
+  border-radius: 0.5rem;
+  font-size: 1rem;
+}
+
+[data-sign-in-form] .cl-formButtonPrimary {
+  height: 3rem;
+  border-radius: 9999px;
+  background-image: none;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+[data-sign-in-form] .cl-formButtonPrimary::after {
+  background-image: none;
 }
 
 /* Selected text takes the theme's focus colour, so every theme selects in its own accent. */

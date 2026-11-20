@@ -17,9 +17,8 @@ export function isSidebarUtilityPage(pathname: string) {
 // are still recorded; they are real app URLs, so returning to one is harmless.
 const SHELL_LESS_PATHS = new Set(["/pair", "/connect", "/connect-agent", GUEST_PAGE_PATH]);
 
-/** The sign-in page and each of its steps, which Clerk keeps under its path. */
-export const isSignInPath = (pathname: string) =>
-  pathname === "/sign-in" || pathname.startsWith("/sign-in/");
+/** The sign-in page and each of its steps, which Clerk keeps under its path, and /sign-up. */
+export const isSignInPath = (pathname: string) => /^\/sign-(?:in|up)(?:\/|$)/.test(pathname);
 
 let mainAppHref: string | null = null;
 let appModalReturnHref: string | null = null;

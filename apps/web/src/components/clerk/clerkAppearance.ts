@@ -120,6 +120,8 @@ export const signInScreenAppearance = {
 const TO_CONTINUE = "to continue to Tinkjam";
 // The one line of what Tinkjam is, under every first step.
 const VALUE = "Your team and your agents on one board, on every device.";
+// The form makes an account for an email it does not know, so this is the way to sign up.
+const NEW_HERE = "New here? Use the same form to create your account.";
 
 /**
  * Clerk names the product with its dashboard's application name; every line that would show it
@@ -129,9 +131,9 @@ export const clerkLocalization = {
   signIn: {
     start: {
       title: "Sign in",
-      subtitle: VALUE,
+      subtitle: NEW_HERE,
       titleCombined: "Sign in",
-      subtitleCombined: VALUE,
+      subtitleCombined: NEW_HERE,
       actionText: "New here?",
       actionLink: "Create an account",
     },
