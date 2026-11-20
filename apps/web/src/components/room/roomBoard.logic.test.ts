@@ -244,6 +244,12 @@ describe("selectionBarSpot", () => {
       spot: { left: 8, top: 260 },
     },
     {
+      name: "stays right of the tool rail beside a selection at the board's left",
+      selection: { x: -100, y: 300, width: 120, height: 100 },
+      cover: { top: 0, bottom: 60, left: 62 },
+      spot: { left: 70, top: 260 },
+    },
+    {
       name: "stays inside the board when the selection fills it",
       selection: { x: 0, y: 0, width: 1000, height: 700 },
       spot: { left: 350, top: 660 },

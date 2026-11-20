@@ -69,6 +69,16 @@ export function boardChromeAt(root: ParentNode, edge: "top" | "bottom"): Array<H
   );
 }
 
+/** How far the tool rail, upright beside a wide board, reaches in from `left` (screen pixels). */
+export function boardRailReach(root: ParentNode, left: number): number {
+  return Math.max(
+    0,
+    ...[...root.querySelectorAll<HTMLElement>('[data-board-chrome="rail"]')]
+      .filter((rail) => rail.offsetHeight > rail.offsetWidth)
+      .map((rail) => rail.getBoundingClientRect().right - left),
+  );
+}
+
 /**
  * A card's body that scrolls on its own and stays at its newest text while it grows, so a
  * streaming reply never stretches the card. `column-reverse` anchors the scroll to the bottom;

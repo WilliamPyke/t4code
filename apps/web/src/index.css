@@ -1475,7 +1475,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --paint-grey-deep: #57534e;
   --paint-ink: #1f1d1a;
   --paint-ink-muted: color-mix(in srgb, var(--paint-ink) 72%, transparent);
-  --person-1: #d93036;
+  /* The design's raspberry teammate colour, never the error red a badge would be mistaken for. */
+  --person-1: #db2d55;
   --person-2: #1f6fe5;
   --person-3: #18794e;
   --person-4: #7c3aed;
@@ -1490,12 +1491,13 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     --board-hairline: color-mix(in srgb, var(--foreground) 10%, transparent);
     --board-shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 10px 28px -10px rgb(0 0 0 / 70%);
     --paint-shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 6px 14px -6px rgb(0 0 0 / 60%);
-    --paint-yellow: color-mix(in srgb, #795808 90%, var(--card));
-    --paint-green: color-mix(in srgb, #176b40 90%, var(--card));
-    --paint-blue: color-mix(in srgb, #1f58a3 90%, var(--card));
-    --paint-pink: color-mix(in srgb, #8c2c5c 90%, var(--card));
-    --paint-purple: color-mix(in srgb, #5a40a8 90%, var(--card));
-    --paint-grey: color-mix(in srgb, #46464c 90%, var(--card));
+    /* The design's muted dark paints (Doop "Board — dark"); light ink keeps well over 7:1. */
+    --paint-yellow: color-mix(in srgb, #3a3018 90%, var(--card));
+    --paint-green: color-mix(in srgb, #16342a 90%, var(--card));
+    --paint-blue: color-mix(in srgb, #1c2550 90%, var(--card));
+    --paint-pink: color-mix(in srgb, #3d1c27 90%, var(--card));
+    --paint-purple: color-mix(in srgb, #2c2142 90%, var(--card));
+    --paint-grey: color-mix(in srgb, #2a2730 90%, var(--card));
     --paint-yellow-deep: #e5c453;
     --paint-green-deep: #6fcf8e;
     --paint-blue-deep: #7cb4f5;

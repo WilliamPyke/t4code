@@ -3518,19 +3518,22 @@ const SELECTION_BAR_GAP = 8;
  * Where the selection's bar goes, in board screen pixels: centred above the cards, else below,
  * else beside them (right, then left), else docked at the board's bottom, as near the middle as it
  * goes without covering a selected card (`cards`), or in the middle when nowhere is clear; always
- * between the header and toolbar floating over the board (`cover`, how far each reaches in).
+ * clear of the chrome floating over the board (`cover`, how far it reaches in from each edge).
  */
 export function selectionBarSpot(
   selection: BoardRect,
   bar: BoardSize,
   board: BoardSize,
-  cover: { readonly top: number; readonly bottom: number } = { top: 0, bottom: 0 },
+  cover: { readonly top: number; readonly bottom: number; readonly left?: number } = {
+    top: 0,
+    bottom: 0,
+  },
   cards: ReadonlyArray<BoardRect> = [],
 ): { readonly left: number; readonly top: number } {
   const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max));
   const highest = cover.top + SELECTION_BAR_GAP;
   const lowest = Math.max(highest, board.height - cover.bottom - SELECTION_BAR_GAP - bar.height);
-  const leftmost = SELECTION_BAR_GAP;
+  const leftmost = (cover.left ?? 0) + SELECTION_BAR_GAP;
   const rightmost = Math.max(leftmost, board.width - SELECTION_BAR_GAP - bar.width);
   const centred = clamp(selection.x + selection.width / 2 - bar.width / 2, leftmost, rightmost);
   const above = selection.y - SELECTION_BAR_GAP - bar.height;

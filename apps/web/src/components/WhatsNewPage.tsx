@@ -1,5 +1,5 @@
 import { ChevronDownIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { WHATS_NEW, type WhatsNewEntry, useWhatsNewSeen } from "~/whatsNew";
 
@@ -33,6 +33,8 @@ export function WhatsNewPage() {
   const { markSeen } = useWhatsNewSeen();
   const closeAppModal = useCloseAppModal();
   const [open, setOpen] = useState(true);
+  // Opening focuses the dialog itself, so no entry wears a focus ring until the person tabs.
+  const popupRef = useRef<HTMLDivElement>(null);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- records in browser storage that this browser has read the page
   useEffect(() => markSeen());
 
@@ -46,7 +48,7 @@ export function WhatsNewPage() {
         if (!next) void closeAppModal();
       }}
     >
-      <DialogPopup className="sm:max-w-lg" data-whats-new>
+      <DialogPopup ref={popupRef} initialFocus={popupRef} className="sm:max-w-lg" data-whats-new>
         <DialogHeader>
           <DialogTitle>What's new</DialogTitle>
         </DialogHeader>

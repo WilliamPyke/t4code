@@ -859,6 +859,25 @@ describe("RoomBoard keys and pointer", () => {
       .toHaveFocus();
   });
 
+  it("saves a note's text once typing pauses, while it is still being written, and undoes the writing in one step", async () => {
+    const board = renderBoard([{ id: "a", text: "First", x: 0, y: 0 }]);
+    const { onChange } = board;
+    await using screen = await board.screen;
+    const field = screen.getByRole("textbox", { name: "Note", exact: true });
+    await userEvent.dblClick(field);
+    await expect.element(field).toHaveFocus();
+    await userEvent.keyboard("{End} draft");
+    await vi.waitFor(() => expect(puts(onChange)).toHaveLength(1));
+    expect(puts(onChange)[0]).toMatchObject({ noteId: "a", text: "First draft" });
+    await expect.element(field).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+    await vi.waitFor(() => expect(puts(onChange)).toHaveLength(2));
+    await userEvent.keyboard("{Control>}z{/Control}");
+    await vi.waitFor(() => expect(puts(onChange)).toHaveLength(3));
+    expect(puts(onChange)[2]).toMatchObject({ noteId: "a", text: "First" });
+  });
+
   it("brings the hidden first-run guide back from the board menu, and ticks a step once the board takes the note", async () => {
     await using _viewport = await boardSizedViewport();
     const board = renderBoard([{ id: "a", text: "First", x: 0, y: 0 }]);
@@ -1004,7 +1023,7 @@ describe("RoomBoard keys and pointer", () => {
     await userEvent.click(view("Board"));
   });
 
-  it("puts a note added from the toolbar by key into the section last clicked, and a Section where clicked", async () => {
+  it("puts a note added from the toolbar by key into the section last clicked, and a Section where clicked, clear of other sections", async () => {
     const board = renderBoard([
       // Below the thread's own card and the places kept for guests' cards.
       { id: "frame", text: "Plan", x: 500, y: 500, section: true, size: { w: 640, h: 420 } },
@@ -1024,10 +1043,23 @@ describe("RoomBoard keys and pointer", () => {
     await userEvent.click(screen.getByRole("button", { name: "Section", exact: true }));
     const layer = screen.container.querySelector<HTMLElement>('[data-board-place="section"]');
     if (layer === null) throw new Error("The Section tool did not wait for a click");
-    await userEvent.click(layer, { position: { x: 200, y: 200 } });
+    const frame = screen.container.querySelector('[data-board-item="note:frame"]');
+    if (frame === null) throw new Error("The board did not draw the section");
+    const over = middleOf(frame);
+    const under = layer.getBoundingClientRect();
+    await userEvent.click(layer, { position: { x: over.x - under.left, y: over.y - under.top } });
     await expect
       .element(screen.getByRole("textbox", { name: "Section title" }).last())
       .toHaveFocus();
+    const added = puts(onChange).at(-1)!;
+    const size = added.size ?? { w: 0, h: 0 };
+    // Its title would sit against the other's, and its frame over the other's cards.
+    expect(
+      added.x < 500 + 640 &&
+        added.x + size.w > 500 &&
+        added.y < 500 + 420 &&
+        added.y + size.h > 500,
+    ).toBe(false);
   });
 
   it("gives the board its keys back after a toolbar button is clicked", async () => {

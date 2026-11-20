@@ -18,6 +18,7 @@ import {
   LinkIcon,
   ListIcon,
   LocateFixedIcon,
+  PencilIcon,
   PlayIcon,
   PlusIcon,
   ShapesIcon,
@@ -667,6 +668,7 @@ export function BoardPlan({
                   pickedCount={picked.has(task.id) ? picked.size : 1}
                   onMoveTo={(to) => moveTo(task, to)}
                   onOpen={(event) => open(event, task)}
+                  onDetails={() => setEditing(task.id)}
                 />
               ))}
             </ol>
@@ -759,6 +761,7 @@ export function BoardPlan({
                         onMoveTo={(to) => moveTo(task, to)}
                         onMoveBy={(by) => onMove(task.id, status, index + by)}
                         onOpen={(event) => open(event, task)}
+                        onDetails={() => setEditing(task.id)}
                         onPress={(event) => press(event, task)}
                       />
                     </li>
@@ -1161,6 +1164,7 @@ function PlanCardMenu({
   actions,
   onMoveTo,
   onMoveBy,
+  onDetails,
   open,
   onOpenChange,
 }: {
@@ -1173,6 +1177,8 @@ function PlanCardMenu({
   readonly actions: PlanTaskActions;
   readonly onMoveTo: (to: RoomTaskStatus) => void;
   readonly onMoveBy: ((by: number) => void) | undefined;
+  /** Opens the task's details: its text, who it is for, priority and due day. */
+  readonly onDetails: () => void;
   /** Held by the card, so a right-click on it opens this menu too. */
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
@@ -1185,6 +1191,11 @@ function PlanCardMenu({
         <EllipsisIcon />
       </MenuTrigger>
       <MenuPopup align="end">
+        <MenuItem onClick={onDetails}>
+          <PencilIcon />
+          {canEdit ? "Edit details" : "Details"}
+        </MenuItem>
+        <MenuSeparator />
         {canEdit ? (
           <>
             <MenuGroup>
@@ -1235,6 +1246,7 @@ function PlanCard({
   onMoveTo,
   onMoveBy,
   onOpen,
+  onDetails,
   onPress,
   ...shows
 }: PlanCardShows & {
@@ -1249,6 +1261,7 @@ function PlanCard({
   readonly onMoveTo: (to: RoomTaskStatus) => void;
   readonly onMoveBy: (by: number) => void;
   readonly onOpen: (event: ReactMouseEvent) => void;
+  readonly onDetails: () => void;
   readonly onPress: (event: ReactPointerEvent<HTMLElement>) => void;
 }) {
   const label = shows.task.text.trim() || "Untitled task";
@@ -1289,6 +1302,7 @@ function PlanCard({
           actions={actions}
           onMoveTo={onMoveTo}
           onMoveBy={onMoveBy}
+          onDetails={onDetails}
           open={menuOpen}
           onOpenChange={setMenuOpen}
         />
@@ -1305,6 +1319,7 @@ function PlanListRow({
   actions,
   onMoveTo,
   onOpen,
+  onDetails,
   ...shows
 }: PlanCardShows & {
   readonly canEdit: boolean;
@@ -1313,6 +1328,7 @@ function PlanListRow({
   readonly actions: PlanTaskActions;
   readonly onMoveTo: (to: RoomTaskStatus) => void;
   readonly onOpen: (event: ReactMouseEvent) => void;
+  readonly onDetails: () => void;
 }) {
   const { task, people, guests, today } = shows;
   const status = roomTaskStatus(task);
@@ -1379,6 +1395,7 @@ function PlanListRow({
           actions={actions}
           onMoveTo={onMoveTo}
           onMoveBy={undefined}
+          onDetails={onDetails}
           open={menuOpen}
           onOpenChange={setMenuOpen}
         />

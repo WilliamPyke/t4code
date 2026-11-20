@@ -448,6 +448,7 @@ import {
   type BoardChipTone,
   BoardFloat,
   boardChromeAt,
+  boardRailReach,
   BoardScrollTail,
   PersonDot,
 } from "./BoardChrome";
@@ -504,11 +505,16 @@ const COMPACT_CARD_ZOOM = 0.8;
 const FIT_MARGIN = 72;
 // The bottom toolbar's height with its gap below, which the board's own view keeps cards out of.
 const BOARD_TOOLBAR_BAND = 60;
+// A new card lands this far below the top of the view, where its selection bar fits above it.
+const SELECTION_BAR_ROOM = 48;
 /** How far an arrow key moves the selection, in board pixels, and with Shift. */
 const NUDGE_STEP = 4;
 const NUDGE_STEP_LARGE = 40;
 // Nudges this close together are one move, sent once and undone at once.
 const NUDGE_SETTLE_MS = 500;
+// Text being typed reaches the room this long after typing pauses, and at least this often.
+const TYPING_SAVE_MS = 600;
+const TYPING_SAVE_MAX_MS = 3_000;
 const NUDGES: Readonly<Record<string, readonly [number, number]>> = {
   ArrowLeft: [-1, 0],
   ArrowRight: [1, 0],
@@ -896,13 +902,14 @@ const touchFirst = () =>
   typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
 
 /**
- * How far the chrome floating over the surface reaches into it from the top (the header) and from
- * the bottom (the toolbar and zoom), in screen pixels.
+ * How far the chrome floating over the surface reaches into it from the top and from the bottom
+ * (the zoom corner, and the tools on a narrow board), and from the left (the tool rail beside a
+ * wide board), in screen pixels.
  */
 const chromeCoverOf = (surface: HTMLElement | null) => {
   const area = boardAreaOf(surface);
   const root = surface?.parentElement;
-  if (area === null || root === null || root === undefined) return { top: 0, bottom: 0 };
+  if (area === null || root === null || root === undefined) return { top: 0, bottom: 0, left: 0 };
   const reach = (edge: "top" | "bottom") =>
     Math.max(
       0,
@@ -911,7 +918,7 @@ const chromeCoverOf = (surface: HTMLElement | null) => {
         return edge === "top" ? drawn.bottom - area.top : area.top + area.height - drawn.top;
       }),
     );
-  return { top: reach("top"), bottom: reach("bottom") };
+  return { top: reach("top"), bottom: reach("bottom"), left: boardRailReach(root, area.left) };
 };
 
 /** A note or task, which Ctrl+Enter and its + follow with a blank one beside it. */
@@ -1917,10 +1924,63 @@ export function RoomBoard({
     landedFrames.current = [];
     paintFrames();
   });
+  // Text being typed is also saved when typing pauses, so a tab closed mid-note keeps it. Those
+  // saves are not history: the blur that ends the writing is its one undo step.
+  // `pause` fires once typing pauses, `cap` a few seconds after the first unsaved key.
+  const typingSaves = useRef(
+    new Map<
+      string,
+      {
+        pause: ReturnType<typeof setTimeout> | null;
+        cap: ReturnType<typeof setTimeout> | null;
+        saved: boolean;
+      }
+    >(),
+  );
+  const clearTypingTimers = (pending: {
+    pause: ReturnType<typeof setTimeout> | null;
+    cap: ReturnType<typeof setTimeout> | null;
+  }) => {
+    if (pending.pause !== null) clearTimeout(pending.pause);
+    if (pending.cap !== null) clearTimeout(pending.cap);
+    pending.pause = null;
+    pending.cap = null;
+  };
+  /** Stops saving this text as it is typed; true when some of it already reached the room. */
+  const stopSavingTyping = (key: string) => {
+    const pending = typingSaves.current.get(key);
+    if (pending === undefined) return false;
+    clearTypingTimers(pending);
+    typingSaves.current.delete(key);
+    return pending.saved;
+  };
+  const saveTyping = useStableCallback((target: BoardTarget) => {
+    const key = boardEditKey(target);
+    const pending = typingSaves.current.get(key);
+    const value = held.current.get(key);
+    if (pending === undefined || onChange === undefined) return;
+    clearTypingTimers(pending);
+    if (value === undefined || value === null || !("text" in value)) return;
+    pending.saved = true;
+    const change = boardChangeOf(target, settleBoardValue(value));
+    void queueChange(key, () => onChange(change));
+  });
+  const scheduleTypingSave = (target: BoardTarget, value: RoomBoardNote) => {
+    // A comment posts when it is sent, never half-written.
+    if (value.kind === "comment") return;
+    const key = boardEditKey(target);
+    const pending = typingSaves.current.get(key) ?? { pause: null, cap: null, saved: false };
+    if (pending.pause !== null) clearTimeout(pending.pause);
+    pending.pause = setTimeout(() => saveTyping(target), TYPING_SAVE_MS);
+    // Steady typing still saves every few seconds.
+    pending.cap ??= setTimeout(() => saveTyping(target), TYPING_SAVE_MAX_MS);
+    typingSaves.current.set(key, pending);
+  };
   // `after` names the queue a change waits in: a line to a new card goes once the card is there.
   const send = (target: BoardTarget, value: BoardValue, after?: string | ReadonlyArray<string>) => {
     if (onChange === undefined) return;
     const key = boardEditKey(target);
+    stopSavingTyping(key);
     held.current.delete(key);
     letFrameGo(key);
     const before = boardStepBefore(gestureFrom.current, shown, target);
@@ -2565,17 +2625,24 @@ export function RoomBoard({
     const current = noteNow(note);
     // Someone picked with `@` stays mentioned while the text names them.
     const mentions = roomMentionsIn([...(current.mentions ?? []), ...(added ? [added] : [])], text);
+    const target = { kind: "note", id: note.id } as const;
     hold(
-      { kind: "note", id: note.id },
+      target,
       current.mentions === undefined && mentions.length === 0
         ? { ...current, text }
         : { ...current, text, mentions },
     );
+    scheduleTypingSave(target, current);
     sendDrag();
   };
-  // Escape in a title: back to what is stored, sending nothing.
+  // Escape in a title: back to what was stored, sending nothing unless a pause already saved some.
   const revertText = (target: BoardTarget) => {
     const key = boardEditKey(target);
+    const was = gestureFrom.current.get(key);
+    if (stopSavingTyping(key) && onChange !== undefined && was !== undefined && was !== null) {
+      const change = boardChangeOf(target, settleBoardValue(was));
+      void queueChange(key, () => onChange(change));
+    }
     held.current.delete(key);
     gestureFrom.current.delete(key);
     setEdits((current) => dropHeldBoardEdits(current, new Set([key])));
@@ -2712,29 +2779,31 @@ export function RoomBoard({
   const reveal = (rect: BoardRect, added = false) => {
     const surface = boardAreaOf(surfaceRef.current);
     if (surface === null) return;
+    const cover = chromeCoverOf(surfaceRef.current);
+    // Right of the tool rail beside a wide board, where nothing hides under it.
+    const left = surface.width - cover.left < surface.width / 2 ? 0 : cover.left;
     if (added) {
       // What the bottom toolbar covers is out of view: a card added is shown above it.
-      const area = {
-        width: surface.width,
+      const shifted = { ...view, x: view.x - left };
+      const next = panToShowAdded(shifted, rect, {
+        width: surface.width - left,
         height: Math.max(surface.height / 2, surface.height - BOARD_TOOLBAR_BAND),
-      };
-      const next = panToShowAdded(view, rect, area);
-      if (next === view) return;
+      });
+      if (next === shifted) return;
       setFollowing(null);
-      setView(next);
+      setView({ ...next, x: next.x + left });
       return;
     }
-    const cover = chromeCoverOf(surfaceRef.current);
     const height = surface.height - cover.top - cover.bottom;
     const top = height < surface.height / 2 ? 0 : cover.top;
-    const shifted = { ...view, y: view.y - top };
+    const shifted = { ...view, x: view.x - left, y: view.y - top };
     const next = panToCentre(shifted, rect, {
-      width: surface.width,
+      width: surface.width - left,
       height: top === 0 ? surface.height : height,
     });
     if (next === shifted) return;
     setFollowing(null);
-    setView({ ...next, y: next.y + top });
+    setView({ ...next, x: next.x + left, y: next.y + top });
   };
   // Far enough in for a card's page to load, as `reveal` centres it, when the board is too far out.
   const zoomToCard = (ref: string) => {
@@ -2745,17 +2814,19 @@ export function RoomBoard({
     const cover = chromeCoverOf(surfaceRef.current);
     const height = area.height - cover.top - cover.bottom;
     const top = height < area.height / 2 ? 0 : cover.top;
+    const left = area.width - cover.left < area.width / 2 ? 0 : cover.left;
     const zoomed = {
       ...view,
       zoom: Math.max(view.zoom, BOARD_EMBED_MIN_ZOOM),
+      x: view.x - left,
       y: view.y - top,
     };
     const next = panToCentre(zoomed, rect, {
-      width: area.width,
+      width: area.width - left,
       height: top === 0 ? area.height : height,
     });
     setFollowing(null);
-    setView({ ...next, y: next.y + top });
+    setView({ ...next, x: next.x + left, y: next.y + top });
   };
   // The card this person last added or selected alone, which a new card joins in its section.
   const lastCard = useRef<string | null>(null);
@@ -2767,10 +2838,19 @@ export function RoomBoard({
     size: RoomBoardSize = boardNewNoteSize(kind),
     intoSection = true,
   ): BoardPoint => {
-    const within = visibleBoardRect(
-      view,
-      boardAreaOf(surfaceRef.current) ?? { width: 600, height: 400 },
-    );
+    const area = boardAreaOf(surfaceRef.current) ?? { width: 600, height: 400 };
+    // Clear of the chrome floating over the board, where it would hide, and low enough for its
+    // selection bar to fit above it.
+    const cover = chromeCoverOf(surfaceRef.current);
+    const left = cover.left / view.zoom;
+    const headroom = (cover.top + SELECTION_BAR_ROOM) / view.zoom;
+    const seen = visibleBoardRect(view, area);
+    const within = {
+      x: seen.x + left,
+      y: seen.y + headroom,
+      width: Math.max(0, seen.width - left),
+      height: Math.max(0, seen.height - headroom - cover.bottom / view.zoom),
+    };
     const sections = shown.notes.flatMap((note) => {
       if (note.section !== true) return [];
       const { w, h } = note.size ?? BOARD_SECTION_SIZE;
@@ -2779,16 +2859,10 @@ export function RoomBoard({
     const last = lastCard.current === null ? null : drawnItem(lastCard.current);
     const lastRect = last === null ? null : drawnRect(last);
     if (!intoSection) {
-      // Clear of the header and toolbar floating over the board, where it would hide.
-      const cover = chromeCoverOf(surfaceRef.current);
       return boardAddSpot(
         size,
         [...takenRects(), ...sections.map(({ rect }) => rect)],
-        {
-          ...within,
-          y: within.y + cover.top / view.zoom,
-          height: Math.max(0, within.height - (cover.top + cover.bottom) / view.zoom),
-        },
+        within,
         null,
       );
     }
@@ -2803,18 +2877,12 @@ export function RoomBoard({
           : { x: lastRect.x + lastRect.width / 2, y: lastRect.y + lastRect.height / 2 },
     });
     if (paper && section === null) {
-      const area = boardAreaOf(surfaceRef.current) ?? { width: 600, height: 400 };
       const touch = touchFirst();
       return boardCentreSpot(
         size,
         takenRects(),
         // On a touch screen the keyboard opens for it: it goes where the keyboard leaves in sight.
-        touch
-          ? boardTypingRect(view, area, chromeCoverOf(surfaceRef.current))
-          : visibleBoardRect(view, {
-              width: area.width,
-              height: Math.max(area.height / 2, area.height - BOARD_TOOLBAR_BAND),
-            }),
+        touch ? boardTypingRect(view, area, chromeCoverOf(surfaceRef.current)) : within,
         touch,
       );
     }
@@ -2916,8 +2984,17 @@ export function RoomBoard({
       tool === "section"
         ? BOARD_SECTION_SIZE
         : boardNewNoteSize(tool === "task" ? "task" : undefined);
-    // A tap means "here", over a card or not, so no taken rect dislodges it; the seen rect does.
-    const wanted = at === null ? undefined : boardPointedSpot(size, at, seenRect(), []);
+    // A tap means "here", over a card or not, so no card dislodges it; the seen rect does. A
+    // section keeps clear of other sections, where its frame and title would sit on theirs.
+    const sections =
+      tool === "section"
+        ? shown.notes.flatMap((note) => {
+            if (note.section !== true) return [];
+            const { w, h } = note.size ?? BOARD_SECTION_SIZE;
+            return [{ x: note.x, y: note.y, width: w, height: h }];
+          })
+        : [];
+    const wanted = at === null ? undefined : boardPointedSpot(size, at, seenRect(), sections);
     addAndType(() =>
       tool === "section"
         ? addSection(undefined, wanted)
@@ -3026,13 +3103,15 @@ export function RoomBoard({
     event.preventDefault();
     event.clipboardData.setData("text/plain", text);
   };
-  // The part of the board people see, clear of the header and toolbar floating over it.
+  // The part of the board people see, clear of the chrome floating over it.
   const seenRect = (): BoardRect => {
-    const within = visibleBoardRect(
-      view,
-      boardAreaOf(surfaceRef.current) ?? { width: 0, height: 0 },
-    );
+    const seen = visibleBoardRect(view, boardAreaOf(surfaceRef.current) ?? { width: 0, height: 0 });
     const cover = chromeCoverOf(surfaceRef.current);
+    const left = cover.left / view.zoom;
+    const within =
+      seen.width - left < seen.width / 2
+        ? seen
+        : { ...seen, x: seen.x + left, width: seen.width - left };
     const height = within.height - (cover.top + cover.bottom) / view.zoom;
     return height < within.height / 2
       ? within
@@ -6877,7 +6956,8 @@ export function RoomBoard({
                 return (
                   <div
                     key={edge.id}
-                    className="absolute flex -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-lg border border-border bg-popover p-1 shadow-sm"
+                    // Kept at least its own size as the board zooms out, so it stays readable and pressable.
+                    className="absolute flex -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-lg border border-border bg-popover p-1 shadow-sm [scale:var(--board-line-scale,1)]"
                     style={{ left: middle.x, top: middle.y }}
                     onPointerDown={stopPointer}
                     // On the group, so the keys work from the shape buttons too.

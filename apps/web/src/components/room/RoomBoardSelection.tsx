@@ -15,7 +15,7 @@ import { cn } from "~/lib/utils";
 
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
-import { boardChromeAt } from "./BoardChrome";
+import { boardChromeAt, boardRailReach } from "./BoardChrome";
 import { selectionBarSpot } from "./roomBoard.logic";
 import { holdPointer } from "./roomBoardPointer";
 
@@ -223,6 +223,7 @@ export function SelectionBar({
       {
         top: reach("top"),
         bottom: reach("bottom"),
+        left: board.parentElement === null ? 0 : boardRailReach(board.parentElement, area.left),
       },
       rects.map((rect) => ({
         x: rect.left - area.left,
