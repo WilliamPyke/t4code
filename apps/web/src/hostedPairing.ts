@@ -20,7 +20,7 @@ export function configuredHostedAppUrl(): string {
   const configured = builtHostedAppUrl();
   const page =
     typeof window === "undefined" || window.location === undefined ? null : window.location.origin;
-  return page !== null && hostedAppOrigins().includes(page) ? page : configured;
+  return page !== null && builtHostedAppOrigins().includes(page) ? page : configured;
 }
 
 const builtHostedAppUrl = () =>
@@ -34,12 +34,12 @@ export function onThisHostedApp(link: string): string {
   if (!URL.canParse(link)) return link;
   const url = new URL(link);
   const here = configuredHostedAppUrl();
-  if (!hostedAppOrigins().includes(url.origin) || !URL.canParse(here)) return link;
+  if (!builtHostedAppOrigins().includes(url.origin) || !URL.canParse(here)) return link;
   return `${new URL(here).origin}${url.pathname}${url.search}${url.hash}`;
 }
 
-/** The built hosted app's origin on each of our domains. */
-const hostedAppOrigins = (): ReadonlyArray<string> => {
+/** The built hosted app's origin on each of our domains, the built one first. */
+export const builtHostedAppOrigins = (): ReadonlyArray<string> => {
   const origin = originFromUrl(builtHostedAppUrl());
   return origin === null ? [] : ownDomainOrigins(origin);
 };
@@ -74,7 +74,7 @@ export function isHostedStaticApp(url?: URL): boolean {
     return false;
   }
 
-  return hostedAppOrigins().includes((url ?? new URL(window.location.href)).origin);
+  return builtHostedAppOrigins().includes((url ?? new URL(window.location.href)).origin);
 }
 
 export function readHostedPairingRequest(url: URL = new URL(window.location.href)) {

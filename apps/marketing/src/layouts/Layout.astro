@@ -22,6 +22,12 @@ const year = new Date().getFullYear();
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script is:inline>
+      // The site moved. Downloads and installers stay on both addresses; pages go to the new one.
+      if (/(^|\.)trellium\.org$/.test(location.hostname)) {
+        location.replace("https://tinkjam.com" + location.pathname + location.search + location.hash);
+      }
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
     <meta name="description" content={description} />

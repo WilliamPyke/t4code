@@ -25,6 +25,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { Atom, AtomRegistry } from "effect/reactivity";
 
+import { MOVED_SHARES_KEY, mergeMovedShares } from "../domainMove.logic";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { sharedThreadLocationOf } from "./boardAddress";
 import { linkRefusalNotice, type RefusalNotice } from "./linkRefusal.logic";
@@ -80,10 +81,27 @@ const decodeStored = Schema.decodeUnknownOption(
 
 function readStored(): ReadonlyArray<JoinedGuestShare> {
   try {
-    return Option.getOrElse(
+    const own = Option.getOrElse(
       decodeStored(window.localStorage.getItem(STORAGE_KEY) ?? "[]"),
       () => [],
     );
+    const handedOver = window.localStorage.getItem(MOVED_SHARES_KEY);
+    if (handedOver === null) return own;
+    // Boards our older address handed over (see domainMove.logic.ts), taken in once.
+    window.localStorage.removeItem(MOVED_SHARES_KEY);
+    const merged = mergeMovedShares(
+      own,
+      Option.getOrElse(decodeStored(handedOver), () => []),
+      (requested) =>
+        acceptedGuestLinkHost({
+          requested,
+          pageHost: window.location.host,
+          zones: guestHostZones(),
+          cloudHosts: cloudBoardsHosts(),
+        }),
+    );
+    if (merged !== own) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+    return merged;
   } catch {
     return [];
   }
