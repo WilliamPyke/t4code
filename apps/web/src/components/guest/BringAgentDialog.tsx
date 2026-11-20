@@ -6,15 +6,10 @@ import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
-import { CheckIcon, CopyIcon, DownloadIcon } from "lucide-react";
+import { CheckIcon, CopyIcon } from "lucide-react";
 import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react";
 
-import {
-  TINKJAM_AGENT_PROMPT,
-  TINKJAM_SYNC_COMMAND,
-  TINKJAM_SYNC_MAC_COMMAND,
-  TINKJAM_SYNC_WINDOWS_DOWNLOAD,
-} from "~/branding";
+import { TINKJAM_AGENT_PROMPT } from "~/branding";
 import { environmentCatalog } from "~/connection/catalog";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
@@ -22,8 +17,10 @@ import { cn } from "~/lib/utils";
 import { useProjects } from "~/state/entities";
 import { useEnvironmentProviders } from "~/state/environments";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { SYNC_INSTALLS, detectSyncOs, type SyncOs } from "~/syncDownloads";
 
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
+import { SyncInstallAction } from "../connect/GetSync";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
@@ -38,7 +35,6 @@ import {
 } from "../ui/dialog";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { type BringAgentComputer, agentsChecked } from "./bringAgent.logic";
 import { ComputerRow, ComputersLoading, ComputersNotLoaded } from "./ComputerRow";
 import { useRemoveComputer, useYourComputers } from "./yourComputers";
@@ -426,21 +422,10 @@ function BringControls({
   );
 }
 
-type Os = "mac" | "windows" | "linux";
-/** The computer being set up, or `null` on a phone or tablet, which is never it. */
-const detectOs = (): Os | null => {
-  if (typeof navigator === "undefined") return "linux";
-  const agent = navigator.userAgent;
-  // An iPad says it is a Mac; only its touch points tell them apart.
-  if (/iphone|ipad|ipod|android/i.test(agent)) return null;
-  if (/mac/i.test(agent)) return navigator.maxTouchPoints > 1 ? null : "mac";
-  return /win/i.test(agent) ? "windows" : "linux";
-};
-
 /** Whether this is a phone or tablet, where no agent runs and Tinkjam Sync cannot be installed. */
-export const onPhoneOrTablet = () => detectOs() === null;
+export const onPhoneOrTablet = () => detectSyncOs() === null;
 
-/** How a computer gets connected: the Tinkjam Sync app, or an agent or a terminal installing it. */
+/** How a computer gets connected: the Tinkjam Sync app, or the person's coding agent installing it. */
 export function ConnectComputerRoutes({
   withAccount,
   signedIn,
@@ -448,33 +433,17 @@ export function ConnectComputerRoutes({
   readonly withAccount: boolean;
   readonly signedIn: boolean;
 }) {
-  const [os, setOs] = useState<Os | null>(detectOs);
-  // Read on a phone, the steps are for another machine: nothing here says "this computer".
-  const [elsewhere] = useState(onPhoneOrTablet);
+  const [os, setOs] = useState<SyncOs | null>(detectSyncOs);
   const signIn = withAccount && !signedIn;
   const connect = "Your browser opens by itself. Sign in if it asks, then press Connect.";
   return (
     <div className="flex flex-col gap-3" data-bring-agent-steps>
       <section className="flex flex-col gap-3 rounded-xl border border-border p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="min-w-0">
-            <h3 className="text-sm font-semibold">Install Tinkjam Sync</h3>
-            <p className="text-xs text-muted-foreground">
-              The small app that lets your boards reach the agents on your computer.
-            </p>
-          </div>
-          <ToggleGroup
-            aria-label="Your computer"
-            value={os === null ? [] : [os]}
-            onValueChange={(next) => {
-              const value = next[0];
-              if (value === "mac" || value === "windows" || value === "linux") setOs(value);
-            }}
-          >
-            <Toggle value="mac">Mac</Toggle>
-            <Toggle value="windows">Windows</Toggle>
-            <Toggle value="linux">Linux</Toggle>
-          </ToggleGroup>
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold">Install Tinkjam Sync</h3>
+          <p className="text-xs text-muted-foreground">
+            The small app that lets your boards reach the agents on your computer.
+          </p>
         </div>
         {os === null ? (
           <div className="flex flex-col gap-3 text-sm" data-sync-other-device>
@@ -483,86 +452,66 @@ export function ConnectComputerRoutes({
               sign in, and connect it from there. Your boards will be waiting.
             </p>
             <CopyAppLink />
-            <p className="text-xs text-muted-foreground">
-              To read the steps first, pick your computer above.
-            </p>
           </div>
         ) : (
-          // All three share one cell, so the tallest sets its height and picking another moves
-          // nothing. One column no wider than the dialog: a long command wraps, never widens it.
-          <div className="grid grid-cols-1">
-            <OsSteps shown={os === "mac"}>
-              <ol className="flex flex-col gap-2.5 text-sm">
-                <Step number={1}>
-                  Open Terminal: press Command and Space, type Terminal, press Return.
-                </Step>
-                <Step number={2}>
-                  Paste this line and press Return.
-                  <CopyLine text={TINKJAM_SYNC_MAC_COMMAND} mono />
-                  <StepNote>
-                    One time only. It asks for no password and changes no settings: it downloads
-                    Tinkjam Sync, checks the file is intact, puts it in your Applications folder and
-                    opens it.
-                  </StepNote>
-                </Step>
-                <Step number={3}>{connect}</Step>
-                {signIn ? (
-                  <Step number={4}>
-                    <SignInHere />
+          <>
+            <SyncInstallAction os={os} onChoose={setOs} />
+            {os === "mac" ? (
+              <>
+                <ol className="flex flex-col gap-2.5 text-sm">
+                  <Step number={1}>
+                    Open Terminal: press Command and Space, type Terminal, press Return.
                   </Step>
-                ) : null}
-              </ol>
-              <p className="text-xs text-muted-foreground">
-                Why Terminal? Apple has not checked Tinkjam Sync yet (it is not notarized), so macOS
-                would refuse to open a normal download. Once installed it sits in your menu bar,
-                starts with your Mac and keeps itself up to date.
-              </p>
-              <AgentRoute elsewhere={elsewhere} />
-            </OsSteps>
-            <OsSteps shown={os === "windows"}>
-              <ol className="flex flex-col gap-2.5 text-sm">
-                <Step number={1}>
-                  {elsewhere ? (
-                    <>
-                      On your PC, open Tinkjam, press Bring my agent and download Tinkjam Sync
-                      there. Then open the file.
-                    </>
-                  ) : (
-                    <span className="flex flex-wrap items-center gap-2">
-                      Download Tinkjam Sync and open the file.
-                      <Button
-                        size="sm"
-                        render={<a href={TINKJAM_SYNC_WINDOWS_DOWNLOAD} download />}
-                        data-sync-download
-                      >
-                        <DownloadIcon />
-                        Download for Windows
-                      </Button>
-                    </span>
-                  )}
-                  <StepNote>
-                    Windows does not recognise Tinkjam Sync yet, so it says it protected your PC.
-                    Choose More info, then Run anyway.
-                  </StepNote>
-                </Step>
-                <Step number={2}>{connect}</Step>
-                {signIn ? (
-                  <Step number={3}>
-                    <SignInHere />
+                  <Step number={2}>
+                    Paste the install command and press Return.
+                    <CommandLine os={os} />
+                    <StepNote>
+                      One time only. It asks for no password and changes no settings: it downloads
+                      Tinkjam Sync, checks the file is intact, puts it in your Applications folder
+                      and opens it.
+                    </StepNote>
                   </Step>
-                ) : null}
-              </ol>
-              <p className="text-xs text-muted-foreground">
-                Once installed it sits in your system tray, starts with your computer and keeps
-                itself up to date.
-              </p>
-              <AgentRoute elsewhere={elsewhere} />
-            </OsSteps>
-            <OsSteps shown={os === "linux"}>
+                  <Step number={3}>{connect}</Step>
+                  {signIn ? (
+                    <Step number={4}>
+                      <SignInHere />
+                    </Step>
+                  ) : null}
+                </ol>
+                <p className="text-xs text-muted-foreground">
+                  Why Terminal? Apple has not checked Tinkjam Sync yet (it is not notarized), so
+                  macOS would refuse to open a normal download. Once installed it sits in your menu
+                  bar, starts with your Mac and keeps itself up to date.
+                </p>
+              </>
+            ) : os === "windows" ? (
+              <>
+                <ol className="flex flex-col gap-2.5 text-sm">
+                  <Step number={1}>
+                    Download Tinkjam Sync and open the file.
+                    <StepNote>
+                      Windows does not recognise Tinkjam Sync yet, so it says it protected your PC.
+                      Choose More info, then Run anyway.
+                    </StepNote>
+                  </Step>
+                  <Step number={2}>{connect}</Step>
+                  {signIn ? (
+                    <Step number={3}>
+                      <SignInHere />
+                    </Step>
+                  ) : null}
+                </ol>
+                <p className="text-xs text-muted-foreground">
+                  Once installed it sits in your system tray, starts with your computer and keeps
+                  itself up to date.
+                </p>
+              </>
+            ) : (
               <ol className="flex flex-col gap-2.5 text-sm">
                 <Step number={1}>
-                  Open a terminal, paste this line and press Enter. It needs Node.js 22.16 or newer.
-                  <CopyLine text={TINKJAM_SYNC_COMMAND} mono />
+                  Open a terminal, paste the install command and press Enter. It needs Node.js 22.16
+                  or newer.
+                  <CommandLine os={os} />
                 </Step>
                 <Step number={2}>
                   Open the link it prints and press Connect. It then runs in the background and
@@ -574,14 +523,15 @@ export function ConnectComputerRoutes({
                   </Step>
                 ) : null}
               </ol>
-            </OsSteps>
-          </div>
+            )}
+            <AgentRoute />
+          </>
         )}
       </section>
       <p className="text-xs text-muted-foreground">
-        Tinkjam Sync lets your boards use the agents on {elsewhere ? "your" : "this"} computer, such
-        as Claude Code or Codex, under your own account, with the access they already have on it.
-        Nothing anyone else writes reaches your agent unless you press Send. To stop it, quit it
+        Tinkjam Sync lets your boards use the agents on {os === null ? "your" : "this"} computer,
+        such as Claude Code or Codex, under your own account, with the access they already have on
+        it. Nothing anyone else writes reaches your agent unless you press Send. To stop it, quit it
         from its menu.
       </p>
       {withAccount ? null : (
@@ -595,15 +545,17 @@ export function ConnectComputerRoutes({
   );
 }
 
-/** One computer's steps. The ones not picked keep their place, unseen and out of reach. */
-function OsSteps({ shown, children }: { readonly shown: boolean; readonly children: ReactNode }) {
+/** An OS's install command, whole and selectable; the button above copies it. */
+function CommandLine({ os }: { readonly os: SyncOs }) {
+  const install = SYNC_INSTALLS[os];
+  if (install.method !== "command") return null;
   return (
-    <div
-      inert={!shown}
-      className={cn("col-start-1 row-start-1 flex min-w-0 flex-col gap-3", !shown && "invisible")}
+    <code
+      className="mt-1.5 block rounded-lg border border-border bg-muted/50 px-3 py-2 font-mono text-sm wrap-anywhere select-all"
+      data-sync-command
     >
-      {children}
-    </div>
+      {install.command}
+    </code>
   );
 }
 
@@ -625,7 +577,7 @@ function CopyLabel({ copied, children }: { readonly copied: boolean; readonly ch
  * The other way to install: the person's coding agent does it. The request is written for that
  * agent, so it is copied whole and only shown to whoever asks to read it.
  */
-function AgentRoute({ elsewhere }: { readonly elsewhere: boolean }) {
+function AgentRoute() {
   const { copyToClipboard, isCopied } = useCopyToClipboard({ timeout: 2000, target: "command" });
   return (
     <div
@@ -635,7 +587,7 @@ function AgentRoute({ elsewhere }: { readonly elsewhere: boolean }) {
       <p className="min-w-48 flex-1 text-xs text-muted-foreground">
         <span className="font-medium text-foreground">Rather have your coding agent do it?</span>{" "}
         Copy a ready-made request and paste it into Claude Code, Codex or another coding agent on{" "}
-        {elsewhere ? "that" : "this"} computer.
+        this computer.
       </p>
       <Popover>
         <PopoverTrigger render={<Button size="sm" variant="ghost" />}>Read it</PopoverTrigger>
@@ -665,33 +617,11 @@ function AgentRoute({ elsewhere }: { readonly elsewhere: boolean }) {
   );
 }
 
-/** A link or command to copy, shown whole, with a Copy button anyone can find. */
-function CopyLine({ text, mono = false }: { readonly text: string; readonly mono?: boolean }) {
-  const { copyToClipboard, isCopied } = useCopyToClipboard({ timeout: 2000, target: "command" });
-  return (
-    // Side by side where there is room; on a phone the button sits under the whole line.
-    <div className="mt-1.5 flex flex-col gap-2 sm:flex-row sm:items-start" data-sync-command>
-      <p
-        className={cn(
-          "min-w-0 rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm wrap-anywhere select-all sm:flex-1",
-          mono && "font-mono",
-        )}
-      >
-        {text}
-      </p>
-      <Button size="sm" onClick={() => copyToClipboard(text, undefined)}>
-        {isCopied ? <CheckIcon /> : <CopyIcon />}
-        <CopyLabel copied={isCopied}>Copy</CopyLabel>
-      </Button>
-    </div>
-  );
-}
-
 /**
  * For someone reading on a phone: Tinkjam's own address, to open on their computer. Never a board
  * or invite link, which would hand on a way in.
  */
-function CopyAppLink() {
+export function CopyAppLink() {
   const { copyToClipboard, isCopied } = useCopyToClipboard({ timeout: 2000, target: "link" });
   const address = typeof window === "undefined" ? "" : window.location.origin;
   return (

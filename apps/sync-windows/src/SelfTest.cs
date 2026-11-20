@@ -205,6 +205,88 @@ namespace TinkjamSync
             Check("npm rebuild", string.Join(" ", NpmCommands.Rebuild("npm.js", "p", "c")) == "npm.js rebuild koffi node-pty --prefix p --loglevel=error --cache c");
             Check("package layout", Home.LauncherIn(@"C:\a") == @"C:\a\node_modules\tinkjam-sync\bin\tinkjam-sync.mjs" && defaults.ServerEntry == Path.Combine(defaults.AppDir, @"node_modules\tinkjam-sync\dist\bin.mjs"));
 
+            // The setup window's words.
+            Check("problem drops retry soon", Words.Problem(Words.Offline + Words.RetriesSoon) == Words.Offline);
+            Check("problem drops retry later", Words.Problem(Words.KeepsStopping + Words.RetriesLater) == Words.KeepsStopping);
+            Check("problem without detail", Words.Problem(null) == Words.Unexpected);
+            Check("found one", Words.Found(new[] { "Claude" }) == "Found Claude");
+            Check("found two", Words.Found(new[] { "Claude", "Codex" }, " on this PC") == "Found Claude and Codex on this PC");
+            Check("found three", Words.Found(new[] { "Claude", "Codex", "Cursor" }) == "Found Claude, Codex and Cursor");
+            Check("found none", Words.Found(new string[0]) == null && Words.Found(null) == null);
+
+            // Install steps: the runtime, then Tinkjam Sync, then the account.
+            var setup = new AppView { Phase = Phase.SettingUp };
+            Check("step 1 at start", InstallSteps.Of(setup) == 1 && InstallSteps.Caption(setup) == "Getting ready" && InstallSteps.Done(setup) == 0);
+            setup.Detail = "downloading";
+            setup.Percent = 50;
+            Check("step 1 download", InstallSteps.Of(setup) == 1 && InstallSteps.Caption(setup) == "Downloading (50%)" && Math.Abs(InstallSteps.Done(setup) - 1 / 6.0) < 1e-9);
+            setup.Detail = "downloading Tinkjam Sync";
+            setup.Percent = 100;
+            Check("step 2 download", InstallSteps.Of(setup) == 2 && Math.Abs(InstallSteps.Done(setup) - 2 / 3.0) < 1e-9);
+            setup.Percent = null;
+            setup.Detail = "installing (this can take a few minutes)";
+            Check("step 2 install", InstallSteps.Of(setup) == 2 && Math.Abs(InstallSteps.Done(setup) - 1 / 3.0) < 1e-9);
+            Check("percent clamped", InstallSteps.Done(new AppView { Phase = Phase.SettingUp, Detail = "unpacking", Percent = 250 }) <= 1 / 3.0 + 1e-9);
+            Check("step 3 connecting", InstallSteps.Of(new AppView { Phase = Phase.Approving }) == 3);
+
+            // The panel's words.
+            var panelView = new AppView { Phase = Phase.Connected };
+            Check("panel connected", PanelModel.Status(panelView) == "Connected" && PanelModel.StatusTone(panelView) == Tone.Good && PanelModel.Notice(panelView) == null);
+            panelView.Phase = Phase.Stopped;
+            panelView.Detail = Words.Offline + Words.RetriesSoon;
+            Check("panel stopped", PanelModel.StatusTone(panelView) == Tone.Attention && PanelModel.Notice(panelView) == Words.Offline);
+            panelView.Phase = Phase.Approving;
+            panelView.Detail = null;
+            Check("panel approving", PanelModel.Status(panelView) == "Not connected" && PanelModel.Notice(panelView) == MenuModel.Title(panelView));
+            panelView.Phase = Phase.Connecting;
+            panelView.Detail = "restarting in 4 seconds";
+            Check("panel connecting detail", PanelModel.Notice(panelView) == "Restarting in 4 seconds.");
+            Check("update unknown", PanelModel.UpdateText(panelView) == "Check for updates");
+            panelView.UpToDate = true;
+            Check("update up to date", PanelModel.UpdateText(panelView) == "Up to date");
+            panelView.UpdateVersion = "0.2.0";
+            Check("update ready", PanelModel.UpdateText(panelView) == "Restart to update");
+            panelView.CheckingForUpdates = true;
+            Check("update checking", PanelModel.UpdateText(panelView) == "Checking for updates…");
+
+            // Agents: found by their command on PATH, working by their executable under Sync.
+            var onDisk = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { @"C:\npm\codex.cmd", @"C:\Users\x\.local\bin\claude.exe", @"C:\tools\grok" };
+            var found = AgentCatalog.Installed(new[] { @"C:\Users\x\.local\bin", " ", @"""C:\npm""", @"C:\tools" }, new[] { ".EXE", ".CMD" }, onDisk.Contains);
+            Check("agents found in catalogue order", string.Join(",", found.Select(a => a.Id)) == "claude,codex");
+            Check("agents none", AgentCatalog.Installed(new[] { @"C:\x" }, new[] { ".exe" }, _ => false).Count == 0);
+            Check("agents path errors ignored", AgentCatalog.Installed(new[] { "bad|dir" }, new[] { ".exe" }, _ => throw new ArgumentException()).Count == 0);
+            var tree = new[] { row(10, 1, "node.exe"), row(11, 10, "cmd.exe"), row(12, 11, "Codex.exe"), row(13, 10, "cloudflared.exe"), row(20, 1, "claude.exe") };
+            var busy = AgentCatalog.Working(tree, 10);
+            Check("working under sync only", busy.SetEquals(new[] { "codex" }));
+            Check("working none", AgentCatalog.Working(tree, 99).Count == 0);
+
+            // Theme: AppsUseLightTheme 0 is dark; anything missing is light.
+            Check("theme dark", ThemeSetting.IsDark(0) && ThemeSetting.IsDark(0L) && ThemeSetting.IsDark("0") && ThemeSetting.IsDark(new byte[] { 0, 0, 0, 0 }));
+            Check("theme light", !ThemeSetting.IsDark(1) && !ThemeSetting.IsDark(null) && !ThemeSetting.IsDark("yes") && !ThemeSetting.IsDark(new byte[] { 1, 0, 0, 0 }));
+
+            // The panel's place: over the icon, beside the taskbar on each edge, inside the work area.
+            var screen = new System.Drawing.Rectangle(0, 0, 1920, 1080);
+            var panelSize = new System.Drawing.Size(340, 500);
+            var bottomWork = new System.Drawing.Rectangle(0, 0, 1920, 1032);
+            Check("edge bottom", Placement.TaskbarEdge(screen, bottomWork, Edge.Top) == Edge.Bottom);
+            Check("place bottom, clamped right", Placement.Panel(bottomWork, Edge.Bottom, new System.Drawing.Point(1850, 1056), panelSize, 12) == new System.Drawing.Point(1568, 520));
+            Check("place bottom, centred on icon", Placement.Panel(bottomWork, Edge.Bottom, new System.Drawing.Point(900, 1056), panelSize, 12) == new System.Drawing.Point(730, 520));
+            var topWork = new System.Drawing.Rectangle(0, 48, 1920, 1032);
+            Check("edge top", Placement.TaskbarEdge(screen, topWork, Edge.Bottom) == Edge.Top);
+            Check("place top", Placement.Panel(topWork, Edge.Top, new System.Drawing.Point(1850, 24), panelSize, 12) == new System.Drawing.Point(1568, 60));
+            var leftWork = new System.Drawing.Rectangle(62, 0, 1858, 1080);
+            Check("edge left", Placement.TaskbarEdge(screen, leftWork, Edge.Bottom) == Edge.Left);
+            Check("place left, clamped low", Placement.Panel(leftWork, Edge.Left, new System.Drawing.Point(30, 1040), panelSize, 12) == new System.Drawing.Point(74, 568));
+            var rightWork = new System.Drawing.Rectangle(0, 0, 1858, 1080);
+            Check("edge right", Placement.TaskbarEdge(screen, rightWork, Edge.Bottom) == Edge.Right);
+            Check("place right", Placement.Panel(rightWork, Edge.Right, new System.Drawing.Point(1890, 300), panelSize, 12) == new System.Drawing.Point(1506, 50));
+            Check("edge auto-hide falls back", Placement.TaskbarEdge(screen, screen, Edge.Left) == Edge.Left);
+            // 150% on a second screen to the left, in its own (negative) coordinates: 340x500 is 510x750 there.
+            var second = new System.Drawing.Rectangle(-2560, 0, 2560, 1440);
+            var secondWork = new System.Drawing.Rectangle(-2560, 0, 2560, 1368);
+            Check("place 150% second screen", Placement.Panel(secondWork, Placement.TaskbarEdge(second, secondWork, Edge.Top), new System.Drawing.Point(-60, 1404), new System.Drawing.Size(510, 750), 18) == new System.Drawing.Point(-528, 600));
+            Check("place panel taller than screen stays on it", Placement.Panel(bottomWork, Edge.Bottom, new System.Drawing.Point(1850, 1056), new System.Drawing.Size(340, 2000), 12).Y == 12);
+
             Console.WriteLine("self-test: " + passed + " passed, " + failed + " failed");
             return failed == 0 ? 0 : 1;
         }

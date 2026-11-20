@@ -36,6 +36,8 @@ const buttonVariants = cva(
           "h-5 gap-1 rounded-sm px-[calc(--spacing(1.5)-1px)] text-[0.6875rem] before:rounded-[calc(var(--radius-sm)-1px)] sm:text-[0.6875rem] [&_svg:not([class*='size-'])]:size-3 sm:[&_svg:not([class*='size-'])]:size-3 pointer-coarse:h-10 pointer-coarse:px-3 pointer-coarse:text-xs sm:pointer-coarse:text-xs",
         multiline:
           "min-h-9 px-[calc(--spacing(3)-1px)] py-[calc(--spacing(1.5)-1px)] whitespace-normal sm:min-h-8",
+        // A full-page call to action, as on sign-in and connecting a computer.
+        pill: "h-12 gap-2 rounded-full px-6 text-base font-semibold before:rounded-full sm:h-12 sm:text-base",
         sm: "h-8 gap-1.5 px-[calc(--spacing(2.5)-1px)] sm:h-7",
         "sm-pill": "h-8 gap-1.5 rounded-full px-2.5 sm:h-7",
         "sm-multiline":

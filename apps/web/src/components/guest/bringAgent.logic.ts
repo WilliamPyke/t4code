@@ -247,7 +247,13 @@ const SIGN_IN_HINTS: Partial<Record<string, string>> = {
 export const agentSignInHint = (driver: string, name: string): string =>
   SIGN_IN_HINTS[driver] ?? `Open ${name} on that computer and sign in.`;
 
-type AgentState = "ready" | "checking" | "signed-out" | "broken" | "turned-off" | "not-installed";
+export type AgentState =
+  | "ready"
+  | "checking"
+  | "signed-out"
+  | "broken"
+  | "turned-off"
+  | "not-installed";
 const AGENT_STATE_ORDER: ReadonlyArray<AgentState> = [
   "ready",
   "checking",
@@ -298,18 +304,14 @@ const describeAgent = (driver: string, name: string, state: AgentState): string 
 };
 
 /**
- * Why a computer's agent cannot come to a board, from that computer's agents: Claude Code and
- * Codex always, other agents only when installed and turned on. One line per agent.
+ * A computer's agents as a person should see them: Claude Code and Codex always, other agents only
+ * when installed and turned on. One entry per agent, at the best state any of its instances has.
  */
-export function noAgentMessage(input: {
-  readonly computerName: string;
-  readonly settingsLoaded: boolean;
-  readonly providers: ReadonlyArray<ProviderSummary>;
-}): string {
-  const stillChecking = `${input.computerName} is still checking its agents. Try again in a moment.`;
-  if (!input.settingsLoaded || input.providers.length === 0) return stillChecking;
+export function computerAgentStates(
+  providers: ReadonlyArray<ProviderSummary>,
+): ReadonlyArray<{ readonly driver: string; readonly name: string; readonly state: AgentState }> {
   const states = new Map<string, { name: string; state: AgentState }>();
-  for (const provider of input.providers) {
+  for (const provider of providers) {
     const state = agentState(provider);
     const known = states.get(provider.driver);
     if (
@@ -325,7 +327,7 @@ export function noAgentMessage(input: {
       provider.driver;
     states.set(provider.driver, { name, state });
   }
-  const lines = [
+  return [
     ...["claudeAgent", "codex"].map((driver) => ({
       driver,
       name: AGENT_NAMES[driver]!,
@@ -340,6 +342,20 @@ export function noAgentMessage(input: {
       )
       .map(([driver, entry]) => ({ driver, ...entry })),
   ];
+}
+
+/**
+ * Why a computer's agent cannot come to a board, from that computer's agents: Claude Code and
+ * Codex always, other agents only when installed and turned on. One line per agent.
+ */
+export function noAgentMessage(input: {
+  readonly computerName: string;
+  readonly settingsLoaded: boolean;
+  readonly providers: ReadonlyArray<ProviderSummary>;
+}): string {
+  const stillChecking = `${input.computerName} is still checking its agents. Try again in a moment.`;
+  if (!input.settingsLoaded || input.providers.length === 0) return stillChecking;
+  const lines = computerAgentStates(input.providers);
   const anyReady = lines.some((line) => line.state === "ready");
   if (!anyReady && lines.some((line) => line.state === "checking")) return stillChecking;
   const heading = anyReady

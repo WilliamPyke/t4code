@@ -16,6 +16,7 @@ import { Route as ConnectAgentRouteImport } from './routes/connect-agent'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
+import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as RNameRouteImport } from './routes/r.$name'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
 import { Route as ChatWhatsNewRouteImport } from './routes/_chat.whats-new'
@@ -94,6 +95,11 @@ const ChatIndexRoute = ChatIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => ChatRoute,
+} as any)
+const SignInSplatRoute = SignInSplatRouteImport.update({
+  id: '/sign-in/$',
+  path: '/sign-in/$',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const RNameRoute = RNameRouteImport.update({
   id: '/r/$name',
@@ -340,6 +346,7 @@ export interface FileRoutesByFullPath {
   '/whats-new': typeof ChatWhatsNewRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/r/$name': typeof RNameRoute
+  '/sign-in/$': typeof SignInSplatRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/b/$shareId': typeof ChatBShareIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
@@ -391,6 +398,7 @@ export interface FileRoutesByTo {
   '/whats-new': typeof ChatWhatsNewRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/r/$name': typeof RNameRoute
+  '/sign-in/$': typeof SignInSplatRoute
   '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/b/$shareId': typeof ChatBShareIdRoute
@@ -445,6 +453,7 @@ export interface FileRoutesById {
   '/_chat/whats-new': typeof ChatWhatsNewRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/r/$name': typeof RNameRoute
+  '/sign-in/$': typeof SignInSplatRoute
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/b/$shareId': typeof ChatBShareIdRoute
@@ -500,6 +509,7 @@ export interface FileRouteTypes {
     | '/whats-new'
     | '/projects/$projectKey'
     | '/r/$name'
+    | '/sign-in/$'
     | '/$environmentId/$threadId'
     | '/b/$shareId'
     | '/draft/$draftId'
@@ -551,6 +561,7 @@ export interface FileRouteTypes {
     | '/whats-new'
     | '/projects/$projectKey'
     | '/r/$name'
+    | '/sign-in/$'
     | '/'
     | '/$environmentId/$threadId'
     | '/b/$shareId'
@@ -604,6 +615,7 @@ export interface FileRouteTypes {
     | '/_chat/whats-new'
     | '/projects/$projectKey'
     | '/r/$name'
+    | '/sign-in/$'
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/b/$shareId'
@@ -650,6 +662,7 @@ export interface RootRouteChildren {
   WelcomeRoute: typeof WelcomeRoute
   ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
   RNameRoute: typeof RNameRoute
+  SignInSplatRoute: typeof SignInSplatRoute
   ThreadsEnvironmentIdThreadIdRoute: typeof ThreadsEnvironmentIdThreadIdRoute
 }
 
@@ -703,6 +716,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof ChatIndexRouteImport
       parentRoute: typeof ChatRoute
+    }
+    '/sign-in/$': {
+      id: '/sign-in/$'
+      path: '/sign-in/$'
+      fullPath: '/sign-in/$'
+      preLoaderRoute: typeof SignInSplatRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/r/$name': {
       id: '/r/$name'
@@ -1127,6 +1147,7 @@ const rootRouteChildren: RootRouteChildren = {
   WelcomeRoute: WelcomeRoute,
   ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,
   RNameRoute: RNameRoute,
+  SignInSplatRoute: SignInSplatRoute,
   ThreadsEnvironmentIdThreadIdRoute: ThreadsEnvironmentIdThreadIdRoute,
 }
 export const routeTree = rootRouteImport

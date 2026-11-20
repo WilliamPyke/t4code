@@ -1,12 +1,13 @@
 ---
 import Layout from "../layouts/Layout.astro";
+import { UPSTREAM_REPO_URL } from "../lib/site";
 ---
 
 <Layout
   title="Terms and privacy | Tinkjam"
   description="Tinkjam is in beta. Our full terms of service and privacy policy are still being written."
 >
-  <div class="wrap">
+  <div class="page">
     <article class="prose">
       <h1>Terms and privacy</h1>
       <p>
@@ -29,6 +30,12 @@ import Layout from "../layouts/Layout.astro";
           Text someone else writes is never sent to your agent until you press Send yourself.
         </li>
       </ul>
+
+      <h2>Open source</h2>
+      <p>
+        Tinkjam is built on the open-source <a href={UPSTREAM_REPO_URL}>T3 Code</a>, used under its
+        MIT licence.
+      </p>
     </article>
   </div>
 </Layout>

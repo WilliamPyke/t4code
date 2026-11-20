@@ -20,6 +20,45 @@ export function resolveClerkSignInProps(href: string, isElectron: boolean): Cler
   return { forceRedirectUrl: returnUrl, signUpForceRedirectUrl: returnUrl };
 }
 
+/** What the sign-in page needs to send a person back to where they asked to sign in. */
+export interface SignInPageRequest extends ClerkSignInProps {
+  /** The page to go back to without signing in, as a path on this site. */
+  readonly from: string;
+  /** An email Clerk does not know yet makes an account in the same form. */
+  readonly withSignUp: boolean;
+}
+
+const sameOriginUrl = (value: unknown, origin: string): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  try {
+    const url = new URL(value, origin);
+    return url.origin === origin ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Reads a kept sign-in request. Every address must be on this site, so a request planted in
+ * storage cannot send someone elsewhere after they sign in.
+ */
+export function parseSignInPageRequest(raw: string | null, origin: string): SignInPageRequest {
+  let value: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = raw === null ? null : JSON.parse(raw);
+    if (typeof parsed === "object" && parsed !== null) value = parsed as Record<string, unknown>;
+  } catch {}
+  const from = sameOriginUrl(value.from, origin);
+  const forceRedirectUrl = sameOriginUrl(value.forceRedirectUrl, origin);
+  const signUpForceRedirectUrl = sameOriginUrl(value.signUpForceRedirectUrl, origin);
+  return {
+    from: from === undefined ? "/" : from.slice(origin.length) || "/",
+    withSignUp: value.withSignUp !== false,
+    ...(forceRedirectUrl ? { forceRedirectUrl } : {}),
+    ...(signUpForceRedirectUrl ? { signUpForceRedirectUrl } : {}),
+  };
+}
+
 // The home and the two invite pages follow the account as it changes and hold their invite in
 // memory, so a sign-in never has to load them again.
 const IN_APP_PATHS: ReadonlySet<string> = new Set(["/", "/guest", "/join-workspace"]);

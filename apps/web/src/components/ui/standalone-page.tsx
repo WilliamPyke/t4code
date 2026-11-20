@@ -25,7 +25,7 @@ export function StandalonePageHeader({
       <div className="flex items-baseline justify-between gap-3 text-muted-foreground">
         <span className="flex items-center gap-1.5" role="img" aria-label="Tinkjam">
           <TinkjamMark className="size-5 shrink-0" aria-hidden />
-          <TinkjamWord className="h-3.5 w-auto shrink-0 text-foreground" aria-hidden />
+          <TinkjamWord className="text-lg text-foreground" aria-hidden />
         </span>
         {context ? <span className="text-sm">{context}</span> : null}
       </div>

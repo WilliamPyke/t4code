@@ -1,18 +1,21 @@
 ---
 import Logo from "../components/Logo.astro";
-import { APP_URL, SITE_NAME, UPSTREAM_REPO_URL } from "../lib/site";
+import { APP_URL, SITE_NAME } from "../lib/site";
 import "../styles/site.css";
 
 interface Props {
   title?: string;
   description?: string;
   noindex?: boolean;
+  /** The nav sits on top of the page's first section (the home page's board). */
+  navOver?: boolean;
 }
 
 const {
   title = "Tinkjam: your team and your AI agents on one live board",
   description = "Tinkjam is a live board where product teams and their AI agents work side by side. Everyone brings their own agent, pins notes as context, and watches pages and prototypes change as agents edit them. Free while in beta.",
   noindex = false,
+  navOver = false,
 } = Astro.props;
 const canonicalUrl = new URL(Astro.url.pathname, Astro.site);
 const socialImageUrl = new URL("/og.png", Astro.site);
@@ -33,19 +36,19 @@ const year = new Date().getFullYear();
     <meta name="description" content={description} />
     {noindex ? <meta name="robots" content="noindex" /> : <link rel="canonical" href={canonicalUrl} />}
     <meta name="color-scheme" content="light dark" />
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#FBF6EF" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#141218" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F6F5F2" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#1B1820" />
     <link rel="icon" href="/favicon.ico" sizes="48x48" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="preload" href="/fonts/outfit-600-latin.woff2" as="font" type="font/woff2" crossorigin />
     <link
       rel="preload"
-      href="/fonts/bricolage-grotesque-latin.woff2"
+      href="/fonts/instrument-sans-latin.woff2"
       as="font"
       type="font/woff2"
       crossorigin
     />
-    <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content={SITE_NAME} />
     <meta property="og:url" content={canonicalUrl} />
@@ -54,7 +57,10 @@ const year = new Date().getFullYear();
     <meta property="og:image" content={socialImageUrl} />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="Tinkjam: a live board with sticky notes, AI agents and a page they are editing" />
+    <meta
+      property="og:image:alt"
+      content="Tinkjam: build beautiful things with your AI agent and your teammates"
+    />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
@@ -62,45 +68,29 @@ const year = new Date().getFullYear();
   </head>
   <body>
     <a class="skip" href="#main">Skip to content</a>
-    <header class="site-header">
-      <div class="wrap site-header__inner">
-        <a class="brand" href="/" aria-label="Tinkjam home"><Logo class="brand__logo" /></a>
-        <nav class="site-nav" aria-label="Main">
-          <a href="/#how">How it works</a>
-          <a href="/#plan">Plan</a>
-          <a href="/#agents">Agents</a>
-          <a href="/#teams">Teams</a>
-        </nav>
-        <div class="site-header__actions">
-          <a class="link-quiet" href={APP_URL}>Sign in</a>
-          <a class="btn btn--primary btn--small" href={APP_URL}>Start a board</a>
-        </div>
-      </div>
+    <header class:list={["nav", { "nav--over": navOver }]}>
+      <a class="nav__brand" href="/" aria-label="Tinkjam home"><Logo class="nav__logo" /></a>
+      <nav class="nav__links" aria-label="Main">
+        <a class="navlink navlink--wide" href="/changelog">What's new</a>
+        <a class="navlink navlink--wide" href="/download">Download</a>
+        <a class="navlink" href={APP_URL}>Sign in</a>
+        <a class="btn btn--dark" href={APP_URL}>Start a board</a>
+      </nav>
     </header>
     <main id="main">
       <slot />
     </main>
-    <footer class="site-footer">
-      <div class="wrap site-footer__inner">
-        <div class="site-footer__brand">
-          <a href="/" aria-label="Tinkjam home"><Logo class="site-footer__logo" /></a>
-          <p>Where your team and your agents make things together.</p>
-        </div>
-        <nav class="site-footer__links" aria-label="Footer">
-          <a href="/#how">How it works</a>
-          <a href="/#pricing">Pricing</a>
-          <a href="/#faq">Questions</a>
-          <a href="/changelog">Changelog</a>
-          <a href="/legal">Terms and privacy</a>
-        </nav>
-        <p class="site-footer__fine">
-          <span>&copy; {year} Tinkjam.</span>
-          <span>
-            Built on the open-source <a href={UPSTREAM_REPO_URL}>T3 Code</a>, used under its MIT
-            licence.
-          </span>
-        </p>
+    <footer class="footer">
+      <div class="footer__brand">
+        <a href="/" aria-label="Tinkjam home"><Logo class="footer__logo" /></a>
+        <span>&copy; {year} Tinkjam</span>
       </div>
+      <nav class="footer__links" aria-label="Footer">
+        <a class="navlink" href="/changelog">What's new</a>
+        <a class="navlink" href="/download">Download</a>
+        <a class="navlink" href="/legal">Privacy and terms</a>
+        <a class="navlink" href={APP_URL}>Sign in</a>
+      </nav>
     </footer>
   </body>
 </html>

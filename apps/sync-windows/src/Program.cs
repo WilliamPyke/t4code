@@ -27,6 +27,12 @@ namespace TinkjamSync
                 Console.WriteLine("Tinkjam Sync " + AppInfo.Version);
                 return 0;
             }
+            if (args.PreviewUi)
+            {
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                return Preview.Run(args);
+            }
             var home = Home.Resolve(args);
             if (args.DumpState) return Instance.DumpState(home);
             if (args.Quit) return Instance.RequestQuit(home, TimeSpan.FromSeconds(30)) ? 0 : 1;

@@ -88,7 +88,7 @@ export function BoardsWelcome() {
           onSubmit={start}
         >
           <div className="flex flex-col gap-3">
-            <TinkjamWordmark wordClassName="h-5 w-auto shrink-0" markClassName="size-7 shrink-0" />
+            <TinkjamWordmark wordClassName="text-2xl" markClassName="size-7 shrink-0" />
             <div className="flex flex-col gap-1.5">
               <h1 className="text-xl leading-tight font-semibold tracking-tight text-balance sm:text-2xl">
                 Your team and your agents, on one board

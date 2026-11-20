@@ -25,8 +25,12 @@ namespace TinkjamSync
         public bool StartWithWindows = true;
         public string Version = "";
         public string UpdateVersion;
+        /// <summary>The last update check found nothing newer.</summary>
+        public bool UpToDate;
         public bool Busy;
         public bool CheckingForUpdates;
+        /// <summary>The Sync package is in place (not the first setup).</summary>
+        public bool Installed;
     }
 
     public sealed class MenuEntry
@@ -56,9 +60,214 @@ namespace TinkjamSync
             "Another program on this computer is in the way of the sign-in page. Restart your computer.";
         public const string CantCheckConnection = "Couldn't check whether this computer is connected.";
         public const string FindTheIcon = "Its icon is near the clock: click the ^ arrow if you don't see it.";
+        public const string RetriesSoon = " It tries again in a minute.";
+        public const string RetriesLater = " It tries again in 15 minutes, or choose Try again.";
 
         public static string Capitalized(string text) =>
             string.IsNullOrEmpty(text) ? "" : char.ToUpper(text[0]) + text.Substring(1);
+
+        /// <summary>What stopped it, without when it tries again: the window has its own Retry.</summary>
+        public static string Problem(string detail)
+        {
+            var text = detail ?? Unexpected;
+            foreach (var suffix in new[] { RetriesSoon, RetriesLater })
+                if (text.EndsWith(suffix, StringComparison.Ordinal)) return text.Substring(0, text.Length - suffix.Length);
+            return text;
+        }
+
+        /// <summary>"Found Claude and Codex", "Found Claude, Codex and Cursor"; null when none was found.</summary>
+        public static string Found(IList<string> names, string where = "")
+        {
+            if (names == null || names.Count == 0) return null;
+            var list = names.Count == 1 ? names[0] : string.Join(", ", names.Take(names.Count - 1)) + " and " + names[names.Count - 1];
+            return "Found " + list + where;
+        }
+
+        public const string NoAgents = "No agents found on this PC yet.";
+    }
+
+    /// <summary>The agents Sync can run, by the command each installs. Antigravity is an app, not a command, so it is not looked for.</summary>
+    public sealed class AgentKind
+    {
+        public string Id, Name, Process;
+        public string[] Commands;
+    }
+
+    public static class AgentCatalog
+    {
+        public static readonly AgentKind[] All =
+        {
+            new AgentKind { Id = "claude", Name = "Claude", Commands = new[] { "claude" }, Process = "claude.exe" },
+            new AgentKind { Id = "codex", Name = "Codex", Commands = new[] { "codex" }, Process = "codex.exe" },
+            new AgentKind { Id = "cursor", Name = "Cursor", Commands = new[] { "cursor-agent" }, Process = "cursor-agent.exe" },
+            new AgentKind { Id = "grok", Name = "Grok", Commands = new[] { "grok" }, Process = "grok.exe" },
+            new AgentKind { Id = "opencode", Name = "OpenCode", Commands = new[] { "opencode" }, Process = "opencode.exe" },
+            new AgentKind { Id = "kiro", Name = "Kiro", Commands = new[] { "kiro-cli" }, Process = "kiro-cli.exe" },
+        };
+
+        /// <summary>The agents whose command is in one of `folders` with one of `extensions` (PATHEXT), in catalogue order.</summary>
+        public static List<AgentKind> Installed(IEnumerable<string> folders, IEnumerable<string> extensions, Func<string, bool> exists)
+        {
+            var dirs = folders.Where(d => !string.IsNullOrWhiteSpace(d)).Select(d => d.Trim().Trim('"')).ToList();
+            var exts = extensions.Where(e => !string.IsNullOrWhiteSpace(e)).Select(e => e.Trim().ToLowerInvariant()).ToList();
+            return All.Where(agent => agent.Commands.Any(command =>
+                dirs.Any(dir => exts.Any(ext =>
+                {
+                    try { return exists(Path.Combine(dir, command + ext)); }
+                    catch (Exception) { return false; }
+                })))).ToList();
+        }
+
+        /// <summary>The ids of agents running somewhere under Sync, told by their own executable's name.</summary>
+        public static HashSet<string> Working(IEnumerable<ProcessRow> rows, int root)
+        {
+            var working = new HashSet<string>();
+            var all = rows.ToList();
+            var seen = new HashSet<int> { root };
+            var queue = new Queue<int>();
+            queue.Enqueue(root);
+            while (queue.Count > 0)
+            {
+                var parent = queue.Dequeue();
+                foreach (var row in all.Where(row => row.ParentPid == parent && seen.Add(row.Pid)))
+                {
+                    var agent = All.FirstOrDefault(a => string.Equals(a.Process, row.Name, StringComparison.OrdinalIgnoreCase));
+                    if (agent != null) working.Add(agent.Id);
+                    queue.Enqueue(row.Pid);
+                }
+            }
+            return working;
+        }
+    }
+
+    /// <summary>The first setup in three steps: the runtime, Tinkjam Sync itself, then the account.</summary>
+    public static class InstallSteps
+    {
+        public const int Count = 3;
+        static readonly string[] RuntimeDetails = { "downloading", "checking the download", "unpacking" };
+
+        public static int Of(AppView view)
+        {
+            if (view.Phase != Phase.SettingUp) return 3;
+            return view.Detail == null || RuntimeDetails.Contains(view.Detail) ? 1 : 2;
+        }
+
+        /// <summary>What is happening now, as the line under the bar says it.</summary>
+        public static string Caption(AppView view)
+        {
+            var detail = MenuModel.DetailText(view);
+            return detail == null ? "Getting ready" : Words.Capitalized(detail);
+        }
+
+        /// <summary>How much of the bar is done: the steps behind, plus the current download's share when it is known.</summary>
+        public static double Done(AppView view)
+        {
+            var behind = (Of(view) - 1) / (double)Count;
+            return view.Percent == null ? behind : behind + Math.Max(0, Math.Min(100, view.Percent.Value)) / 100.0 / Count;
+        }
+    }
+
+    public enum Tone { Good, Busy, Quiet, Attention }
+
+    /// <summary>The tray panel's words: short, and only what the engine really knows.</summary>
+    public static class PanelModel
+    {
+        public static string Status(AppView view)
+        {
+            switch (view.Phase)
+            {
+                case Phase.Connected: return "Connected";
+                case Phase.Connecting: return "Connecting…";
+                case Phase.Reconnecting: return "Reconnecting…";
+                case Phase.SettingUp: return "Setting up…";
+                case Phase.Disconnecting: return "Disconnecting…";
+                case Phase.Stopped: return "Stopped";
+                default: return "Not connected";
+            }
+        }
+
+        public static Tone StatusTone(AppView view)
+        {
+            switch (view.Phase)
+            {
+                case Phase.Connected: return Tone.Good;
+                case Phase.Stopped: return Tone.Attention;
+                case Phase.Approving:
+                case Phase.NotConnected: return Tone.Quiet;
+                default: return Tone.Busy;
+            }
+        }
+
+        /// <summary>The card under the header: what is going on when not simply connected, or null.</summary>
+        public static string Notice(AppView view)
+        {
+            switch (view.Phase)
+            {
+                case Phase.Connected: return null;
+                case Phase.Stopped: return Words.Problem(view.Detail);
+                case Phase.Approving: return MenuModel.Title(view);
+                default:
+                    var detail = MenuModel.DetailText(view);
+                    return detail == null ? null : Words.Capitalized(detail) + (detail.EndsWith(".") ? "" : ".");
+            }
+        }
+
+        public static string UpdateText(AppView view)
+        {
+            if (view.CheckingForUpdates) return "Checking for updates…";
+            if (view.UpdateVersion != null) return "Restart to update";
+            return view.UpToDate ? "Up to date" : "Check for updates";
+        }
+    }
+
+    public enum Edge { Bottom, Top, Left, Right }
+
+    /// <summary>Where the tray panel goes: beside the taskbar, over the icon, inside the work area.</summary>
+    public static class Placement
+    {
+        /// <summary>The side the taskbar takes from this screen; `fallback` when it takes none (auto-hide).</summary>
+        public static Edge TaskbarEdge(System.Drawing.Rectangle bounds, System.Drawing.Rectangle work, Edge fallback)
+        {
+            var gaps = new[]
+            {
+                (Edge.Bottom, bounds.Bottom - work.Bottom),
+                (Edge.Top, work.Top - bounds.Top),
+                (Edge.Left, work.Left - bounds.Left),
+                (Edge.Right, bounds.Right - work.Right),
+            };
+            var widest = gaps.OrderByDescending(g => g.Item2).First();
+            return widest.Item2 > 0 ? widest.Item1 : fallback;
+        }
+
+        public static System.Drawing.Point Panel(System.Drawing.Rectangle work, Edge edge, System.Drawing.Point anchor, System.Drawing.Size size, int gap)
+        {
+            int Clamp(int value, int min, int max) => max < min ? min : Math.Max(min, Math.Min(max, value));
+            var x = Clamp(anchor.X - size.Width / 2, work.Left + gap, work.Right - gap - size.Width);
+            var y = Clamp(anchor.Y - size.Height / 2, work.Top + gap, work.Bottom - gap - size.Height);
+            switch (edge)
+            {
+                case Edge.Top: return new System.Drawing.Point(x, work.Top + gap);
+                case Edge.Left: return new System.Drawing.Point(work.Left + gap, y);
+                case Edge.Right: return new System.Drawing.Point(Math.Max(work.Left + gap, work.Right - gap - size.Width), y);
+                default: return new System.Drawing.Point(x, Math.Max(work.Top + gap, work.Bottom - gap - size.Height));
+            }
+        }
+    }
+
+    public static class ThemeSetting
+    {
+        /// <summary>HKCU …\Themes\Personalize AppsUseLightTheme: 0 is dark; missing or anything else is light.</summary>
+        public static bool IsDark(object appsUseLightTheme)
+        {
+            switch (appsUseLightTheme)
+            {
+                case int number: return number == 0;
+                case long number: return number == 0;
+                case byte[] bytes: return bytes.Length > 0 && bytes.All(b => b == 0);
+                case string text: return text.Trim() == "0";
+                default: return false;
+            }
+        }
     }
 
     public static class MenuModel

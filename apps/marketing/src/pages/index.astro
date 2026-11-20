@@ -1,788 +1,252 @@
 ---
-import BoardScene from "../components/BoardScene.astro";
-import Cursor from "../components/Cursor.astro";
-import Icon from "../components/Icon.astro";
 import Layout from "../layouts/Layout.astro";
-import { APP_URL, SAMPLE_BOARD_URL, UPSTREAM_REPO_URL, WINDOWS_DOWNLOAD } from "../lib/site";
+import { APP_URL, SAMPLE_BOARD_URL } from "../lib/site";
 
-const today = [
-  "Start a board in one click, with no account",
-  "Accounts and workspaces, with invites by link",
-  "Boards in the cloud that stay open when your computer is off",
-  "Share links that can edit or only view; viewers need no account",
-  "Starter templates, and copies of boards their makers allow",
-  "Tinkjam Sync, a small app for Mac and Windows, brings your own Claude or Codex agent",
-  "Sticky notes, and lines with handles on every side",
-  "Link embeds, and readable snapshots your agent brings in",
-  "Artifacts that change live as agents edit them",
-  "Plan view, filled in by people or by their agents",
-  "Mentions, an inbox and My tasks, in the app",
-  "Live cursors, and a catch-up of what changed while you were away",
-  "Command menu, keyboard shortcuts and right-click menus",
-  "Export to Markdown and PNG",
-  "Nothing reaches your agent until you press Send",
+// The only place these four names appear regardless of what a person has installed.
+const agents = [
+  { name: "Claude", icon: "/agents/claude-icon.svg", mono: false },
+  { name: "Codex", icon: "/agents/openai-icon.svg", mono: true },
+  { name: "Grok", icon: "/agents/grok-icon.svg", mono: true },
+  { name: "Cursor", icon: "/agents/cursor-icon.svg", mono: true },
 ];
-
-const faqs = [
-  {
-    q: "What agents work?",
-    a: "Claude and Codex, running on your own computer under your own account. Each person brings their own.",
-  },
-  {
-    q: "Do I need a terminal?",
-    a: "Teammates who just join boards never do. To bring your own agent you install the Tinkjam Sync app once. On Windows you download it and open it. On a Mac you paste one line into the Terminal app, once, because Apple has not checked the app yet. It asks for no password and changes no settings, and Tinkjam gives you the line when you get there. After that everything happens in the browser.",
-  },
-  {
-    q: "Why does Windows say it protected my PC?",
-    a: "Windows does not recognise Tinkjam Sync yet, so it shows that notice the first time you open it. Choose More info, then Run anyway. Tinkjam Sync then sits in your system tray, starts with your computer and keeps itself up to date.",
-  },
-  {
-    q: "Where do my boards live?",
-    a: "In the cloud, in your workspace, so they stay open for your team when every computer is off. Agents run on the computers of the people who connected them.",
-  },
-  {
-    q: "Who pays for the AI?",
-    a: "Each person's agent uses that person's own Claude or Codex account. Tinkjam itself is free while in beta.",
-  },
-  {
-    q: "Do I need an account?",
-    a: "Not to start. You can start a board, or open a Can view or Can edit link, without one. Signing in is offered so your boards follow you to every device. You do sign in to join a workspace, to ask for edit access, or to connect your computer.",
-  },
-  {
-    q: "How do I invite people?",
-    a: "With a link. Every board has a Can edit link and a Can view link, and a workspace has an invite link. Tinkjam does not send emails, so you paste the link wherever your team talks. The invite names the board and who made it.",
-  },
-  {
-    q: "Can others run my agent?",
-    a: "No. Your agent runs on your own computer, under your own Claude or Codex account. Teammates can leave notes for it or assign you a task, but nothing anyone else writes reaches it unless you press Send.",
-  },
+const faces = [
+  { initial: "P", color: "var(--forest)" },
+  { initial: "S", color: "var(--raspberry)" },
+  { initial: "M", color: "var(--claude)" },
+  { initial: "+4", color: "var(--sun)", ink: "#17141C" },
 ];
+const arrow = "M2 2l5.5 13 2-5.5 5.5-2z";
 ---
 
-<Layout>
+<Layout navOver>
   <section class="hero">
-    <div class="wrap">
-      <div class="hero__top">
-        <h1>
-          <span>Your team,</span>
-          <span>your AI agents,</span>
-          <span><span class="marker">one live board.</span></span>
-        </h1>
-        <div class="hero__side">
-          <p class="hero__lede">
-            Designers, PMs and engineers work side by side with their own agents. Pin notes, paste
-            links, draw lines, and watch pages and prototypes change as the agents work.
-          </p>
-          <div class="hero__ctas">
-            <a class="btn btn--primary" href={APP_URL}>Start a board</a>
-            {
-              SAMPLE_BOARD_URL === "" ? (
-                <a class="btn btn--ghost" href="#how">
-                  See how it works
-                </a>
-              ) : (
-                <a class="btn btn--ghost" href={SAMPLE_BOARD_URL} data-sample-board>
-                  See a sample board
-                </a>
-              )
-            }
-          </div>
-          <p class="hero__fine">Free while in beta. No account needed to start.</p>
-        </div>
-      </div>
-      <div class="hero__board">
-        <div class="scribble scribble--board" aria-hidden="true">
-          <span>watch it work</span>
-          <svg width="46" height="44" viewBox="0 0 46 44">
-            <path d="M4 6c18 0 32 8 34 30"></path>
-            <path d="M30 28l8 9 6-10"></path>
-          </svg>
-        </div>
-        <BoardScene />
-      </div>
-    </div>
-  </section>
-
-  <section class="section" id="what" aria-labelledby="what-title">
-    <div class="wrap">
-      <div class="section__split">
-        <div class="section__head">
-          <p class="kicker">What it is</p>
-          <h2 id="what-title">A shared board where everyone can see the agents work.</h2>
-          <p class="section__lede">
-            The notes, the agents and the things they make live in one place your whole team can
-            follow, so nobody has to ask what the agent did.
-          </p>
-        </div>
-        <div class="aside-note" aria-hidden="true">
-          <span class="tape"></span>
-          No more pasting chat screenshots into a thread.
-          <span class="aside-note__by"><span class="s-dot" style="background:var(--priya)"></span>Priya</span>
-        </div>
-      </div>
-
-      <div class="features">
-        <article class="feature">
-          <div class="feature__art fa-agents" aria-hidden="true">
-            <div class="fa-agent">
-              <span class="agent-glyph"><Icon name="spark" /></span>
-              <span>Claude<small>Maya's agent</small></span>
-            </div>
-            <div class="fa-agent fa-agent--b">
-              <span class="agent-glyph agent-glyph--codex"><Icon name="spark" /></span>
-              <span>Codex<small>Sam's agent</small></span>
-            </div>
-            <div class="fa-agent fa-agent--c fa-agent--yours">
-              <span class="agent-glyph" style="background:var(--maya)"><Icon name="spark" /></span>
-              <span>Yours<small>Your own account</small></span>
-            </div>
-          </div>
-          <h3>Everyone brings their own agent</h3>
-          <p>
-            Connect Claude or Codex from your own computer, on your own account. Each agent becomes
-            a box on the board, and the whole team can watch it think, write and change things.
-          </p>
-        </article>
-
-        <article class="feature">
-          <div class="feature__art fa-context" aria-hidden="true">
-            <div class="fa-sticky"><span class="tape"></span>Use the friendlier tone from the brief.</div>
-            <svg class="fa-wire" viewBox="0 0 64 40"><path d="M4 12C34 12 30 28 60 28"></path></svg>
-            <div class="fa-box">
-              Claude
-              <span class="chip"><Icon name="pin" />1 note</span>
-            </div>
-          </div>
-          <h3>Notes become context</h3>
-          <p>
-            Pin a sticky note to an agent or an artifact. Draw a line, and the note becomes part
-            of what the agent reads.
-          </p>
-        </article>
-
-        <article class="feature">
-          <div class="feature__art fa-artifact" aria-hidden="true">
-            <div class="fa-page">
-              <b>Pricing page</b>
-              <i style="width:90%"></i>
-              <i class="add" style="width:76%"></i>
-              <i class="add" style="width:58%"></i>
-              <i style="width:66%"></i>
-            </div>
-            <span class="pill pill--live"><span class="pill__dot"></span>Live</span>
-          </div>
-          <h3>Artifacts change while you watch</h3>
-          <p>
-            Pages, docs and prototypes land on the board and update live as agents edit them.
-            Anyone can point their agent at anyone's artifact.
-          </p>
-        </article>
-
-        <article class="feature">
-          <div class="feature__art fa-send" aria-hidden="true">
-            <div class="draft">
-              <div class="draft__label"><Icon name="pin" />Draft from Priya</div>
-              <div class="draft__foot">
-                <span>Waiting for you</span>
-                <span class="mini-btn">Edit</span>
-                <span class="mini-btn mini-btn--send">Send</span>
-              </div>
-            </div>
-          </div>
-          <h3>Your agent, your call</h3>
-          <p>
-            Teammates can suggest work for your agent, but their words never reach it until you
-            press Send. You stay in charge of your own agent and your own subscription.
-          </p>
-        </article>
-      </div>
-    </div>
-  </section>
-
-  <section class="section section--tint" id="how" aria-labelledby="how-title">
-    <div class="wrap">
-      <div class="section__head section__head--center">
-        <p class="kicker">How it works</p>
-        <h2 id="how-title">Up and running in three steps.</h2>
-      </div>
-      <ol class="steps">
-        <li class="step">
-          <span class="step__num" aria-hidden="true">1</span>
-          <h3>Start a board</h3>
-          <p>
-            Pick Blank, Project kickoff or Design review, name it if you like, and you are on your
-            board in one click. No account needed; sign in when you want your boards on every
-            device.
-          </p>
-        </li>
-        <li class="step">
-          <span class="step__num" aria-hidden="true">2</span>
-          <h3>Invite your team</h3>
-          <p>
-            Copy the board's Can edit or Can view link and paste it wherever your team talks. The
-            invite names the board and who made it, and everyone sees each other's cursors, notes
-            and lines as they happen.
-          </p>
-        </li>
-        <li class="step">
-          <span class="step__num" aria-hidden="true">3</span>
-          <h3>Bring your agents</h3>
-          <p>
-            Install the Tinkjam Sync app on your computer and press Connect. Your Claude or Codex
-            agent shows up as a box everyone can follow, and only you can send it work.
-          </p>
-        </li>
-      </ol>
-
-      <div class="today">
-        <span class="tape"></span>
-        <div class="today__head">
-          <h3>In Tinkjam today</h3>
-          <p>No roadmap promises. This is what works right now.</p>
-        </div>
-        <ul class="today__list">
-          {
-            today.map((item) => (
-              <li>
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M4 13.5c2.2 1.4 3.9 3.2 5 5.5C11.6 12.4 15.4 7.8 20.5 4.5" />
-                </svg>
-                {item}
-              </li>
-            ))
-          }
-        </ul>
-      </div>
-    </div>
-  </section>
-
-  <section class="section" id="context" aria-labelledby="context-title">
-    <div class="wrap">
-      <div class="context">
-        <div class="section__head">
-          <p class="kicker">Links as context</p>
-          <h2 id="context-title">Paste a link. Draw a line. Your agent is caught up.</h2>
-          <p class="section__lede">
-            Drop the design file, the spec, the issue or the sheet onto the board. Each link
-            becomes a card, and a line from that card to an agent makes it part of what the agent
-            works from.
-          </p>
-          <dl class="link-kinds">
-            <div>
-              <dt>Live previews</dt>
-              <dd>Figma, Google Docs, Sheets and Slides, YouTube, Loom and Vimeo</dd>
-            </div>
-            <div>
-              <dt>Titled cards</dt>
-              <dd>Linear, GitHub, Notion, Jira and any other link</dd>
-            </div>
-          </dl>
-          <p class="context__how">
-            <b>Can't be embedded?</b> For a private Google Doc, a Notion page or a Linear issue, ask
-            your own agent to bring it in. It reads the link with the tools you connected and puts a
-            readable snapshot on the board, which any agent can then use as context. It only runs
-            when you press Send.
-          </p>
-        </div>
-
-        <div class="context-art" aria-hidden="true">
-          <div class="link-cards">
-            <div class="link-card">
-              <div class="s-link__head">
-                <span class="embed__icon" style="background:var(--priya)"><Icon name="shapes" /></span>
-                <span class="s-card__name">Onboarding flows</span>
-                <span class="s-card__owner">Figma</span>
-              </div>
-              <div class="frames"><i></i><i></i><i></i></div>
-            </div>
-            <div class="link-card">
-              <div class="s-link__head">
-                <span class="embed__icon" style="background:var(--maya)"><Icon name="sheet" /></span>
-                <span class="s-card__name">Launch checklist</span>
-                <span class="s-card__owner">Google Sheets</span>
-              </div>
-              <div class="sheet">
-                <span class="h">Step</span><span class="h">Owner</span><span class="h">Status</span>
-                <span>Welcome</span><span>Priya</span><span>Done</span>
-              </div>
-            </div>
-            <div class="link-card link-card--titled">
-              <div class="s-link__head">
-                <span class="embed__icon" style="background:var(--agent)"><Icon name="issue" /></span>
-                <span class="s-card__owner">linear.app</span>
-                <span class="snap">Snapshot</span>
-              </div>
-              <div class="link-card__title">Make onboarding feel personal</div>
-              <span class="link-card__by">Brought in by Maya's Claude</span>
-            </div>
-          </div>
-          <svg class="context-wires" viewBox="0 0 80 386" preserveAspectRatio="none">
-            <path d="M0 59C44 59 36 193 78 193"></path>
-            <path d="M0 193H78"></path>
-            <path d="M0 327C44 327 36 193 78 193"></path>
-            <circle cx="78" cy="193" r="5"></circle>
-          </svg>
-          <div class="s-card context-agent">
-            <div class="s-card__head">
-              <span class="agent-glyph"><Icon name="spark" /></span>
-              <span><span class="s-card__name">Claude</span> <span class="s-card__owner">Maya's agent</span></span>
-            </div>
-            <div class="s-card__body">
-              <div class="chips">
-                <span class="chip"><Icon name="wire" />Onboarding flows</span>
-                <span class="chip"><Icon name="wire" />Launch checklist</span>
-                <span class="chip"><Icon name="wire" />Linear issue</span>
-              </div>
-              <p class="context-agent__text">
-                Working from the Figma file, the checklist and the issue snapshot.
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="section section--tint" id="plan" aria-labelledby="plan-title">
-    <div class="wrap">
-      <div class="section__split section__split--list">
-        <div class="section__head">
-          <p class="kicker">Plan</p>
-          <h2 id="plan-title">The same work, as a plan.</h2>
-          <p class="section__lede">
-            Every task on the board is also a card in the Plan, so the PM's view and the board
-            never drift apart. Or tell your agent to break a goal into tasks: it creates,
-            prioritises and assigns them for you.
-          </p>
-        </div>
-        <ul class="ticks">
-          <li><Icon name="check" />Kanban and list views, with priority, due dates and filters</li>
-          <li><Icon name="check" />Assign tasks to the people on the board</li>
-          <li><Icon name="check" />Agents plan with you; one undo takes a whole turn back</li>
-          <li><Icon name="check" />Take a task to your own agent; nothing runs until you send it</li>
-        </ul>
-      </div>
-
-      <div class="plan" aria-hidden="true">
-        <div class="plan__bar">
-          <span class="seg"><span>Board</span><span class="is-active">Plan</span><span>List</span></span>
-          <span class="chip">Assignee: anyone</span>
-          <span class="chip">Priority: all</span>
-          <span class="plan__agent">
-            <span class="agent-glyph agent-glyph--sm"><Icon name="spark" /></span>
-            Claude added 4 tasks
-            <span class="plan__undo">Undo</span>
+    <div class="hero__stage">
+      <h1 class="headline" data-headline>
+        <span class="sr-only">build beautiful things with your AI agent and your teammates</span>
+        <span aria-hidden="true">
+          <span class="headline__line">build beautiful</span>
+          <span class="headline__line"
+            >things with
+            <span class="agent-box" data-agent-box>
+              <span class="agent-stack">
+                {
+                  agents.map((agent, index) => (
+                    <span class:list={["agent", { "is-on": index === 0 }]} data-agent>
+                      <img
+                        class:list={{ "mono-icon": agent.mono }}
+                        src={agent.icon}
+                        width="100"
+                        height="100"
+                        alt=""
+                      />
+                      {agent.name}
+                    </span>
+                  ))
+                }
+              </span>
+              <i class="handle handle--tl"></i><i class="handle handle--tr"></i><i
+                class="handle handle--bl"></i><i class="handle handle--br"></i>
+              <span class="cursor">
+                <svg viewBox="0 0 18 18"
+                  ><path d={arrow} fill="var(--accent)" stroke="var(--page)" stroke-width="1.2"
+                  ></path></svg
+                >
+                <span style="background:var(--btn)">You</span>
+              </span>
+            </span>
           </span>
-        </div>
-        <div class="plan__cols">
-          <div class="pcol">
-            <b>To do <em>3</em></b>
-            <div class="ptask">
-              <span class="ptask__title">Write the invite email</span>
-              <span class="ptask__meta">
-                <span class="prio prio--high" title="High"><i></i><i></i><i></i></span>
-                <span class="due">Thu</span>
-                <span class="avatar avatar--sm" style="background:var(--priya)">P</span>
+          <span class="headline__line"
+            >and
+            <span class="mates" data-mates>
+              <span class="faces is-on">
+                {
+                  faces.map((face) => (
+                    <span class="face" style={`background:${face.color};color:${face.ink ?? "#fff"}`}>
+                      <span>{face.initial}</span>
+                    </span>
+                  ))
+                }
               </span>
-            </div>
-            <div class="ptask">
-              <span class="ptask__title">Check sign-up on small phones</span>
-              <span class="ptask__handoff"><Icon name="spark" />Sam's draft for Codex. Not sent yet</span>
-              <span class="ptask__meta">
-                <span class="prio prio--med"><i></i><i></i><i></i></span>
-                <span class="due">Fri</span>
-                <span class="avatar avatar--sm" style="background:var(--sam)">S</span>
-              </span>
-            </div>
-            <div class="ptask ptask--ghost"></div>
-          </div>
-          <div class="pcol">
-            <b>In progress <em>2</em></b>
-            <div class="ptask ptask--agent">
-              <span class="ptask__title">Greet people by name</span>
-              <span class="ptask__live">
-                <span class="ptask__stream">Updating the onboarding heading</span>
-                <span class="ptask__bar"><i></i></span>
-              </span>
-              <span class="ptask__meta">
-                <span class="prio prio--urgent">!</span>
-                <span class="due">Today</span>
-                <span class="avatar avatar--sm" style="background:var(--maya)">M</span>
-              </span>
-            </div>
-            <div class="ptask ptask--slot"></div>
-          </div>
-          <div class="pcol pcol--done">
-            <b>Done <em>4</em></b>
-            <div class="ptask">
-              <span class="ptask__title">Onboarding brief</span>
-              <span class="ptask__meta">
-                <span class="prio prio--low"><i></i><i></i><i></i></span>
-                <span class="due due--done"><Icon name="check" />Mon</span>
-                <span class="avatar avatar--sm" style="background:var(--sam)">S</span>
-              </span>
-            </div>
-            <div class="ptask">
-              <span class="ptask__title">Empty state illustration</span>
-              <span class="ptask__meta">
-                <span class="prio prio--med"><i></i><i></i><i></i></span>
-                <span class="due due--done"><Icon name="check" />Tue</span>
-                <span class="avatar avatar--sm" style="background:var(--maya)">M</span>
-              </span>
-            </div>
-          </div>
-          <div class="ptask ptask--drag">
-            <span class="ptask__title">Pick the welcome photo</span>
-            <span class="ptask__meta">
-              <span class="prio prio--med"><i></i><i></i><i></i></span>
-              <span class="due">Wed</span>
-              <span class="avatar avatar--sm" style="background:var(--maya)">M</span>
+              <span>your teammates</span>
             </span>
-            <Cursor name="Maya" color="var(--maya)" class="cursor--drag" />
+          </span>
+        </span>
+      </h1>
+
+      <div class="board" aria-hidden="true">
+        <svg
+          class="board__lines"
+          width="1440"
+          height="900"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M1236 286v196"></path><path d="M1229 474l7 8 7-8"></path>
+          <path d="M930 640h112"></path><path d="M1034 633l8 7-8 7"></path>
+          <path d="M730 772v-62"></path><path d="M723 718l7-8 7 8"></path>
+        </svg>
+
+        <div class="bcard note">
+          Bigger photos on the landing page, and lose the carousel.
+          <div class="note__by">Priya</div>
+        </div>
+        <div class="cursor drift cursor--priya">
+          <svg viewBox="0 0 18 18"
+            ><path d={arrow} fill="var(--forest)" stroke="var(--page)" stroke-width="1.2"></path></svg
+          >
+          <span style="background:var(--forest)">Priya</span>
+        </div>
+
+        <div class="bcard codex">
+          <div class="bcard__head">
+            <img class="mono-icon" src="/agents/openai-icon.svg" width="16" height="16" alt="" />Codex<span
+              class="bcard__sub">Sam's agent</span
+            ><span class="chip chip--working">Working</span>
+          </div>
+          <div class="codex__body">
+            <div class="codex__chips">
+              <span class="chip chip--quiet">1 note</span><span class="chip chip--quiet">1 link</span>
+            </div>
+            <p>Rebuilding the landing page with bigger photos from the Figma file.</p>
           </div>
         </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="section" id="agents" aria-labelledby="agents-title">
-    <div class="wrap">
-      <div class="agents">
-        <div class="section__head">
-          <p class="kicker">Bring your own agents</p>
-          <h2 id="agents-title">Install, connect. Your agent is on the board.</h2>
-          <ol class="agent-steps">
-            <li>
-              <b>Get Tinkjam Sync</b>
-              <span>
-                A small app for your Mac or PC. On Windows, download it and open it. On a Mac, paste
-                one line into Terminal, once.
-              </span>
-            </li>
-            <li>
-              <b>Press Connect</b>
-              <span>Your browser opens by itself. Sign in if it asks, then press Connect.</span>
-            </li>
-            <li>
-              <b>Bring your agent onto a board</b>
-              <span>
-                Open a board, press Bring my agent and pick your computer. Your agent shows up as a
-                box your team can follow.
-              </span>
-            </li>
-          </ol>
-        </div>
-
-        <div class="agents__art">
-          <div class="cmd">
-            <div class="cmd__bar">
-              <i></i><i></i><i></i>
-              <span>Tinkjam Sync</span>
-            </div>
-            <div class="cmd__os">
-              <h3>On Windows</h3>
-              <p>
-                Download Tinkjam Sync and open the file. Windows does not recognise the app yet, so
-                it says it protected your PC. Choose More info, then Run anyway.
-              </p>
-              <a class="btn btn--primary" href={WINDOWS_DOWNLOAD} download>Download for Windows</a>
-            </div>
-            <div class="cmd__os">
-              <h3>On a Mac</h3>
-              <p>
-                You paste one line into the Terminal app, once, because Apple has not checked the
-                app yet. It asks for no password and changes no settings. Tinkjam gives you the
-                line, with a Copy button, when you press Bring my agent on a board.
-              </p>
-              <a class="btn btn--on-dark" href={APP_URL}>Open Tinkjam</a>
-            </div>
-            <p class="cmd__note">
-              Tinkjam Sync then sits in the menu bar on a Mac, or the system tray on Windows, starts
-              with your computer and keeps itself up to date. To stop it, quit it from its menu. On
-              Linux, or rather have your coding agent install it? Both ways are beside the Mac and
-              Windows steps in the app.
-            </p>
+        <div class="bcard figma">
+          <div class="bcard__head">
+            <img src="/agents/figma.svg" width="11" height="16" alt="" />Spring photos
           </div>
+        </div>
+        <div class="cursor drift cursor--maya">
+          <svg viewBox="0 0 18 18"
+            ><path d={arrow} fill="var(--claude)" stroke="var(--page)" stroke-width="1.2"></path></svg
+          >
+          <span style="background:var(--claude)">Maya</span>
+        </div>
 
-          <div class="connect" aria-hidden="true">
-            <span class="tape"></span>
-            <p class="connect__title">Connect Maya's MacBook to Tinkjam?</p>
-            <p class="connect__text">Only connect a computer you just opened Tinkjam Sync on.</p>
-            <span class="mini-btn mini-btn--send">Connect</span>
+        <div class="bcard landing">
+          <div class="bcard__head">Landing page<span class="chip chip--live">Live</span></div>
+          <div class="landing__body">
+            <div class="landing__art"></div>
+            <div class="landing__title">Spring collection</div>
+            <div class="landing__tiles"><span></span><span></span><span></span></div>
           </div>
-
-          <p class="agents__promise">
-            Your agents run on your own computer, under your own Claude or Codex account. Nothing
-            anyone else writes reaches your agent unless you press Send.
-          </p>
         </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="section section--tint" id="depth" aria-labelledby="depth-title">
-    <div class="wrap">
-      <div class="section__split">
-        <div class="section__head">
-          <p class="kicker">Simple by default, Advanced on demand</p>
-          <h2 id="depth-title">Same box, two depths.</h2>
-          <p class="section__lede">
-            Tinkjam opens as a plain boards product, and most of the team never needs more. One
-            Advanced switch opens the same boxes into a full coding-agent workbench: chats, diffs,
-            terminals and pull requests.
-          </p>
+        <div class="bcard comment">
+          <span class="comment__face">M</span>Much better. Can we try it in blue?
         </div>
-        <div class="aside-note aside-note--mint" aria-hidden="true">
-          <span class="tape"></span>
-          Engineers: flip Advanced on. Chats, diffs, terminals and pull requests are all there.
-          <span class="aside-note__by"><span class="s-dot" style="background:var(--sam)"></span>Sam</span>
+        <div class="cursor drift cursor--sam">
+          <svg viewBox="0 0 18 18"
+            ><path d={arrow} fill="var(--raspberry)" stroke="var(--page)" stroke-width="1.2"
+            ></path></svg
+          >
+          <span style="background:var(--raspberry)">Sam</span>
         </div>
       </div>
 
-      <div class="depth">
-        <div class="depth__glance">
-          <p class="depth__tag">Simple: what everyone sees</p>
-          <div class="s-card">
-            <div class="s-card__head">
-              <span class="agent-glyph"><Icon name="spark" /></span>
-              <span><span class="s-card__name">Claude</span> <span class="s-card__owner">Maya's agent</span></span>
-              <span class="status"><span class="pill pill--done"><Icon name="check" />Done</span></span>
-            </div>
-            <div class="s-card__body">
-              <p class="summary">Updated the onboarding page to greet people by name.</p>
-              <ul class="summary-list">
-                <li><Icon name="check" />New heading uses the person's first name</li>
-                <li><Icon name="check" />Warmer copy in the empty state</li>
-                <li><Icon name="check" />Checked the page on a small phone</li>
-              </ul>
-            </div>
-          </div>
-          <div class="scribble scribble--open" aria-hidden="true">
-            <span>open it up</span>
-            <svg width="56" height="40" viewBox="0 0 56 40">
-              <path d="M4 30C18 6 36 4 50 14"></path>
-              <path d="M40 8l10 6-6 10"></path>
-            </svg>
-          </div>
-        </div>
-
-        <div class="workbench">
-          <div class="workbench__bar">
-            <span class="agent-glyph"><Icon name="spark" /></span>
-            <span class="workbench__title">Claude <span>Maya's agent</span></span>
-            <span class="chip"><Icon name="branch" />onboarding-greeting</span>
-            <span class="switch"><span class="switch__track"><i></i></span>Advanced</span>
-          </div>
-          <div class="workbench__tabs">
-            <span>Chat</span>
-            <span class="is-active">Changes <b>2</b></span>
-            <span>Terminal</span>
-            <span>Pull request</span>
-          </div>
-          <div class="workbench__files">
-            <span class="is-active">Welcome.tsx <em>+9 &minus;3</em></span>
-            <span>EmptyState.tsx <em>+3 &minus;1</em></span>
-          </div>
-          <div class="code" role="img" aria-label="A diff that changes the heading from Welcome aboard to greet the person by first name">
-            <div class="code__line"><i>12</i><code>export function Welcome({"{"} user {"}"}) {"{"}</code></div>
-            <div class="code__line"><i>13</i><code>  return (</code></div>
-            <div class="code__line"><i>14</i><code>    &lt;Page&gt;</code></div>
-            <div class="code__line d-del"><i>15</i><code>-     &lt;h1&gt;Welcome aboard&lt;/h1&gt;</code></div>
-            <div class="code__line d-add"><i>15</i><code>+     &lt;h1&gt;Hi {"{"}user.firstName{"}"}, let's get you set up&lt;/h1&gt;</code></div>
-            <div class="code__line d-del"><i>16</i><code>-     &lt;EmptyState /&gt;</code></div>
-            <div class="code__line d-add"><i>16</i><code>+     &lt;EmptyState tone="warm" /&gt;</code></div>
-            <div class="code__line"><i>17</i><code>    &lt;/Page&gt;</code></div>
-          </div>
-          <div class="approval">
-            <div class="approval__ask">
-              <span class="approval__icon"><Icon name="terminal" /></span>
-              <span>Claude wants to run <code>pnpm test onboarding</code></span>
-            </div>
-            <span class="approval__btns">
-              <span class="mini-btn">Deny</span>
-              <span class="mini-btn mini-btn--send">Approve</span>
-            </span>
-          </div>
-          <div class="scribble scribble--approve" aria-hidden="true">
-            <svg width="44" height="38" viewBox="0 0 44 38">
-              <path d="M40 34C30 30 14 24 8 6"></path>
-              <path d="M2 14l6-9 9 6"></path>
-            </svg>
-            <span>nothing runs until Maya says so</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="power">
-        <p class="power__title">Fast for people who live in it</p>
-        <ul class="power__list">
-          <li><kbd>Ctrl</kbd><kbd>K</kbd> or <kbd>&#8984;</kbd><kbd>K</kbd> command menu</li>
-          <li>FigJam-style keys</li>
-          <li>Right-click menus</li>
-          <li>While you were away</li>
-          <li>Export to Markdown and PNG</li>
-        </ul>
-      </div>
-    </div>
-  </section>
-
-  <section class="section" id="teams" aria-labelledby="teams-title">
-    <div class="wrap">
-      <div class="teams">
-        <div class="section__head">
-          <p class="kicker">For teams</p>
-          <h2 id="teams-title">Everyone's boards, in one place.</h2>
-          <p class="section__lede">
-            Make a workspace and invite people with a link. Every member sees its boards, and your
-            boards follow you to any device. Share a board with anyone, and keep up with what needs
-            you from one inbox in the app.
-          </p>
-          <ul class="ticks">
-            <li><Icon name="check" />Can edit and Can view links; viewers need no account</li>
-            <li><Icon name="check" />Invites name the board and who made it; Tinkjam sends no emails</li>
-            <li><Icon name="check" />Viewers can ask for edit access; makers can allow copies</li>
-            <li><Icon name="check" />@mention teammates in notes, tasks and comments</li>
-            <li><Icon name="check" />An inbox for mentions, assignments, replies and access requests</li>
-            <li><Icon name="check" />My tasks, across every board</li>
-          </ul>
-        </div>
-
-        <div class="home" aria-hidden="true">
-          <div class="home__bar">
-            <span class="home__ws"><span class="home__ws-mark">P</span>Product team</span>
-            <span class="avatars">
-              <span class="avatar" style="background:var(--priya)">P</span>
-              <span class="avatar" style="background:var(--maya)">M</span>
-              <span class="avatar" style="background:var(--sam)">S</span>
-            </span>
-            <span class="invite"><Icon name="wire" />Invite link</span>
-          </div>
-          <div class="home__grid">
-            <div class="thumb">
-              <div class="thumb__img thumb__img--a"><i></i><i></i><i></i></div>
-              <b>Onboarding v2</b><span>Edited today</span>
-            </div>
-            <div class="thumb">
-              <div class="thumb__img thumb__img--b"><i></i><i></i><i></i></div>
-              <b>Q3 launch</b><span>Project kickoff</span>
-            </div>
-            <div class="thumb">
-              <div class="thumb__img thumb__img--c"><i></i><i></i><i></i></div>
-              <b>Checkout review</b><span>Design review</span>
-            </div>
-            <div class="thumb thumb--new">
-              <div class="thumb__img"><span>+</span></div>
-              <b>New board</b><span>Blank or template</span>
-            </div>
-          </div>
-          <div class="inbox">
-            <span class="tape"></span>
-            <b class="inbox__title">Inbox</b>
-            <div class="inbox__item">
-              <span class="avatar avatar--sm" style="background:var(--priya)">P</span>
-              <span><b>Priya</b> mentioned you in Onboarding v2</span>
-            </div>
-            <div class="inbox__item">
-              <span class="avatar avatar--sm" style="background:var(--sam)">S</span>
-              <span><b>Sam</b> assigned you Pick the welcome photo</span>
-            </div>
-            <div class="inbox__item">
-              <span class="avatar avatar--sm" style="background:var(--agent)">V</span>
-              <span>A viewer asked to edit Q3 launch</span>
-              <span class="mini-btn mini-btn--send">Allow</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="section section--tint" id="pricing" aria-labelledby="pricing-title">
-    <div class="wrap">
-      <div class="section__head section__head--center">
-        <p class="kicker">Pricing</p>
-        <h2 id="pricing-title">Free while in beta.</h2>
-        <p class="section__lede">
-          Everything below is free today. You bring your own Claude or Codex account for the agents.
+      <div class="intro">
+        <p class="intro__lede">
+          Tinkjam is a shared board for your team. Everyone brings their own AI agent, and everyone
+          sees what it makes.
         </p>
-      </div>
-      <div class="prices">
-        <div class="price price--main">
-          <h3>Beta</h3>
-          <p class="price__amount">Free</p>
-          <ul class="ticks">
-            <li><Icon name="check" />Cloud boards with live cursors</li>
-            <li><Icon name="check" />Workspaces and invites</li>
-            <li><Icon name="check" />Plan view, link embeds and live artifacts</li>
-            <li><Icon name="check" />Tinkjam Sync for your own agents</li>
-          </ul>
-          <a class="btn btn--primary" href={APP_URL}>Start a board</a>
-        </div>
-        <div class="price">
-          <h3>Team</h3>
-          <p class="price__amount price__amount--tbd">Not priced yet</p>
-          <p>No team plan yet. During the beta, teams use everything free in a shared workspace.</p>
-          <a class="btn btn--ghost" href={APP_URL}>Sign in</a>
-        </div>
-        <div class="price">
-          <h3>Enterprise</h3>
-          <p class="price__amount price__amount--tbd">Not priced yet</p>
-          <p>Not offered yet. Larger organisations can try the beta in a workspace today.</p>
-          <a class="btn btn--ghost" href={APP_URL}>Sign in</a>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="section" id="faq" aria-labelledby="faq-title">
-    <div class="wrap faq">
-      <div class="section__head">
-        <p class="kicker">Questions</p>
-        <h2 id="faq-title">Good questions, straight answers.</h2>
-      </div>
-      <div class="faq__list">
-        {
-          faqs.map((item) => (
-            <details>
-              <summary>{item.q}</summary>
-              <p>{item.a}</p>
-            </details>
-          ))
-        }
-        <details>
-          <summary>Is it open source?</summary>
-          <p>
-            Yes, at its core. Tinkjam is built on <a href={UPSTREAM_REPO_URL}>T3 Code</a>, which is
-            open source under the MIT licence.
-          </p>
-        </details>
-      </div>
-    </div>
-  </section>
-
-  <section class="closing" aria-labelledby="closing-title">
-    <div class="wrap">
-      <div class="closing__panel">
-        <div class="closing__sticky closing__sticky--a" aria-hidden="true">
-          <span class="tape"></span>Bring the whole team.
-        </div>
-        <div class="closing__sticky closing__sticky--b" aria-hidden="true">
-          <span class="tape tape--right"></span>And everyone's agents.
-        </div>
-        <h2 id="closing-title">Start a board and make something together.</h2>
-        <p>Free while in beta. Bring your team and the agents you already use.</p>
-        <div class="hero__ctas">
-          <a class="btn btn--cream" href={APP_URL}>Start a board</a>
+        <div class="intro__ctas">
+          <a class="btn btn--lg" href={APP_URL}>Start a board</a>
           {
             SAMPLE_BOARD_URL === "" ? null : (
-              <a class="btn btn--on-jam" href={SAMPLE_BOARD_URL} data-sample-board>
+              <a class="navlink intro__sample" href={SAMPLE_BOARD_URL}>
                 See a sample board
               </a>
             )
           }
         </div>
+        <p class="intro__fine">Free while in beta. No account needed.</p>
       </div>
     </div>
   </section>
 
+  <section class="panels">
+    <div class="panel panel--blue">
+      <div aria-hidden="true">
+        <div class="cursor drift cursor--a">
+          <svg viewBox="0 0 18 18"
+            ><path d={arrow} fill="var(--sun)" stroke="#2F5BEA" stroke-width="1"></path></svg
+          >
+          <span style="background:var(--sun)">Priya</span>
+        </div>
+        <div class="cursor drift cursor--b">
+          <svg viewBox="0 0 18 18"
+            ><path d={arrow} fill="#FFFFFF" stroke="#2F5BEA" stroke-width="1"></path></svg
+          >
+          <span style="background:#FFFFFF">Sam</span>
+        </div>
+        <div class="cursor drift cursor--c">
+          <svg viewBox="0 0 18 18"
+            ><path d={arrow} fill="var(--claude)" stroke="#2F5BEA" stroke-width="1"></path></svg
+          >
+          <span style="background:var(--claude)">Maya's Claude</span>
+        </div>
+      </div>
+      <h2>one board, everyone on it</h2>
+      <p>
+        Notes, links, pages and prototypes in one place. You see your teammates and their agents
+        work as it happens.
+      </p>
+    </div>
+    <div class="panel">
+      <div class="tiles" aria-hidden="true">
+        {
+          agents.map((agent) => (
+            <span class="tile">
+              <img
+                class:list={{ "mono-icon": agent.mono }}
+                src={agent.icon}
+                width="48"
+                height="48"
+                alt=""
+              />
+            </span>
+          ))
+        }
+      </div>
+      <h2>bring your own agent</h2>
+      <p>
+        Connect Claude, Codex, Grok or Cursor from your own computer, on your own account. Nothing
+        goes to it until you send it.
+      </p>
+    </div>
+  </section>
 </Layout>
+
+<script>
+  // The headline's agent is dragged off toward the board and the next one is brought in from above.
+  const headline = document.querySelector<HTMLElement>("[data-headline]");
+  const box = headline?.querySelector<HTMLElement>("[data-agent-box]");
+  const mates = headline?.querySelector<HTMLElement>("[data-mates]");
+  if (headline && box && mates && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    const agents = [...box.querySelectorAll<HTMLElement>("[data-agent]")];
+    const mateStates = [...mates.children] as HTMLElement[];
+    let agent = 0;
+    let mate = 0;
+    setInterval(() => {
+      box.classList.add("is-leaving");
+      setTimeout(() => {
+        agents[agent]?.classList.remove("is-on");
+        agent = (agent + 1) % agents.length;
+        agents[agent]?.classList.add("is-on");
+        box.classList.replace("is-leaving", "is-arriving");
+        void box.offsetWidth;
+        box.classList.remove("is-arriving");
+      }, 650);
+    }, 3200);
+    setInterval(() => {
+      mates.classList.add("is-fading");
+      setTimeout(() => {
+        mateStates[mate]?.classList.remove("is-on");
+        mate = (mate + 1) % mateStates.length;
+        mateStates[mate]?.classList.add("is-on");
+        mates.classList.remove("is-fading");
+      }, 250);
+    }, 5200);
+  }
+</script>

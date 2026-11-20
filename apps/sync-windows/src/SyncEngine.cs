@@ -96,6 +96,7 @@ namespace TinkjamSync
             View.Version = AppInfo.ShortVersion;
             View.StartWithWindows = settings.StartWithWindows;
             View.ComputerName = Dns.GetHostName();
+            View.Installed = !FirstRun;
             poll.Tick += (s, e) => Poll();
             restart.Tick += (s, e) =>
             {
@@ -324,7 +325,7 @@ namespace TinkjamSync
         /// <summary>Stopped, with when it tries again by itself. One toast until it next connects or the person retries.</summary>
         void Stop(string message, bool retrySoon)
         {
-            Set(Phase.Stopped, message + (retrySoon ? " It tries again in a minute." : " It tries again in 15 minutes, or choose Try again."));
+            Set(Phase.Stopped, message + (retrySoon ? Words.RetriesSoon : Words.RetriesLater));
             retry.Stop();
             slowRetry.Stop();
             if (shuttingDown) return;
@@ -877,6 +878,8 @@ namespace TinkjamSync
                 var sha = Json.Text(manifest, "sha256");
                 if (!Versions.IsNewer(AppInfo.Version, version) || !AllowedUrl(url) || !Checksum.LooksValid(sha))
                 {
+                    // Only a readable version that is not newer says "Up to date"; a garbled manifest says nothing.
+                    View.UpToDate = Versions.IsNewer("0.0.0", version) && !Versions.IsNewer(AppInfo.Version, version);
                     await Task.Run(() => { try { DeleteDir(home.UpdateDir); } catch (Exception) { } });
                     if (manual) Notify?.Invoke("Tinkjam Sync is up to date", "You have version " + AppInfo.ShortVersion + ".", false);
                     return false;
@@ -904,6 +907,7 @@ namespace TinkjamSync
                 }
                 updatePath = path;
                 updateSha = sha;
+                View.UpToDate = false;
                 View.UpdateVersion = Versions.Short(version);
                 Changed?.Invoke();
                 if (shuttingDown) return false;
@@ -1078,6 +1082,7 @@ namespace TinkjamSync
 
         void Set(Phase phase, string detail, int? percent = null)
         {
+            View.Installed = !FirstRun;
             if (View.Phase == phase && View.Detail == detail && View.Percent == percent) return;
             var worthLogging = View.Phase != phase || (phase == Phase.Stopped && View.Detail != detail);
             View.Phase = phase;

@@ -394,25 +394,120 @@ function legacyThemeMode(theme: ThemePreference): ThemeAppearance | null {
   return theme === LEGACY_T3_CHAT_DARK_THEME_ID ? "dark" : null;
 }
 
+// The Tinkjam theme, the default: the values index.css paints when no other theme is chosen.
+// Mobile still uses the shared T3 Code palette these start from.
+const TINKJAM_LIGHT_THEME_COLORS: ThemeColors = {
+  ...T3_CODE_LIGHT_THEME_COLORS,
+  canvas: "#fdfcfb",
+  chrome: "#fdfcfb",
+  toolbar: "#fdfcfb",
+  toolbarForeground: "#17141c",
+  toolbarBorder: "#e7e4de",
+  toolbarControl: "#ffffff",
+  toolbarControlForeground: "#17141c",
+  toolbarControlHover: "#f1efeb",
+  surface: "#ffffff",
+  surfaceRaised: "#fdfcfb",
+  surfaceOverlay: "#ffffff",
+  text: "#17141c",
+  textMuted: "#6f6a78",
+  border: "#e7e4de",
+  input: "#d9d5ce",
+  focus: "#2f5bea",
+  accent: "#2f5bea",
+  accentForeground: "#ffffff",
+  secondary: "#f6f5f2",
+  secondaryForeground: "#17141c",
+  muted: "#f6f5f2",
+  mutedForeground: "#6f6a78",
+  placeholder: "#6f6a78",
+  secondaryLabel: "#6f6a78",
+  iconMuted: "#6f6a78",
+  update: "#2f5bea",
+  updateForeground: "#2f5bea",
+  updateSurface: "#e9eefe",
+  accentSurface: "#f1efeb",
+  accentSurfaceForeground: "#17141c",
+  messageSurface: "#e9eefe",
+  messageForeground: "#17141c",
+  messageAction: "#2f5bea",
+  messageActionForeground: "#ffffff",
+  messageActionHover: "#1c3fbf",
+  codeBackground: "#ffffff",
+  codeForeground: "#17141c",
+  sidebar: "#f6f5f2",
+  sidebarForeground: "#17141c",
+  sidebarMutedForeground: "#6f6a78",
+  sidebarControlSurface: "#eeece7",
+  sidebarRowHover: "#fbfaf8",
+  sidebarRowActive: "#ffffff",
+  sidebarRowSelected: "#ffffff",
+  sidebarBorder: "#e7e4de",
+  terminalBackground: "#fdfcfb",
+  terminalForeground: "#17141c",
+};
+
+const TINKJAM_DARK_THEME_COLORS: ThemeColors = {
+  ...T3_CODE_DARK_THEME_COLORS,
+  canvas: "#121016",
+  chrome: "#121016",
+  toolbar: "#121016",
+  toolbarForeground: "#f6f3ee",
+  toolbarBorder: "#34303c",
+  toolbarControl: "#1b1820",
+  toolbarControlForeground: "#f6f3ee",
+  toolbarControlHover: "#232029",
+  surface: "#1b1820",
+  surfaceRaised: "#1b1820",
+  surfaceOverlay: "#1b1820",
+  text: "#f6f3ee",
+  textMuted: "#928c9c",
+  border: "#34303c",
+  input: "#403b49",
+  focus: "#5b7dff",
+  accent: "#5b7dff",
+  accentForeground: "#121016",
+  secondary: "#232029",
+  secondaryForeground: "#f6f3ee",
+  muted: "#232029",
+  mutedForeground: "#928c9c",
+  placeholder: "#928c9c",
+  secondaryLabel: "#928c9c",
+  iconMuted: "#928c9c",
+  update: "#5b7dff",
+  updateForeground: "#5b7dff",
+  updateSurface: "#1c2550",
+  accentSurface: "#2a2630",
+  accentSurfaceForeground: "#f6f3ee",
+  messageSurface: "#1c2550",
+  messageForeground: "#f6f3ee",
+  messageAction: "#2f5bea",
+  messageActionForeground: "#ffffff",
+  messageActionHover: "#3d68f0",
+  codeBackground: "#1b1820",
+  codeForeground: "#f6f3ee",
+  sidebar: "#1b1820",
+  sidebarForeground: "#f6f3ee",
+  sidebarMutedForeground: "#928c9c",
+  sidebarControlSurface: "#232029",
+  sidebarRowHover: "#232029",
+  sidebarRowActive: "#2a2630",
+  sidebarRowSelected: "#232029",
+  sidebarBorder: "#34303c",
+  terminalBackground: "#121016",
+  terminalForeground: "#f6f3ee",
+};
+
 export function getStandardThemeColors(appearance: ThemeAppearance): ThemeColors {
   if (appearance === "dark") {
-    return (standardDarkThemeColors ??= decodeThemeColors({
-      ...T3_CODE_DARK_THEME_COLORS,
-      canvas: "#000000",
-    }));
+    return (standardDarkThemeColors ??= decodeThemeColors(TINKJAM_DARK_THEME_COLORS));
   }
-  return (standardLightThemeColors ??= decodeThemeColors(T3_CODE_LIGHT_THEME_COLORS));
+  return (standardLightThemeColors ??= decodeThemeColors(TINKJAM_LIGHT_THEME_COLORS));
 }
-
-// index.css paints the light bubble a step darker than the shared palette mobile uses.
-const STANDARD_WEB_PAINTED_COLORS: Record<ThemeAppearance, Partial<ThemeColors>> = {
-  light: { messageSurface: "#ebebed" },
-  dark: { canvas: "#000000", messageSurface: "#1e1e1e" },
-};
 
 /** The standard theme as index.css paints it, for solves that measure the page. */
 export function getStandardPaintedThemeColors(appearance: ThemeAppearance): ThemeColors {
-  return { ...getStandardThemeColors(appearance), ...STANDARD_WEB_PAINTED_COLORS[appearance] };
+  return getStandardThemeColors(appearance);
 }
 
 type ThemeRgbColor = {

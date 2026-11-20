@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 import "@fontsource-variable/inter";
+import "@fontsource-variable/outfit";
 import "./index.css";
 
 import { hasCloudPublicConfig } from "./cloud/publicConfig";

@@ -1,0 +1,121 @@
+---
+import Layout from "../layouts/Layout.astro";
+import { CHECKSUMS_PUBLISHED, CHECKSUMS_URL, SYNC_SYSTEMS } from "../lib/site";
+---
+
+<Layout
+  title="Download Tinkjam Sync | Tinkjam"
+  description="Tinkjam Sync connects the agents on your computer to your boards. For Mac, Windows and Linux."
+>
+  <div class="page">
+    <article class="prose download" data-download>
+      <h1>Download Tinkjam Sync</h1>
+      <p>Tinkjam Sync connects the agents on your computer to your boards.</p>
+
+      <nav class="sync-switch" aria-label="Choose your computer" data-switch hidden>
+        {
+          SYNC_SYSTEMS.map((system) => (
+            <button type="button" data-show={system.os}>
+              {system.name}
+            </button>
+          ))
+        }
+      </nav>
+
+      {
+        SYNC_SYSTEMS.map((system) => (
+          <section class="sync" data-os={system.os} aria-label={system.name}>
+            <h2 class="sync__name">{system.name}</h2>
+            {system.method.kind === "files" ? (
+              <div class="sync__files">
+                {system.method.files.map((file, index) => (
+                  <a class:list={index === 0 ? "btn btn--lg" : "sync__more"} href={file.href}>
+                    {file.label}
+                  </a>
+                ))}
+              </div>
+            ) : (
+              <div class="sync__command">
+                <button type="button" class="btn btn--lg" data-copy aria-live="polite" hidden>
+                  Copy install command
+                </button>
+                <code class="sync__line" tabindex="0">
+                  {system.method.command}
+                </code>
+                <p class="sync__how">{system.method.instruction}</p>
+              </div>
+            )}
+          </section>
+        ))
+      }
+
+      {
+        CHECKSUMS_PUBLISHED ? (
+          <p class="sync__more-row">
+            <a class="sync__more" href={CHECKSUMS_URL}>
+              Checksums (SHA-256)
+            </a>
+          </p>
+        ) : null
+      }
+      <p class="download__soon">Desktop app: coming soon</p>
+    </article>
+  </div>
+  <script is:inline>
+    // Runs before paint. Without it every system is listed in full and each command is selectable.
+    (function () {
+      var root = document.querySelector("[data-download]");
+      var ua = navigator.userAgent;
+      var os = /iPhone|iPad|iPod|Android/.test(ua)
+        ? "windows"
+        : /Mac/.test(ua)
+          ? "mac"
+          : /Linux|X11|CrOS/.test(ua)
+            ? "linux"
+            : "windows";
+      var buttons = root.querySelectorAll("[data-show]");
+      function show(next) {
+        root.querySelectorAll(".sync").forEach(function (block) {
+          block.hidden = block.getAttribute("data-os") !== next;
+        });
+        buttons.forEach(function (button) {
+          button.setAttribute("aria-pressed", String(button.getAttribute("data-show") === next));
+        });
+      }
+      root.classList.add("is-enhanced");
+      root.querySelector("[data-switch]").hidden = false;
+      buttons.forEach(function (button) {
+        button.addEventListener("click", function () {
+          show(button.getAttribute("data-show"));
+        });
+      });
+      root.querySelectorAll("[data-copy]").forEach(function (button) {
+        var line = button.parentNode.querySelector(".sync__line");
+        var timer;
+        button.hidden = false;
+        button.addEventListener("click", function () {
+          var done = function () {
+            button.textContent = "Copied";
+            clearTimeout(timer);
+            timer = setTimeout(function () {
+              button.textContent = "Copy install command";
+            }, 1800);
+          };
+          var select = function () {
+            var range = document.createRange();
+            range.selectNodeContents(line);
+            var selection = getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+          };
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(line.textContent.trim()).then(done, select);
+          } else {
+            select();
+          }
+        });
+      });
+      show(os);
+    })();
+  </script>
+</Layout>

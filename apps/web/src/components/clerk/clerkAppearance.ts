@@ -58,6 +58,65 @@ export const clerkAppearance = {
   signUp: { elements: authFlowElements },
 } satisfies NonNullable<ClerkProviderProps["appearance"]>;
 
+const linkElement =
+  "font-medium text-update-foreground underline underline-offset-3 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset";
+
+/**
+ * The sign-in page's form, laid out as the page's own content: no card, the heading face, tall
+ * fields, pill buttons. Every colour, font and radius is the person's theme, through its tokens.
+ */
+export const signInScreenAppearance = {
+  options: {
+    logoPlacement: "none",
+    socialButtonsVariant: "blockButton",
+  },
+  variables: {
+    colorBackground: "var(--background)",
+    colorMuted: "var(--background)",
+    fontFamily: "var(--font-sans)",
+    fontSize: "1rem",
+  },
+  elements: {
+    rootBox: "w-full",
+    cardBox: "w-full max-w-none overflow-visible rounded-none border-0 bg-transparent shadow-none",
+    card: "w-full gap-8 rounded-none border-0 bg-transparent p-0 shadow-none",
+    header: "items-start gap-2.5 text-start",
+    headerTitle:
+      "font-heading text-[2.25rem] leading-[1.05] font-semibold tracking-[-0.035em] text-foreground sm:text-[2.75rem]",
+    headerSubtitle: "text-base text-muted-foreground",
+    socialButtons: "gap-3",
+    socialButtonsBlockButton:
+      "h-13 rounded-full border-[1.5px] border-border bg-card text-[15px] font-semibold text-foreground shadow-none hover:border-foreground hover:bg-card focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+    socialButtonsBlockButtonText: "text-[15px] font-semibold",
+    dividerRow: "my-0",
+    dividerLine: "bg-border",
+    dividerText: "text-[13px] text-muted-foreground",
+    formFieldLabel: "text-[13px] font-semibold text-foreground",
+    formFieldInput:
+      "h-12 rounded-lg border-[1.5px] border-border bg-card px-3.5 text-base text-foreground shadow-none focus:border-ring focus:ring-0",
+    otpCodeFieldInput: "border-[1.5px] border-border bg-card text-foreground",
+    formButtonPrimary:
+      "h-12 rounded-full border-primary bg-primary bg-none text-base font-semibold text-primary-foreground shadow-none hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+    formFieldAction: linkElement,
+    formResendCodeLink: linkElement,
+    identityPreviewEditButton: linkElement,
+    alternativeMethodsBlockButton:
+      "h-12 rounded-full border-[1.5px] border-border bg-card text-foreground shadow-none",
+    backLink: linkElement,
+    footer: "mt-0 bg-transparent bg-none p-0 [&>*]:px-0",
+    footerAction: "justify-start px-0 py-0",
+    footerActionText: "text-base text-muted-foreground",
+    footerActionLink: `text-base ${linkElement}`,
+    lastAuthenticationStrategyBadge: "hidden",
+    buttonArrowIcon: "hidden",
+    formFieldErrorText: { color: "var(--error-foreground)" },
+    formFieldWarningText: { color: "var(--warning-foreground)" },
+    formFieldSuccessText: { color: "var(--success-foreground)" },
+    otpCodeFieldErrorText: { color: "var(--error-foreground)" },
+    otpCodeFieldSuccessText: { color: "var(--success-foreground)" },
+  },
+} satisfies NonNullable<ClerkProviderProps["appearance"]>;
+
 const TO_CONTINUE = "to continue to Tinkjam";
 // The one line of what Tinkjam is, under every first step.
 const VALUE = "Your team and your agents on one board, on every device.";
@@ -69,11 +128,11 @@ const VALUE = "Your team and your agents on one board, on every device.";
 export const clerkLocalization = {
   signIn: {
     start: {
-      title: "Sign in to Tinkjam",
+      title: "Sign in",
       subtitle: VALUE,
-      titleCombined: "Continue to Tinkjam",
-      subtitleCombined: `${VALUE} New here? The same email makes your account.`,
-      actionText: "New to Tinkjam?",
+      titleCombined: "Sign in",
+      subtitleCombined: VALUE,
+      actionText: "New here?",
       actionLink: "Create an account",
     },
     password: { subtitle: TO_CONTINUE },
@@ -84,11 +143,11 @@ export const clerkLocalization = {
   },
   signUp: {
     start: {
-      title: "Create your Tinkjam account",
-      titleCombined: "Create your Tinkjam account",
+      title: "Create an account",
+      titleCombined: "Create an account",
       subtitle: VALUE,
       subtitleCombined: VALUE,
-      actionText: "Already use Tinkjam?",
+      actionText: "Have an account?",
       actionLink: "Sign in",
     },
     emailCode: { subtitle: TO_CONTINUE },

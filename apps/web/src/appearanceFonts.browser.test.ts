@@ -52,4 +52,30 @@ describe("applyAppearanceFontVariables", () => {
       else root.setAttribute("style", style);
     }
   });
+
+  it("sets headings in Outfit until the person picks an interface font", () => {
+    const root = document.documentElement;
+    const style = root.getAttribute("style");
+    const preferences = {
+      sans: "",
+      code: "",
+      composer: "",
+      sizeInterface: 14,
+      sizePrompt: 14,
+      sizeCode: 13,
+      smoothing: true,
+      separate: false,
+    };
+    const heading = () => getComputedStyle(root).getPropertyValue("--font-heading").trim();
+    try {
+      applyAppearanceFontVariables(root, preferences);
+      expect(heading()).toMatch(/^"Outfit Variable"/);
+
+      applyAppearanceFontVariables(root, { ...preferences, sans: "Georgia" });
+      expect(heading()).toMatch(/^Georgia,/);
+    } finally {
+      if (style === null) root.removeAttribute("style");
+      else root.setAttribute("style", style);
+    }
+  });
 });

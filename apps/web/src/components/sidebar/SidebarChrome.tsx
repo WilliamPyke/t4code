@@ -194,7 +194,7 @@ function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
       <TinkjamMark aria-hidden className="size-5 shrink-0" />
       <TinkjamWord
         aria-hidden
-        className={cn("h-3.5 w-auto shrink-0", onBackdrop ? "text-white" : "text-foreground")}
+        className={cn("text-lg", onBackdrop ? "text-white" : "text-foreground")}
       />
     </span>
   );

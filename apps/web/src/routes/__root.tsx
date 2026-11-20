@@ -25,6 +25,7 @@ import { NewBoardDialogHost } from "../components/boards/newBoard";
 import { AddProjectToMachineDialogHost } from "../components/AddProjectToMachineDialog";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
 import { ConnectComputerDialogHost } from "../components/ConnectComputerDialog";
+import { isSignInPath } from "../components/sidebar/mainAppLocation";
 import { AdvancedOnlyPage } from "../components/shell/AdvancedOnlyPage";
 import { DocumentTitleSync } from "../components/shell/DocumentTitleSync";
 import { OfflineNote } from "../components/shell/OfflineNote";
@@ -188,7 +189,12 @@ function RootRouteBranch() {
   // By the page drawn: a guest's page keeps the window, and its cover, until the board has loaded.
   if (isGuestEntryPath(drawnPathname)) return <Outlet />;
 
-  if (pathname === "/pair" || pathname === "/connect" || pathname === "/connect-agent") {
+  if (
+    pathname === "/pair" ||
+    pathname === "/connect" ||
+    pathname === "/connect-agent" ||
+    isSignInPath(pathname)
+  ) {
     return <Outlet />;
   }
 

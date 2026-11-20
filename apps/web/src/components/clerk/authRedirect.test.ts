@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveClerkSignInProps, staysInApp } from "./authRedirect";
+import { parseSignInPageRequest, resolveClerkSignInProps, staysInApp } from "./authRedirect";
 
 describe("resolveClerkSignInProps", () => {
   it("removes a Clerk virtual pathname and callback params while preserving the desktop route", () => {
@@ -23,6 +23,44 @@ describe("resolveClerkSignInProps", () => {
     expect(resolveClerkSignInProps("https://app.example.org/", false).forceRedirectUrl).toBe(
       "https://app.example.org/",
     );
+  });
+});
+
+describe("parseSignInPageRequest", () => {
+  const origin = "https://app.example.org";
+  it("keeps a request for this site", () => {
+    expect(
+      parseSignInPageRequest(
+        JSON.stringify({
+          from: "https://app.example.org/guest?share=abc",
+          forceRedirectUrl: "https://app.example.org/guest?share=abc",
+          withSignUp: false,
+        }),
+        origin,
+      ),
+    ).toEqual({
+      from: "/guest?share=abc",
+      forceRedirectUrl: "https://app.example.org/guest?share=abc",
+      withSignUp: false,
+    });
+  });
+
+  it.each([
+    [
+      "another site",
+      JSON.stringify({
+        from: "https://evil.example.com/",
+        forceRedirectUrl: "https://evil.example.com/",
+      }),
+    ],
+    [
+      "a script address",
+      JSON.stringify({ from: "javascript:alert(1)", forceRedirectUrl: "javascript:alert(1)" }),
+    ],
+    ["nothing kept", null],
+    ["something that is not JSON", "{"],
+  ] as const)("goes home, never elsewhere, from %s", (_case, raw) => {
+    expect(parseSignInPageRequest(raw, origin)).toEqual({ from: "/", withSignUp: true });
   });
 });
 

@@ -11,6 +11,12 @@ namespace TinkjamSync
     {
         public bool Install, Uninstall, Silent, Autostart, AfterUpdate, DumpState, SelfTest, PrintVersion, Quit;
         public string BaseDir, InstallDir;
+        /// <summary>--preview-ui: shows the window and the panel for one state, and does nothing else.</summary>
+        public bool PreviewUi, PreviewSettings, PreviewInstalled;
+        public string PreviewPhase, PreviewDetail, PreviewUpdate, PreviewTheme, PreviewShot;
+        public int? PreviewPercent;
+        public int PreviewTabs;
+        public float? PreviewScale;
 
         public static AppArgs Parse(string[] argv)
         {
@@ -32,6 +38,20 @@ namespace TinkjamSync
                     case "--quit": args.Quit = true; break;
                     case "--base-dir": if (i + 1 < argv.Length) args.BaseDir = argv[++i]; break;
                     case "--install-dir": if (i + 1 < argv.Length) args.InstallDir = argv[++i]; break;
+                    case "--preview-ui": args.PreviewUi = true; break;
+                    case "--preview-settings": args.PreviewSettings = true; break;
+                    case "--preview-installed": args.PreviewInstalled = true; break;
+                    case "--preview-phase": if (i + 1 < argv.Length) args.PreviewPhase = argv[++i]; break;
+                    case "--preview-detail": if (i + 1 < argv.Length) args.PreviewDetail = argv[++i]; break;
+                    case "--preview-update": if (i + 1 < argv.Length) args.PreviewUpdate = argv[++i]; break;
+                    case "--preview-theme": if (i + 1 < argv.Length) args.PreviewTheme = argv[++i]; break;
+                    case "--preview-shot": if (i + 1 < argv.Length) args.PreviewShot = argv[++i]; break;
+                    case "--preview-percent": if (i + 1 < argv.Length && int.TryParse(argv[++i], out var percent)) args.PreviewPercent = percent; break;
+                    case "--preview-tabs": if (i + 1 < argv.Length && int.TryParse(argv[++i], out var tabs)) args.PreviewTabs = tabs; break;
+                    case "--preview-scale":
+                        if (i + 1 < argv.Length && float.TryParse(argv[++i], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var scale) && scale >= 1 && scale <= 4)
+                            args.PreviewScale = scale;
+                        break;
                 }
             }
             return args;

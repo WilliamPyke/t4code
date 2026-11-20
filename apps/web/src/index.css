@@ -170,6 +170,12 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 @theme {
   --font-sans:
     -apple-system, BlinkMacSystemFont, "Inter Variable", "Segoe UI", system-ui, sans-serif;
+  /* Headings. A custom interface font replaces it too (appearanceFonts.ts). */
+  --font-heading:
+    "Outfit Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  /* The wordmark and the art panel's headline: the brand's own face in every theme. */
+  --font-brand:
+    "Outfit Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono:
     ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
 }
@@ -188,6 +194,17 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --text-4xs--line-height: 1;
   --text-5xs: 0.4375rem;
   --text-5xs--line-height: 1;
+  /* The brand pages' steps between Tailwind's: 13px small print, 15px secondary body, the 44px
+     page heading and the 27px wordmark, as the Tinkjam designs set them. */
+  --text-ui-sm: 0.8125rem;
+  --text-ui-sm--line-height: 1.4;
+  --text-ui-md: 0.9375rem;
+  --text-ui-md--line-height: 1.5;
+  --text-display: 2.75rem;
+  --text-display--line-height: 1.05;
+  --text-wordmark: 1.6875rem;
+  --text-wordmark--line-height: 1;
+  --tracking-brand: -0.035em;
   /* Motion. drawer is the decelerating curve for surfaces that slide or pop in
      (composer context, pills). */
   --inset-shadow-control-highlight: 0 1px rgb(255 255 255 / 16%);
@@ -220,6 +237,21 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
       transparent calc(var(--chat-composer-attachment-overlap) + 10px)
     );
   --color-zinc-25: oklch(99.2% 0 0);
+  /* Tinkjam's artwork colours. Fixed in every theme: only the cobalt art panel and the mark use
+     them; everything a theme can restyle reads the semantic tokens below. */
+  --color-brand-cobalt: #2f5bea;
+  --color-brand-cobalt-deep: #1c3fbf;
+  --color-brand-sky: #9db8ff;
+  --color-brand-sun: #ffc83d;
+  --color-brand-sun-tint: #fff3cf;
+  --color-brand-cream: #fff7ec;
+  --color-brand-forest: #14634a;
+  --color-brand-raspberry: #db2d55;
+  --color-brand-claude: #d97757;
+  --color-brand-ink: #17141c;
+  --color-brand-quiet: #7c7785;
+  --color-brand-panel: #f6f5f2;
+  --color-brand-tint: #e9eefe;
   --animate-skeleton: skeleton 2.4s infinite;
   /* Duty-cycled indicator animations: long holds with stepped ramps, so the
      compositor updates discrete frames instead of every vsync. */
@@ -1172,7 +1204,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 :root {
   color-scheme: light;
   --radius: 0.5rem;
-  --background: var(--color-zinc-25);
+  /* The Tinkjam theme, light: warm paper neutrals and one cobalt. themePalette.ts mirrors these
+     values (TINKJAM_LIGHT_THEME_COLORS) for the theme editor and contrast solves. */
+  --background: #fdfcfb;
   --app-chrome-background: var(--background);
   --toolbar-background: var(--app-chrome-background);
   --toolbar-foreground: var(--foreground);
@@ -1181,35 +1215,35 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --toolbar-control-foreground: var(--foreground);
   --toolbar-control-hover: var(--accent);
   --surface-raised: color-mix(in srgb, var(--card) 20%, transparent);
-  --foreground: var(--color-zinc-900);
-  --card: var(--color-white);
-  --card-foreground: var(--color-zinc-900);
-  --popover: var(--color-white);
-  --popover-foreground: var(--color-zinc-900);
-  --primary: oklch(0.488 0.217 264);
-  --primary-foreground: var(--color-white);
-  --secondary: var(--color-zinc-50);
-  --secondary-foreground: var(--color-zinc-800);
-  --muted: var(--color-zinc-50);
-  --muted-foreground: var(--color-zinc-500);
+  --foreground: #17141c;
+  --card: #ffffff;
+  --card-foreground: #17141c;
+  --popover: #ffffff;
+  --popover-foreground: #17141c;
+  --primary: #2f5bea;
+  --primary-foreground: #ffffff;
+  --secondary: #f6f5f2;
+  --secondary-foreground: #17141c;
+  --muted: #f6f5f2;
+  --muted-foreground: #6f6a78;
   --placeholder: var(--muted-foreground);
   --secondary-label: var(--muted-foreground);
   --icon-muted: var(--muted-foreground);
-  /* One step past the accent, so a user turn stands off the near-white canvas. */
-  --message-surface: color-mix(in srgb, var(--color-zinc-200) 55%, var(--color-zinc-100));
+  /* A user turn sits on the cobalt tint, so it stands off the near-white canvas. */
+  --message-surface: #e9eefe;
   --message-foreground: var(--foreground);
   --message-action: var(--primary);
   --message-action-foreground: var(--primary-foreground);
-  --message-action-hover: color-mix(in srgb, var(--primary) 90%, var(--background));
-  --accent: var(--color-zinc-100);
-  --accent-foreground: var(--color-zinc-900);
+  --message-action-hover: #1c3fbf;
+  --accent: #f1efeb;
+  --accent-foreground: #17141c;
   --error: var(--color-red-500);
   --error-foreground: var(--color-red-700);
   --tool-error-icon: var(--error);
   --error-surface: color-mix(in srgb, var(--error) 8%, transparent);
   --destructive: var(--error);
-  --border: var(--color-zinc-200);
-  --input: var(--color-zinc-300);
+  --border: #e7e4de;
+  --input: #d9d5ce;
   --ring: var(--primary);
   --destructive-foreground: var(--error-foreground);
   --info: var(--color-blue-500);
@@ -1219,7 +1253,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --guest-foreground: var(--color-fuchsia-600);
   --guest-surface: color-mix(in srgb, var(--guest) 14%, var(--message-surface));
   --success: var(--color-emerald-500);
-  --success-foreground: var(--color-emerald-700);
+  --success-foreground: #14634a;
   --warning: var(--color-amber-500);
   --warning-foreground: var(--color-amber-700);
   --warning-surface: color-mix(in srgb, var(--warning) 8%, transparent);
@@ -1227,13 +1261,13 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --update-foreground: var(--primary);
   /* Keep every sidebar primitive on the same light surface hierarchy, including
      portaled mobile sheets and settings navigation outside the app sidebar. */
-  --sidebar: var(--color-zinc-50);
+  --sidebar: #f6f5f2;
   --sidebar-foreground: var(--foreground);
   --sidebar-muted-foreground: var(--muted-foreground);
-  --sidebar-control-surface: var(--color-zinc-100);
-  --sidebar-row-hover: var(--color-zinc-25);
-  --sidebar-row-active: var(--color-white);
-  --sidebar-row-selected: var(--color-white);
+  --sidebar-control-surface: #eeece7;
+  --sidebar-row-hover: #fbfaf8;
+  --sidebar-row-active: #ffffff;
+  --sidebar-row-selected: #ffffff;
   --sidebar-border: var(--border);
   --sidebar-stage-fade: var(--sidebar);
   --code-background: color-mix(in srgb, var(--card) 90%, var(--background));
@@ -1245,40 +1279,42 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
   @variant dark {
     color-scheme: dark;
-    /* The canvas is true black, matching the sidebar. Raised surfaces keep the tone they had
-       over neutral-950, so cards, popovers, and the composer still lift. Borders and hover
-       states provide separation without milky gray fills. */
-    --background: #000;
-    --surface-raised: color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white));
-    --foreground: var(--color-neutral-100);
-    --card: color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white));
-    --card-foreground: var(--color-neutral-100);
-    --popover: color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white));
-    --popover-foreground: var(--color-neutral-100);
-    --primary: oklch(0.571 0.21 264);
-    --secondary: --alpha(var(--color-white) / 3%);
-    --secondary-foreground: var(--color-neutral-100);
-    --muted: --alpha(var(--color-white) / 3%);
-    --muted-foreground: var(--color-neutral-400);
-    --accent: --alpha(var(--color-white) / 4%);
-    --accent-foreground: var(--color-neutral-100);
-    /* A user turn sits above the composer tone, level with the selected sidebar row. */
-    --message-surface: color-mix(in srgb, var(--color-neutral-950) 92%, var(--color-white));
+    /* The Tinkjam theme, dark: a violet-black ground, raised surfaces a step up, and cobalt
+       lifted for contrast. Solid buttons keep white on the true cobalt. */
+    --background: #121016;
+    --surface-raised: #1b1820;
+    --foreground: #f6f3ee;
+    --card: #1b1820;
+    --card-foreground: #f6f3ee;
+    --popover: #1b1820;
+    --popover-foreground: #f6f3ee;
+    --primary: #2f5bea;
+    --message-action-hover: #3d68f0;
+    --ring: #5b7dff;
+    --secondary: #232029;
+    --secondary-foreground: #f6f3ee;
+    --muted: #232029;
+    --muted-foreground: #928c9c;
+    --accent: #2a2630;
+    --accent-foreground: #f6f3ee;
+    /* A user turn sits on the dark cobalt tint. */
+    --message-surface: #1c2550;
     --error: color-mix(in srgb, var(--color-red-500) 90%, var(--color-white));
     --error-foreground: var(--color-red-400);
     --tool-error-icon: #fca5a5;
     --error-surface: color-mix(in srgb, var(--error) 16%, transparent);
-    --border: --alpha(var(--color-white) / 8%);
-    --input: --alpha(var(--color-white) / 11%);
+    --border: #34303c;
+    --input: #403b49;
     --info-foreground: var(--color-blue-400);
     --guest-foreground: var(--color-fuchsia-300);
-    --success-foreground: var(--color-emerald-400);
+    --success-foreground: #3fbf8f;
     --warning-foreground: var(--color-amber-400);
     --warning-surface: color-mix(in srgb, var(--warning) 16%, transparent);
-    --update-foreground: var(--color-blue-400);
+    --update: #5b7dff;
+    --update-foreground: #5b7dff;
     --sidebar: var(--card);
     --sidebar-control-surface: var(--muted);
-    --sidebar-row-hover: var(--accent);
+    --sidebar-row-hover: var(--muted);
     --sidebar-row-active: var(--accent);
     --sidebar-row-selected: var(--muted);
     --sidebar-stage-fade: var(--card);
@@ -1287,52 +1323,50 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   }
 }
 
-/* Keep both sidebar implementations (default and legacy) on the same quiet
-   zinc hierarchy: zinc-50 navigation, zinc-25 hover, and white selected/raised
-   surfaces. */
+/* Keep both sidebar implementations (default and legacy) on the Tinkjam theme's
+   hierarchy: panel navigation, paper hover, and white selected/raised surfaces. */
 [data-app-sidebar] {
-  --background: var(--color-zinc-25);
-  --foreground: var(--color-zinc-900);
-  --card: var(--color-white);
-  --card-foreground: var(--color-zinc-900);
-  --accent: var(--color-zinc-100);
-  --accent-foreground: var(--color-zinc-900);
-  --muted: var(--color-zinc-50);
-  --muted-foreground: var(--color-zinc-500);
-  --border: var(--color-zinc-200);
-  --input: var(--color-zinc-300);
-  --sidebar: var(--color-zinc-50);
-  --sidebar-foreground: var(--color-zinc-900);
-  --sidebar-muted-foreground: var(--color-zinc-500);
-  --sidebar-control-surface: var(--color-zinc-100);
-  --sidebar-row-hover: var(--color-zinc-25);
-  --sidebar-row-active: var(--color-white);
-  --sidebar-row-selected: var(--color-white);
-  --sidebar-border: var(--color-zinc-200);
+  --background: #fdfcfb;
+  --foreground: #17141c;
+  --card: #ffffff;
+  --card-foreground: #17141c;
+  --accent: #f1efeb;
+  --accent-foreground: #17141c;
+  --muted: #f6f5f2;
+  --muted-foreground: #6f6a78;
+  --border: #e7e4de;
+  --input: #d9d5ce;
+  --sidebar: #f6f5f2;
+  --sidebar-foreground: #17141c;
+  --sidebar-muted-foreground: #6f6a78;
+  --sidebar-control-surface: #eeece7;
+  --sidebar-row-hover: #fbfaf8;
+  --sidebar-row-active: #ffffff;
+  --sidebar-row-selected: #ffffff;
+  --sidebar-border: #e7e4de;
   --sidebar-stage-fade: var(--sidebar);
 
   @variant dark {
-    --background: #000;
-    --foreground: #f1f3f7;
-    --card: #000;
+    --background: #121016;
+    --foreground: #f6f3ee;
+    --card: #1b1820;
     --card-foreground: var(--foreground);
-    --accent: #191a1d;
-    --accent-foreground: #f7f9ff;
-    --muted: #0a0a0a;
-    --muted-foreground: #a3a3a3;
-    --border: rgb(255 255 255 / 8%);
-    --input: rgb(255 255 255 / 18%);
+    --accent: #2a2630;
+    --accent-foreground: #f6f3ee;
+    --muted: #232029;
+    --muted-foreground: #928c9c;
+    --border: #34303c;
+    --input: #403b49;
     --sidebar: var(--card);
     --sidebar-foreground: var(--foreground);
     --sidebar-muted-foreground: var(--muted-foreground);
     --sidebar-control-surface: var(--muted);
-    --sidebar-row-hover: color-mix(in srgb, var(--contrast-foreground) 8%, transparent);
-    --sidebar-row-active: color-mix(in srgb, var(--contrast-foreground) 11%, transparent);
+    --sidebar-row-hover: color-mix(in srgb, var(--contrast-foreground) 6%, transparent);
+    --sidebar-row-active: color-mix(in srgb, var(--contrast-foreground) 10%, transparent);
     --sidebar-row-selected: color-mix(in srgb, var(--contrast-foreground) 7%, transparent);
     --sidebar-border: var(--border);
     --sidebar-stage-fade: var(--card);
-    /* Row metadata sits a step below read titles (75% white). */
-    --secondary-label: #8f8f8f;
+    --secondary-label: #928c9c;
   }
 }
 
@@ -1832,6 +1866,26 @@ body {
   font-family: var(--font-sans);
   margin: 0;
   padding: 0;
+}
+
+/* Headings take the heading face. In the base layer, so a font utility on one still wins. */
+@layer base {
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-heading);
+  }
+}
+
+/* The sign-in page's first step has no subtitle, as its design; later steps keep theirs, which
+   say where a code went. Clerk names each step on its card. */
+[data-sign-in-form] :is(.cl-signIn-start, .cl-signUp-start) .cl-headerSubtitle {
+  display: none;
+}
+
+/* Selected text takes the theme's focus colour, so every theme selects in its own accent. */
+::selection {
+  background-color: color-mix(in srgb, var(--ring) 24%, transparent);
 }
 
 [data-preview-url-input] {
@@ -2700,4 +2754,95 @@ code {
 [data-workspace-keyboard-focus]:focus {
   outline: 2px solid var(--ring);
   outline-offset: -2px;
+}
+
+/* Tinkjam's cobalt art half (components/brand/BrandArtPanel.tsx). It is artwork: its sizes follow
+   the headline in em, and its colours stay the same in every theme. */
+@layer components {
+  .brand-art-headline {
+    font-size: clamp(2rem, 8.5vw, 2.75rem);
+    line-height: 1.14;
+    letter-spacing: -0.04em;
+
+    /* Sized to the half it sits in, so its longest line fits from 900px up. */
+    @media (width >= 900px) {
+      font-size: clamp(2rem, calc((50vw - 6.5rem) / 9.5), 4.125rem);
+    }
+  }
+
+  .brand-art-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 0.24em;
+
+    @media (width >= 900px) {
+      flex-wrap: nowrap;
+      white-space: nowrap;
+    }
+  }
+
+  .brand-art-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.18em;
+    padding: 0 0.3em 0.08em;
+    border-radius: 0.27em;
+    background: white;
+    color: var(--color-brand-ink);
+  }
+
+  .brand-art-pill img {
+    width: 0.7em;
+    height: 0.7em;
+    margin-top: 0.08em;
+  }
+
+  .brand-art-people {
+    display: inline-flex;
+    padding-inline-start: 0.27em;
+    padding-top: 0.09em;
+  }
+
+  /* Sized in its own em: 0.36 of the headline, so 2.5em is the headline's 0.9. */
+  .brand-art-person {
+    display: inline-flex;
+    width: 2.5em;
+    height: 2.5em;
+    margin-inline-start: -0.75em;
+    align-items: center;
+    justify-content: center;
+    border: 0.1667em solid white;
+    border-radius: 9999px;
+    font-size: 0.36em;
+    letter-spacing: normal;
+  }
+
+  .brand-art-card {
+    position: absolute;
+    border-radius: var(--radius-xl);
+    background: white;
+    color: var(--color-brand-ink);
+    font-size: var(--text-ui-sm);
+    line-height: 1.4;
+    box-shadow: 0 20px 44px -16px rgb(10 20 60 / 55%);
+  }
+
+  /* The line from a computer to its agent: dashed while waiting, solid once connected. */
+  .brand-art-connector {
+    position: absolute;
+    bottom: 11rem;
+    left: 17.625rem;
+    width: 4.875rem;
+    border-top: 2.5px dashed rgb(255 255 255 / 80%);
+  }
+
+  .brand-art-connector[data-tone="sun"] {
+    border-top-color: var(--color-brand-sun);
+  }
+
+  .brand-art-connector[data-tone="connected"] {
+    border-top-style: solid;
+    border-top-color: white;
+  }
 }

@@ -24,6 +24,15 @@
   <ItemGroup>
     <Compile Include="src\*.cs" />
   </ItemGroup>
+  <!-- Outfit (OFL, licence in assets\fonts\OFL.txt), the art photo and the agents' marks travel inside the exe. -->
+  <ItemGroup>
+    <EmbeddedResource Include="assets\fonts\Outfit-SemiBold.ttf" LogicalName="TinkjamSync.Outfit-SemiBold.ttf" />
+    <EmbeddedResource Include="assets\fonts\OFL.txt" LogicalName="TinkjamSync.OFL-Outfit.txt" />
+    <EmbeddedResource Include="assets\art.jpg" LogicalName="TinkjamSync.art.jpg" />
+    <EmbeddedResource Include="assets\agents\claude.png" LogicalName="TinkjamSync.agent-claude.png" />
+    <EmbeddedResource Include="assets\agents\codex.png" LogicalName="TinkjamSync.agent-codex.png" />
+    <EmbeddedResource Include="assets\agents\cursor.png" LogicalName="TinkjamSync.agent-cursor.png" />
+  </ItemGroup>
   <ItemGroup>
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="System.Drawing" />
