@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Tinkjam Sync
+GenericName=Agent connection
+Comment=Connects the agents on this computer to Tinkjam
+Exec=tinkjam-sync
+TryExec=tinkjam-sync
+Icon=org.tinkjam.Sync
+Terminal=false
+Categories=Network;Utility;
+Keywords=tinkjam;agent;claude;codex;sync;
+StartupWMClass=org.tinkjam.Sync
